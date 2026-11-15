@@ -1,6 +1,6 @@
 # DbSphere V0.2 容器化一键部署（开发中）
 
-> 本文对应开发分支上的 V0.2 功能；正式发行仍需 Compose 与 PG18 CI、升级/恢复演练通过。V0.1.0 的手动启动见[部署与接入](DEPLOYMENT.md)。
+> 本文对应主分支上的 V0.2 开发功能；默认和外部 PG18 Compose 已通过 Linux CI，正式发行仍需安装/升级/恢复演练。V0.1.0 的手动启动见[部署与接入](DEPLOYMENT.md)。
 
 ## 一条命令启动
 
@@ -36,4 +36,12 @@ bash scripts/one-click.sh --migrate-from /absolute/path/to/v0.1/data
 
 Linux 主机增强采集可按 [Prometheus 官方指南](https://prometheus.io/docs/guides/node-exporter/)在目标主机安装 `node_exporter`，资产中填写 Linux 主机名和 exporter 端口（默认常见端口 9100）。DbSphere 只读取 `/metrics`，设置 4 秒超时和 5 MiB 响应上限，不在目标主机执行脚本；请将 exporter 限制在可信内网，不要直接暴露到公网。未配置时界面明确显示“未采集”。CPU 使用率与 IO/网络速率由相邻两次累计计数计算，首次采样仅显示累计量。
 
-PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。V0.2 仍在开发，分区、保留期、备份恢复与外部 PG18 模式的端到端验收将继续补齐。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。
+PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。外部 PG18 一键启动已通过 Linux CI；分区、保留期、备份恢复和真实环境的安装升级验收尚未完成。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。
+
+### Kubernetes 只读发现与指标
+
+浏览器选择 K8S 运行环境，填写 kubeconfig context 和 Namespace 后可查询该 Namespace 的 Pod，并按容器镜像/5432 端口提示可能的 PostgreSQL Pod。选择后会填入 Pod、Workload、Node 与匹配的 Service 地址，仍需人工核对数据库连接和凭据。每类资源最多读取 100 项；结果截断或缺少权限会显示具体原因。Pod 重建后应重新确认映射。
+
+Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `get,list`，`services`、`events` 的 `list`，以及 `deployments`、`replicasets`、`statefulsets` 的 `list`。关联 Node 和 PV 需额外在 ClusterRole 授予 `nodes`、`persistentvolumes` 的 `get`。若集群提供 metrics-server，可在 Namespace 授予 `metrics.k8s.io/pods` 的 `list`，在 ClusterRole 授予 `metrics.k8s.io/nodes` 的 `list`。测试用的具体只读配置见 [`k8s-postgres.yaml`](../test/fixtures/k8s-postgres.yaml)，其中 PostgreSQL 测试密码不得用于生产。
+
+metrics-server 仅提供 Pod/Node 资源使用量，不提供 PVC 文件系统实际用量。当前采样展示 PVC 申请量与容量；实际用量尚未接入，界面不得将其误认为“正常”。如没有 metrics-server、权限或目标指标，DbSphere 会记录未采集原因，PG 侧监控继续工作。

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { PgStore } from './pg-store.js';
 import { collectPostgres } from './postgres.js';
-import { collectK8s } from './k8s.js';
+import { collectK8s, discoverK8s } from './k8s.js';
 import { collectLinux, deriveLinuxRates } from './linux.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
 
@@ -51,7 +51,8 @@ function cookie(req) {
   return pair ? pair.slice('dbsphere_session='.length) : null;
 }
 
-export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s, linuxFn = collectLinux } = {}) {
+export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s,
+  discoverK8sFn = discoverK8s, linuxFn = collectLinux } = {}) {
   const directory = resolve(dataDir ?? process.env.DBSPHERE_DATA_DIR ?? './data');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = loadMasterKey(directory);
@@ -103,7 +104,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'");
     try {
-      const path = new URL(req.url, 'http://localhost').pathname;
+      const requestUrl = new URL(req.url, 'http://localhost');
+      const path = requestUrl.pathname;
       if (req.method === 'GET' && path === '/healthz') return send(res, 200, { status: 'ok' });
       if (req.method === 'GET' && path === '/readyz') {
         try { await store.health(); return send(res, 200, { status: 'ready', storage: store.kind }); }
@@ -141,6 +143,14 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (!authenticated) return send(res, 401, { error: 'Authentication required' });
       if (req.method !== 'GET' && req.headers['x-csrf-token'] !== csrfToken(key, token)) return send(res, 403, { error: 'CSRF token required' });
       if (req.method === 'POST' && path === '/api/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': 'dbsphere_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+      if (req.method === 'GET' && path === '/api/k8s/discover') {
+        const cluster = requestUrl.searchParams.get('cluster') ?? '';
+        const namespace = requestUrl.searchParams.get('namespace') ?? '';
+        if (!cluster || cluster.length > 150 || !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(namespace) || namespace.length > 63) {
+          return send(res, 400, { error: 'A valid K8S context and namespace are required' });
+        }
+        return send(res, 200, { discovery: await discoverK8sFn({ k8s_cluster: cluster, k8s_namespace: namespace }) });
+      }
       if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
       if (req.method === 'POST' && path === '/api/assets') {
         const input = await body(req);

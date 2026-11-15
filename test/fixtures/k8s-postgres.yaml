@@ -99,9 +99,15 @@ metadata:
 rules:
   - apiGroups: ['']
     resources: [pods, persistentvolumeclaims]
-    verbs: [get]
+    verbs: [get, list]
   - apiGroups: ['']
-    resources: [events]
+    resources: [events, services]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
     verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -116,4 +122,29 @@ subjects:
 roleRef:
   kind: Role
   name: dbsphere-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dbsphere-smoke-reader
+rules:
+  - apiGroups: ['']
+    resources: [nodes, persistentvolumes]
+    verbs: [get]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dbsphere-smoke-reader
+subjects:
+  - kind: ServiceAccount
+    name: dbsphere-reader
+    namespace: dbsphere-smoke
+roleRef:
+  kind: ClusterRole
+  name: dbsphere-smoke-reader
   apiGroup: rbac.authorization.k8s.io

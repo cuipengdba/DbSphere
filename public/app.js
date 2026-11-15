@@ -91,6 +91,16 @@ async function showAsset(id) {
       detail.append(cell('p', `Pod ${k8s.pod.name} · ${k8s.pod.phase || '未知'} · Node ${k8s.pod.node || '未映射'}`));
       for (const container of k8s.containers) detail.append(cell('p', `${container.name} · 重启 ${container.restartCount} 次${container.terminatedReason ? ' · 最近终止：' + container.terminatedReason : ''}`, container.terminatedReason === 'OOMKilled' ? 'warning' : ''));
       for (const pvc of k8s.pvcs) detail.append(cell('p', `PVC ${pvc.name} · ${pvc.phase || pvc.error || '未知'} · ${pvc.capacity || '容量未知'}`));
+      if (k8s.node) detail.append(cell('p', `Node ${k8s.node.name} · ${k8s.node.conditions.map(c => `${c.type}=${c.status}`).join('，') || '状态未知'}`));
+      else if (k8s.nodeError) detail.append(cell('p', `Node 状态未采集：${k8s.nodeError}`, 'warning'));
+      for (const service of k8s.services || []) detail.append(cell('p', `Service ${service.name} · 端口 ${service.ports.join('、')}`));
+      if (k8s.servicesError) detail.append(cell('p', `Service 未采集：${k8s.servicesError}`, 'warning'));
+      if (k8s.resourceMetrics) {
+        detail.append(cell('p', `资源来源 ${k8s.resourceMetrics.source} · ${formatTime(k8s.resourceMetrics.observedAt)}`));
+        for (const container of k8s.resourceMetrics.containers) detail.append(cell('p', `${container.name}：CPU ${container.cpu || '未知'}，内存 ${container.memory || '未知'}`));
+        if (k8s.resourceMetrics.node) detail.append(cell('p', `Node 使用量：CPU ${k8s.resourceMetrics.node.cpu || '未知'}，内存 ${k8s.resourceMetrics.node.memory || '未知'}`));
+      }
+      if (k8s.resourceMetricsError) detail.append(cell('p', `K8S 资源使用量未采集：${k8s.resourceMetricsError}`, 'warning'));
       for (const event of k8s.events) detail.append(cell('p', `${formatTime(event.at)} · ${event.reason || 'Event'} · ${event.message || ''}`, 'evidence'));
       if (k8s.eventsError) detail.append(cell('p', `K8S Event 未采集：${k8s.eventsError}`, 'warning'));
     } else detail.append(cell('p', `K8S 未采集：${k8s.reason || k8s.status}`, 'warning'));
@@ -210,6 +220,35 @@ $('runtime').addEventListener('change', (event) => {
   for (const field of document.querySelectorAll('.linux-field')) field.hidden = k8s;
   $('asset-form').elements.k8sCluster.required = k8s;
   $('asset-form').elements.namespace.required = k8s;
+});
+$('discover-k8s').addEventListener('click', async () => {
+  const form = $('asset-form');
+  const cluster = form.elements.k8sCluster.value.trim();
+  const namespace = form.elements.namespace.value.trim();
+  const target = $('discovery-results');
+  target.replaceChildren(cell('p', '正在查询 Kubernetes API…'));
+  try {
+    const { discovery } = await api(`/api/k8s/discover?cluster=${encodeURIComponent(cluster)}&namespace=${encodeURIComponent(namespace)}`);
+    target.replaceChildren();
+    if (discovery.status !== 'ok') { target.append(cell('p', discovery.reason || discovery.errors?.pods || discovery.status, 'warning')); return; }
+    const candidates = discovery.pods.filter(pod => pod.postgresLikely);
+    target.append(cell('p', `发现 ${discovery.pods.length} 个 Pod，其中 ${candidates.length} 个可能运行 PostgreSQL。请核对后选择。`));
+    for (const pod of candidates) {
+      const button = cell('button', `${pod.name} · ${pod.workload?.kind || 'Pod'}/${pod.workload?.name || '未关联'} · ${pod.services.join('、') || '无 Service'}`, 'ghost');
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        form.elements.pod.value = pod.name;
+        form.elements.workload.value = pod.workload?.name || '';
+        form.elements.node.value = pod.node || '';
+        const service = pod.services[0];
+        if (service && !form.elements.host.value) form.elements.host.value = `${service}.${namespace}.svc`;
+        notice(`已填入 ${pod.name} 的 K8S 映射；请核对 PostgreSQL 地址和凭据。`);
+      });
+      target.append(button);
+    }
+    for (const [resource, error] of Object.entries(discovery.errors || {})) target.append(cell('p', `${resource} 未采集：${error}`, 'warning'));
+    for (const resource of Object.keys(discovery.truncated || {})) target.append(cell('p', `${resource} 超过 100 项，发现结果不完整。`, 'warning'));
+  } catch (error) { target.replaceChildren(cell('p', error.message, 'warning')); }
 });
 $('asset-form').addEventListener('submit', async (event) => {
   event.preventDefault();

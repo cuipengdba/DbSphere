@@ -58,6 +58,8 @@
               <label>Workload<input name="workload" placeholder="postgresql"></label>
               <label>Pod<input name="pod" placeholder="postgresql-0"></label>
               <label>Node<input name="node" placeholder="worker-01"></label>
+              <button id="discover-k8s" class="ghost" type="button">发现此 Namespace 的 PostgreSQL Pod</button>
+              <div id="discovery-results" class="wide" aria-live="polite"></div>
             </div>
             <button class="wide" id="asset-submit" type="submit">保存资产</button>
             <button class="wide ghost" id="cancel-edit" type="button" hidden>取消编辑</button>
