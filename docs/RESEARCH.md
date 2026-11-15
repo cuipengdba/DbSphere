@@ -25,7 +25,8 @@
 
 ## 技术标准与版本依据
 
-- [PostgreSQL 官方版本策略](https://www.postgresql.org/support/versioning/)：截至调研日，PostgreSQL 15–18 仍在支持期，14 于 2026-11-12 结束支持，因此建议 V1.0 正式支持 15–18。
+- [PostgreSQL 官方版本策略](https://www.postgresql.org/support/versioning/)：截至调研日，PostgreSQL 15–18 仍在支持期，14 于 2026-11-12 结束支持。按项目需求 DbSphere 仍兼容监控 PG14，并明确显示 EOL 状态。
+- [Kubernetes StatefulSet 文档](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)与[系统组件指标文档](https://kubernetes.io/docs/concepts/cluster-administration/system-metrics/)：K8S 工作负载身份、存储和基础设施遥测的设计依据。
 - [PostgreSQL 统计系统](https://www.postgresql.org/docs/current/monitoring-stats.html)：`pg_stat_activity`、等待事件和累积统计等数据库侧观测依据。
 - [PostgreSQL `pg_stat_statements` 文档](https://www.postgresql.org/docs/current/pgstatstatements.html)：SQL 聚合统计需要启用扩展，且预加载配置可能要求重启；因此它是分级可选信号。
 - [OpenTelemetry PostgreSQL 语义约定](https://opentelemetry.io/docs/specs/semconv/db/postgresql/)：应用侧数据库调用 Span 的标准依据。应用到数据库的全链路分析须实际接入应用遥测，不能仅靠数据库指标声称完成。

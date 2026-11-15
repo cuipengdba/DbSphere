@@ -4,9 +4,9 @@
 
 **英文名：DbSphere**
 
-DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台规划项目。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 聚焦 PostgreSQL；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
+DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-当前仓库处于**产品规划阶段**：尚无可安装的软件或功能实现。版本号代表拟议的交付顺序，不代表已经发布。
+项目已进入开发阶段。版本号代表拟议的交付顺序，只有满足各版本验收条件后才标记为发布。
 
 ## 核心原则
 
@@ -20,6 +20,7 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 
 - [V0.1–V1.0 十版本路线图](docs/ROADMAP.md)
 - [产品设计与能力边界](docs/PRODUCT_DESIGN.md)
+- [全版本开发任务清单](docs/DEVELOPMENT_TASKS.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 许可与参考边界
@@ -28,4 +29,4 @@ DbSphere 仓库采用 [Apache License 2.0](LICENSE)。DeepLens 的本地安装�
 
 ## 参与讨论
 
-路线图是提案。建议通过 GitHub Issues 反馈 PostgreSQL 场景、关键指标、故障案例与版本优先级。功能开发将在规划确认后开始。
+路线图是交付计划。建议通过 GitHub Issues 反馈 PostgreSQL 场景、关键指标、故障案例与版本优先级。
