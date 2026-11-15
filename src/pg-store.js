@@ -44,6 +44,7 @@ export class PgStore {
   static async create(connectionString) {
     const pool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000, application_name: 'dbsphere-store' });
+    pool.on('error', error => console.error('PG18 store connection lost:', error.message));
     try {
       const version = (await pool.query("SELECT current_setting('server_version_num')::int AS version_num")).rows[0].version_num;
       if (Math.floor(version / 10000) !== 18) throw new Error('DbSphere long-term store requires PostgreSQL 18');

@@ -16,6 +16,10 @@ bash scripts/one-click.sh
 
 Docker 命名卷 `dbsphere_pg18-data` 保存长期数据，`dbsphere_app-data` 保存应用本地配置目录。`docker compose down` 不删除命名卷；不要使用 `down -v` 清理包含正式数据的卷。当前版本尚未实现自动备份。
 
+### 使用已有的独立 PostgreSQL 18
+
+如果已有单独的 PG18 存储实例，先为 DbSphere 创建专属数据库和账号，并确保容器能访问。首次运行脚本生成 `.env` 后，加入一行 `DBSPHERE_DATABASE_URL=postgres://用户:URL编码后的密码@主机:5432/数据库`，再次运行脚本会只启动 DbSphere 应用容器。目标必须是 PostgreSQL 18，连接失败或版本不符会使启动明确失败。请通过网络策略、TLS 和数据库权限保护这个连接；不得指向被纳管的业务库。
+
 ## 从 V0.1 SQLite 迁移
 
 先停止 V0.1 服务并备份它的整个数据目录，然后运行：
@@ -30,4 +34,4 @@ bash scripts/one-click.sh --migrate-from /absolute/path/to/v0.1/data
 
 ## 当前边界
 
-PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。V0.2 仍在开发，分区、保留期、备份恢复与外部现有 PG18 的一键配置将继续补齐。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。
+PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。V0.2 仍在开发，分区、保留期、备份恢复与外部 PG18 模式的端到端验收将继续补齐。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。

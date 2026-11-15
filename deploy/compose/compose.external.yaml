@@ -1,0 +1,28 @@
+name: dbsphere
+
+services:
+  app:
+    build:
+      context: ../..
+    restart: unless-stopped
+    environment:
+      DBSPHERE_DATABASE_URL: ${DBSPHERE_DATABASE_URL:?Set an independent PostgreSQL 18 URL in .env}
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click.sh first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_MASTER_KEY:?Run scripts/one-click.sh first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_DATA_DIR: /var/lib/dbsphere
+      DBSPHERE_COLLECT_INTERVAL_SECONDS: ${DBSPHERE_COLLECT_INTERVAL_SECONDS:-60}
+      DBSPHERE_COOKIE_SECURE: ${DBSPHERE_COOKIE_SECURE:-false}
+    volumes:
+      - app-data:/var/lib/dbsphere
+    ports:
+      - '127.0.0.1:${DBSPHERE_WEB_PORT:-8080}:8080'
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  app-data: {}

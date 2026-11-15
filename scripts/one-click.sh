@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="$repo_dir/deploy/compose/compose.yaml"
+external_compose_file="$repo_dir/deploy/compose/compose.external.yaml"
 env_file="$repo_dir/deploy/compose/.env"
 migrate_from=''
 
@@ -36,11 +37,18 @@ if [[ ! -e "$env_file" ]]; then
   echo "Created $env_file with random credentials. Back it up securely."
 fi
 
+if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
+  compose_file="$external_compose_file"
+  echo 'Using the independent external PostgreSQL 18 store from .env.'
+fi
+
 docker compose --env-file "$env_file" -f "$compose_file" config -q
 if [[ -n "$migrate_from" ]]; then
   docker compose --env-file "$env_file" -f "$compose_file" build app
   docker compose --env-file "$env_file" -f "$compose_file" stop app >/dev/null 2>&1 || true
-  docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --wait-timeout 180 store
+  if [[ "$compose_file" != "$external_compose_file" ]]; then
+    docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --wait-timeout 180 store
+  fi
   extra_env=()
   if [[ -n "${DBSPHERE_OLD_MASTER_KEY:-}" ]]; then extra_env=(-e DBSPHERE_OLD_MASTER_KEY); fi
   docker compose --env-file "$env_file" -f "$compose_file" run --rm --no-deps \
