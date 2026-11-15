@@ -15,12 +15,13 @@ const schema = `
   CREATE TABLE IF NOT EXISTS assets (
     id uuid PRIMARY KEY, name text NOT NULL, host text NOT NULL, port integer NOT NULL,
     database_name text NOT NULL, username text NOT NULL, password_enc text NOT NULL,
-    ssl_mode text NOT NULL, runtime text NOT NULL, linux_host text, linux_exporter_port integer, k8s_cluster text,
+    ssl_mode text NOT NULL, runtime text NOT NULL, linux_host text, linux_exporter_port integer, pooler_url_enc text, k8s_cluster text,
     k8s_namespace text, k8s_workload text, k8s_pod text, k8s_node text,
     created_at timestamptz NOT NULL, last_sample_at timestamptz,
     last_status text NOT NULL DEFAULT 'pending', last_error text, version_num integer, role text
   );
   ALTER TABLE assets ADD COLUMN IF NOT EXISTS linux_exporter_port integer;
+  ALTER TABLE assets ADD COLUMN IF NOT EXISTS pooler_url_enc text;
   CREATE TABLE IF NOT EXISTS samples (
     id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     collected_at timestamptz NOT NULL, status text NOT NULL,
@@ -55,6 +56,7 @@ export class PgStore {
         await client.query('SELECT pg_advisory_xact_lock(1742026)');
         await client.query(schema);
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -81,27 +83,27 @@ export class PgStore {
   }
   async getAsset(id) { return publicAsset(await this.getInternalAsset(id)); }
 
-  async addAsset(a, encryptedPassword) {
+  async addAsset(a, encryptedPassword, encryptedPoolerUrl = null) {
     const id = randomUUID();
     await this.pool.query(`INSERT INTO assets
-      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,linux_exporter_port,k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,k8s_node,created_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [
+      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,linux_exporter_port,pooler_url_enc,k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,k8s_node,created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [
       id, a.name, a.host, a.port, a.database, a.username, encryptedPassword,
-      a.sslMode, a.runtime, a.linuxHost || null, a.linuxExporterPort || null, a.k8sCluster || null,
+      a.sslMode, a.runtime, a.linuxHost || null, a.linuxExporterPort || null, encryptedPoolerUrl, a.k8sCluster || null,
       a.namespace || null, a.workload || null, a.pod || null, a.node || null,
       new Date().toISOString()
     ]);
     return this.getAsset(id);
   }
 
-  async updateAsset(id, a, encryptedPassword) {
+  async updateAsset(id, a, encryptedPassword, encryptedPoolerUrl = null) {
     const updated = await this.pool.query(`UPDATE assets SET
       name=$1,host=$2,port=$3,database_name=$4,username=$5,password_enc=$6,ssl_mode=$7,runtime=$8,
-      linux_host=$9,linux_exporter_port=$10,k8s_cluster=$11,k8s_namespace=$12,k8s_workload=$13,k8s_pod=$14,k8s_node=$15,
+      linux_host=$9,linux_exporter_port=$10,pooler_url_enc=$11,k8s_cluster=$12,k8s_namespace=$13,k8s_workload=$14,k8s_pod=$15,k8s_node=$16,
       last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
-      WHERE id=$16 RETURNING id`, [
+      WHERE id=$17 RETURNING id`, [
       a.name, a.host, a.port, a.database, a.username, encryptedPassword, a.sslMode, a.runtime,
-      a.linuxHost || null, a.linuxExporterPort || null, a.k8sCluster || null, a.namespace || null,
+      a.linuxHost || null, a.linuxExporterPort || null, encryptedPoolerUrl, a.k8sCluster || null, a.namespace || null,
       a.workload || null, a.pod || null, a.node || null, id
     ]);
     return updated.rowCount ? this.getAsset(id) : null;
@@ -147,6 +149,10 @@ export class PgStore {
         if (result?.linux) {
           await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
             VALUES($1,$2,'linux_state',$3,$4)`, [randomUUID(), eventId, now, JSON.stringify(result.linux)]);
+        }
+        if (result?.pgbouncer) {
+          await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+            VALUES($1,$2,'pgbouncer_state',$3,$4)`, [randomUUID(), eventId, now, JSON.stringify(result.pgbouncer)]);
         }
       } else if (open) {
         await client.query("UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2", [now, open.id]);

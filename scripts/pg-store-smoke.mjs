@@ -61,7 +61,8 @@ try {
   const linuxCreated = await fetch(`${base}/api/assets`, { method: 'POST', headers,
     body: JSON.stringify({ name: 'Linux exporter mapping', host: '127.0.0.1', port: 5432,
       database: 'postgres', username: 'monitor', password: 'test-monitor-secret',
-      sslMode: 'disable', runtime: 'linux', linuxHost: 'db-node-01', linuxExporterPort: 9100 }) });
+      sslMode: 'disable', runtime: 'linux', linuxHost: 'db-node-01', linuxExporterPort: 9100,
+      poolerUrl: 'postgres://monitor:pooler-secret@pooler:6432/pgbouncer' }) });
   assert.equal(linuxCreated.status, 201);
   linuxAssetId = (await linuxCreated.json()).asset.id;
 } finally { await stop(); }
@@ -75,7 +76,9 @@ try {
   assert.equal(assets.assets.length, 2);
   assert.equal(assets.assets.find(asset => asset.id === assetId).versionNum, 180006);
   assert.equal(assets.assets.find(asset => asset.id === linuxAssetId).linuxExporterPort, 9100);
+  assert.equal(assets.assets.find(asset => asset.id === linuxAssetId).poolerConfigured, true);
   assert.ok(!JSON.stringify(assets).includes('test-monitor-secret'));
+  assert.ok(!JSON.stringify(assets).includes('pooler-secret'));
   const samples = await (await fetch(`${base}/api/assets/${assetId}/samples`, {
     headers: { cookie: auth.cookie }
   })).json();

@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-项目已进入开发阶段，首个版本是 **[V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)**。V0.1 使用 SQLite 保存早期样例数据；当前主分支正在开发 Docker Compose 一键部署、独立 PostgreSQL 18 长期存储和 Linux 资源采集，尚未发布 V0.2。后续版本仅在满足各自验收条件后发布。
+项目首个版本是 **[V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)**。V0.1 使用 SQLite 保存早期样例数据；当前主分支的 V0.2 开发代码已接入 Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集，以及可选 PgBouncer 观测。V0.2 尚未发行，后续版本仅在满足各自验收条件后发布。
 
 ## 核心原则
 
@@ -25,10 +25,11 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [部署与接入](docs/DEPLOYMENT.md)
 - [V0.1.0 发行说明](docs/RELEASE_NOTES_V0.1.md)
 - [V0.2 一键部署与 PG18 存储（开发中）](docs/DEPLOYMENT_V0.2.md)
+- [参考产品与资料来源](docs/RESEARCH.md)
 
-## V0.1 开发预览
+## 当前可用范围
 
-已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线，以及 Linux/K8S 运行位置登记。V0.2 的 PG 诊断采集已覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。K8S 位置目前由用户填写；配置 K8S 访问后可读取指定 Pod 的状态、容器重启/OOMKilled、关联 PVC 和 Pod 事件。自动发现、Node 指标与容量时序仍在 V0.2 任务中；跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口，不把尚未采集的层级显示为健康。
+已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
 
 ### 本机开发启动
 
@@ -46,10 +47,9 @@ Linux 容器镜像可用 `docker build -t dbsphere:dev .` 构建。对外提供�
 
 建议为纳管目标创建专用 PostgreSQL 登录角色并授予 `pg_monitor`；DbSphere 不需要数据库超级用户。PG14 的监控兼容已纳入测试，但其上游已停止安全维护，控制台会显示 EOL 提示。
 
-### Kubernetes 接入预览
+### Kubernetes 接入
 
-如果 DbSphere 在 Kubernetes 内运行，可给它配置只读 ServiceAccount；如果在集群外运行，设置 `DBSPHERE_KUBECONFIG` 为可信 kubeconfig 文件路径，资产里的“K8S 集群”填写该文件中的 context 名。服务端禁止执行 kubeconfig 中的外部认证插件。当前所需权限为目标 Namespace 中 `pods`、`persistentvolumeclaims` 的 `get` 和 `events` 的 `list`；没有这些权限时，实例详情会显示 K8S 采集错误。kind 中的 PostgreSQL 18 Pod、PVC、只读 ServiceAccount 与容器重启已通过实际演练，测试配置见 `test/fixtures/k8s-postgres.yaml` 和 `scripts/k8s-smoke.mjs`。
-- [参考产品与资料来源](docs/RESEARCH.md)
+如果 DbSphere 在 Kubernetes 内运行，可给它配置只读 ServiceAccount；如果在集群外运行，设置 `DBSPHERE_KUBECONFIG` 为可信 kubeconfig 文件路径，资产里的“K8S 集群”填写该文件中的 context 名。服务端禁止执行 kubeconfig 中的外部认证插件。Compose 部署可在 `.env` 中设置只读 kubeconfig 的绝对路径。所需的 Namespace/ClusterRole 权限与可选指标来源见 [V0.2 部署说明](docs/DEPLOYMENT_V0.2.md)。kind 中的 PostgreSQL 18 Pod、PVC/PV、Service、Node、只读 ServiceAccount 与容器重启已通过实际演练。
 
 ## 许可与参考边界
 

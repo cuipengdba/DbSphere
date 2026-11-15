@@ -33,6 +33,7 @@ DbSphere 自身长期存储选择独立 PG18，产品交付选择最小权限的
 - [Kubernetes StatefulSet 文档](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)与[系统组件指标文档](https://kubernetes.io/docs/concepts/cluster-administration/system-metrics/)：K8S 工作负载身份、存储和基础设施遥测的设计依据。
 - [PostgreSQL 统计系统](https://www.postgresql.org/docs/current/monitoring-stats.html)：`pg_stat_activity`、等待事件和累积统计等数据库侧观测依据。
 - [PostgreSQL `pg_stat_statements` 文档](https://www.postgresql.org/docs/current/pgstatstatements.html)：SQL 聚合统计需要启用扩展，且预加载配置可能要求重启；因此它是分级可选信号。
+- [PgBouncer 官方管理控制台](https://www.pgbouncer.org/usage)：`stats_users` 可访问只读统计，`SHOW POOLS` 与 `SHOW STATS` 提供连接池排队和查询累计信息；DbSphere 的可选适配器仅调用这两个命令。
 - [OpenTelemetry PostgreSQL 语义约定](https://opentelemetry.io/docs/specs/semconv/db/postgresql/)：应用侧数据库调用 Span 的标准依据。应用到数据库的全链路分析须实际接入应用遥测，不能仅靠数据库指标声称完成。
 
 ## 设计归纳

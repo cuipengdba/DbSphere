@@ -47,3 +47,9 @@ Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `ge
 在 Compose 模式使用 K8S 时，将只读 kubeconfig 保存为 Linux 主机上仅运维账号可读的文件，并在 `deploy/compose/.env` 增加 `DBSPHERE_KUBECONFIG_HOST_PATH=/绝对路径/readonly.kubeconfig`，再运行 `bash scripts/one-click.sh`。脚本验证文件存在后将其只读挂载到应用容器。kubeconfig 的 context 名须与资产中填写的集群名一致；DbSphere 禁止执行其中的外部认证插件。Kubernetes API 地址须从应用容器可达，ServiceAccount token 应按集群策略轮换。
 
 metrics-server 提供 Pod/Node 资源使用量，不提供 PVC 文件系统实际用量。若已有 Prometheus 抓取 kubelet 的 `kubelet_volume_stats_used_bytes`，可在 `.env` 设置 `DBSPHERE_PROMETHEUS_URL=https://prometheus.example.internal`，如需 bearer token 再设置 `DBSPHERE_PROMETHEUS_TOKEN`。DbSphere 对每个关联 PVC 发起只读即时查询，限制 4 秒和 1 MiB 响应；实际用量与 PVC 申请量、容量分别展示。Prometheus 地址由管理员在部署配置中设置，不能从资产表单指定。如没有 metrics-server、Prometheus、权限或目标指标，DbSphere 会记录未采集原因，PG 侧监控继续工作。
+
+### 可选 PgBouncer 观测
+
+若 PostgreSQL 前面有 PgBouncer，可在资产中填写指向其**管理数据库**的连接 URL，如 `postgres://stats_user:URL编码后的密码@pooler.internal:6432/pgbouncer`。按 [PgBouncer 官方管理控制台说明](https://www.pgbouncer.org/usage)，给该用户配置 `stats_users`；DbSphere 只运行 `SHOW POOLS` 和 `SHOW STATS`，不会执行暂停、重载或关闭命令。连接串加密保存在 PG18 监控库，浏览器只看到“已配置”标志；编辑时留空会保留原值，勾选清除才移除。
+
+统计按资产的数据库名过滤，显示等待客户端、活跃/空闲服务端连接和累计查询。若 PgBouncer 无对应数据库或统计权限不足，界面明确显示未关联或采集错误；不影响 PostgreSQL、Linux 和 K8S 采样。请将管理端口限定在可信网络。

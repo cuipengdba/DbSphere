@@ -7,6 +7,7 @@ import { PgStore } from './pg-store.js';
 import { collectPostgres } from './postgres.js';
 import { collectK8s, discoverK8s } from './k8s.js';
 import { collectLinux, deriveLinuxRates } from './linux.js';
+import { collectPgBouncer } from './pgbouncer.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
@@ -43,6 +44,14 @@ function validAsset(a) {
     if (a.runtime !== 'linux' || !/^[a-zA-Z0-9_.:-]{1,150}$/.test(a.linuxHost || '')) return false;
     if (!Number.isInteger(Number(a.linuxExporterPort)) || Number(a.linuxExporterPort) < 1 || Number(a.linuxExporterPort) > 65535) return false;
   }
+  if (a.poolerUrl) {
+    if (typeof a.poolerUrl !== 'string' || a.poolerUrl.length > 2048) return false;
+    try {
+      const url = new URL(a.poolerUrl);
+      if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.pathname !== '/pgbouncer' || !url.username) return false;
+    } catch { return false; }
+  }
+  if (a.poolerClear != null && typeof a.poolerClear !== 'boolean') return false;
   return ['linuxHost', 'k8sCluster', 'namespace', 'workload', 'pod', 'node'].every(k => !a[k] || (typeof a[k] === 'string' && a[k].length <= 150));
 }
 
@@ -52,7 +61,7 @@ function cookie(req) {
 }
 
 export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s,
-  discoverK8sFn = discoverK8s, linuxFn = collectLinux } = {}) {
+  discoverK8sFn = discoverK8s, linuxFn = collectLinux, poolerFn = collectPgBouncer } = {}) {
   const directory = resolve(dataDir ?? process.env.DBSPHERE_DATA_DIR ?? './data');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = loadMasterKey(directory);
@@ -93,8 +102,24 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
           linux = deriveLinuxRates(linux, previous);
         }
       }
+      let pgbouncer = null;
+      if (asset.pooler_url_enc) {
+        let poolerUrl = '';
+        try { poolerUrl = decrypt(key, asset.pooler_url_enc); pgbouncer = await poolerFn(asset, poolerUrl); }
+        catch (e) {
+          let reason = String(e?.message ?? e);
+          try {
+            reason = reason.replaceAll(poolerUrl, '[redacted]');
+            const secret = decodeURIComponent(new URL(poolerUrl).password);
+            if (secret) reason = reason.replaceAll(secret, '[redacted]');
+          }
+          catch { reason = 'PgBouncer credential or connection error'; }
+          pgbouncer = { status: 'error', reason: reason.slice(0, 300) };
+        }
+      }
       if (!await store.getInternalAsset(id)) return null;
-      return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}) }, error);
+      return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}),
+        ...(pgbouncer ? { pgbouncer } : {}) }, error);
     } finally { activeCollections.delete(id); }
   }
 
@@ -156,7 +181,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         const input = await body(req);
         if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
         const asset = await store.addAsset({ ...input, port: Number(input.port),
-          linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null }, encrypt(key, input.password));
+          linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null },
+        encrypt(key, input.password), input.poolerUrl ? encrypt(key, input.poolerUrl) : null);
         return send(res, 201, { asset });
       }
       const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|check))?$/);
@@ -169,8 +195,9 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
           if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
           const old = await store.getInternalAsset(id);
           const password = input.password ? encrypt(key, input.password) : old.password_enc;
+          const poolerUrl = input.poolerClear ? null : input.poolerUrl ? encrypt(key, input.poolerUrl) : old.pooler_url_enc;
           return send(res, 200, { asset: await store.updateAsset(id, { ...input, port: Number(input.port),
-            linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null }, password) });
+            linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null }, password, poolerUrl) });
         }
         if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
         if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });

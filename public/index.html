@@ -52,6 +52,8 @@
             <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option></select></label>
             <label class="linux-field wide">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field wide">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
+            <label class="wide">PgBouncer 管理连接 URL（可选）<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
+            <label class="wide"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 连接</label>
             <div id="k8s-fields" class="nested wide" hidden>
               <label>K8S 集群<input name="k8sCluster" placeholder="production"></label>
               <label>Namespace<input name="namespace" placeholder="database"></label>

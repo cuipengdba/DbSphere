@@ -21,7 +21,8 @@ const source = new Store(sourceDir);
 source.setSetting('admin_password_hash', hashPassword('old-admin-password-strong'));
 const asset = source.addAsset({ name: 'SQLite source', host: '127.0.0.1', port: 5432,
   database: 'postgres', username: 'monitor', sslMode: 'disable', runtime: 'k8s',
-  k8sCluster: 'source', namespace: 'db', pod: 'postgres-0' }, encrypt(oldKey, 'old-monitor-secret'));
+  k8sCluster: 'source', namespace: 'db', pod: 'postgres-0' }, encrypt(oldKey, 'old-monitor-secret'),
+encrypt(oldKey, 'postgres://stats:old-pooler-secret@pooler:6432/pgbouncer'));
 source.recordResult(asset.id, { k8s: { status: 'ok', containers: [{ name: 'postgres',
   terminatedReason: 'OOMKilled', lastTerminatedAt: new Date().toISOString() }] } }, 'connection refused');
 source.recordResult(asset.id, { version_num: 180006, role: 'primary' });
@@ -50,6 +51,7 @@ const target = await PgStore.create(targetUrl);
 try {
   const imported = await target.getInternalAsset(asset.id);
   assert.equal(decrypt(newKey, imported.password_enc), 'old-monitor-secret');
+  assert.equal(decrypt(newKey, imported.pooler_url_enc), 'postgres://stats:old-pooler-secret@pooler:6432/pgbouncer');
   assert.equal((await target.listSamples(asset.id)).length, 2);
   const event = await target.getEvent(sourceEvent.id);
   assert.equal(event.status, 'resolved');

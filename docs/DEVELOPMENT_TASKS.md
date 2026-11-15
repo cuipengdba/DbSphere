@@ -32,7 +32,7 @@
 - [x] **02-02** Linux CPU/内存/磁盘/IO/网络采集器，标记权限与开销，不在目标主机执行任意用户脚本。通过只读 node_exporter `/metrics` 采集，4 秒超时、5 MiB 上限；真实 PG14 + node_exporter + PG18 存储演练已验证速率与重启持久化。
 - [x] **02-03** K8S 只读凭据、Namespace/Pod/Container/Node/PV/PVC/Service 发现，按 OwnerReference 和标签关联 PG 实例。Namespace 限定并限制单类资源最多 100 项；只读 ServiceAccount 的真实 kind 演练已验证 Pod → ReplicaSet → Deployment、Service 标签、Node、PVC/PV 关联。未授权资源和截断结果显式显示。
 - [ ] **02-04** 接入 K8S Pod 重启、状态、驱逐、OOMKilled、调度、探针、Node 压力、PVC 用量和事件；区分 API/metrics-server/exporter 来源。已接入 Pod/Node 条件和 Event、可选 metrics.k8s.io Pod/Node 使用量、可选 Prometheus kubelet PVC 实际用量；待真实 metrics-server/Prometheus 与故障事件验收。
-- [ ] **02-05** PgBouncer 可选适配与 Linux/K8S 资源趋势联动；不可用信号显式标记。
+- [ ] **02-05** PgBouncer 可选适配与 Linux/K8S 资源趋势联动；不可用信号显式标记。已实现加密连接串、只读 `SHOW POOLS/STATS`、同资产 PG/Linux/K8S 联合采样与事件证据；真实 PG14 + PgBouncer + PG18 存储本地通过，待 Linux CI。
 - [ ] **02-06** 验收：从 PG 实例跳转到其 Linux 主机或 K8S Pod/Node/PVC，模拟锁等待、Pod 重启与采集权限缺失。
 - [x] **02-07** PG18 持久化后端：资产、凭据、样本、事件和证据以独立 PG18 为正式存储；提供 SQLite 预览数据迁移与校验，禁止监控数据写入被纳管业务库。真实 PG18 容器与 Linux CI 已验证重启持久化、事件证据、凭据重加密和旧版 SQLite 数据导入。
 - [x] **02-08** Linux Docker Compose 一键部署：DbSphere + PG18 两容器、随机初始密钥、数据卷、健康门禁、只暴露 Web 端口；支持改用现有 PG18 实例和可选只读 kubeconfig 挂载。默认与外部 PG18 两种模式均通过 GitHub Linux CI。

@@ -70,6 +70,7 @@ async function showAsset(id) {
   detail.append(cell('h3', asset.name));
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}` : asset.linuxHost || 'Linux 主机未关联'}`));
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
+  detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
   detail.append(cell('p', `采集状态：${asset.lastStatus} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
   const sample = samples[0];
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
@@ -125,6 +126,14 @@ async function showAsset(id) {
       }
     } else detail.append(cell('p', `Linux 未采集：${linux.reason || linux.status}`, 'warning'));
   }
+  if (currentSample?.metrics?.pgbouncer) {
+    const pooler = currentSample.metrics.pgbouncer;
+    detail.append(cell('h3', 'PgBouncer 连接池'));
+    if (pooler.status === 'ok') {
+      for (const entry of pooler.pools) detail.append(cell('p', `${entry.user} · 客户端活跃 ${entry.clientActive} / 等待 ${entry.clientWaiting} · 服务端活跃 ${entry.serverActive} / 空闲 ${entry.serverIdle} · 最久等待 ${entry.maxWaitSeconds.toFixed(2)} 秒`));
+      for (const entry of pooler.stats) detail.append(cell('p', `累计事务 ${entry.transactionsTotal} · 累计查询 ${entry.queriesTotal} · 平均查询 ${entry.avgQueryMicroseconds} μs`));
+    } else detail.append(cell('p', `PgBouncer 未采集：${pooler.reason || pooler.status}`, 'warning'));
+  }
 }
 
 function renderDiagnostics(target, diagnostics) {
@@ -171,6 +180,8 @@ function editAsset(asset) {
     workload: asset.workload, pod: asset.pod, node: asset.node
   })) form.elements[field].value = value ?? '';
   form.elements.password.value = '';
+  form.elements.poolerUrl.value = '';
+  form.elements.poolerClear.checked = false;
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '更新资产';
   $('cancel-edit').hidden = false;
@@ -198,6 +209,9 @@ async function showEvent(id) {
     if (evidence.kind === 'root_cause_candidate') text = `${evidence.payload.hypothesis} · 置信度 ${evidence.payload.confidence}。${evidence.payload.limitation}`;
     if (evidence.kind === 'linux_state') text = evidence.payload.status === 'ok'
       ? `Linux 内存已用 ${evidence.payload.memory?.usedPercent ?? '未知'}%；负载 ${evidence.payload.cpu?.load1 ?? '未知'}`
+      : evidence.payload.reason || evidence.payload.status;
+    if (evidence.kind === 'pgbouncer_state') text = evidence.payload.status === 'ok'
+      ? `${evidence.payload.pools?.length || 0} 个连接池；等待客户端 ${(evidence.payload.pools || []).reduce((sum, pool) => sum + pool.clientWaiting, 0)}`
       : evidence.payload.reason || evidence.payload.status;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
@@ -261,6 +275,7 @@ $('asset-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
   data.port = Number(data.port);
+  data.poolerClear = data.poolerClear === 'on';
   try {
     await api(editingAsset ? `/api/assets/${editingAsset}` : '/api/assets', editingAsset ? 'PATCH' : 'POST', data);
     resetEdit(); notice('资产已保存。点击“采集”验证连接。'); await refresh();
