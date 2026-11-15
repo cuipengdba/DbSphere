@@ -24,6 +24,7 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [当前开发状态与测试记录](docs/DEVELOPMENT_STATUS.md)
 - [部署与接入](docs/DEPLOYMENT.md)
 - [V0.1.0 发行说明](docs/RELEASE_NOTES_V0.1.md)
+- [V0.2 一键部署与 PG18 存储（开发中）](docs/DEPLOYMENT_V0.2.md)
 
 ## V0.1 开发预览
 

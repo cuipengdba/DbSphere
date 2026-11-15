@@ -1,0 +1,52 @@
+name: dbsphere
+
+services:
+  store:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dbsphere
+      POSTGRES_DB: dbsphere
+      POSTGRES_PASSWORD: ${DBSPHERE_STORE_PASSWORD:?Run scripts/one-click.sh first}
+    volumes:
+      - pg18-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U dbsphere -d dbsphere']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [dbsphere]
+
+  app:
+    build:
+      context: ../..
+    restart: unless-stopped
+    depends_on:
+      store:
+        condition: service_healthy
+    environment:
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_STORE_PASSWORD}@store:5432/dbsphere
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click.sh first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_MASTER_KEY:?Run scripts/one-click.sh first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_DATA_DIR: /var/lib/dbsphere
+      DBSPHERE_COLLECT_INTERVAL_SECONDS: ${DBSPHERE_COLLECT_INTERVAL_SECONDS:-60}
+      DBSPHERE_COOKIE_SECURE: ${DBSPHERE_COOKIE_SECURE:-false}
+    volumes:
+      - app-data:/var/lib/dbsphere
+    ports:
+      - '127.0.0.1:${DBSPHERE_WEB_PORT:-8080}:8080'
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [dbsphere]
+
+networks:
+  dbsphere: {}
+
+volumes:
+  pg18-data: {}
+  app-data: {}

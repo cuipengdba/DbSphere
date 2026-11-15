@@ -58,6 +58,7 @@ async function login() {
 
 try {
   await start();
+  assert.equal((await fetch(`${base}/readyz`)).status, 200);
   let auth = await login();
   const assetResponse = await fetch(`${base}/api/assets`, {
     method: 'POST', headers: { 'content-type': 'application/json', cookie: auth.cookie,

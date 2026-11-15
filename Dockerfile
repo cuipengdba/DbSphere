@@ -4,6 +4,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --prod --frozen-lockfile
 COPY src ./src
 COPY public ./public
+COPY scripts/migrate-sqlite-to-pg18.mjs ./scripts/migrate-sqlite-to-pg18.mjs
 ENV DBSPHERE_HOST=0.0.0.0 DBSPHERE_PORT=8080 DBSPHERE_DATA_DIR=/var/lib/dbsphere
 RUN mkdir -p /var/lib/dbsphere && chown node:node /var/lib/dbsphere
 VOLUME /var/lib/dbsphere

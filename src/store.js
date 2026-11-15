@@ -1,8 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { oomCandidate } from './incidents.js';
 
-const publicAsset = (row) => row && ({
+export const publicAsset = (row) => row && ({
   id: row.id, name: row.name, host: row.host, port: row.port,
   database: row.database_name, username: row.username, sslMode: row.ssl_mode,
   runtime: row.runtime, linuxHost: row.linux_host,
@@ -16,6 +17,7 @@ const publicAsset = (row) => row && ({
 
 export class Store {
   constructor(dataDir) {
+    this.kind = 'sqlite-preview';
     this.db = new DatabaseSync(join(dataDir, 'dbsphere.sqlite'));
     this.db.exec(`
       PRAGMA journal_mode=WAL;
@@ -49,6 +51,7 @@ export class Store {
   }
 
   getSetting(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? null; }
+  health() { this.db.prepare('SELECT 1').get(); }
   setSetting(key, value) { this.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value); }
 
   listAssets() { return this.db.prepare('SELECT * FROM assets ORDER BY created_at DESC').all().map(publicAsset); }
@@ -105,18 +108,11 @@ export class Store {
           const k8sEvidenceId = randomUUID();
           this.db.prepare('INSERT INTO evidence(id,event_id,kind,observed_at,payload_json) VALUES(?,?,?,?,?)')
             .run(k8sEvidenceId, eventId, 'k8s_state', now, JSON.stringify(result.k8s));
-          const recentOom = result.k8s.containers?.find(c => c.terminatedReason === 'OOMKilled' &&
-            c.lastTerminatedAt && Math.abs(Date.now() - new Date(c.lastTerminatedAt).getTime()) < 10 * 60 * 1000);
-          const connectivityError = /connection|connect |ECONN|ETIMEDOUT|timeout/i.test(error) &&
-            !/authentication|password|permission denied/i.test(error);
+          const candidate = oomCandidate(result, error, collectionEvidenceId, k8sEvidenceId);
           const hasCandidate = this.db.prepare("SELECT 1 FROM evidence WHERE event_id=? AND kind='root_cause_candidate' LIMIT 1").get(eventId);
-          if (recentOom && connectivityError && !hasCandidate) {
+          if (candidate && !hasCandidate) {
             this.db.prepare('INSERT INTO evidence(id,event_id,kind,observed_at,payload_json) VALUES(?,?,?,?,?)')
-              .run(randomUUID(), eventId, 'root_cause_candidate', now, JSON.stringify({
-                hypothesis: `Pod 容器 ${recentOom.name} 最近发生 OOMKilled，可能导致 PostgreSQL 连接失败`,
-                confidence: 'medium', supports: [collectionEvidenceId, k8sEvidenceId],
-                limitation: '时间关联不等于因果；仍需核对容器日志、探针和服务端点。'
-              }));
+              .run(randomUUID(), eventId, 'root_cause_candidate', now, JSON.stringify(candidate));
           }
         }
       } else if (open) {

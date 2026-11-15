@@ -22,3 +22,50 @@ jobs:
         run: node scripts/linux-smoke.mjs
       - name: Audit dependencies
         run: pnpm audit --audit-level high
+
+  pg18-store:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Test PostgreSQL 18 persistence
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-pgstore-smoke
+        run: node scripts/pg-store-smoke.mjs
+      - name: Test SQLite migration to PostgreSQL 18
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-migration-smoke
+        run: node scripts/migration-smoke.mjs
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and start one-click stack
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: bash scripts/one-click.sh
+      - name: Check B/S service
+        run: |
+          curl --fail --silent http://127.0.0.1:8080/readyz
+          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml ps

@@ -3,6 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
+import { PgStore } from './pg-store.js';
 import { collectPostgres } from './postgres.js';
 import { collectK8s } from './k8s.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
@@ -49,18 +50,19 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   const directory = resolve(dataDir ?? process.env.DBSPHERE_DATA_DIR ?? './data');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = loadMasterKey(directory);
-  const store = new Store(directory);
-  if (!store.getSetting('admin_password_hash')) {
+  const store = process.env.DBSPHERE_DATABASE_URL
+    ? await PgStore.create(process.env.DBSPHERE_DATABASE_URL) : new Store(directory);
+  if (!await store.getSetting('admin_password_hash')) {
     const password = process.env.DBSPHERE_ADMIN_PASSWORD;
-    if (!password || password.length < 12) { store.close(); throw new Error('Set DBSPHERE_ADMIN_PASSWORD (at least 12 characters) for first start'); }
-    store.setSetting('admin_password_hash', hashPassword(password));
+    if (!password || password.length < 12) { await store.close(); throw new Error('Set DBSPHERE_ADMIN_PASSWORD (at least 12 characters) for first start'); }
+    await store.setSetting('admin_password_hash', hashPassword(password));
   }
   const attempts = new Map();
   const activeCollections = new Set();
 
   async function collectAsset(id) {
     if (activeCollections.has(id)) return { busy: true };
-    const asset = store.getInternalAsset(id);
+    const asset = await store.getInternalAsset(id);
     if (!asset) return null;
     activeCollections.add(id);
     try {
@@ -76,7 +78,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         try { k8s = await k8sFn(asset); }
         catch (e) { k8s = { status: 'error', reason: String(e?.message ?? e).slice(0, 300) }; }
       }
-      if (!store.getInternalAsset(id)) return null;
+      if (!await store.getInternalAsset(id)) return null;
       return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}) }, error);
     } finally { activeCollections.delete(id); }
   }
@@ -89,6 +91,10 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/healthz') return send(res, 200, { status: 'ok' });
+      if (req.method === 'GET' && path === '/readyz') {
+        try { await store.health(); return send(res, 200, { status: 'ready', storage: store.kind }); }
+        catch { return send(res, 503, { status: 'unavailable', storage: store.kind }); }
+      }
       if (req.method === 'GET' && staticFiles.has(path)) {
         const [file, type] = staticFiles.get(path);
         res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -106,7 +112,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         const entry = attempts.get(ip) ?? { count: 0, until: 0 };
         if (entry.until > Date.now()) return send(res, 429, { error: 'Too many attempts' });
         const input = await body(req);
-        if (typeof input.password !== 'string' || !verifyPassword(input.password, store.getSetting('admin_password_hash'))) {
+        if (typeof input.password !== 'string' || !verifyPassword(input.password, await store.getSetting('admin_password_hash'))) {
           entry.count += 1;
           if (entry.count >= 5) { entry.until = Date.now() + 5 * 60 * 1000; entry.count = 0; }
           attempts.set(ip, entry);
@@ -121,33 +127,33 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (!authenticated) return send(res, 401, { error: 'Authentication required' });
       if (req.method !== 'GET' && req.headers['x-csrf-token'] !== csrfToken(key, token)) return send(res, 403, { error: 'CSRF token required' });
       if (req.method === 'POST' && path === '/api/logout') return send(res, 200, { ok: true }, { 'Set-Cookie': 'dbsphere_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
-      if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: store.listAssets() });
+      if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
       if (req.method === 'POST' && path === '/api/assets') {
         const input = await body(req);
         if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
-        const asset = store.addAsset({ ...input, port: Number(input.port) }, encrypt(key, input.password));
+        const asset = await store.addAsset({ ...input, port: Number(input.port) }, encrypt(key, input.password));
         return send(res, 201, { asset });
       }
       const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
-        if (!store.getAsset(id)) return send(res, 404, { error: 'Asset not found' });
-        if (req.method === 'GET' && !action) return send(res, 200, { asset: store.getAsset(id) });
+        if (!await store.getAsset(id)) return send(res, 404, { error: 'Asset not found' });
+        if (req.method === 'GET' && !action) return send(res, 200, { asset: await store.getAsset(id) });
         if (req.method === 'PATCH' && !action) {
           const input = await body(req);
           if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
-          const old = store.getInternalAsset(id);
+          const old = await store.getInternalAsset(id);
           const password = input.password ? encrypt(key, input.password) : old.password_enc;
-          return send(res, 200, { asset: store.updateAsset(id, { ...input, port: Number(input.port) }, password) });
+          return send(res, 200, { asset: await store.updateAsset(id, { ...input, port: Number(input.port) }, password) });
         }
-        if (req.method === 'DELETE' && !action) { store.deleteAsset(id); return send(res, 200, { ok: true }); }
-        if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: store.listSamples(id) });
+        if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
+        if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });
         if (req.method === 'POST' && action === 'check') return send(res, 200, { result: await collectAsset(id) });
       }
-      if (req.method === 'GET' && path === '/api/events') return send(res, 200, { events: store.listEvents() });
+      if (req.method === 'GET' && path === '/api/events') return send(res, 200, { events: await store.listEvents() });
       const eventMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})$/);
       if (req.method === 'GET' && eventMatch) {
-        const event = store.getEvent(eventMatch[1]);
+        const event = await store.getEvent(eventMatch[1]);
         return event ? send(res, 200, { event }) : send(res, 404, { error: 'Event not found' });
       }
       return send(res, 404, { error: 'Not found' });
@@ -161,10 +167,12 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   let timer;
   function startScheduler() {
     const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60) * 1000;
-    timer = setInterval(() => { for (const asset of store.listAssets()) void collectAsset(asset.id).catch(e => console.error('Collection failed:', e)); }, interval);
+    timer = setInterval(() => { void (async () => {
+      for (const asset of await store.listAssets()) void collectAsset(asset.id).catch(e => console.error('Collection failed:', e));
+    })().catch(e => console.error('Scheduler failed:', e)); }, interval);
     timer.unref();
   }
-  function stop() { clearInterval(timer); server.close(); store.close(); }
+  function stop() { clearInterval(timer); server.close(); return store.close(); }
   return { server, store, collectAsset, startScheduler, stop };
 }
 
