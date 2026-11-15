@@ -13,6 +13,7 @@
 | 验证 | 结果 | 范围 |
 | --- | --- | --- |
 | `pnpm test` | 通过，3 项 | 登录、CSRF、资产编辑、凭据不外泄、单事件归并、恢复与证据持久化、无关 OOM 不误判、PG14 EOL 标识 |
+| [GitHub Actions Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43687609396) | 通过 | Node 24 安装、自动化测试与依赖审计 |
 | K8S 适配器单元测试 | 通过 | 按 Pod UID 限定事件，读取容器 OOMKilled、PVC 和事件；尚未接入真实集群 |
 | Linux 容器构建与启动 | 通过 | `docker build`；容器 `/healthz` 返回 `{"status":"ok"}` |
 | PostgreSQL 14 | 通过 | 14.24，`pg_monitor` 账号读取版本/角色/连接/事务/容量/复制基础指标 |
