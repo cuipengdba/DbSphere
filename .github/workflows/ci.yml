@@ -74,6 +74,14 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml ps
       - name: Check persistence and storage outage
         run: node scripts/compose-smoke.mjs
+      - name: Check one-click K8S kubeconfig mount
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: |
+          printf 'DBSPHERE_KUBECONFIG_HOST_PATH=%s\n' "$PWD/test/fixtures/k8s-postgres.yaml" >> deploy/compose/.env
+          bash scripts/one-click.sh
+          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
+            -f deploy/compose/compose.k8s.yaml exec -T app test -r /etc/dbsphere/kubeconfig
 
   external-compose:
     runs-on: ubuntu-latest

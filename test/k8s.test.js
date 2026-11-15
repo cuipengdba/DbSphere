@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { collectK8s, discoverK8s } from '../src/k8s.js';
+import { collectK8s, collectPvcUsage, discoverK8s } from '../src/k8s.js';
 import { createApp } from '../src/server.js';
 
 test('Kubernetes evidence is scoped to the mapped Pod and PVC', async () => {
@@ -36,7 +37,7 @@ test('Kubernetes evidence is scoped to the mapped Pod and PVC', async () => {
   assert.equal(result.node.conditions[0].type, 'Ready');
   assert.equal(result.services[0].name, 'postgres');
   assert.equal(result.resourceMetrics.containers[0].memory, '100Mi');
-  assert.match(result.nodeError, /Node metrics forbidden/);
+  assert.match(result.nodeMetricsError, /Node metrics forbidden/);
   assert.equal(result.events[0].reason, 'BackOff');
   assert.deepEqual(requests[0], ['pod', { namespace: 'database', name: 'pg-0' }]);
   assert.deepEqual(requests[1], ['pvc', { namespace: 'database', name: 'pg-data' }]);
@@ -86,4 +87,24 @@ test('Kubernetes discovery API requires login and validates the namespace', asyn
     if (!resolve(dataDir).startsWith(root + sep)) throw new Error('Refusing to remove a directory outside the test root');
     await rm(dataDir, { recursive: true, force: true });
   }
+});
+
+test('PVC actual usage comes from a bounded Prometheus query', async () => {
+  let query = '';
+  const server = createServer((req, res) => {
+    query = new URL(req.url, 'http://localhost').searchParams.get('query');
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ status: 'success', data: { resultType: 'vector', result: [
+      { value: [1794740000, '1048576'] }
+    ] } }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const usage = await collectPvcUsage('database', 'pg-data', `http://127.0.0.1:${server.address().port}`);
+    assert.equal(usage.status, 'ok');
+    assert.equal(usage.usedBytes, 1048576);
+    assert.equal(query, 'kubelet_volume_stats_used_bytes{namespace="database",persistentvolumeclaim="pg-data"}');
+    assert.equal((await collectPvcUsage('bad_name', 'pg-data', 'http://localhost:9090')).status, 'error');
+    assert.equal((await collectPvcUsage('database', 'pg-data', '')).status, 'not_configured');
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

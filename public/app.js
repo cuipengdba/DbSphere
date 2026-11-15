@@ -90,7 +90,13 @@ async function showAsset(id) {
     if (k8s.status === 'ok') {
       detail.append(cell('p', `Pod ${k8s.pod.name} · ${k8s.pod.phase || '未知'} · Node ${k8s.pod.node || '未映射'}`));
       for (const container of k8s.containers) detail.append(cell('p', `${container.name} · 重启 ${container.restartCount} 次${container.terminatedReason ? ' · 最近终止：' + container.terminatedReason : ''}`, container.terminatedReason === 'OOMKilled' ? 'warning' : ''));
-      for (const pvc of k8s.pvcs) detail.append(cell('p', `PVC ${pvc.name} · ${pvc.phase || pvc.error || '未知'} · ${pvc.capacity || '容量未知'}`));
+      for (const pvc of k8s.pvcs) {
+        detail.append(cell('p', `PVC ${pvc.name} · ${pvc.phase || pvc.error || '未知'} · 申请 ${pvc.requested || '未知'} / 容量 ${pvc.capacity || '未知'}`));
+        if (pvc.volume) detail.append(cell('p', `PV ${pvc.volume.name} · ${pvc.volume.phase || '状态未知'}`));
+        if (pvc.volumeError) detail.append(cell('p', `PV 未采集：${pvc.volumeError}`, 'warning'));
+        if (pvc.usage?.status === 'ok') detail.append(cell('p', `PVC 实际已用 ${(pvc.usage.usedBytes / 1024 / 1024 / 1024).toFixed(2)} GiB · ${pvc.usage.source}`));
+        else detail.append(cell('p', `PVC 实际用量未采集：${pvc.usage?.reason || '未知原因'}`, 'warning'));
+      }
       if (k8s.node) detail.append(cell('p', `Node ${k8s.node.name} · ${k8s.node.conditions.map(c => `${c.type}=${c.status}`).join('，') || '状态未知'}`));
       else if (k8s.nodeError) detail.append(cell('p', `Node 状态未采集：${k8s.nodeError}`, 'warning'));
       for (const service of k8s.services || []) detail.append(cell('p', `Service ${service.name} · 端口 ${service.ports.join('、')}`));
@@ -101,6 +107,7 @@ async function showAsset(id) {
         if (k8s.resourceMetrics.node) detail.append(cell('p', `Node 使用量：CPU ${k8s.resourceMetrics.node.cpu || '未知'}，内存 ${k8s.resourceMetrics.node.memory || '未知'}`));
       }
       if (k8s.resourceMetricsError) detail.append(cell('p', `K8S 资源使用量未采集：${k8s.resourceMetricsError}`, 'warning'));
+      if (k8s.nodeMetricsError) detail.append(cell('p', `Node 资源使用量未采集：${k8s.nodeMetricsError}`, 'warning'));
       for (const event of k8s.events) detail.append(cell('p', `${formatTime(event.at)} · ${event.reason || 'Event'} · ${event.message || ''}`, 'evidence'));
       if (k8s.eventsError) detail.append(cell('p', `K8S Event 未采集：${k8s.eventsError}`, 'warning'));
     } else detail.append(cell('p', `K8S 未采集：${k8s.reason || k8s.status}`, 'warning'));

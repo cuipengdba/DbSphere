@@ -31,6 +31,38 @@ function createK8sApps(asset) {
 
 function errorText(error) { return String(error?.message ?? error).slice(0, 300); }
 
+export async function collectPvcUsage(namespace, name, prometheusUrl = process.env.DBSPHERE_PROMETHEUS_URL) {
+  if (!prometheusUrl) return { status: 'not_configured', reason: 'Set DBSPHERE_PROMETHEUS_URL for kubelet PVC usage metrics' };
+  if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(namespace) || !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)) {
+    return { status: 'error', reason: 'Invalid Kubernetes namespace or PVC name' };
+  }
+  try {
+    const url = new URL(prometheusUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Prometheus URL must be HTTP(S) without embedded credentials');
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/api/v1/query`;
+    url.search = '';
+    url.searchParams.set('query', `kubelet_volume_stats_used_bytes{namespace="${namespace}",persistentvolumeclaim="${name}"}`);
+    const token = process.env.DBSPHERE_PROMETHEUS_TOKEN;
+    const response = await fetch(url, { signal: AbortSignal.timeout(4000), redirect: 'error',
+      headers: token ? { authorization: `Bearer ${token}` } : {} });
+    if (!response.ok) throw new Error(`Prometheus HTTP ${response.status}`);
+    if (Number(response.headers.get('content-length')) > 1024 * 1024) throw new Error('Prometheus response exceeds 1 MiB');
+    let bytes = 0;
+    const chunks = [];
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024) throw new Error('Prometheus response exceeds 1 MiB');
+      chunks.push(chunk);
+    }
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (payload.status !== 'success' || payload.data?.resultType !== 'vector') throw new Error('Prometheus query did not return a vector');
+    const values = (payload.data.result ?? []).map(item => Number(item.value?.[1])).filter(value => Number.isFinite(value) && value >= 0);
+    if (!values.length) return { status: 'unavailable', reason: 'kubelet_volume_stats_used_bytes is absent for this PVC' };
+    return { status: 'ok', source: 'Prometheus kubelet_volume_stats_used_bytes', usedBytes: Math.max(...values),
+      observedAt: new Date(Math.max(...payload.data.result.map(item => Number(item.value?.[0]) || 0)) * 1000).toISOString() };
+  } catch (error) { return { status: 'error', reason: errorText(error) }; }
+}
+
 function readOptional(api, method, query) {
   return typeof api[method] === 'function' ? api[method](query) : Promise.reject(new Error(`${method} is unavailable`));
 }
@@ -44,7 +76,7 @@ function namesAndStatus(node) {
   };
 }
 
-export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = null) {
+export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = null, pvcUsageFn = collectPvcUsage) {
   if (!api) return { status: 'not_configured', reason: 'Set DBSPHERE_KUBECONFIG or run DbSphere with a read-only ServiceAccount' };
   if (!asset.k8s_namespace || !asset.k8s_pod) return { status: 'unmapped', reason: 'Namespace and Pod mapping are required' };
   const pod = await api.readNamespacedPod({ namespace: asset.k8s_namespace, name: asset.k8s_pod });
@@ -67,8 +99,9 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
             capacity: pv.spec?.capacity?.storage ?? null };
         } catch (error) { volumeError = errorText(error); }
       }
+      const usage = await pvcUsageFn(asset.k8s_namespace, name);
       return { name, phase: pvc.status?.phase ?? null, capacity: pvc.status?.capacity?.storage ?? null,
-        requested: pvc.spec?.resources?.requests?.storage ?? null, volume, volumeError };
+        requested: pvc.spec?.resources?.requests?.storage ?? null, volume, volumeError, usage };
     } catch (error) { return { name, error: errorText(error) }; }
   }));
   let events = [];
@@ -98,6 +131,7 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
   } catch (error) { servicesError = errorText(error); }
   let resourceMetrics = null;
   let resourceMetricsError = null;
+  let nodeMetricsError = null;
   try {
     const metrics = metricsApi ?? createK8sMetrics(asset);
     if (!metrics) throw new Error('Kubernetes metrics API is not configured');
@@ -105,7 +139,7 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
     let nodeMetrics = { items: [] };
     if (pod.spec?.nodeName) {
       try { nodeMetrics = await metrics.getNodeMetrics(); }
-      catch (error) { nodeError ??= `Node metrics: ${errorText(error)}`; }
+      catch (error) { nodeMetricsError = errorText(error); }
     }
     const currentPod = (podMetrics.items ?? []).find(item => item.metadata?.name === asset.k8s_pod);
     const currentNode = (nodeMetrics.items ?? []).find(item => item.metadata?.name === pod.spec?.nodeName);
@@ -118,7 +152,7 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
     status: 'ok', cluster: asset.k8s_cluster, namespace: asset.k8s_namespace,
     pod: { name: pod.metadata?.name, uid: pod.metadata?.uid, phase: pod.status?.phase ?? null, node: pod.spec?.nodeName ?? null, owner: pod.metadata?.ownerReferences?.[0]?.name ?? null },
     containers, pvcs, events, eventsError, node, nodeError, services, servicesError,
-    resourceMetrics, resourceMetricsError
+    resourceMetrics, resourceMetricsError, nodeMetricsError
   };
 }
 

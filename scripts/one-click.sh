@@ -42,21 +42,31 @@ if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   echo 'Using the independent external PostgreSQL 18 store from .env.'
 fi
 
-docker compose --env-file "$env_file" -f "$compose_file" config -q
+compose_files=(-f "$compose_file")
+kubeconfig_host_path="$(sed -n 's/^DBSPHERE_KUBECONFIG_HOST_PATH=//p' "$env_file" | tail -n 1)"
+if [[ -n "$kubeconfig_host_path" ]]; then
+  if [[ "$kubeconfig_host_path" != /* || ! -f "$kubeconfig_host_path" ]]; then
+    echo 'DBSPHERE_KUBECONFIG_HOST_PATH must be an existing absolute file path.' >&2
+    exit 1
+  fi
+  compose_files+=(-f "$repo_dir/deploy/compose/compose.k8s.yaml")
+fi
+
+docker compose --env-file "$env_file" "${compose_files[@]}" config -q
 if [[ -n "$migrate_from" ]]; then
-  docker compose --env-file "$env_file" -f "$compose_file" build app
-  docker compose --env-file "$env_file" -f "$compose_file" stop app >/dev/null 2>&1 || true
+  docker compose --env-file "$env_file" "${compose_files[@]}" build app
+  docker compose --env-file "$env_file" "${compose_files[@]}" stop app >/dev/null 2>&1 || true
   if [[ "$compose_file" != "$external_compose_file" ]]; then
-    docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --wait-timeout 180 store
+    docker compose --env-file "$env_file" "${compose_files[@]}" up -d --wait --wait-timeout 180 store
   fi
   extra_env=()
   if [[ -n "${DBSPHERE_OLD_MASTER_KEY:-}" ]]; then extra_env=(-e DBSPHERE_OLD_MASTER_KEY); fi
-  docker compose --env-file "$env_file" -f "$compose_file" run --rm --no-deps \
+  docker compose --env-file "$env_file" "${compose_files[@]}" run --rm --no-deps \
     -v "$migrate_from:/import:ro" -e DBSPHERE_SQLITE_DATA_DIR=/import \
     "${extra_env[@]}" app node scripts/migrate-sqlite-to-pg18.mjs
-  docker compose --env-file "$env_file" -f "$compose_file" up -d --wait --wait-timeout 180 app
+  docker compose --env-file "$env_file" "${compose_files[@]}" up -d --wait --wait-timeout 180 app
 else
-  docker compose --env-file "$env_file" -f "$compose_file" up -d --build --wait --wait-timeout 180
+  docker compose --env-file "$env_file" "${compose_files[@]}" up -d --build --wait --wait-timeout 180
 fi
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
 echo "DbSphere is ready at http://127.0.0.1:${web_port:-8080}"
