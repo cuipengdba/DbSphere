@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { collectDiagnostics } from './diagnostics.js';
 
 const { Client } = pg;
 
@@ -16,6 +17,8 @@ export async function collectPostgres(asset, password) {
   });
   try {
     await client.connect();
+    await client.query('SET default_transaction_read_only = on');
+    await client.query('SET statement_timeout = 3000');
     const identity = (await client.query("SELECT current_setting('server_version_num')::int AS version_num, pg_is_in_recovery() AS in_recovery")).rows[0];
     const major = Math.floor(identity.version_num / 10000);
     if (major < 14 || major > 18) throw new Error(`PostgreSQL ${major} is outside the supported 14–18 range`);
@@ -43,6 +46,7 @@ export async function collectPostgres(asset, password) {
         metrics.replicas = Number((await client.query('SELECT count(*)::int AS count FROM pg_stat_replication')).rows[0].count);
       }
     } catch { /* Optional replication view is unavailable to this monitoring account. */ }
+    metrics.diagnostics = await collectDiagnostics(client, major);
     return metrics;
   } finally {
     await client.end().catch(() => {});

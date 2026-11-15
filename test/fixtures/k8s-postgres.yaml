@@ -1,0 +1,119 @@
+# Disposable kind test fixture. Credentials are for local tests only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dbsphere-smoke
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: dbsphere-smoke
+data:
+  monitor.sql: |
+    CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test';
+    GRANT pg_monitor TO dbsphere_monitor;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: dbsphere-smoke
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: dbsphere-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dbsphere-smoke-postgres
+  template:
+    metadata:
+      labels:
+        app: dbsphere-smoke-postgres
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: postgres
+          image: postgres:18-bookworm
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              value: dbsphere-root-test
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres]
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: init
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: dbsphere-smoke
+spec:
+  selector:
+    app: dbsphere-smoke-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dbsphere-reader
+  namespace: dbsphere-smoke
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dbsphere-reader
+  namespace: dbsphere-smoke
+rules:
+  - apiGroups: ['']
+    resources: [pods, persistentvolumeclaims]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [events]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dbsphere-reader
+  namespace: dbsphere-smoke
+subjects:
+  - kind: ServiceAccount
+    name: dbsphere-reader
+    namespace: dbsphere-smoke
+roleRef:
+  kind: Role
+  name: dbsphere-reader
+  apiGroup: rbac.authorization.k8s.io

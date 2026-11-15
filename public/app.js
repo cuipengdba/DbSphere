@@ -82,6 +82,7 @@ async function showAsset(id) {
       const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
     }
     detail.append(grid);
+    if (metrics.diagnostics) renderDiagnostics(detail, metrics.diagnostics);
   } else detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
   if (currentSample?.metrics?.k8s) {
     const k8s = currentSample.metrics.k8s;
@@ -94,6 +95,31 @@ async function showAsset(id) {
       if (k8s.eventsError) detail.append(cell('p', `K8S Event 未采集：${k8s.eventsError}`, 'warning'));
     } else detail.append(cell('p', `K8S 未采集：${k8s.reason || k8s.status}`, 'warning'));
   }
+}
+
+function renderDiagnostics(target, diagnostics) {
+  target.append(cell('h3', 'PostgreSQL 深度监控'));
+  const rows = [
+    ['等待与会话', 'activity', d => d.map(x => `${x.state}/${x.waitType}: ${x.sessions}`).join('；') || '无活动会话'],
+    ['长事务', 'transactions', d => `${d.longTransactions} 个；idle in transaction ${d.idleInTransaction} 个`],
+    ['锁阻塞', 'locks', d => `${d.blockedSessions} 个会话`],
+    ['阻塞链', 'lockChain', d => d.length ? d.slice(0, 3).map(x => `${x.waitingPid} ← ${x.blockerPid} (${x.waitType || 'wait'})`).join('；') : '无阻塞链'],
+    ['死锁与缓存', 'database', d => `${d.deadlocks} 次死锁；命中 ${d.blocksHit} / 读取 ${d.blocksRead}`],
+    ['WAL', 'wal', d => `${(Number(d.bytes) / 1024 / 1024).toFixed(1)} MiB 累计；${d.records} 条记录`],
+    ['归档', 'archiver', d => `成功 ${d.archivedCount}，失败 ${d.failedCount}`],
+    ['检查点', 'checkpoints', d => `定时 ${d.timed}，请求 ${d.requested}`],
+    ['复制槽', 'slots', d => `总数 ${d.total}，活跃 ${d.active}`],
+    ['autovacuum', 'vacuum', d => d.length ? d.slice(0, 3).map(x => `${x.schema}.${x.table}: 死元组估计 ${x.deadRowsEstimate}`).join('；') : '暂无用户表'],
+    ['表与索引', 'tables', d => d.length ? d.slice(0, 3).map(x => `${x.schema}.${x.table}: 总量 ${(x.totalBytes / 1024 / 1024).toFixed(1)} MiB / 索引 ${(x.indexBytes / 1024 / 1024).toFixed(1)} MiB`).join('；') : '暂无用户表']
+  ];
+  const list = document.createElement('div'); list.className = 'diagnostic-list';
+  for (const [label, key, format] of rows) {
+    const entry = diagnostics[key];
+    const row = document.createElement('div');
+    row.append(cell('strong', label), cell('span', entry?.status === 'ok' ? format(entry.data) : `未采集：${entry?.reason || '未知'}`));
+    list.append(row);
+  }
+  target.append(list);
 }
 
 function renderEvents(events) {

@@ -18,5 +18,7 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Run tests
         run: pnpm test
+      - name: Linux native startup and restart smoke test
+        run: node scripts/linux-smoke.mjs
       - name: Audit dependencies
         run: pnpm audit --audit-level high
