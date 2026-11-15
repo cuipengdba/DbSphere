@@ -15,13 +15,13 @@ test('Kubernetes evidence is scoped to the mapped Pod and PVC', async () => {
       return {
         metadata: { name: 'pg-0', uid: 'pod-uid', labels: { app: 'postgres' }, ownerReferences: [{ name: 'pg' }] },
         spec: { nodeName: 'worker-1', volumes: [{ persistentVolumeClaim: { claimName: 'pg-data' } }] },
-        status: { phase: 'Running', containerStatuses: [{ name: 'postgres', ready: true, restartCount: 1, lastState: { terminated: { reason: 'OOMKilled', finishedAt: '2026-11-15T00:00:00Z' } } }] }
+        status: { phase: 'Failed', reason: 'Evicted', conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable' }], containerStatuses: [{ name: 'postgres', ready: false, restartCount: 1, lastState: { terminated: { reason: 'OOMKilled', finishedAt: '2026-11-15T00:00:00Z' } } }] }
       };
     },
     async readNamespacedPersistentVolumeClaim(query) { requests.push(['pvc', query]); return { spec: { volumeName: 'pv-1', resources: { requests: { storage: '10Gi' } } }, status: { phase: 'Bound', capacity: { storage: '20Gi' } } }; },
     async readPersistentVolume(query) { requests.push(['pv', query]); return { metadata: { name: 'pv-1' }, spec: { capacity: { storage: '20Gi' } }, status: { phase: 'Bound' } }; },
-    async listNamespacedEvent(query) { requests.push(['events', query]); return { items: [{ reason: 'BackOff', message: 'Pod restarted', lastTimestamp: '2026-11-15T00:01:00Z' }] }; },
-    async readNode(query) { requests.push(['node', query]); return { metadata: { name: 'worker-1' }, status: { conditions: [{ type: 'Ready', status: 'True' }, { type: 'MemoryPressure', status: 'False' }], allocatable: { cpu: '4', memory: '8Gi' } } }; },
+    async listNamespacedEvent(query) { requests.push(['events', query]); return { items: [{ reason: 'Unhealthy', message: 'Readiness probe failed', lastTimestamp: '2026-11-15T00:01:00Z' }] }; },
+    async readNode(query) { requests.push(['node', query]); return { metadata: { name: 'worker-1' }, status: { conditions: [{ type: 'Ready', status: 'True' }, { type: 'MemoryPressure', status: 'True' }], allocatable: { cpu: '4', memory: '8Gi' } } }; },
     async listNamespacedService(query) { requests.push(['services', query]); return { items: [{ metadata: { name: 'postgres' }, spec: { selector: { app: 'postgres' }, ports: [{ port: 5432 }] } }] }; }
   };
   const metrics = {
@@ -31,14 +31,17 @@ test('Kubernetes evidence is scoped to the mapped Pod and PVC', async () => {
   const result = await collectK8s({ k8s_cluster: 'prod', k8s_namespace: 'database', k8s_pod: 'pg-0' }, api, metrics);
   assert.equal(result.status, 'ok');
   assert.equal(result.pod.node, 'worker-1');
+  assert.equal(result.pod.conditions[0].reason, 'Unschedulable');
+  assert.equal(result.pod.reason, 'Evicted');
   assert.equal(result.containers[0].terminatedReason, 'OOMKilled');
   assert.equal(result.pvcs[0].volume.name, 'pv-1');
   assert.equal(result.pvcs[0].requested, '10Gi');
   assert.equal(result.node.conditions[0].type, 'Ready');
+  assert.equal(result.node.conditions[1].status, 'True');
   assert.equal(result.services[0].name, 'postgres');
   assert.equal(result.resourceMetrics.containers[0].memory, '100Mi');
   assert.match(result.nodeMetricsError, /Node metrics forbidden/);
-  assert.equal(result.events[0].reason, 'BackOff');
+  assert.equal(result.events[0].reason, 'Unhealthy');
   assert.deepEqual(requests[0], ['pod', { namespace: 'database', name: 'pg-0' }]);
   assert.deepEqual(requests[1], ['pvc', { namespace: 'database', name: 'pg-data' }]);
   assert.deepEqual(requests[2], ['pv', { name: 'pv-1' }]);

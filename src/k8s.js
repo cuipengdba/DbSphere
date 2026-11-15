@@ -86,6 +86,11 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
     terminatedReason: c.state?.terminated?.reason ?? c.lastState?.terminated?.reason ?? null,
     lastTerminatedAt: c.lastState?.terminated?.finishedAt ?? c.state?.terminated?.finishedAt ?? null
   }));
+  const podConditions = (pod.status?.conditions ?? []).filter(condition =>
+    ['PodScheduled', 'Initialized', 'ContainersReady', 'Ready'].includes(condition.type))
+    .map(condition => ({ type: condition.type, status: condition.status,
+      reason: condition.reason ?? null, message: condition.message?.slice(0, 300) ?? null,
+      changedAt: condition.lastTransitionTime ?? null }));
   const pvcNames = [...new Set((pod.spec?.volumes ?? []).map(v => v.persistentVolumeClaim?.claimName).filter(Boolean))];
   const pvcs = await Promise.all(pvcNames.map(async name => {
     try {
@@ -150,7 +155,10 @@ export async function collectK8s(asset, api = createK8sApi(asset), metricsApi = 
   } catch (error) { resourceMetricsError = errorText(error); }
   return {
     status: 'ok', cluster: asset.k8s_cluster, namespace: asset.k8s_namespace,
-    pod: { name: pod.metadata?.name, uid: pod.metadata?.uid, phase: pod.status?.phase ?? null, node: pod.spec?.nodeName ?? null, owner: pod.metadata?.ownerReferences?.[0]?.name ?? null },
+    pod: { name: pod.metadata?.name, uid: pod.metadata?.uid, phase: pod.status?.phase ?? null,
+      reason: pod.status?.reason ?? null, message: pod.status?.message?.slice(0, 300) ?? null,
+      node: pod.spec?.nodeName ?? null, owner: pod.metadata?.ownerReferences?.[0]?.name ?? null,
+      conditions: podConditions },
     containers, pvcs, events, eventsError, node, nodeError, services, servicesError,
     resourceMetrics, resourceMetricsError, nodeMetricsError
   };

@@ -72,6 +72,18 @@ jobs:
         run: |
           curl --fail --silent http://127.0.0.1:8080/readyz
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml ps
+      - name: Onboard a real PostgreSQL 14 target
+        run: |
+          docker run -d --rm --name dbsphere-compose-pg14 -p 15435:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-root-test postgres:14-bookworm
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-compose-pg14 pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-compose-pg14 \
+            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor;"
+          node scripts/compose-pg-target-smoke.mjs
       - name: Check persistence and storage outage
         run: node scripts/compose-smoke.mjs
       - name: Check one-click K8S kubeconfig mount
@@ -82,6 +94,7 @@ jobs:
           bash scripts/one-click.sh
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
             -f deploy/compose/compose.k8s.yaml exec -T app test -r /etc/dbsphere/kubeconfig
+          node scripts/compose-upgrade-smoke.mjs
 
   external-compose:
     runs-on: ubuntu-latest

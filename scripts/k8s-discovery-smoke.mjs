@@ -26,4 +26,9 @@ assert.ok(state.pvcs.some(pvc => pvc.name === 'postgres-data' && pvc.volume?.pha
 assert.ok(state.services.some(service => service.name === 'postgres'));
 assert.equal(state.eventsError, null);
 assert.ok(state.resourceMetrics || state.resourceMetricsError);
+if (process.env.DBSPHERE_TEST_EXPECT_METRICS === 'true') {
+  assert.equal(state.resourceMetricsError, null);
+  assert.ok(state.resourceMetrics?.containers.some(container => container.name === 'postgres' && container.memory));
+  assert.ok(state.resourceMetrics?.node?.memory);
+}
 console.log('K8S read-only discovery, Pod/Deployment/Service/Node/PVC/PV association and metrics status passed');

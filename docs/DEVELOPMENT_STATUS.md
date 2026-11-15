@@ -6,14 +6,14 @@
 
 **[V0.1.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)，V0.2 开发中**。已实现 B/S 服务端与浏览器页面、管理员登录和 CSRF 校验、PostgreSQL 资产增删改查、凭据加密、基础采集、采集失败与恢复共用一个事件 ID 的证据记录。PG14–18 已能读取会话/等待、长事务、锁链、WAL/归档、检查点、autovacuum、表/索引容量和复制槽 11 个诊断分区，并显示不可用原因。V0.2 开发代码新增独立 PG18 后端、SQLite 数据迁移、Docker Compose 一键部署、Linux node_exporter 资源采集；K8S 适配器支持按 Namespace 发现并关联 Pod/Workload/Service/Node/PVC/PV，读取容器重启/OOMKilled、事件与可用的 metrics.k8s.io 数据。当 PG 连接失败与近期 Pod OOMKilled 同时出现时，在**同一个事件 ID** 中给出中等置信度、可查看原始证据的根因候选。
 
-V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S PostgreSQL。V0.2 的 PG18 存储、默认及外部 PG18 一键 Compose、Linux 主机采集均通过 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43720533915)。K8S Namespace 资源发现和 Pod → Workload/Service/Node/PVC/PV 关联已通过真实 kind 只读演练；metrics-server 缺失会显示未采集，PVC 实际用量可选从 Prometheus kubelet 指标读取，该路径目前只通过模拟响应测试。V0.1 SQLite 仅用于早期样例。应用 Trace 及通用跨层根因引擎属后续任务。当前只支持“采集连接失败 + 近期 Pod OOMKilled”的有限候选，**不能将其宣称为完整的全链路根因分析**。
+V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S PostgreSQL。V0.2 的 PG18 存储、默认及外部 PG18 一键 Compose、Linux 主机采集和 PgBouncer 适配均通过 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43722385125)。K8S Namespace 资源发现和 Pod → Workload/Service/Node/PVC/PV 关联已通过真实 kind 只读演练；Pod/Node 使用量也通过实际 metrics-server 验证。PVC 实际用量可选从 Prometheus kubelet 指标读取，该路径目前只通过模拟响应测试。V0.1 SQLite 仅用于早期样例。应用 Trace 及通用跨层根因引擎属后续任务。当前只支持“采集连接失败 + 近期 Pod OOMKilled”的有限候选，**不能将其宣称为完整的全链路根因分析**。
 
 ## 已通过的验证
 
 | 验证 | 结果 | 范围 |
 | --- | --- | --- |
 | `pnpm test` | 通过，9 项 | 登录、CSRF、资产编辑、凭据不外泄、单事件归并、恢复与证据持久化、无关 OOM 不误判、PG14 EOL、Linux 资源采集、K8S 发现/鉴权及 PVC 用量查询、PgBouncer 凭据与事件证据 |
-| [V0.2 PG18/Compose Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43720533915) | 通过 | PG18 资产/样本/事件存储、SQLite 迁移、默认和外部 PG18 一键 Compose、Linux PG14 + node_exporter、重启持久化、存储断连与恢复 |
+| [V0.2 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43722385125) | 通过 | PG18 资产/样本/事件存储、SQLite 迁移、默认和外部 PG18 一键 Compose、Linux PG14 + node_exporter、PgBouncer、重启持久化、存储断连与恢复 |
 | [GitHub Actions Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/43687609396) | 通过 | Node 24 安装、自动化测试与依赖审计 |
 | K8S 适配器单元测试 | 通过 | 按 Pod UID 限定事件，读取容器 OOMKilled、PVC/PV、Node 条件、Service 与 metrics.k8s.io；发现权限缺失与 API 鉴权 |
 | Linux 容器构建与启动 | 通过 | `docker build`；容器 `/healthz` 返回 `{"status":"ok"}` |
@@ -23,8 +23,9 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 | K8S 容器重启信号 | 通过 | 测试容器强制重启后，采集器读取 `restartCount` 和终止时间，PG 数据与监控账号仍可用 |
 | K8S PG18 + 独立 PG18 存储 | 本地通过 | 同一 B/S 资产的 PG/K8S 联合采样写入独立 PG18，重启后数据仍可读 |
 | K8S 发现与资源关联 | 本地通过 | 只读 ServiceAccount 在真实 kind 集群发现 PG18 Pod、Deployment、Service、Node、PVC/PV；Pod 资源 API 缺失显式报错，Secret 读取被拒绝 |
+| K8S metrics-server | 本地通过 | 官方 metrics-server 0.9.1 在测试 kind 集群提供真实 Pod/Node CPU 和内存；只读 ServiceAccount 采样成功 |
 | Linux PG14 + node_exporter + 独立 PG18 存储 | 本地通过 | 真实 node_exporter 1.12.1 输出；CPU、内存、文件系统、IO、网络采集，连续样本速率与服务重启持久化 |
-| Linux PG14 + PgBouncer 1.26.1 + 独立 PG18 存储 | 本地通过 | `stats_users` 只读管理控制台；真实连接池查询、凭据加密、PG18 采样和服务重启持久化 |
+| Linux PG14 + PgBouncer 1.26.1 + 独立 PG18 存储 | 本地及 Linux CI 通过 | `stats_users` 只读管理控制台；真实连接池查询、凭据加密、PG18 采样和服务重启持久化 |
 | PostgreSQL 14 | 通过 | 14.24，`pg_monitor` 账号读取基础指标、11 个诊断分区及真实锁阻塞链 |
 | PostgreSQL 15 | 通过 | 15.20，同上 |
 | PostgreSQL 16 | 通过 | 16.15，同上 |
@@ -35,6 +36,6 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 
 ## 下一步
 
-1. V0.2 继续 K8S metrics-server/Prometheus 真实使用量与故障场景、PgBouncer Linux CI 和安装升级验收；PG18 后端、两种一键 Compose、Linux node_exporter 和 K8S 资源关联已通过初版验证。
+1. V0.2 继续 K8S Prometheus PVC 真实使用量与驱逐/探针故障场景、安装升级验收；PG18 后端、两种一键 Compose、Linux node_exporter、PgBouncer 和 K8S 资源关联已通过初版验证。
 2. 持续维护可复现安装、故障演练和存储迁移文档。
 3. 按 [开发任务清单](DEVELOPMENT_TASKS.md) 推进告警、巡检、SQL 性能、跨层证据化根因和应用 Trace，逐版验收。

@@ -21,6 +21,8 @@ services:
     build:
       context: ../..
     restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
       store:
         condition: service_healthy
