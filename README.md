@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-项目已进入开发阶段，首个版本是 **V0.1.0 基础版**。V0.1 使用 SQLite 保存早期样例数据；V0.2 计划交付 Docker Compose 一键部署和独立 PostgreSQL 18 长期存储。后续版本仅在满足各自验收条件后发布。
+项目已进入开发阶段，首个版本是 **[V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)**。V0.1 使用 SQLite 保存早期样例数据；当前主分支正在开发 Docker Compose 一键部署、独立 PostgreSQL 18 长期存储和 Linux 资源采集，尚未发布 V0.2。后续版本仅在满足各自验收条件后发布。
 
 ## 核心原则
 

@@ -7,6 +7,7 @@ export const publicAsset = (row) => row && ({
   id: row.id, name: row.name, host: row.host, port: row.port,
   database: row.database_name, username: row.username, sslMode: row.ssl_mode,
   runtime: row.runtime, linuxHost: row.linux_host,
+  linuxExporterPort: row.linux_exporter_port,
   k8sCluster: row.k8s_cluster, namespace: row.k8s_namespace,
   workload: row.k8s_workload, pod: row.k8s_pod, node: row.k8s_node,
   createdAt: row.created_at, lastSampleAt: row.last_sample_at,
@@ -26,7 +27,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS assets (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
         database_name TEXT NOT NULL, username TEXT NOT NULL, password_enc TEXT NOT NULL,
-        ssl_mode TEXT NOT NULL, runtime TEXT NOT NULL, linux_host TEXT, k8s_cluster TEXT,
+        ssl_mode TEXT NOT NULL, runtime TEXT NOT NULL, linux_host TEXT, linux_exporter_port INTEGER, k8s_cluster TEXT,
         k8s_namespace TEXT, k8s_workload TEXT, k8s_pod TEXT, k8s_node TEXT,
         created_at TEXT NOT NULL, last_sample_at TEXT, last_status TEXT NOT NULL DEFAULT 'pending',
         last_error TEXT, version_num INTEGER, role TEXT
@@ -48,6 +49,9 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS evidence_event_time ON evidence(event_id, observed_at);
     `);
+    if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
+      this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
+    }
   }
 
   getSetting(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? null; }
@@ -62,10 +66,10 @@ export class Store {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db.prepare(`INSERT INTO assets
-      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,k8s_node,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,linux_exporter_port,k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,k8s_node,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, a.name, a.host, a.port, a.database, a.username, encryptedPassword,
-      a.sslMode, a.runtime, a.linuxHost || null, a.k8sCluster || null,
+      a.sslMode, a.runtime, a.linuxHost || null, a.linuxExporterPort || null, a.k8sCluster || null,
       a.namespace || null, a.workload || null, a.pod || null, a.node || null, now
     );
     return this.getAsset(id);
@@ -74,11 +78,11 @@ export class Store {
   updateAsset(id, a, encryptedPassword) {
     const changed = this.db.prepare(`UPDATE assets SET
       name=?,host=?,port=?,database_name=?,username=?,password_enc=?,ssl_mode=?,runtime=?,
-      linux_host=?,k8s_cluster=?,k8s_namespace=?,k8s_workload=?,k8s_pod=?,k8s_node=?,
+      linux_host=?,linux_exporter_port=?,k8s_cluster=?,k8s_namespace=?,k8s_workload=?,k8s_pod=?,k8s_node=?,
       last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
       WHERE id=?`).run(
       a.name, a.host, a.port, a.database, a.username, encryptedPassword, a.sslMode, a.runtime,
-      a.linuxHost || null, a.k8sCluster || null, a.namespace || null,
+      a.linuxHost || null, a.linuxExporterPort || null, a.k8sCluster || null, a.namespace || null,
       a.workload || null, a.pod || null, a.node || null, id
     ).changes;
     return changed ? this.getAsset(id) : null;
@@ -114,6 +118,10 @@ export class Store {
             this.db.prepare('INSERT INTO evidence(id,event_id,kind,observed_at,payload_json) VALUES(?,?,?,?,?)')
               .run(randomUUID(), eventId, 'root_cause_candidate', now, JSON.stringify(candidate));
           }
+        }
+        if (result?.linux) {
+          this.db.prepare('INSERT INTO evidence(id,event_id,kind,observed_at,payload_json) VALUES(?,?,?,?,?)')
+            .run(randomUUID(), eventId, 'linux_state', now, JSON.stringify(result.linux));
         }
       } else if (open) {
         this.db.prepare("UPDATE events SET status='resolved',ended_at=? WHERE id=?").run(now, open.id);

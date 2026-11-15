@@ -95,6 +95,19 @@ async function showAsset(id) {
       if (k8s.eventsError) detail.append(cell('p', `K8S Event 未采集：${k8s.eventsError}`, 'warning'));
     } else detail.append(cell('p', `K8S 未采集：${k8s.reason || k8s.status}`, 'warning'));
   }
+  if (currentSample?.metrics?.linux) {
+    const linux = currentSample.metrics.linux;
+    detail.append(cell('h3', 'Linux 主机资源'));
+    if (linux.status === 'ok') {
+      detail.append(cell('p', `来源 ${linux.source} · CPU 已用 ${linux.cpu.usedPercent ?? '待下次采样'}% · 内存已用 ${linux.memory.usedPercent ?? '未知'}% · 1 分钟负载 ${linux.cpu.load1 ?? '未知'}`));
+      for (const fs of linux.filesystems) detail.append(cell('p', `${fs.mountpoint}: ${fs.usedPercent}% 已用 · ${(fs.sizeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`));
+      detail.append(cell('p', `磁盘累计读取 ${(linux.disk.readBytesTotal / 1024 / 1024).toFixed(1)} MiB，写入 ${(linux.disk.writtenBytesTotal / 1024 / 1024).toFixed(1)} MiB；网络累计接收 ${(linux.network.receiveBytesTotal / 1024 / 1024).toFixed(1)} MiB，发送 ${(linux.network.transmitBytesTotal / 1024 / 1024).toFixed(1)} MiB`));
+      if (linux.disk.readBytesPerSecond != null) {
+        const speed = value => value == null ? '未知' : `${(value / 1024 / 1024).toFixed(2)} MiB/s`;
+        detail.append(cell('p', `磁盘读 ${speed(linux.disk.readBytesPerSecond)} · 写 ${speed(linux.disk.writtenBytesPerSecond)}；网络收 ${speed(linux.network.receiveBytesPerSecond)} · 发 ${speed(linux.network.transmitBytesPerSecond)}`));
+      }
+    } else detail.append(cell('p', `Linux 未采集：${linux.reason || linux.status}`, 'warning'));
+  }
 }
 
 function renderDiagnostics(target, diagnostics) {
@@ -137,7 +150,7 @@ function editAsset(asset) {
   for (const [field, value] of Object.entries({
     name: asset.name, host: asset.host, port: asset.port, database: asset.database,
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
-    linuxHost: asset.linuxHost, k8sCluster: asset.k8sCluster, namespace: asset.namespace,
+    linuxHost: asset.linuxHost, linuxExporterPort: asset.linuxExporterPort, k8sCluster: asset.k8sCluster, namespace: asset.namespace,
     workload: asset.workload, pod: asset.pod, node: asset.node
   })) form.elements[field].value = value ?? '';
   form.elements.password.value = '';
@@ -166,6 +179,9 @@ async function showEvent(id) {
       ? `Pod ${evidence.payload.pod?.name || '未知'} / ${evidence.payload.pod?.phase || '未知'}；${(evidence.payload.containers || []).map(c => `${c.name}: ${c.terminatedReason || '运行中'}`).join('，')}`
       : evidence.payload.reason || evidence.payload.status;
     if (evidence.kind === 'root_cause_candidate') text = `${evidence.payload.hypothesis} · 置信度 ${evidence.payload.confidence}。${evidence.payload.limitation}`;
+    if (evidence.kind === 'linux_state') text = evidence.payload.status === 'ok'
+      ? `Linux 内存已用 ${evidence.payload.memory?.usedPercent ?? '未知'}%；负载 ${evidence.payload.cpu?.load1 ?? '未知'}`
+      : evidence.payload.reason || evidence.payload.status;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
 }
@@ -191,7 +207,7 @@ $('cancel-edit').addEventListener('click', resetEdit);
 $('runtime').addEventListener('change', (event) => {
   const k8s = event.target.value === 'k8s';
   $('k8s-fields').hidden = !k8s;
-  document.querySelector('.linux-field').hidden = k8s;
+  for (const field of document.querySelectorAll('.linux-field')) field.hidden = k8s;
   $('asset-form').elements.k8sCluster.required = k8s;
   $('asset-form').elements.namespace.required = k8s;
 });

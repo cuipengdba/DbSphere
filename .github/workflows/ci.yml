@@ -74,3 +74,72 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml ps
       - name: Check persistence and storage outage
         run: node scripts/compose-smoke.mjs
+
+  external-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Start independent PostgreSQL 18
+        run: |
+          docker run -d --rm --network host --name dbsphere-external-pgtest \
+            -e POSTGRES_USER=dbsphere -e POSTGRES_DB=dbsphere \
+            -e POSTGRES_PASSWORD=dbsphere-external-test \
+            postgres:18-bookworm
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-external-pgtest pg_isready -h 127.0.0.1 -U dbsphere -d dbsphere >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+      - name: One-click external PG18 mode
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: |
+          umask 077
+          printf 'DBSPHERE_ADMIN_PASSWORD=dbsphere-external-admin-test\nDBSPHERE_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nDBSPHERE_DATABASE_URL=postgres://dbsphere:dbsphere-external-test@host.docker.internal:5432/dbsphere\nDBSPHERE_WEB_PORT=8080\n' > deploy/compose/.env
+          bash scripts/one-click.sh
+          curl --fail --silent http://127.0.0.1:8080/readyz
+
+  linux-exporter:
+    runs-on: ubuntu-latest
+    services:
+      store:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Start PostgreSQL 14 and node_exporter
+        run: |
+          docker run -d --rm --name dbsphere-linux-pgtest -p 15435:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-root-test postgres:14-bookworm
+          docker run -d --rm --name dbsphere-linux-exporter -p 19100:9100 \
+            --pid host -v /:/host:ro,rslave quay.io/prometheus/node-exporter:v1.12.1 \
+            --path.rootfs=/host
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-linux-pgtest pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-linux-pgtest \
+            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor;"
+          curl --fail --silent http://127.0.0.1:19100/metrics >/dev/null
+      - name: Check cross-layer collection and restart persistence
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-linux-exporter-smoke
+          DBSPHERE_TEST_PG_PORT: '15435'
+          DBSPHERE_TEST_EXPORTER_PORT: '19100'
+        run: node scripts/linux-exporter-smoke.mjs

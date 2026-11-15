@@ -33,6 +33,7 @@ const login = async base => {
 
 let assetId;
 let eventId;
+let linuxAssetId;
 try {
   const base = await start();
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
@@ -57,6 +58,12 @@ try {
   assert.equal(event.event.evidence.filter(e => e.kind === 'root_cause_candidate').length, 1);
   assert.equal(event.event.evidence.filter(e => e.kind === 'collection_error').length, 2);
   assert.equal(event.event.evidence.filter(e => e.kind === 'collection_recovered').length, 1);
+  const linuxCreated = await fetch(`${base}/api/assets`, { method: 'POST', headers,
+    body: JSON.stringify({ name: 'Linux exporter mapping', host: '127.0.0.1', port: 5432,
+      database: 'postgres', username: 'monitor', password: 'test-monitor-secret',
+      sslMode: 'disable', runtime: 'linux', linuxHost: 'db-node-01', linuxExporterPort: 9100 }) });
+  assert.equal(linuxCreated.status, 201);
+  linuxAssetId = (await linuxCreated.json()).asset.id;
 } finally { await stop(); }
 
 app = await createApp({ dataDir, collectFn, k8sFn });
@@ -65,9 +72,9 @@ try {
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
   const auth = await login(base);
   const assets = await (await fetch(`${base}/api/assets`, { headers: { cookie: auth.cookie } })).json();
-  assert.equal(assets.assets.length, 1);
-  assert.equal(assets.assets[0].id, assetId);
-  assert.equal(assets.assets[0].versionNum, 180006);
+  assert.equal(assets.assets.length, 2);
+  assert.equal(assets.assets.find(asset => asset.id === assetId).versionNum, 180006);
+  assert.equal(assets.assets.find(asset => asset.id === linuxAssetId).linuxExporterPort, 9100);
   assert.ok(!JSON.stringify(assets).includes('test-monitor-secret'));
   const samples = await (await fetch(`${base}/api/assets/${assetId}/samples`, {
     headers: { cookie: auth.cookie }

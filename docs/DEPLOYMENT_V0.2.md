@@ -34,4 +34,6 @@ bash scripts/one-click.sh --migrate-from /absolute/path/to/v0.1/data
 
 ## 当前边界
 
+Linux 主机增强采集可按 [Prometheus 官方指南](https://prometheus.io/docs/guides/node-exporter/)在目标主机安装 `node_exporter`，资产中填写 Linux 主机名和 exporter 端口（默认常见端口 9100）。DbSphere 只读取 `/metrics`，设置 4 秒超时和 5 MiB 响应上限，不在目标主机执行脚本；请将 exporter 限制在可信内网，不要直接暴露到公网。未配置时界面明确显示“未采集”。CPU 使用率与 IO/网络速率由相邻两次累计计数计算，首次采样仅显示累计量。
+
 PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。V0.2 仍在开发，分区、保留期、备份恢复与外部 PG18 模式的端到端验收将继续补齐。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。

@@ -5,6 +5,8 @@ services:
     build:
       context: ../..
     restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       DBSPHERE_DATABASE_URL: ${DBSPHERE_DATABASE_URL:?Set an independent PostgreSQL 18 URL in .env}
       DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click.sh first}

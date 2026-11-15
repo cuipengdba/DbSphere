@@ -37,12 +37,12 @@ try {
   for (const row of sourceRows.assets) {
     const reencrypted = encrypt(targetKey, decrypt(oldKey, row.password_enc));
     await client.query(`INSERT INTO assets
-      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,
+      (id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,linux_host,linux_exporter_port,
        k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,k8s_node,created_at,last_sample_at,
        last_status,last_error,version_num,role)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, [
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, [
       row.id, row.name, row.host, row.port, row.database_name, row.username, reencrypted,
-      row.ssl_mode, row.runtime, row.linux_host, row.k8s_cluster, row.k8s_namespace,
+      row.ssl_mode, row.runtime, row.linux_host, row.linux_exporter_port ?? null, row.k8s_cluster, row.k8s_namespace,
       row.k8s_workload, row.k8s_pod, row.k8s_node, row.created_at, row.last_sample_at,
       row.last_status, row.last_error, row.version_num, row.role
     ]);

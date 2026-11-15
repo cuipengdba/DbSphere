@@ -6,6 +6,7 @@ import { Store } from './store.js';
 import { PgStore } from './pg-store.js';
 import { collectPostgres } from './postgres.js';
 import { collectK8s } from './k8s.js';
+import { collectLinux, deriveLinuxRates } from './linux.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
@@ -38,6 +39,10 @@ function validAsset(a) {
   if (!['disable', 'require'].includes(a.sslMode)) return false;
   if (!['linux', 'k8s'].includes(a.runtime)) return false;
   if (a.runtime === 'k8s' && (!a.k8sCluster || !a.namespace)) return false;
+  if (a.linuxExporterPort !== '' && a.linuxExporterPort != null) {
+    if (a.runtime !== 'linux' || !/^[a-zA-Z0-9_.:-]{1,150}$/.test(a.linuxHost || '')) return false;
+    if (!Number.isInteger(Number(a.linuxExporterPort)) || Number(a.linuxExporterPort) < 1 || Number(a.linuxExporterPort) > 65535) return false;
+  }
   return ['linuxHost', 'k8sCluster', 'namespace', 'workload', 'pod', 'node'].every(k => !a[k] || (typeof a[k] === 'string' && a[k].length <= 150));
 }
 
@@ -46,7 +51,7 @@ function cookie(req) {
   return pair ? pair.slice('dbsphere_session='.length) : null;
 }
 
-export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s } = {}) {
+export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s, linuxFn = collectLinux } = {}) {
   const directory = resolve(dataDir ?? process.env.DBSPHERE_DATA_DIR ?? './data');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = loadMasterKey(directory);
@@ -78,8 +83,17 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         try { k8s = await k8sFn(asset); }
         catch (e) { k8s = { status: 'error', reason: String(e?.message ?? e).slice(0, 300) }; }
       }
+      let linux = null;
+      if (asset.runtime === 'linux') {
+        try { linux = await linuxFn(asset); }
+        catch (e) { linux = { status: 'error', reason: String(e?.message ?? e).slice(0, 300) }; }
+        if (linux?.status === 'ok') {
+          const previous = (await store.listSamples(id, 1))[0]?.metrics?.linux;
+          linux = deriveLinuxRates(linux, previous);
+        }
+      }
       if (!await store.getInternalAsset(id)) return null;
-      return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}) }, error);
+      return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}) }, error);
     } finally { activeCollections.delete(id); }
   }
 
@@ -131,7 +145,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'POST' && path === '/api/assets') {
         const input = await body(req);
         if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
-        const asset = await store.addAsset({ ...input, port: Number(input.port) }, encrypt(key, input.password));
+        const asset = await store.addAsset({ ...input, port: Number(input.port),
+          linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null }, encrypt(key, input.password));
         return send(res, 201, { asset });
       }
       const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|check))?$/);
@@ -144,7 +159,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
           if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
           const old = await store.getInternalAsset(id);
           const password = input.password ? encrypt(key, input.password) : old.password_enc;
-          return send(res, 200, { asset: await store.updateAsset(id, { ...input, port: Number(input.port) }, password) });
+          return send(res, 200, { asset: await store.updateAsset(id, { ...input, port: Number(input.port),
+            linuxExporterPort: input.linuxExporterPort ? Number(input.linuxExporterPort) : null }, password) });
         }
         if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
         if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });
