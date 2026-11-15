@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DbSphere · 全域数据库智能运维管理平台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><strong class="brand">DbSphere</strong><span class="subtitle">全域数据库智能运维管理平台</span></div>
+    <button id="logout" class="ghost" hidden>退出</button>
+  </header>
+  <main>
+    <section id="login-panel" class="panel login">
+      <p class="eyebrow">V0.1 开发预览</p>
+      <h1>登录运维控制台</h1>
+      <p>使用首次启动时配置的管理员密码。</p>
+      <form id="login-form">
+        <label>管理员密码<input name="password" type="password" required autocomplete="current-password"></label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
+
+    <div id="workspace" hidden>
+      <section class="hero">
+        <div><p class="eyebrow">PostgreSQL 14–18 · Linux / Kubernetes</p><h1>数据库运行态势</h1><p>从资产、采样和事件进入同一问题的证据时间线。</p></div>
+        <div class="hero-badge">B/S 架构<br><b>V0.1 DEV</b></div>
+      </section>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section class="summary" aria-label="总览">
+        <div class="stat"><span>纳管实例</span><strong id="asset-count">0</strong></div>
+        <div class="stat"><span>采集正常</span><strong id="healthy-count">0</strong></div>
+        <div class="stat"><span>开放事件</span><strong id="event-count">0</strong></div>
+      </section>
+      <div class="grid">
+        <section class="panel">
+          <div class="section-head"><div><p class="eyebrow">ASSETS</p><h2>PostgreSQL 资产</h2></div><button id="refresh" class="ghost">刷新</button></div>
+          <div id="asset-list" class="list"></div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div><p class="eyebrow">ONBOARD</p><h2>新增只读纳管</h2></div></div>
+          <form id="asset-form" class="form-grid">
+            <label>资产名称<input name="name" required maxlength="100" placeholder="生产主库"></label>
+            <label>主机地址<input name="host" required placeholder="pg.example.internal"></label>
+            <label>端口<input name="port" type="number" min="1" max="65535" value="5432" required></label>
+            <label>数据库<input name="database" value="postgres" required></label>
+            <label>监控用户名<input name="username" required placeholder="dbsphere_monitor"></label>
+            <label>密码<input name="password" type="password" autocomplete="new-password"></label>
+            <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
+            <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option></select></label>
+            <label class="linux-field wide">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
+            <div id="k8s-fields" class="nested wide" hidden>
+              <label>K8S 集群<input name="k8sCluster" placeholder="production"></label>
+              <label>Namespace<input name="namespace" placeholder="database"></label>
+              <label>Workload<input name="workload" placeholder="postgresql"></label>
+              <label>Pod<input name="pod" placeholder="postgresql-0"></label>
+              <label>Node<input name="node" placeholder="worker-01"></label>
+            </div>
+            <button class="wide" id="asset-submit" type="submit">保存资产</button>
+            <button class="wide ghost" id="cancel-edit" type="button" hidden>取消编辑</button>
+          </form>
+          <p class="hint">V0.1 保存运行位置；K8S 指标与事件自动采集列入 V0.2。请使用最小权限监控账号。</p>
+        </section>
+      </div>
+      <div class="grid lower">
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div><div id="event-list" class="list"></div><div id="event-detail"></div></section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
