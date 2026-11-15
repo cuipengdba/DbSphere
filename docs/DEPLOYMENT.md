@@ -1,5 +1,7 @@
 # DbSphere V0.1 部署与接入
 
+> V0.1 是基础监控版本，当前使用 SQLite。容器化一键部署与独立 PostgreSQL 18 长期监控存储排在 V0.2；本页 V0.1 的手动启动步骤用于早期试用。
+
 ## 运行条件
 
 - Linux x86_64 或 arm64，Node.js 24.13+、pnpm 11；或运行 Linux 容器的 Docker。

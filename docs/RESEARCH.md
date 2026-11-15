@@ -10,18 +10,22 @@
 
 ## DBdoctor
 
-- [用户提供的产品下载页](https://www.dbdoctor.cn/product/11)：企业版/免费版下载与部署信息。
+- [用户提供的产品下载页](https://www.dbdoctor.cn/product/11)：企业版/免费版下载与部署信息；官方页面提供 Linux 一键安装包和安装命令。
 - [DBdoctor 官方首页](https://www.dbdoctor.cn/)：公开介绍 SQL 性能洞察、锁问题可视化、慢 SQL 指纹聚合、执行计划、根因诊断、AI 辅助和工单闭环。
 
 可借鉴的**问题域**是从性能异常进入 SQL/锁证据，再提出优化或处置建议。官网描述的 eBPF、外置 Cost 优化器及多智能体属于其产品实现和宣传能力；DbSphere V1.0 不宣称具备同等内核透视、优化器或自动改写能力。DbSphere 首先使用 PostgreSQL 官方视图、扩展接口、日志、开放 Trace 和可审查的规则构建诊断。
+其一键安装体现了低门槛部署的产品需求；DbSphere 将独立实现 Linux Docker Compose 一键部署。
 
 ## Pigsty
 
 - [Pigsty 官方 PostgreSQL 监控文档](https://pigsty.io/docs/pgsql/monitor/)：覆盖 PostgreSQL、节点、连接池、HA 和日志的监控，并区分现有自建集群与仅连接串的 RDS 模式。文档说明仅连接串模式缺少主机、连接池、负载均衡和 HA 组件指标。
 - [Pigsty 官方文档首页](https://pigsty.io/docs/)：其范围包括高可用、PITR、IaC、监控与组件化部署。
 - [Pigsty GitHub 仓库](https://github.com/pgsty/pigsty)：项目代码与许可应在任何复用前单独核查。
+- [Pigsty Docker 部署文档](https://pigsty.io/docs/setup/docker/)：容器快速体验、持久卷和随机密码生成；其文档明确单节点容器模式的生产边界。
+- [Pigsty PostgreSQL 内核文档](https://pigsty.io/docs/pgsql/kernel/postgres/)：PG18 默认版本及 PG14–18 版本选择。
 
 可借鉴的**架构问题**是如何组合不同采集层并明确监控深度。DbSphere 的优先目标是统一纳管与诊断工作台；不要求用户交给 DbSphere 部署或重建 PostgreSQL 集群。不会复制 Pigsty 的代码、配置、图表或部署剧本。
+DbSphere 自身长期存储选择独立 PG18，产品交付选择最小权限的双容器 Compose 模式；这一决策不意味着复用 Pigsty 的具体部署脚本或监控存储栈。
 
 ## 技术标准与版本依据
 
