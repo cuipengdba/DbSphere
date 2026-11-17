@@ -37,7 +37,7 @@ container=''
 cp -- "$repo_dir/scripts/run-node-offline.sh" "$stage/run.sh"
 chmod 0755 "$stage/run.sh"
 printf 'DbSphere %s Linux x86_64; requires Node.js >=24.13 and external PostgreSQL 18.\n' "$version" > "$stage/README.txt"
-(cd -- "$stage" && find . \( -type f -o -type l \) ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$output_dir/DbSphere-node-$version-linux-amd64.tar.gz"
 tar -C "$stage" -czf "$archive" .
 (cd -- "$output_dir" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
