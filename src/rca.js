@@ -155,6 +155,13 @@ export function analyzeEvent(event, samples, context = {}) {
     if (span.kind === 'postgresql_client') {
       edges.push({ from: spanNode, to: assetNode, relation: 'calls', source });
       edges.push({ from: eventNode, to: spanNode, relation: 'overlaps_db_call', source });
+      for (const sample of samples.filter(item => item.collectedAt &&
+        Date.parse(item.collectedAt) >= Date.parse(span.start) &&
+        Date.parse(item.collectedAt) <= Date.parse(span.end)).slice(0, 10)) {
+        const sampleNode = `sample:${sample.id}`;
+        if (nodes.some(node => node.id === sampleNode)) edges.push({ from: spanNode,
+          to: sampleNode, relation: 'overlaps_sample', source: sampleLink(event.assetId, sample.id) });
+      }
     }
     if (span.parentSpanId && spanIds.has(`${span.traceId}:${span.parentSpanId}`)) {
       edges.push({ from: `trace_span:${span.traceId}:${span.parentSpanId}`,

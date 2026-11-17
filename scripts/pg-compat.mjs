@@ -3,10 +3,13 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import pg from 'pg';
+import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { collectPostgres } from '../src/postgres.js';
 import { DEFAULT_INSPECTION_TEMPLATES, evaluateInspection } from '../src/inspections.js';
 import { Store } from '../src/store.js';
 import { analyzeEvent, eventSampleIds } from '../src/rca.js';
+import { parseOtlpTraces } from '../src/otel.js';
 
 const major = Number(process.env.DBSPHERE_TEST_PG_MAJOR);
 if (!Number.isInteger(major)) throw new Error('Set DBSPHERE_TEST_PG_MAJOR');
@@ -45,11 +48,31 @@ const waiter = new pg.Client(connection);
 await blocker.connect();
 await waiter.connect();
 let waiting;
+let requestServer;
+let requestStart;
+let dbStart;
+let dbEnd;
+let requestEnd;
 try {
   const blockerPid = (await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
   const waitingPid = (await waiter.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
   await blocker.query('SELECT pg_advisory_lock(1742026)');
-  waiting = waiter.query('SELECT pg_advisory_lock(1742026)');
+  requestServer = createServer(async (_req, res) => {
+    requestStart = new Date();
+    dbStart = new Date();
+    try {
+      await waiter.query('SELECT pg_advisory_lock(1742026)');
+      dbEnd = new Date();
+      res.writeHead(200);
+      res.end('ok');
+    } catch (error) {
+      dbEnd = new Date();
+      res.writeHead(500);
+      res.end('query failed');
+    } finally { requestEnd = new Date(); }
+  });
+  await new Promise(resolve => requestServer.listen(0, '127.0.0.1', resolve));
+  waiting = fetch(`http://127.0.0.1:${requestServer.address().port}/checkout`);
   let found = false;
   let lockedSample = null;
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -82,12 +105,44 @@ try {
     assert.ok(summary, `PG${major} lock alert did not create an event`);
     const event = store.getEvent(summary.id);
     const referenced = store.getSamplesByIds(asset.id, eventSampleIds(event));
-    const analysis = analyzeEvent(event, referenced, { nearbySamples: referenced });
+    await blocker.query('SELECT pg_advisory_unlock(1742026)');
+    const response = await waiting;
+    assert.equal(response.status, 200);
+    const traceId = randomBytes(16).toString('hex');
+    const requestSpanId = randomBytes(8).toString('hex');
+    const dbSpanId = randomBytes(8).toString('hex');
+    const nanos = date => String(BigInt(date.getTime()) * 1000000n);
+    const input = { resourceSpans: [{ resource: { attributes: [
+      { key: 'service.name', value: { stringValue: 'dbsphere-lock-smoke-app' } }] },
+    scopeSpans: [{ spans: [
+      { traceId, spanId: requestSpanId, kind: 'SPAN_KIND_SERVER',
+        startTimeUnixNano: nanos(requestStart), endTimeUnixNano: nanos(requestEnd) },
+      { traceId, spanId: dbSpanId, parentSpanId: requestSpanId, kind: 'SPAN_KIND_CLIENT',
+        startTimeUnixNano: nanos(dbStart), endTimeUnixNano: nanos(dbEnd), attributes: [
+          { key: 'db.system.name', value: { stringValue: 'postgresql' } },
+          { key: 'server.address', value: { stringValue: connection.host } },
+          { key: 'server.port', value: { intValue: String(connection.port) } },
+          { key: 'db.namespace', value: { stringValue: 'postgres|public' } },
+          { key: 'db.query.text', value: { stringValue: 'SELECT pg_advisory_lock(1742026)' } }
+        ] }
+    ] }] }] };
+    const parsed = parseOtlpTraces(input, [asset]);
+    assert.equal(store.saveTraceSpans(parsed.spans), 2);
+    const traceSpans = store.getTraceSpans(asset.id, traceId);
+    assert.doesNotMatch(JSON.stringify(traceSpans), /pg_advisory_lock/);
+    const analysis = analyzeEvent(event, referenced, { nearbySamples: referenced, traceSpans });
     assert.equal(analysis.eventId, event.id);
     assert.ok(analysis.candidates.some(candidate => candidate.code === 'lock_chain'));
+    assert.equal(analysis.traceCoverage.databaseSpans, 1);
+    assert.ok(analysis.graph.edges.some(edge => edge.from === `trace_span:${traceId}:${requestSpanId}` &&
+      edge.to === `trace_span:${traceId}:${dbSpanId}` && edge.relation === 'parent_of'));
+    assert.ok(analysis.graph.edges.some(edge => edge.from === `event:${event.id}` &&
+      edge.to === `trace_span:${traceId}:${dbSpanId}` && edge.relation === 'overlaps_db_call'));
+    assert.ok(analysis.graph.edges.some(edge => edge.from === `trace_span:${traceId}:${dbSpanId}` &&
+      edge.to.startsWith('sample:') && edge.relation === 'overlaps_sample'));
     assert.ok(analysis.graph.edges.some(edge => edge.from.endsWith(`:${waitingPid}`) &&
       edge.to.endsWith(`:${blockerPid}`) && edge.relation === 'blocked_by'));
-    console.log(`PG${major} lock RCA: one event ${event.id} links waiter, blocker and alert`);
+    console.log(`PG${major} lock RCA: one event ${event.id} links HTTP request, DB Span, waiter, blocker and alert`);
   } finally {
     store.close();
     if (!resolve(directory).startsWith(root + sep)) throw new Error('Unexpected test directory');
@@ -96,6 +151,7 @@ try {
 } finally {
   await blocker.query('SELECT pg_advisory_unlock(1742026)').catch(() => {});
   await waiting?.catch(() => {});
+  if (requestServer) await new Promise(resolve => requestServer.close(resolve));
   await blocker.end();
   await waiter.end();
 }

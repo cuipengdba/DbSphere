@@ -21,4 +21,5 @@
 ## 验证
 
 - `test/otel.test.js`：字段脱敏、跨资产 Trace 隔离、令牌校验、重复写入、管理员可见原始数据，以及同一事件 ID 的父子 Span → PG 关系。
-- `scripts/pg18-trace-smoke.mjs`：真实 PostgreSQL 18 中保存、去重、读取 Span，并在故障事件的同一事件 ID 下关联；已在本机 PG18 验证，GitHub CI 作业已加入。
+- `scripts/pg18-trace-smoke.mjs`：真实 PostgreSQL 18 中保存、去重、读取 Span，并在故障事件的同一事件 ID 下关联；本机及[14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44067441805)已通过。
+- `scripts/pg-compat.mjs`：真实 HTTP 请求在 PG14–18 上等待一个 advisory lock；请求/DB Span 由测试程序按实际时间生成 OTLP JSON，PG 只读采集读出等待与阻塞 PID。证据图从同一事件 ID 连到应用请求、DB Span、重叠样本、等待会话和阻塞会话。本机 PG14 已通过；五版 CI 待确认。这里验证的是手工埋点，不等于所有 OpenTelemetry SDK 导出器已兼容。

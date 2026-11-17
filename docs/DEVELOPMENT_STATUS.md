@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-V0.7 Trace 首段能力正在开发：可选令牌保护的 OTLP/HTTP JSON 接口接收 PostgreSQL 客户端 Span，将服务及父子 Span 与唯一匹配的 PG 资产关联，并在原事件 ID 的证据图展示；敏感 SQL/参数/URL 不入库。真实 PG18 持久化冒烟已通过。协议、映射、采样率、时钟偏移、影响面和真实应用故障演练仍待完成，详见[开发记录](TRACE_V0.7_PROGRESS.md)。V0.6 正式版也尚未通过全部故障演练，因此目前不可宣称 V0.7 已发布。
+V0.7 Trace 首段能力正在开发：可选令牌保护的 OTLP/HTTP JSON 接口接收 PostgreSQL 客户端 Span，将服务及父子 Span 与唯一匹配的 PG 资产关联，并在原事件 ID 的证据图展示；敏感 SQL/参数/URL 不入库。真实 PG18 持久化冒烟及[14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44067441805)已通过。协议、映射、采样率、时钟偏移、影响面和真实应用故障演练仍待完成，详见[开发记录](TRACE_V0.7_PROGRESS.md)。V0.6 正式版也尚未通过全部故障演练，因此目前不可宣称 V0.7 已发布。
 
 **[V0.1.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0)、[V0.5.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)，V0.6 开发中**。已实现 B/S 服务端与浏览器页面、管理员登录和 CSRF 校验、PostgreSQL 资产增删改查、凭据加密、基础采集、采集失败与恢复共用一个事件 ID 的证据记录。PG14–18 已能读取会话/等待、长事务、锁链、WAL/归档、检查点、autovacuum、表/索引容量和复制槽 11 个诊断分区，并显示不可用原因。V0.2 新增独立 PG18 后端、SQLite 数据迁移、Docker Compose 一键部署、Linux node_exporter 资源采集；K8S 适配器支持按 Namespace 发现并关联 Pod/Workload/Service/Node/PVC/PV，读取容器重启/OOMKilled、事件与可用的 metrics.k8s.io 数据。当 PG 连接失败与近期 Pod OOMKilled 同时出现时，在**同一个事件 ID** 中给出中等置信度、可查看原始证据的根因候选。
 
@@ -27,6 +27,8 @@ V0.6 后续开发将 SQL 指纹、慢日志、计划、锁链、等待、WAL/复
 本机 kind 的临时 Pending Pod 已由只读采集器读取 `PodScheduled=False` 与真实 `FailedScheduling` 事件，并与注入的 PG 连接失败归入同一事件 ID；演练 Pod 已删除。该混合演练不替代真实业务 PG 调度故障与恢复测试。
 
 PG14–18 的真实锁等待 → 只读锁链采集 → 同一事件 ID 的候选和 PID 证据图已通过 [14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44064849447)。十类注入式跨层故障矩阵通过本地测试；真实故障恢复矩阵仍是 V0.6 发布前缺口。
+
+V0.7 开发中的真实 HTTP 请求 → PostgreSQL 锁等待 → 只读锁链样本 → 同一事件 ID 证据图已在本机 PG14 验证；请求和 DB Span 由测试程序按实际起止时间生成 OTLP JSON。PG14–18 CI 与真实 OpenTelemetry SDK 导出仍待验收。
 
 ## V0.5 已发布能力
 
