@@ -120,6 +120,9 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 		if ctx.Err() != nil {
 			return
 		}
+		if _, err := pg.QueueCriticalEscalations(ctx, time.Now().UTC(), 15); err != nil && ctx.Err() == nil {
+			log.Error("Go alert escalation scan failed", "error", err)
+		}
 		if _, err := pg.DispatchDueNotifications(ctx, 20, cfg.Send); err != nil && ctx.Err() == nil {
 			log.Error("Go notification dispatch failed", "error", err)
 		}

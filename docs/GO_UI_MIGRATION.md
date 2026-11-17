@@ -27,7 +27,7 @@ Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubecon
 
 Go K8S 告警移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled、Node 压力及可选 Prometheus PVC 使用率规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。Pod 重启增量与未确认严重告警升级仍未移植；PVC 告警的真实 Prometheus 路径仍待验收。
 
-Go 告警静默与维护窗现支持 B/S 创建、查看和撤销；服务端校验资产/规则、起止时间、最长 30 天和原因，所有写操作要求登录和 CSRF。PG18 实库故障演练确认锁等待告警触发时写入 `alert_suppressed`，撤销维护窗后写入 `alert_unsuppressed`，两条证据使用同一个事件 ID。告警触发、解除静默及恢复会向 PG18 持久化 Webhook/邮件投递任务；Go 后台工作器支持级别路由、Webhook HMAC、SMTP TLS、失败退避和 B/S 手动重试。当前仅完成本地 TLS Webhook、环回 SMTP 与 PG18 队列测试，生产通道和严重告警升级仍待验收。
+Go 告警静默与维护窗现支持 B/S 创建、查看和撤销；服务端校验资产/规则、起止时间、最长 30 天和原因，所有写操作要求登录和 CSRF。PG18 实库故障演练确认锁等待告警触发时写入 `alert_suppressed`，撤销维护窗后写入 `alert_unsuppressed`，两条证据使用同一个事件 ID。告警触发、解除静默及恢复会向 PG18 持久化 Webhook/邮件投递任务；Go 后台工作器支持级别路由、Webhook HMAC、SMTP TLS、失败退避和 B/S 手动重试。未确认的严重事件超过 15 分钟会在原事件 ID 下写入一次升级证据并再次通知；PG18 实库已验证未到期不升级、静默时不升级、解除静默后只升级一次。生产通知通道仍待验收。
 
 Go 已按 Pod 标签选择同 Namespace 的匹配 Service，并将 Service → Pod 路由关系加入事件证据图和资产详情。列表限定 100 条，权限不足或分页截断会显式标记缺口；TLS 模拟 API 与 PG18 实库证据图通过，真实 kind 仍需重新验收。
 

@@ -113,3 +113,96 @@ func (s *Postgres) RetryNotification(ctx context.Context, id string) (bool, erro
 	}
 	return result.RowsAffected() == 1, nil
 }
+
+// QueueCriticalEscalations adds one escalation per rule and open event after the
+// acknowledgement window. It checks current silences even when no new sample arrived.
+func (s *Postgres) QueueCriticalEscalations(ctx context.Context, now time.Time, afterMinutes int) (int, error) {
+	if afterMinutes < 1 || afterMinutes > 1440 {
+		return 0, errors.New("invalid escalation delay")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT s.asset_id::text,s.rule_id,s.state_json,r.definition_json
+		FROM alert_states s JOIN alert_rules r ON r.id=s.rule_id
+		WHERE s.state_json->>'status'='firing'`)
+	if err != nil {
+		return 0, err
+	}
+	type candidate struct {
+		assetID string
+		ruleID  string
+		state   alertState
+		rule    alertRule
+	}
+	candidates := []candidate{}
+	for rows.Next() {
+		var item candidate
+		var stateJSON, ruleJSON []byte
+		if err := rows.Scan(&item.assetID, &item.ruleID, &stateJSON, &ruleJSON); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if json.Unmarshal(stateJSON, &item.state) == nil && json.Unmarshal(ruleJSON, &item.rule) == nil &&
+			item.rule.Enabled && item.rule.Severity == "critical" && item.state.MutedBy == nil &&
+			item.state.EventID != "" {
+			candidates = append(candidates, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	queued := 0
+	for _, item := range candidates {
+		var eventID string
+		err := tx.QueryRow(ctx, `SELECT id::text FROM events WHERE id=$1 AND status='open'
+			AND acknowledged_at IS NULL AND started_at<=$2 FOR UPDATE`,
+			item.state.EventID, now.Add(-time.Duration(afterMinutes)*time.Minute)).Scan(&eventID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		var suppressed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM silences
+			WHERE revoked_at IS NULL AND starts_at<=$1 AND ends_at>$1
+			AND (asset_id IS NULL OR asset_id=$2) AND (rule_id IS NULL OR rule_id=$3))`,
+			now, item.assetID, item.ruleID).Scan(&suppressed); err != nil {
+			return 0, err
+		}
+		if suppressed {
+			continue
+		}
+		var already bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1
+			AND kind='alert_escalation' AND payload_json->>'ruleId'=$2)`,
+			eventID, item.ruleID).Scan(&already); err != nil {
+			return 0, err
+		}
+		if already {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]any{"ruleId": item.ruleID,
+			"severity": item.rule.Severity, "source": item.rule.Source,
+			"value": item.state.LastValue, "afterMinutes": afterMinutes})
+		var evidenceID string
+		if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			VALUES(gen_random_uuid(),$1,'alert_escalation',$2,$3) RETURNING id::text`,
+			eventID, now, payload).Scan(&evidenceID); err != nil {
+			return 0, err
+		}
+		if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
+			return 0, err
+		}
+		queued++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return queued, nil
+}
