@@ -236,6 +236,17 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 			t.Fatalf("asset section %s failed: %d %s", section, response.Code, response.Body.String())
 		}
 	}
+	missingLog := "/api/assets/" + result.Asset.ID + "/slow-logs/00000000-0000-0000-0000-000000000001"
+	if !rawSQLPath.MatchString(missingLog) {
+		t.Fatal("raw SQL evidence route does not match a valid UUID")
+	}
+	missingLogRequest := httptest.NewRequest(http.MethodGet, missingLog, nil)
+	missingLogRequest.AddCookie(login.Result().Cookies()[0])
+	missingLogResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingLogResponse, missingLogRequest)
+	if missingLogResponse.Code != http.StatusNotFound {
+		t.Fatalf("unknown SQL evidence should return 404, got %d", missingLogResponse.Code)
+	}
 	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/assets/"+result.Asset.ID, nil)
 	deleteRequest.AddCookie(login.Result().Cookies()[0])
 	deleteRequest.Header.Set("X-CSRF-Token", credentials.CSRF)

@@ -195,6 +195,19 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var slowLogID, planID string
+	if err := pg.pool.QueryRow(context.Background(), `INSERT INTO slow_log_entries
+		(id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
+		VALUES(gen_random_uuid(),$1,'go-rca-test',now(),1350,'42','csv',now()) RETURNING id`,
+		asset.ID).Scan(&slowLogID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.pool.QueryRow(context.Background(), `INSERT INTO sql_plan_snapshots
+		(id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
+		VALUES(gen_random_uuid(),$1,'42',now(),'import','test-shape','{"nodeCount":1}',now()) RETURNING id`,
+		asset.ID).Scan(&planID); err != nil {
+		t.Fatal(err)
+	}
 	if err := pg.pool.QueryRow(context.Background(), `SELECT count(*)::int
 		FROM events WHERE asset_id=$1 AND status='open'`, asset.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("repeated failures did not share one event: %q %d %v", eventID, count, err)
@@ -208,8 +221,15 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		!strings.Contains(string(encoded), "connection_pressure") || !strings.Contains(string(encoded), "lock_chain") ||
 		!strings.Contains(string(encoded), "blocked_by") || !strings.Contains(string(encoded), "sql_fingerprint") ||
 		!strings.Contains(string(encoded), "scheduled_on") || !strings.Contains(string(encoded), "pvc:") ||
-		!strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), "parent_of") {
+		!strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), "parent_of") ||
+		!strings.Contains(string(encoded), "query_id_matches") || !strings.Contains(string(encoded), slowLogID) ||
+		!strings.Contains(string(encoded), planID) {
 		t.Fatal("same event ID did not expose its sample evidence graph", err)
+	}
+	for _, item := range []struct{ kind, id string }{{"slow-logs", slowLogID}, {"sql-plans", planID}} {
+		if raw, err := pg.RawSQLEvidence(context.Background(), asset.ID, item.kind, item.id); err != nil || raw == nil {
+			t.Fatalf("SQL evidence %s is unavailable: %v", item.kind, err)
+		}
 	}
 	if rawTrace, err := pg.RawTrace(context.Background(), asset.ID, traceID); err != nil || rawTrace == nil {
 		t.Fatal("trace evidence is unavailable", err)

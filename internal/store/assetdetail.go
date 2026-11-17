@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var ErrInvalidRange = errors.New("invalid monitoring time range")
@@ -86,6 +88,33 @@ func (s *Postgres) queryJSON(ctx context.Context, query string, args ...any) ([]
 	}
 	defer rows.Close()
 	return jsonRows(rows)
+}
+
+func (s *Postgres) RawSQLEvidence(ctx context.Context, assetID, kind, id string) (any, error) {
+	var query, key string
+	switch kind {
+	case "slow-logs":
+		query = `SELECT jsonb_build_object('id',id,'assetId',asset_id,'observedAt',observed_at,
+			'durationMs',duration_ms,'queryId',query_id,'sourceFormat',source_format)
+			FROM slow_log_entries WHERE asset_id=$1 AND id=$2`
+		key = "log"
+	case "sql-plans":
+		query = `SELECT jsonb_build_object('id',id,'assetId',asset_id,'queryId',query_id,
+			'observedAt',observed_at,'source',source,'shapeHash',shape_hash,'summary',summary_json)
+			FROM sql_plan_snapshots WHERE asset_id=$1 AND id=$2`
+		key = "plan"
+	default:
+		return nil, fmt.Errorf("unsupported SQL evidence kind")
+	}
+	var raw []byte
+	err := s.pool.QueryRow(ctx, query, assetID, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{key: json.RawMessage(raw)}, nil
 }
 
 func timeRange(params url.Values, defaultDuration, maxDuration time.Duration) (time.Time, time.Time, error) {

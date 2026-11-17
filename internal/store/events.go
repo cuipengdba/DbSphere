@@ -137,6 +137,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			map[string]string{"from": sampleNode, "to": assetNode, "relation": "collected_from"})
 		addSampleLayers(event.AssetID, samples[sampleID], addNode, &edges)
 	}
+	if err := s.addSQLEvidenceGraph(ctx, event, samples, addNode, &edges); err != nil {
+		return nil, err
+	}
 	candidates := analyzeCandidates(event, samples, addNode, &edges)
 	traceCount := 0
 	databaseSpans := 0
