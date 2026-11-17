@@ -17,7 +17,8 @@ func TestGoRCAPreservesCrossLayerCandidatesWhenPGFails(t *testing.T) {
 		metric("e1", "k8s.pod_not_ready", 1), metric("e2", "k8s.oom_recent", 1),
 		metric("e3", "k8s.node_pressure", 1), metric("e4", "k8s.scheduling_failure_recent", 1),
 		metric("e5", "k8s.pvc_used_percent", 90), metric("e6", "linux.disk_used_percent", 95),
-		metric("e7", "pgbouncer.waiting_clients", 2), metric("e8", "pg.connection_utilization", 99)}}
+		metric("e7", "pgbouncer.waiting_clients", 2), metric("e8", "pg.connection_utilization", 99),
+		metric("e9", "k8s.restart_delta", 1)}}
 	sample := sampleObservation{ID: "sample-1", At: now, Status: "error",
 		Metrics: map[string]any{"k8s": map[string]any{"status": "ok",
 			"pod": map[string]any{"name": "pg-0", "uid": "pod-uid", "conditions": []any{
@@ -37,7 +38,7 @@ func TestGoRCAPreservesCrossLayerCandidatesWhenPGFails(t *testing.T) {
 		found[candidate["code"].(string)] = true
 	}
 	for _, code := range []string{"k8s_pod_not_ready", "k8s_oom_killed", "k8s_node_pressure",
-		"k8s_scheduling_event", "pvc_pressure", "linux_disk_pressure", "pooler_queue"} {
+		"k8s_scheduling_event", "k8s_pod_restart", "pvc_pressure", "linux_disk_pressure", "pooler_queue"} {
 		if !found[code] {
 			t.Fatalf("cross-layer candidate %s was lost when PG failed: %+v", code, found)
 		}
@@ -58,12 +59,14 @@ func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 		alert("e1", "pg.replication_lag_bytes", "primary", 70*1024*1024),
 		alert("e2", "pg.wal_receiver_down", "standby", 1),
 		alert("e3", "pg.autovacuum_disabled", "primary", 1),
-		alert("e4", "pg.vacuum_backlog_percent", "primary", 25)}}
+		alert("e4", "pg.vacuum_backlog_percent", "primary", 25),
+		alert("e5", "pg.archive_fail_delta", "primary", 1)}}
 	samples := map[string]sampleObservation{
 		"primary": {ID: "primary", At: now, Status: "ok", Metrics: map[string]any{
 			"role": "primary", "replication_lag_bytes": float64(70 * 1024 * 1024),
 			"diagnostics": map[string]any{"vacuum": map[string]any{"status": "ok", "data": []any{
-				map[string]any{"deadRowsEstimate": float64(20000)}}}}}},
+				map[string]any{"deadRowsEstimate": float64(20000)}}},
+				"archiver": map[string]any{"status": "ok"}}}},
 		"standby": {ID: "standby", At: now, Status: "ok", Metrics: map[string]any{
 			"role": "standby", "replication_observed": true, "wal_receiver": "absent"}}}
 	candidates := analyzeCandidates(event, samples, func(string, string, string, string, any) {},
@@ -75,7 +78,8 @@ func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 			t.Fatalf("candidate lacks alert and raw sample: %+v", candidate)
 		}
 	}
-	for _, code := range []string{"replication_lag", "wal_receiver_down", "autovacuum_disabled", "vacuum_backlog"} {
+	for _, code := range []string{"replication_lag", "wal_receiver_down", "wal_archive_failures",
+		"autovacuum_disabled", "vacuum_backlog"} {
 		if !found[code] {
 			t.Fatalf("PostgreSQL candidate %s was not proposed: %+v", code, found)
 		}

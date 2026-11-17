@@ -245,6 +245,14 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					"备库已观测接收中断，不能单凭备库侧信号判断主库或网络根因。",
 					map[string]any{"receiver": sample.Metrics["wal_receiver"]}, item.ObservedAt, condition)
 			}
+		case "pg.archive_fail_delta":
+			archiver := object(object(sample.Metrics["diagnostics"])["archiver"])
+			if stringValue(archiver["status"]) == "ok" && number(payload["value"]) > 0 {
+				addCandidate("wal_archive_failures", "WAL 归档失败增加", "medium", supports,
+					[]string{"归档命令错误日志与仓库状态未关联"},
+					"失败计数增加是恢复风险，尚未确认失败命令原因。",
+					map[string]any{"failureDelta": payload["value"]}, item.ObservedAt, condition)
+			}
 		case "pg.autovacuum_disabled":
 			if number(payload["value"]) == 1 {
 				backlog := 0
@@ -356,6 +364,15 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			k8s := object(sample.Metrics["k8s"])
 			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) != 1 {
 				continue
+			}
+		case "k8s.restart_delta":
+			k8s := object(sample.Metrics["k8s"])
+			if stringValue(k8s["status"]) == "ok" && number(payload["value"]) > 0 {
+				addCandidate("k8s_pod_restart", "PostgreSQL Pod 容器发生重启", "low", supports,
+					[]string{"容器终止原因与 PG 服务退化未核对"},
+					"重启与事件同期出现，不能断定其为唯一故障原因。",
+					map[string]any{"pod": object(k8s["pod"])["name"], "restartDelta": payload["value"]},
+					item.ObservedAt, condition)
 			}
 			for _, raw := range list(k8s["containers"]) {
 				container := object(raw)

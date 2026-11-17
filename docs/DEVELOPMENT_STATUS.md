@@ -42,13 +42,15 @@ Go 每次资产采样现并行读取 PG、Linux/K8S 和 PgBouncer，K8S API 的�
 
 Go 可选从 Prometheus `kubelet_volume_stats_used_bytes` 按 Namespace/PVC 读取实际使用字节，并与 Kubernetes PVC 容量组合触发使用率规则。查询 URL、Bearer 令牌、响应大小和超时均受限制；模拟 Prometheus API 已验证真实值、空向量与未配置状态，未配置/缺信号不触发“健康”结论。Go Compose 可选传入 Prometheus URL/令牌；生产 Prometheus 与 PVC 高水位事件仍待验收。
 
-Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力和可选 PVC 使用率六条规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量的生产指标、容器重启增量与通知通道仍待验收。
+Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力和可选 PVC 使用率规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量的生产指标、真实容器重启和通知通道仍待验收。
 
 Go 告警静默/维护窗已接入创建与撤销 API，窗口最长 30 天，按资产和规则限定；PG18 实库验证锁等待告警的抑制和解除抑制证据均写入同一事件 ID。Go 通知工作器已接入 PG18 持久化队列、Webhook/SMTP、严重度路由、失败退避和 B/S 重试；PG18 实库验证最多五次失败后的手动重试仍使用原投递 ID，本地 TLS Webhook 签名与环回 SMTP 已通过模拟收件端。未确认严重告警超过 15 分钟仅在同一事件 ID 升级一次；PG18 实库已验证未到期、静默和解除静默的边界。生产通知通道仍待验收。
 
 Go RCA 在 PG 连接失败的样本上继续读取 K8S/Linux/PgBouncer 的有效告警证据；新增 Pod 未就绪/OOM/调度、Node/PVC 压力、Linux 内存/磁盘和连接池等待候选。候选仍标为假设，附原始样本、告警证据、时间顺序和未验证条件。PG18 实库验证 PG 连接失败 + K8S OOM 同一事件 ID 下同时保留关联候选和 K8S 告警候选；其余候选经合成证据测试。复制/WAL、SQL 性能根因和真实 K8S 故障矩阵仍待开发验收。
 
 Go 规则包继续增加复制延迟、备库 WAL 接收中断、autovacuum 关闭、表死元组积压和 Linux CPU，共十七条默认规则；对应 RCA 候选附上复制/WAL 与表维护的原始采样证据及不确定性。本机 PG14 只读实库验证复制状态查询，五版矩阵需以本轮 CI 确认；真实复制拓扑和 autovacuum 故障演练仍待完成。
+
+Go 新增 WAL 归档失败计数和同一 Pod 容器重启的相邻采样增量规则，共十九条。首次样本、计数回退或 Pod UID 变更保持未知；PG18 实库验证第二次采样触发、后续零增量在原事件 ID 关闭。RCA 对应候选只把时间相关性当作线索。真实归档错误与 Pod 重启故障演练仍待完成。
 
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
 

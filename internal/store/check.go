@@ -209,6 +209,14 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 		}
 		return CheckResult{}, err
 	}
+	var previous map[string]any
+	var previousJSON []byte
+	if err := tx.QueryRow(ctx, `SELECT metrics_json FROM samples WHERE asset_id=$1
+		AND collected_at<$2 ORDER BY collected_at DESC LIMIT 1`, id, now).Scan(&previousJSON); err == nil {
+		_ = json.Unmarshal(previousJSON, &previous)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return CheckResult{}, fmt.Errorf("read previous monitoring sample: %w", err)
+	}
 	status := "ok"
 	if reason != "" {
 		status = "error"
@@ -324,7 +332,7 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	if err := json.Unmarshal(encoded, &observed); err != nil {
 		return CheckResult{}, err
 	}
-	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, now); err != nil {
+	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now); err != nil {
 		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}
 	if reason == "" {

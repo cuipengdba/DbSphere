@@ -132,6 +132,94 @@ func TestGoReplicationVacuumAndCPUSignals(t *testing.T) {
 	}
 }
 
+func TestGoArchiveAndPodRestartNeedPreviousSample(t *testing.T) {
+	now := time.Now().UTC()
+	current := map[string]any{
+		"diagnostics": map[string]any{"archiver": map[string]any{"status": "ok",
+			"data": map[string]any{"failedCount": float64(5)}}},
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0", "uid": "pod-uid"},
+			"containers": []any{map[string]any{"name": "postgres", "restartCount": float64(3)}}}}
+	for _, metric := range []string{"pg.archive_fail_delta", "k8s.restart_delta"} {
+		if readGoSignalWithPrevious(metric, current, nil, now).Available {
+			t.Fatalf("%s inferred a delta from the first sample", metric)
+		}
+	}
+	previous := map[string]any{
+		"diagnostics": map[string]any{"archiver": map[string]any{"status": "ok",
+			"data": map[string]any{"failedCount": float64(3)}}},
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "pod-uid"},
+			"containers": []any{map[string]any{"name": "postgres", "restartCount": float64(2)}}}}
+	if signal := readGoSignalWithPrevious("pg.archive_fail_delta", current, previous, now); !signal.Available || signal.Value != 2 {
+		t.Fatalf("WAL archive failure delta missing: %+v", signal)
+	}
+	if signal := readGoSignalWithPrevious("k8s.restart_delta", current, previous, now); !signal.Available || signal.Value != 1 {
+		t.Fatalf("same-Pod restart delta missing: %+v", signal)
+	}
+	object(object(previous["diagnostics"])["archiver"])["data"] = map[string]any{"failedCount": float64(6)}
+	object(object(previous["k8s"])["pod"])["uid"] = "old-pod"
+	if readGoSignalWithPrevious("pg.archive_fail_delta", current, previous, now).Available ||
+		readGoSignalWithPrevious("k8s.restart_delta", current, previous, now).Available {
+		t.Fatal("counter reset or Pod replacement was treated as a normal delta")
+	}
+}
+
+func TestGoDeltaAlertsUsePreviousPG18SampleAndRecover(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	ctx := context.Background()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Go delta alert test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "k8s", K8sCluster: "test",
+		Namespace: "db", Pod: "pg-0"}, []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	metrics := func(count float64) map[string]any {
+		return map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
+			"diagnostics": map[string]any{"archiver": map[string]any{"status": "ok",
+				"data": map[string]any{"failedCount": count}}},
+			"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0", "uid": "pod-uid"},
+				"containers": []any{map[string]any{"name": "postgres", "restartCount": count}}}}
+	}
+	now := time.Now().UTC().Add(-3 * time.Minute)
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(0), "", "", now); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int FROM events WHERE asset_id=$1`, asset.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("first delta sample opened an incident: %d %v", count, err)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(1), "", "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int FROM alert_states WHERE asset_id=$1
+		AND rule_id IN ('pg_archive_failures','k8s_pod_restarted')
+		AND state_json->>'status'='firing'`, asset.ID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("archive/restart deltas did not fire: %d %v", count, err)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(1), "", "", now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int FROM events WHERE asset_id=$1 AND status='resolved'
+		AND event_group IN ('storage','availability')`, asset.ID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("delta alerts did not recover under their event IDs: %d %v", count, err)
+	}
+}
+
 func TestGoLockWaitAndPoolerWaitShareIncident(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {

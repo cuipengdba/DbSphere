@@ -31,6 +31,7 @@ var goDefaultRules = []alertRule{
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
 	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true},
+	{"pg_archive_failures", "PostgreSQL WAL 归档失败增加", "pg.archive_fail_delta", "PostgreSQL", "storage", "warning", ">=", 1, 0, 1, true},
 	{"pg_autovacuum_disabled", "PostgreSQL autovacuum 已关闭", "pg.autovacuum_disabled", "PostgreSQL", "maintenance", "critical", ">=", 1, 0, 1, true},
 	{"pg_vacuum_backlog", "PostgreSQL 表死元组积压", "pg.vacuum_backlog_percent", "PostgreSQL", "maintenance", "warning", ">=", 20, 300, 1, true},
 	{"linux_cpu_high", "Linux CPU 使用率高", "linux.cpu_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
@@ -39,6 +40,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
 	{"k8s_pod_unscheduled", "Kubernetes Pod 调度失败", "k8s.pod_unscheduled", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
 	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true},
+	{"k8s_pod_restarted", "Kubernetes 容器重启", "k8s.restart_delta", "Kubernetes API", "availability", "warning", ">=", 1, 0, 1, true},
 	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true},
 	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true},
 	{"k8s_pvc_high", "Kubernetes PVC 使用率高", "k8s.pvc_used_percent", "Prometheus kubelet", "storage", "warning", ">=", 85, 300, 1, true},
@@ -94,10 +96,10 @@ func numeric(value any) (float64, bool) {
 func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
-		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.autovacuum_disabled",
+		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
-		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent",
+		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent", "k8s.restart_delta",
 		"k8s.oom_recent", "k8s.node_pressure", "k8s.pvc_used_percent", "pgbouncer.waiting_clients":
 		return true
 	}
@@ -105,6 +107,10 @@ func supportedAlertMetric(metric string) bool {
 }
 
 func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSignal {
+	return readGoSignalWithPrevious(metric, metrics, nil, now)
+}
+
+func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, now time.Time) alertSignal {
 	signal := alertSignal{Source: "PostgreSQL", Reason: "signal unavailable"}
 	switch metric {
 	case "pg.connection_utilization":
@@ -141,6 +147,16 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 				}
 				return alertSignal{Available: true, Value: value, Source: signal.Source,
 					Detail: map[string]any{"receiver": status}}
+			}
+		}
+	case "pg.archive_fail_delta":
+		current := object(object(metrics["diagnostics"])["archiver"])
+		before := object(object(previous["diagnostics"])["archiver"])
+		if stringValue(current["status"]) == "ok" && stringValue(before["status"]) == "ok" {
+			currentCount, currentOK := numeric(object(current["data"])["failedCount"])
+			beforeCount, beforeOK := numeric(object(before["data"])["failedCount"])
+			if currentOK && beforeOK && currentCount >= beforeCount {
+				return alertSignal{Available: true, Value: currentCount - beforeCount, Source: signal.Source}
 			}
 		}
 	case "pg.autovacuum_disabled":
@@ -249,6 +265,35 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 				}
 			}
 			return alertSignal{Available: true, Value: float64(count), Source: signal.Source}
+		}
+	case "k8s.restart_delta":
+		signal.Source = "Kubernetes API"
+		k8s, old := object(metrics["k8s"]), object(previous["k8s"])
+		uid := stringValue(object(k8s["pod"])["uid"])
+		if stringValue(k8s["status"]) == "ok" && stringValue(old["status"]) == "ok" &&
+			uid != "" && uid == stringValue(object(old["pod"])["uid"]) {
+			previousCounts := map[string]float64{}
+			for _, raw := range list(old["containers"]) {
+				container := object(raw)
+				if count, ok := numeric(container["restartCount"]); ok {
+					previousCounts[stringValue(container["name"])] = count
+				}
+			}
+			delta, compared := 0.0, 0
+			for _, raw := range list(k8s["containers"]) {
+				container := object(raw)
+				beforeCount, exists := previousCounts[stringValue(container["name"])]
+				currentCount, ok := numeric(container["restartCount"])
+				if !exists || !ok || currentCount < beforeCount {
+					return signal
+				}
+				delta += currentCount - beforeCount
+				compared++
+			}
+			if compared > 0 {
+				return alertSignal{Available: true, Value: delta, Source: signal.Source,
+					Detail: map[string]any{"pod": object(k8s["pod"])["name"]}}
+			}
 		}
 	case "k8s.oom_recent":
 		signal.Source = "Kubernetes API"
@@ -376,7 +421,7 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 }
 
 func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sampleID string,
-	metrics map[string]any, now time.Time) error {
+	metrics, previous map[string]any, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT definition_json FROM alert_rules ORDER BY id`)
 	if err != nil {
 		return err
@@ -462,7 +507,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 			}
 			continue
 		}
-		signal := readGoSignal(rule.Metric, metrics, now)
+		signal := readGoSignalWithPrevious(rule.Metric, metrics, previous, now)
 		next, transition := nextGoAlert(rule, signal, old, now)
 		if next != nil {
 			next.MutedBy = genericSilence
