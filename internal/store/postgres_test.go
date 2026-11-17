@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +37,17 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	kept, err := store.AdminPasswordHash(context.Background(), "different-bootstrap-password")
 	if err != nil || kept != hash {
 		t.Fatal("existing administrator hash was replaced")
+	}
+	for _, path := range []string{"/api/assets", "/api/events", "/api/alerts", "/api/alert-rules",
+		"/api/silences", "/api/notifications", "/api/storage", "/api/inspection-templates",
+		"/api/inspection-schedules", "/api/inspection-runs"} {
+		value, found, err := store.ReadCollection(context.Background(), path)
+		if err != nil || !found {
+			t.Fatalf("Go read API %s failed: %v", path, err)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil || strings.Contains(string(encoded), "password_enc") || strings.Contains(string(encoded), "pooler_url_enc") {
+			t.Fatalf("Go read API %s exposed secrets or invalid JSON: %v", path, err)
+		}
 	}
 }

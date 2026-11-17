@@ -18,6 +18,9 @@ import (
 )
 
 type HealthStore interface{ Health(context.Context) error }
+type CollectionReader interface {
+	ReadCollection(context.Context, string) (any, bool, error)
+}
 
 type AuthConfig struct {
 	MasterKey    []byte
@@ -142,6 +145,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
+		}
+		if r.Method == http.MethodGet {
+			if reader, ok := store.(CollectionReader); ok {
+				value, found, err := reader.ReadCollection(r.Context(), r.URL.Path)
+				if found {
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Monitoring data unavailable"})
+						return
+					}
+					respond(w, http.StatusOK, value)
+					return
+				}
+			}
 		}
 		respond(w, http.StatusNotImplemented, map[string]string{"error": "Go API migration in progress"})
 	})

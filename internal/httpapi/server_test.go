@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/cuipengdba/dbsphere/internal/security"
+	"github.com/cuipengdba/dbsphere/internal/store"
 )
 
 type healthStub struct{ err error }
@@ -79,5 +81,40 @@ func TestGoLoginSessionAndCSRF(t *testing.T) {
 	handler.ServeHTTP(logout, logoutRequest)
 	if logout.Code != http.StatusOK {
 		t.Fatalf("logout failed: %d", logout.Code)
+	}
+}
+
+func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("DBSPHERE_TEST_PG18_URL is not set")
+	}
+	pg, err := store.Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	hash, err := security.HashPassword("dashboard-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(pg, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"), PasswordHash: hash})
+	login := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"password":"dashboard-test-password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(login, request)
+	if login.Code != http.StatusOK {
+		t.Fatalf("dashboard login failed: %d", login.Code)
+	}
+	for _, path := range []string{"/api/assets", "/api/events", "/api/alerts", "/api/alert-rules",
+		"/api/silences", "/api/notifications", "/api/storage", "/api/inspection-templates",
+		"/api/inspection-schedules", "/api/inspection-runs"} {
+		record := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(login.Result().Cookies()[0])
+		handler.ServeHTTP(record, request)
+		if record.Code != http.StatusOK || !strings.Contains(record.Body.String(), `":`) {
+			t.Fatalf("dashboard read %s failed: %d %s", path, record.Code, record.Body.String())
+		}
 	}
 }
