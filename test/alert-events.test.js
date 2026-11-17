@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../src/store.js';
+import { normalizeSilence } from '../src/silences.js';
 
 function withStore(t) {
   const root = resolve(process.env.DBSPHERE_TEST_TMP_DIR || tmpdir());
@@ -82,4 +83,24 @@ test('collector staleness opens a telemetry event and only a new sample clears i
   store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100, k8s: k8s(false) });
   assert.equal(store.getEvent(eventId).status, 'resolved');
   assert.equal(store.getEvent(eventId).evidence.filter(item => item.kind === 'alert_recovered').length, 1);
+});
+
+test('maintenance silences notifications while keeping an inspectable event and reactivates on revoke', t => {
+  const { store, asset } = withStore(t);
+  const silence = store.createSilence(normalizeSilence({ kind: 'maintenance', assetId: asset.id,
+    ruleId: 'pg_unavailable', reason: 'planned restart',
+    endsAt: new Date(Date.now() + 3600 * 1000).toISOString() }));
+  assert.ok(silence);
+  store.recordResult(asset.id, { k8s: k8s(false) }, 'connection refused');
+  const active = store.listActiveAlerts().find(item => item.ruleId === 'pg_unavailable');
+  assert.equal(active.state.mutedBy, silence.id);
+  const eventId = active.state.eventId;
+  assert.equal(store.getEvent(eventId).evidence.filter(item => item.kind === 'alert_suppressed').length, 1);
+  assert.equal(store.getEvent(eventId).status, 'open');
+  assert.ok(store.revokeSilence(silence.id).revokedAt);
+  store.recordResult(asset.id, { k8s: k8s(false) }, 'connection refused');
+  assert.equal(store.listActiveAlerts().find(item => item.ruleId === 'pg_unavailable').state.mutedBy, null);
+  assert.equal(store.getEvent(eventId).evidence.filter(item => item.kind === 'alert_unsuppressed').length, 1);
+  store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100, k8s: k8s(false) });
+  assert.equal(store.getEvent(eventId).status, 'resolved');
 });

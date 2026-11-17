@@ -9,6 +9,7 @@ import { collectK8s, discoverK8s } from './k8s.js';
 import { collectLinux, deriveLinuxRates } from './linux.js';
 import { collectPgBouncer } from './pgbouncer.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
+import { normalizeSilence } from './silences.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -179,6 +180,18 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
       if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
       if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
+      if (req.method === 'GET' && path === '/api/silences') return send(res, 200, { silences: await store.listSilences() });
+      if (req.method === 'POST' && path === '/api/silences') {
+        const input = normalizeSilence(await body(req));
+        if (!input) return send(res, 400, { error: 'Invalid silence window' });
+        const silence = await store.createSilence(input);
+        return silence ? send(res, 201, { silence }) : send(res, 400, { error: 'Silence asset or rule not found' });
+      }
+      const silenceMatch = path.match(/^\/api\/silences\/([0-9a-f-]{36})$/);
+      if (req.method === 'DELETE' && silenceMatch) {
+        const silence = await store.revokeSilence(silenceMatch[1]);
+        return silence ? send(res, 200, { silence }) : send(res, 404, { error: 'Silence not found or already revoked' });
+      }
       const ruleMatch = path.match(/^\/api\/alert-rules\/([a-z][a-z0-9_]{1,63})$/);
       if (req.method === 'PATCH' && ruleMatch) {
         const changed = await store.updateAlertRule(ruleMatch[1], await body(req));

@@ -78,6 +78,21 @@
         <section class="panel"><div class="section-head"><div><p class="eyebrow">ALERTS</p><h2>当前告警</h2></div></div><div id="alert-list" class="list"></div></section>
         <section class="panel"><div class="section-head"><div><p class="eyebrow">RULES</p><h2>告警规则</h2></div></div><div id="rule-list" class="list"></div></section>
       </div>
+      <div class="grid lower">
+        <section class="panel">
+          <div class="section-head"><div><p class="eyebrow">SILENCES</p><h2>静默与维护窗</h2></div></div>
+          <form id="silence-form" class="form-grid">
+            <label>类型<select name="kind"><option value="silence">告警静默</option><option value="maintenance">计划维护</option></select></label>
+            <label>范围<select name="assetId" id="silence-asset"><option value="">全部资产</option></select></label>
+            <label>规则<select name="ruleId" id="silence-rule"><option value="">全部规则</option></select></label>
+            <label>持续分钟<input name="durationMinutes" type="number" min="1" max="43200" value="60" required></label>
+            <label class="wide">原因<input name="reason" maxlength="300" required placeholder="例如：计划升级 PostgreSQL"></label>
+            <button class="wide" type="submit">创建时间窗</button>
+          </form>
+          <p class="hint">静默仅抑制通知；告警、问题事件和证据仍持续记录。新时间窗在下次采样时生效。</p>
+        </section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">WINDOWS</p><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
+      </div>
     </div>
   </main>
 </body>

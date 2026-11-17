@@ -7,6 +7,7 @@ import pg from 'pg';
 import { Store } from '../src/store.js';
 import { PgStore } from '../src/pg-store.js';
 import { decrypt, encrypt, hashPassword } from '../src/security.js';
+import { normalizeSilence } from '../src/silences.js';
 
 if (!process.env.DBSPHERE_DATABASE_URL || !process.env.DBSPHERE_TEST_DATA_DIR) {
   throw new Error('Set DBSPHERE_DATABASE_URL and DBSPHERE_TEST_DATA_DIR');
@@ -31,6 +32,9 @@ source.recordResult(asset.id, { version_num: 180006, role: 'primary' });
 const sourceEvent = source.listEvents()[0];
 const activeAsset = source.addAsset({ name: 'Active alert source', host: '127.0.0.1', port: 5432,
   database: 'postgres', username: 'monitor', sslMode: 'disable', runtime: 'linux' }, encrypt(oldKey, 'active-secret'));
+const sourceSilence = source.createSilence(normalizeSilence({ kind: 'maintenance', assetId: activeAsset.id,
+  ruleId: 'pg_collection_failed', reason: 'planned maintenance',
+  endsAt: new Date(Date.now() + 3600 * 1000).toISOString() }));
 source.recordResult(activeAsset.id, {}, 'password authentication failed');
 source.close();
 
@@ -68,5 +72,7 @@ try {
   assert.equal(event.evidence.filter(e => e.kind === 'root_cause_candidate').length, 1);
   assert.equal((await target.getAlertRules()).find(rule => rule.id === 'pg_connections_high').threshold, 77);
   assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).ruleId, 'pg_collection_failed');
-  console.log('SQLite -> PG18 migration: IDs, credentials, samples, event acknowledgement and alert rules/states passed');
+  assert.equal((await target.listSilences()).find(silence => silence.id === sourceSilence.id).reason, 'planned maintenance');
+  assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).state.mutedBy, sourceSilence.id);
+  console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, alert states and silences passed');
 } finally { await target.close(); }

@@ -54,6 +54,13 @@ const schema = `
     rule_id text NOT NULL REFERENCES alert_rules(id), state_json jsonb NOT NULL,
     PRIMARY KEY(asset_id,rule_id)
   );
+  CREATE TABLE IF NOT EXISTS silences (
+    id uuid PRIMARY KEY, kind text NOT NULL, asset_id uuid REFERENCES assets(id) ON DELETE CASCADE,
+    rule_id text REFERENCES alert_rules(id), starts_at timestamptz NOT NULL,
+    ends_at timestamptz NOT NULL, reason text NOT NULL,
+    created_at timestamptz NOT NULL, revoked_at timestamptz
+  );
+  CREATE INDEX IF NOT EXISTS silences_active ON silences(starts_at,ends_at);
 `;
 
 export class PgStore {
@@ -76,6 +83,7 @@ export class PgStore {
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(5) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(6) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -121,6 +129,29 @@ export class PgStore {
       ruleId: row.rule_id, rule: row.definition_json, state: row.state_json }));
   }
 
+  async listSilences() {
+    const rows = (await this.pool.query('SELECT * FROM silences ORDER BY created_at DESC LIMIT 200')).rows;
+    return rows.map(row => ({ id: row.id, kind: row.kind, assetId: row.asset_id,
+      ruleId: row.rule_id, startsAt: row.starts_at, endsAt: row.ends_at,
+      reason: row.reason, createdAt: row.created_at, revokedAt: row.revoked_at }));
+  }
+
+  async createSilence(input) {
+    if (input.assetId && !await this.getInternalAsset(input.assetId)) return null;
+    if (input.ruleId && !(await this.pool.query('SELECT 1 FROM alert_rules WHERE id=$1', [input.ruleId])).rowCount) return null;
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    await this.pool.query(`INSERT INTO silences(id,kind,asset_id,rule_id,starts_at,ends_at,reason,created_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [id, input.kind, input.assetId,
+      input.ruleId, input.startsAt, input.endsAt, input.reason, createdAt]);
+    return (await this.listSilences()).find(item => item.id === id);
+  }
+
+  async revokeSilence(id) {
+    const changed = await this.pool.query('UPDATE silences SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL', [id]);
+    return changed.rowCount ? (await this.listSilences()).find(item => item.id === id) : null;
+  }
+
   async listAssets() {
     return (await this.pool.query('SELECT * FROM assets ORDER BY created_at DESC')).rows.map(publicAsset);
   }
@@ -163,6 +194,9 @@ export class PgStore {
     const rules = (await client.query('SELECT definition_json FROM alert_rules ORDER BY id')).rows.map(row => row.definition_json);
     const states = new Map((await client.query('SELECT rule_id,state_json FROM alert_states WHERE asset_id=$1', [assetId])).rows
       .map(row => [row.rule_id, row.state_json]));
+    const silences = (await client.query(`SELECT id,rule_id FROM silences WHERE revoked_at IS NULL
+      AND starts_at<=$1 AND ends_at>$1 AND (asset_id IS NULL OR asset_id=$2)
+      ORDER BY created_at DESC`, [now, assetId])).rows;
     for (const rule of rules) {
       if (onlyRuleId && rule.id !== onlyRuleId) continue;
       const old = states.get(rule.id) ?? null;
@@ -175,6 +209,7 @@ export class PgStore {
       }
       const signal = readSignal(rule.metric, result, previous, error, Date.parse(now));
       const { next, transition } = nextAlertState(rule, signal, old, now);
+      if (next) next.mutedBy = silences.find(item => !item.rule_id || item.rule_id === rule.id)?.id ?? null;
       if (transition === 'firing') {
         let eventId = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND event_group=$2
           AND status='open' FOR UPDATE`, [assetId, rule.group])).rows[0]?.id;
@@ -185,13 +220,20 @@ export class PgStore {
         }
         next.eventId = eventId;
       }
-      if (transition && (next?.eventId || old?.eventId)) {
+      const transitions = [];
+      if (transition === 'firing') transitions.push(next.mutedBy ? 'suppressed' : 'firing');
+      else if (transition) transitions.push(transition);
+      if (old?.status === 'firing' && next?.status === 'firing' && old.mutedBy !== next.mutedBy) {
+        transitions.push(next.mutedBy ? 'suppressed' : 'unsuppressed');
+      }
+      for (const change of transitions) if (next?.eventId || old?.eventId) {
         await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-          VALUES($1,$2,$3,$4,$5)`, [randomUUID(), next?.eventId ?? old.eventId, `alert_${transition}`, now,
+          VALUES($1,$2,$3,$4,$5)`, [randomUUID(), next?.eventId ?? old.eventId, `alert_${change}`, now,
           JSON.stringify({ ruleId: rule.id, ruleVersion: rule.version, metric: rule.metric,
             severity: rule.severity, source: signal.source, value: signal.value,
             threshold: rule.threshold, operator: rule.operator, sampleId,
-            detail: signal.detail, reason: signal.reason })]);
+            detail: signal.detail, reason: signal.reason,
+            silenceId: next?.mutedBy ?? old?.mutedBy ?? null })]);
       }
       if (next) await client.query(`INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)
         ON CONFLICT(asset_id,rule_id) DO UPDATE SET state_json=excluded.state_json`, [assetId, rule.id, JSON.stringify(next)]);

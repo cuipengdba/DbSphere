@@ -21,7 +21,7 @@ if (oldKey.length !== 32 || targetKey.length !== 32) throw new Error('Source and
 
 const source = new DatabaseSync(sourcePath, { readOnly: true });
 const target = await PgStore.create(targetUrl);
-const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states'];
+const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states', 'silences'];
 const available = new Set(source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
 const sourceRows = Object.fromEntries(tables.map(table => [table,
   available.has(table) ? source.prepare(`SELECT * FROM ${table}`).all() : []]));
@@ -54,6 +54,11 @@ try {
       row.k8s_workload, row.k8s_pod, row.k8s_node, row.created_at, row.last_sample_at,
       row.last_status, row.last_error, row.version_num, row.role
     ]);
+  }
+  for (const row of sourceRows.silences) {
+    await client.query(`INSERT INTO silences(id,kind,asset_id,rule_id,starts_at,ends_at,reason,created_at,revoked_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [row.id, row.kind, row.asset_id, row.rule_id,
+      row.starts_at, row.ends_at, row.reason, row.created_at, row.revoked_at]);
   }
   for (const row of sourceRows.samples) {
     await client.query(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json,error)

@@ -64,6 +64,10 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: node scripts/pg-alert-events-smoke.mjs
+      - name: Test PostgreSQL 18 alert silences
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-alert-silences-smoke.mjs
       - name: Reject a PostgreSQL 17 long-term store
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15437/postgres

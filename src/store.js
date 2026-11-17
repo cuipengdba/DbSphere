@@ -59,6 +59,12 @@ export class Store {
         rule_id TEXT NOT NULL REFERENCES alert_rules(id), state_json TEXT NOT NULL,
         PRIMARY KEY(asset_id,rule_id)
       );
+      CREATE TABLE IF NOT EXISTS silences (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE,
+        rule_id TEXT REFERENCES alert_rules(id), starts_at TEXT NOT NULL, ends_at TEXT NOT NULL,
+        reason TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS silences_active ON silences(starts_at,ends_at);
     `);
     if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
@@ -105,6 +111,31 @@ export class Store {
       .filter(row => row.state.status === 'firing');
   }
 
+  listSilences() {
+    return this.db.prepare('SELECT * FROM silences ORDER BY created_at DESC LIMIT 200').all().map(row => ({
+      id: row.id, kind: row.kind, assetId: row.asset_id, ruleId: row.rule_id,
+      startsAt: row.starts_at, endsAt: row.ends_at, reason: row.reason,
+      createdAt: row.created_at, revokedAt: row.revoked_at
+    }));
+  }
+
+  createSilence(input) {
+    if (input.assetId && !this.getInternalAsset(input.assetId)) return null;
+    if (input.ruleId && !this.db.prepare('SELECT 1 FROM alert_rules WHERE id=?').get(input.ruleId)) return null;
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`INSERT INTO silences(id,kind,asset_id,rule_id,starts_at,ends_at,reason,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(id, input.kind, input.assetId, input.ruleId,
+      input.startsAt, input.endsAt, input.reason, createdAt);
+    return this.listSilences().find(item => item.id === id);
+  }
+
+  revokeSilence(id) {
+    const now = new Date().toISOString();
+    const changed = this.db.prepare('UPDATE silences SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(now, id).changes;
+    return changed ? this.listSilences().find(item => item.id === id) : null;
+  }
+
   listAssets() { return this.db.prepare('SELECT * FROM assets ORDER BY created_at DESC').all().map(publicAsset); }
   getAsset(id) { return publicAsset(this.getInternalAsset(id)); }
   getInternalAsset(id) { return this.db.prepare('SELECT * FROM assets WHERE id=?').get(id) ?? null; }
@@ -144,6 +175,9 @@ export class Store {
     const saveState = this.db.prepare(`INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES(?,?,?)
       ON CONFLICT(asset_id,rule_id) DO UPDATE SET state_json=excluded.state_json`);
     const deleteState = this.db.prepare('DELETE FROM alert_states WHERE asset_id=? AND rule_id=?');
+    const silences = this.db.prepare(`SELECT id,rule_id FROM silences WHERE revoked_at IS NULL
+      AND starts_at<=? AND ends_at>? AND (asset_id IS NULL OR asset_id=?)
+      ORDER BY created_at DESC`).all(now, now, assetId);
     for (const rule of this.getAlertRules()) {
       if (onlyRuleId && rule.id !== onlyRuleId) continue;
       const previousState = stateFor.get(assetId, rule.id);
@@ -156,6 +190,7 @@ export class Store {
       }
       const signal = readSignal(rule.metric, result, previous, error, Date.parse(now));
       const { next, transition } = nextAlertState(rule, signal, old, now);
+      if (next) next.mutedBy = silences.find(item => !item.rule_id || item.rule_id === rule.id)?.id ?? null;
       if (transition === 'firing') {
         let eventId = openByGroup.get(assetId, rule.group)?.id;
         if (!eventId) {
@@ -165,12 +200,19 @@ export class Store {
         }
         next.eventId = eventId;
       }
-      if (transition && (next?.eventId || old?.eventId)) {
+      const transitions = [];
+      if (transition === 'firing') transitions.push(next.mutedBy ? 'suppressed' : 'firing');
+      else if (transition) transitions.push(transition);
+      if (old?.status === 'firing' && next?.status === 'firing' && old.mutedBy !== next.mutedBy) {
+        transitions.push(next.mutedBy ? 'suppressed' : 'unsuppressed');
+      }
+      for (const change of transitions) if (next?.eventId || old?.eventId) {
         const eventId = next?.eventId ?? old.eventId;
-        addEvidence.run(randomUUID(), eventId, `alert_${transition}`, now, JSON.stringify({
+        addEvidence.run(randomUUID(), eventId, `alert_${change}`, now, JSON.stringify({
           ruleId: rule.id, ruleVersion: rule.version, metric: rule.metric, severity: rule.severity,
           source: signal.source, value: signal.value, threshold: rule.threshold,
-          operator: rule.operator, sampleId, detail: signal.detail, reason: signal.reason
+          operator: rule.operator, sampleId, detail: signal.detail, reason: signal.reason,
+          silenceId: next?.mutedBy ?? old?.mutedBy ?? null
         }));
       }
       if (next) saveState.run(assetId, rule.id, JSON.stringify(next));

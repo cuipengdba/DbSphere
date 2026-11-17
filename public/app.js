@@ -28,8 +28,8 @@ function cell(tag, text, cls) {
 }
 
 async function refresh() {
-  const [{ assets }, { events }, { alerts }, { rules }] = await Promise.all([
-    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules')
+  const [{ assets }, { events }, { alerts }, { rules }, { silences }] = await Promise.all([
+    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'), api('/api/silences')
   ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
@@ -37,6 +37,8 @@ async function refresh() {
   renderAssets(assets);
   renderEvents(events);
   renderAlerts(alerts);
+  renderSilenceOptions(assets, rules);
+  renderSilences(silences, assets, rules);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
 }
@@ -195,9 +197,50 @@ function renderAlerts(alerts) {
   const list = $('alert-list'); list.replaceChildren();
   if (!alerts.length) { list.append(cell('p', '当前没有触发中的告警。', 'empty')); return; }
   for (const alert of alerts) {
-    const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${alert.state.lastValue ?? '信号缺失'}${alert.state.missingSince ? ' · 指标已失联' : ''}`, 'event-button');
+    const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${alert.state.lastValue ?? '信号缺失'}${alert.state.missingSince ? ' · 指标已失联' : ''}${alert.state.mutedBy ? ' · 通知已静默' : ''}`, 'event-button');
     button.addEventListener('click', () => showEvent(alert.state.eventId));
     list.append(button);
+  }
+}
+
+function renderSilenceOptions(assets, rules) {
+  for (const [id, items, label] of [['silence-asset', assets, 'name'], ['silence-rule', rules, 'title']]) {
+    const select = $(id);
+    const selected = select.value;
+    select.replaceChildren(cell('option', id === 'silence-asset' ? '全部资产' : '全部规则'));
+    select.firstChild.value = '';
+    for (const item of items) {
+      const option = cell('option', item[label]); option.value = item.id; select.append(option);
+    }
+    select.value = selected;
+  }
+}
+
+function renderSilences(silences, assets, rules) {
+  const list = $('silence-list'); list.replaceChildren();
+  if (!silences.length) { list.append(cell('p', '尚未创建静默或维护窗。', 'empty')); return; }
+  const assetNames = new Map(assets.map(asset => [asset.id, asset.name]));
+  const ruleNames = new Map(rules.map(rule => [rule.id, rule.title]));
+  const now = Date.now();
+  for (const silence of silences) {
+    const expired = Date.parse(silence.endsAt) <= now;
+    const upcoming = Date.parse(silence.startsAt) > now;
+    const status = silence.revokedAt ? '已撤销' : expired ? '已结束' : upcoming ? '待开始' : '生效中';
+    const item = document.createElement('article'); item.className = 'list-item';
+    const info = document.createElement('div');
+    info.append(cell('strong', `${silence.kind === 'maintenance' ? '计划维护' : '告警静默'} · ${status}`));
+    info.append(cell('small', `${assetNames.get(silence.assetId) || (silence.assetId ? '已删除资产' : '全部资产')} · ${ruleNames.get(silence.ruleId) || (silence.ruleId ? silence.ruleId : '全部规则')}`));
+    info.append(cell('small', `${formatTime(silence.startsAt)} 至 ${formatTime(silence.endsAt)} · ${silence.reason}`));
+    item.append(info);
+    if (!silence.revokedAt && !expired) {
+      const revoke = cell('button', '撤销', 'danger small-button');
+      revoke.addEventListener('click', async () => {
+        try { await api(`/api/silences/${silence.id}`, 'DELETE'); notice('时间窗已撤销；下次采样将恢复通知。'); await refresh(); }
+        catch (error) { notice(error.message, true); }
+      });
+      item.append(revoke);
+    }
+    list.append(item);
   }
 }
 
@@ -285,7 +328,7 @@ async function showEvent(id) {
     if (evidence.kind === 'pgbouncer_state') text = evidence.payload.status === 'ok'
       ? `${evidence.payload.pools?.length || 0} 个连接池；等待客户端 ${(evidence.payload.pools || []).reduce((sum, pool) => sum + pool.clientWaiting, 0)}`
       : evidence.payload.reason || evidence.payload.status;
-    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}`;
+    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
@@ -309,6 +352,19 @@ $('login-form').addEventListener('submit', async (event) => {
 $('logout').addEventListener('click', async () => { await api('/api/logout', 'POST'); csrf = null; selectedAsset = null; await boot(); });
 $('refresh').addEventListener('click', () => refresh().catch(e => notice(e.message, true)));
 $('cancel-edit').addEventListener('click', resetEdit);
+$('silence-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  const minutes = Number(data.durationMinutes);
+  const payload = { kind: data.kind, assetId: data.assetId || null, ruleId: data.ruleId || null,
+    reason: data.reason.trim(), endsAt: new Date(Date.now() + minutes * 60000).toISOString() };
+  try {
+    await api('/api/silences', 'POST', payload);
+    event.target.elements.reason.value = '';
+    notice('时间窗已创建；下次采样将标记受抑制的告警。');
+    await refresh();
+  } catch (error) { notice(error.message, true); }
+});
 $('runtime').addEventListener('change', (event) => {
   const k8s = event.target.value === 'k8s';
   $('k8s-fields').hidden = !k8s;
