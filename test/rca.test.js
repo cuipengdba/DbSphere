@@ -45,6 +45,63 @@ test('alert without diagnostic proof remains unlocated', () => {
   assert.ok(analysis.missingSignals.some(signal => signal.includes('锁链')));
 });
 
+test('event graph connects SQL fingerprint, slow log, plan, waits and blocking session with raw sources', () => {
+  const logId = '55555555-5555-4555-8555-555555555555';
+  const planId = '66666666-6666-4666-8666-666666666666';
+  const event = { ...base, eventGroup: 'latency', evidence: [{ id: evidenceId,
+    kind: 'alert_firing', observedAt: '2026-11-17T00:01:00Z',
+    payload: { metric: 'pg.blocked_sessions', sampleId } }] };
+  const sample = { id: sampleId, collectedAt: '2026-11-17T00:01:00Z', status: 'ok',
+    metrics: { diagnostics: {
+      activity: { status: 'ok', data: [{ state: 'active', waitType: 'Lock', sessions: 1 }] },
+      lockChain: { status: 'ok', data: [{ waitingPid: 21, blockerPid: 10 }] },
+      wal: { status: 'ok', data: { bytes: '4096' } }
+    }, sqlPerformance: { status: 'ok', statements: [{ fingerprint: '1:2:42:1', queryId: '42' }] } } };
+  const analysis = analyzeEvent(event, [sample], { nearbySamples: [sample],
+    slowLogs: [{ id: logId, observedAt: sample.collectedAt, durationMs: 250, queryId: '42' }],
+    plans: [{ id: planId, observedAt: sample.collectedAt, queryId: '42',
+      summary: { nodeCount: 1 } }] });
+  assert.ok(analysis.graph.edges.some(edge => edge.from === `session:${sampleId}:21` &&
+    edge.to === `session:${sampleId}:10` && edge.relation === 'blocked_by'));
+  assert.ok(analysis.graph.edges.some(edge => edge.from === `slow_log:${logId}` &&
+    edge.to === `sql:${event.assetId}:1:2:42:1`));
+  assert.ok(analysis.graph.edges.some(edge => edge.from === `plan:${planId}` &&
+    edge.to === `sql:${event.assetId}:1:2:42:1`));
+  assert.ok(analysis.graph.nodes.some(node => node.type === 'wait'));
+  assert.ok(analysis.graph.nodes.some(node => node.type === 'wal'));
+  assert.equal(analysis.graph.nodes.find(node => node.id === `slow_log:${logId}`).source,
+    `/api/assets/${event.assetId}/slow-logs/${logId}`);
+});
+
+test('SQL regression is a time correlated hypothesis and autovacuum backlog is separately evidenced', () => {
+  const ids = [sampleId, '77777777-7777-4777-8777-777777777777',
+    '88888888-8888-4888-8888-888888888888'];
+  const sql = (calls, totalExecMs) => ({ status: 'ok', resetAt: '2026-11-16T00:00:00Z',
+    statements: [{ fingerprint: '1:2:42:1', queryId: '42', calls, totalExecMs,
+      rows: 0, sharedBlocksHit: 0, sharedBlocksRead: 0, sharedBlocksWritten: 0,
+      tempBlocksRead: 0, tempBlocksWritten: 0, walBytes: 0 }] });
+  const samples = [[15, 800], [10, 200], [5, 100]].map(([calls, totalExecMs], i) => ({
+    id: ids[i], collectedAt: `2026-11-17T00:0${3 - i}:00Z`, status: 'ok',
+    metrics: { sqlPerformance: sql(calls, totalExecMs) }
+  }));
+  const event = { ...base, eventGroup: 'latency', evidence: [] };
+  const analysis = analyzeEvent(event, samples, { nearbySamples: samples,
+    slowLogs: [{ id: '55555555-5555-4555-8555-555555555555',
+      queryId: '42', observedAt: samples[0].collectedAt, durationMs: 220 }] });
+  const candidate = analysis.candidates.find(item => item.code === 'sql_regression');
+  assert.equal(candidate.detail.ratio, 6);
+  assert.equal(candidate.confidence, 'medium');
+  assert.equal(candidate.state, 'hypothesis');
+  const maintenance = { ...base, eventGroup: 'maintenance', evidence: [{ id: evidenceId,
+    kind: 'alert_firing', observedAt: samples[0].collectedAt,
+    payload: { sampleId, metric: 'pg.autovacuum_disabled', value: 1 } }] };
+  const vacuumSample = { ...samples[0], metrics: { diagnostics: { vacuum: { status: 'ok',
+    data: [{ schema: 'public', table: 'orders', deadRowsEstimate: 20000 }] } } } };
+  const vacuumAnalysis = analyzeEvent(maintenance, [vacuumSample]);
+  assert.equal(vacuumAnalysis.candidates.find(item => item.code === 'autovacuum_disabled').confidence,
+    'medium');
+});
+
 test('administrator confirms a supported candidate with CSRF and a recorded reason', async t => {
   const root = resolve(process.env.DBSPHERE_TEST_TMP_DIR || tmpdir());
   mkdirSync(root, { recursive: true });
@@ -91,4 +148,10 @@ test('administrator confirms a supported candidate with CSRF and a recorded reas
   assert.equal(detail.analysis.eventId, event.id);
   assert.equal(detail.analysis.candidates[0].review.decision, 'confirmed');
   assert.equal(detail.event.evidence.filter(item => item.kind === 'rca_decision').length, 1);
+  const source = detail.analysis.graph.nodes.find(node => node.type === 'sample')?.source;
+  assert.ok(source);
+  assert.equal((await fetch(baseUrl + source)).status, 401);
+  const raw = await fetch(baseUrl + source, { headers: { cookie } });
+  assert.equal(raw.status, 200);
+  assert.equal((await raw.json()).sample.assetId, asset.id);
 });

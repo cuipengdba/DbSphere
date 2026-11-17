@@ -63,6 +63,12 @@ test('authenticated Top SQL API returns reset-safe fingerprint deltas without SQ
   const text = await logs.text();
   assert.equal(JSON.parse(text).entries[0].queryId, '3');
   assert.equal(text.includes('secret_password'), false);
+  const logId = JSON.parse(text).entries[0].id;
+  const rawLog = await fetch(`${base}/api/assets/${asset.id}/slow-logs/${logId}`,
+    { headers: { cookie } });
+  assert.equal(rawLog.status, 200);
+  assert.equal((await rawLog.json()).log.queryId, '3');
+  assert.equal((await fetch(`${base}/api/assets/${asset.id}/slow-logs/${logId}`)).status, 401);
   const planBody = { queryId: '3', plan: [{ Plan: { 'Node Type': 'Seq Scan',
     'Total Cost': 100, Filter: "password = 'private'" }, 'Execution Time': 220 }] };
   assert.equal((await fetch(`${base}/api/assets/${asset.id}/sql-plans`, {
@@ -78,4 +84,9 @@ test('authenticated Top SQL API returns reset-safe fingerprint deltas without SQ
     { headers: { cookie } })).text();
   assert.equal(JSON.parse(planText).plans[0].summary.nodes[0].type, 'Seq Scan');
   assert.equal(planText.includes('private'), false);
+  const planId = JSON.parse(planText).plans[0].id;
+  const rawPlan = await fetch(`${base}/api/assets/${asset.id}/sql-plans/${planId}`,
+    { headers: { cookie } });
+  assert.equal(rawPlan.status, 200);
+  assert.equal((await rawPlan.json()).plan.summary.nodes[0].type, 'Seq Scan');
 });

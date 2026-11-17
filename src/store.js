@@ -516,6 +516,13 @@ export class Store {
         status: r.status, metrics: r.metrics_json ? JSON.parse(r.metrics_json) : null, error: r.error }));
   }
 
+  listSamplesInWindow(assetId, from, to, limit = 100) {
+    return this.db.prepare(`SELECT * FROM samples WHERE asset_id=? AND collected_at>=? AND collected_at<?
+      ORDER BY collected_at DESC LIMIT ?`).all(assetId, from, to, limit)
+      .map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at,
+        status: r.status, metrics: r.metrics_json ? JSON.parse(r.metrics_json) : null, error: r.error }));
+  }
+
   importSlowLogs(assetId, entries) {
     const insert = this.db.prepare(`INSERT OR IGNORE INTO slow_log_entries
       (id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
@@ -538,6 +545,13 @@ export class Store {
         durationMs: row.duration_ms, queryId: row.query_id, sourceFormat: row.source_format }));
   }
 
+  getSlowLog(assetId, id) {
+    const row = this.db.prepare(`SELECT id,asset_id,observed_at,duration_ms,query_id,source_format
+      FROM slow_log_entries WHERE asset_id=? AND id=?`).get(assetId, id);
+    return row ? { id: row.id, assetId: row.asset_id, observedAt: row.observed_at,
+      durationMs: row.duration_ms, queryId: row.query_id, sourceFormat: row.source_format } : null;
+  }
+
   saveSqlPlan(assetId, plan) {
     this.db.prepare(`INSERT INTO sql_plan_snapshots
       (id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
@@ -552,6 +566,13 @@ export class Store {
       .map(row => ({ id: row.id, assetId: row.asset_id, queryId: row.query_id,
         observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
         summary: JSON.parse(row.summary_json) }));
+  }
+
+  getSqlPlan(assetId, id) {
+    const row = this.db.prepare('SELECT * FROM sql_plan_snapshots WHERE asset_id=? AND id=?').get(assetId, id);
+    return row ? { id: row.id, assetId: row.asset_id, queryId: row.query_id,
+      observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
+      summary: JSON.parse(row.summary_json) } : null;
   }
 
   listEvents() {

@@ -109,6 +109,25 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   const activeCollections = new Set();
   const activeInspections = new Set();
 
+  async function analyzeStoredEvent(event) {
+    const start = Date.parse(event.startedAt);
+    const end = event.endedAt ? Date.parse(event.endedAt) : Date.now();
+    const nearFrom = new Date(start - 10 * 60_000).toISOString();
+    const nearTo = new Date(Math.min(Date.now() + 1, start + 5 * 60_000)).toISOString();
+    const relatedFrom = new Date(start - 5 * 60_000).toISOString();
+    const relatedTo = new Date(Math.min(Date.now() + 1, end + 5 * 60_000)).toISOString();
+    const [referenced, nearbySamples, slowLogs, allPlans] = await Promise.all([
+      store.getSamplesByIds(event.assetId, eventSampleIds(event)),
+      store.listSamplesInWindow(event.assetId, nearFrom, nearTo),
+      store.listSlowLogs(event.assetId, relatedFrom, relatedTo),
+      store.listSqlPlans(event.assetId)
+    ]);
+    const samples = [...new Map([...referenced, ...nearbySamples].map(sample => [sample.id, sample])).values()];
+    const plans = allPlans.filter(plan => Date.parse(plan.observedAt) >= Date.parse(relatedFrom) &&
+      Date.parse(plan.observedAt) < Date.parse(relatedTo));
+    return analyzeEvent(event, samples, { nearbySamples, slowLogs, plans });
+  }
+
   async function collectAsset(id) {
     if (activeCollections.has(id)) return { busy: true };
     const asset = await store.getInternalAsset(id);
@@ -357,6 +376,19 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         return send(res, 200, { scanned: parsed.scanned, ignored: parsed.ignored,
           imported, duplicates: parsed.entries.length - imported });
       }
+      const rawSampleMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})\/samples\/([0-9a-f-]{36})$/);
+      if (req.method === 'GET' && rawSampleMatch) {
+        const sample = (await store.getSamplesByIds(rawSampleMatch[1], [rawSampleMatch[2]]))[0];
+        return sample ? send(res, 200, { sample }) : send(res, 404, { error: 'Sample not found' });
+      }
+      const rawSqlMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})\/(slow-logs|sql-plans)\/([0-9a-f-]{36})$/);
+      if (req.method === 'GET' && rawSqlMatch) {
+        const row = rawSqlMatch[2] === 'slow-logs'
+          ? await store.getSlowLog(rawSqlMatch[1], rawSqlMatch[3])
+          : await store.getSqlPlan(rawSqlMatch[1], rawSqlMatch[3]);
+        return row ? send(res, 200, { [rawSqlMatch[2] === 'slow-logs' ? 'log' : 'plan']: row })
+          : send(res, 404, { error: 'SQL evidence not found' });
+      }
       const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|capacity|sql|slow-logs|sql-plans|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
@@ -435,8 +467,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && eventMatch) {
         const event = await store.getEvent(eventMatch[1]);
         if (!event) return send(res, 404, { error: 'Event not found' });
-        const samples = await store.getSamplesByIds(event.assetId, eventSampleIds(event));
-        return send(res, 200, { event, analysis: analyzeEvent(event, samples) });
+        return send(res, 200, { event, analysis: await analyzeStoredEvent(event) });
       }
       const decisionMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})\/rca-decision$/);
       if (req.method === 'POST' && decisionMatch) {
@@ -448,7 +479,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         }
         const event = await store.getEvent(decisionMatch[1]);
         if (!event) return send(res, 404, { error: 'Event not found' });
-        const analysis = analyzeEvent(event, await store.getSamplesByIds(event.assetId, eventSampleIds(event)));
+        const analysis = await analyzeStoredEvent(event);
         const candidate = analysis.candidates.find(item => item.code === input.code);
         if (!candidate) return send(res, 400, { error: 'Candidate is not supported by this event' });
         await store.recordRcaDecision(event.id, candidate.code, input.decision,

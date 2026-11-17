@@ -779,6 +779,14 @@ export class PgStore {
       status: r.status, metrics: r.metrics_json, error: r.error }));
   }
 
+  async listSamplesInWindow(assetId, from, to, limit = 100) {
+    const rows = (await this.pool.query(`SELECT * FROM samples WHERE asset_id=$1
+      AND collected_at>=$2 AND collected_at<$3 ORDER BY collected_at DESC LIMIT $4`,
+    [assetId, from, to, limit])).rows;
+    return rows.map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at,
+      status: r.status, metrics: r.metrics_json, error: r.error }));
+  }
+
   async importSlowLogs(assetId, entries) {
     const client = await this.pool.connect();
     try {
@@ -805,6 +813,14 @@ export class PgStore {
       durationMs: Number(row.duration_ms), queryId: row.query_id, sourceFormat: row.source_format }));
   }
 
+  async getSlowLog(assetId, id) {
+    const row = (await this.pool.query(`SELECT id,asset_id,observed_at,duration_ms,query_id,source_format
+      FROM slow_log_entries WHERE asset_id=$1 AND id=$2`, [assetId, id])).rows[0];
+    return row ? { id: row.id, assetId: row.asset_id, observedAt: row.observed_at,
+      durationMs: Number(row.duration_ms), queryId: row.query_id,
+      sourceFormat: row.source_format } : null;
+  }
+
   async saveSqlPlan(assetId, plan) {
     await this.pool.query(`INSERT INTO sql_plan_snapshots
       (id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
@@ -819,6 +835,14 @@ export class PgStore {
     return rows.map(row => ({ id: row.id, assetId: row.asset_id, queryId: row.query_id,
       observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
       summary: row.summary_json }));
+  }
+
+  async getSqlPlan(assetId, id) {
+    const row = (await this.pool.query('SELECT * FROM sql_plan_snapshots WHERE asset_id=$1 AND id=$2',
+      [assetId, id])).rows[0];
+    return row ? { id: row.id, assetId: row.asset_id, queryId: row.query_id,
+      observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
+      summary: row.summary_json } : null;
   }
 
   async listEvents() {

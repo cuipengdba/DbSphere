@@ -12,6 +12,8 @@ export const DEFAULT_RULES = Object.freeze([
   { id: 'pg_replication_lag', title: 'PostgreSQL 复制延迟', metric: 'pg.replication_lag_bytes', source: 'PostgreSQL', group: 'replication', severity: 'warning', operator: '>=', threshold: 64 * 1024 * 1024, durationSeconds: 120 },
   { id: 'pg_wal_receiver_down', title: 'PostgreSQL WAL 接收中断', metric: 'pg.wal_receiver_down', source: 'PostgreSQL', group: 'replication', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 60 },
   { id: 'pg_archive_failures', title: 'PostgreSQL WAL 归档失败增加', metric: 'pg.archive_fail_delta', source: 'PostgreSQL', group: 'storage', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
+  { id: 'pg_autovacuum_disabled', title: 'PostgreSQL autovacuum 已关闭', metric: 'pg.autovacuum_disabled', source: 'PostgreSQL', group: 'maintenance', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 0 },
+  { id: 'pg_vacuum_backlog', title: 'PostgreSQL 表死元组积压', metric: 'pg.vacuum_backlog_percent', source: 'PostgreSQL', group: 'maintenance', severity: 'warning', operator: '>=', threshold: 20, durationSeconds: 300 },
   { id: 'linux_cpu_high', title: 'Linux CPU 使用率高', metric: 'linux.cpu_used_percent', source: 'node_exporter', group: 'capacity', severity: 'warning', operator: '>=', threshold: 90, durationSeconds: 300 },
   { id: 'linux_memory_high', title: 'Linux 内存使用率高', metric: 'linux.memory_used_percent', source: 'node_exporter', group: 'capacity', severity: 'warning', operator: '>=', threshold: 90, durationSeconds: 300 },
   { id: 'linux_disk_high', title: 'Linux 文件系统使用率高', metric: 'linux.disk_used_percent', source: 'node_exporter', group: 'storage', severity: 'warning', operator: '>=', threshold: 90, durationSeconds: 300 },
@@ -81,6 +83,27 @@ export function readSignal(metric, result, previous = null, error = null, now = 
       return !error && finite(current) && finite(before) && current >= before
         ? observed(current - before, 'PostgreSQL')
         : unavailable('PostgreSQL', '缺少连续 WAL 归档失败计数');
+    }
+    case 'pg.autovacuum_disabled': {
+      const settings = pg.diagnostics?.settings;
+      const setting = settings?.status === 'ok' ? settings.data?.find(item => item.name === 'autovacuum') : null;
+      return !error && setting && ['on', 'off'].includes(setting.value)
+        ? observed(setting.value === 'off' ? 1 : 0, 'PostgreSQL pg_settings')
+        : unavailable('PostgreSQL pg_settings', 'autovacuum 参数未采集');
+    }
+    case 'pg.vacuum_backlog_percent': {
+      const vacuum = pg.diagnostics?.vacuum;
+      if (error || vacuum?.status !== 'ok' || !Array.isArray(vacuum.data)) {
+        return unavailable('PostgreSQL pg_stat_user_tables', '表死元组统计未采集');
+      }
+      const candidates = vacuum.data.filter(row => finite(row.deadRowsEstimate) && finite(row.liveRowsEstimate) &&
+        row.deadRowsEstimate >= 10000 && row.liveRowsEstimate + row.deadRowsEstimate > 0)
+        .map(row => ({ row, percent: row.deadRowsEstimate /
+          (row.liveRowsEstimate + row.deadRowsEstimate) * 100 }))
+        .sort((a, b) => b.percent - a.percent);
+      const top = candidates[0];
+      return observed(top ? Number(top.percent.toFixed(1)) : 0, 'PostgreSQL pg_stat_user_tables',
+        top ? { schema: top.row.schema, table: top.row.table, deadRowsEstimate: top.row.deadRowsEstimate } : null);
     }
     case 'linux.cpu_used_percent': return linux?.status === 'ok' && finite(linux.cpu?.usedPercent)
       ? observed(linux.cpu.usedPercent, 'node_exporter') : unavailable('node_exporter', 'Linux CPU 使用率未采集');

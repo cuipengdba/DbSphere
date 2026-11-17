@@ -604,7 +604,15 @@ async function showEvent(id) {
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
   for (const edge of analysis.graph.edges) {
     const from = graphNodes.get(edge.from); const to = graphNodes.get(edge.to);
-    graphDetails.append(cell('p', `${from?.type ?? '未知'} ${from?.label ?? edge.from} → ${edge.relation} → ${to?.type ?? '未知'} ${to?.label ?? edge.to}`, 'evidence'));
+    const relation = cell('p', `${from?.type ?? '未知'} ${from?.label ?? edge.from} → ${edge.relation} → ${to?.type ?? '未知'} ${to?.label ?? edge.to}`, 'evidence');
+    if (to?.source) {
+      const source = cell('a', ' · 原始数据');
+      source.href = to.source;
+      source.target = '_blank';
+      source.rel = 'noopener noreferrer';
+      relation.append(source);
+    }
+    graphDetails.append(relation);
   }
   diagnosis.append(graphDetails);
   if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));

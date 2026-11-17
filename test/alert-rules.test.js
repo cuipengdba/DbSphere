@@ -75,3 +75,20 @@ test('rule edits are bounded and cannot change metric identity', () => {
   assert.equal(validateRuleUpdate(rule, { threshold: Number.POSITIVE_INFINITY }), false);
   assert.equal(validateRuleUpdate(rule, { durationSeconds: -1 }), false);
 });
+
+test('autovacuum and dead tuple signals require observed PostgreSQL diagnostics', () => {
+  assert.equal(readSignal('pg.autovacuum_disabled', {}).status, 'unavailable');
+  assert.equal(readSignal('pg.vacuum_backlog_percent', {}).status, 'unavailable');
+  const metrics = { diagnostics: {
+    settings: { status: 'ok', data: [{ name: 'autovacuum', value: 'off' }] },
+    vacuum: { status: 'ok', data: [{ schema: 'public', table: 'orders',
+      liveRowsEstimate: 30000, deadRowsEstimate: 20000 }] }
+  } };
+  assert.equal(readSignal('pg.autovacuum_disabled', metrics).value, 1);
+  const backlog = readSignal('pg.vacuum_backlog_percent', metrics);
+  assert.equal(backlog.value, 40);
+  assert.equal(backlog.detail.table, 'orders');
+  assert.equal(readSignal('pg.autovacuum_disabled', { diagnostics: {
+    settings: { status: 'ok', data: [{ name: 'autovacuum', value: 'on' }] }
+  } }).value, 0);
+});
