@@ -95,3 +95,20 @@ test('autovacuum and dead tuple signals require observed PostgreSQL diagnostics'
     settings: { status: 'ok', data: [{ name: 'autovacuum', value: 'on' }] }
   } }).value, 0);
 });
+
+test('Kubernetes scheduling requires same Pod conditions or recent sourced events', () => {
+  const now = Date.parse('2026-11-17T00:10:00Z');
+  const result = { k8s: { status: 'ok', pod: { name: 'pg-0', conditions: [
+    { type: 'PodScheduled', status: 'False', reason: 'Unschedulable', changedAt: '2026-11-17T00:09:00Z' }
+  ] }, events: [{ reason: 'FailedScheduling', at: '2026-11-17T00:09:00Z' }] } };
+  assert.equal(readSignal('k8s.pod_unscheduled', result).value, 1);
+  assert.equal(readSignal('k8s.scheduling_failure_recent', result, null, null, now).value, 1);
+  assert.equal(readSignal('k8s.pod_unscheduled', { k8s: { status: 'ok', pod: { conditions: [] } } }).status,
+    'unavailable');
+  assert.equal(readSignal('k8s.scheduling_failure_recent', { k8s: {
+    ...result.k8s, eventsError: '403 Forbidden'
+  } }, null, null, now).status, 'unavailable');
+  assert.equal(readSignal('k8s.scheduling_failure_recent', { k8s: {
+    ...result.k8s, events: [{ reason: 'FailedScheduling', at: '2026-11-17T00:11:00Z' }]
+  } }, null, null, now).value, 0);
+});

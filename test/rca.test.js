@@ -63,6 +63,22 @@ test('OOM candidate reports its observed ordering and linked conditions', () => 
   assert.equal(candidate.matchedConditions[0].metric, 'k8s.OOMKilled_before_pg_failure');
 });
 
+test('same-Pod scheduling evidence stays with the availability incident', () => {
+  const event = { ...base, eventGroup: 'availability', evidence: [{ id: evidenceId,
+    kind: 'alert_firing', observedAt: '2026-11-17T00:01:00Z',
+    payload: { metric: 'k8s.pod_unscheduled', value: 1, sampleId, operator: '>=', threshold: 1 } }] };
+  const sample = { id: sampleId, collectedAt: '2026-11-17T00:01:00Z', status: 'error',
+    metrics: { k8s: { status: 'ok', pod: { uid: 'pod-1', name: 'pg-0',
+      conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable' }] },
+    events: [{ reason: 'FailedScheduling', at: '2026-11-17T00:00:30Z' }] } } };
+  const analysis = analyzeEvent(event, [sample]);
+  assert.equal(analysis.eventId, event.id);
+  assert.equal(analysis.candidates[0].code, 'k8s_scheduling');
+  assert.equal(analysis.candidates[0].matchedConditions[0].metric, 'k8s.pod_unscheduled');
+  assert.ok(analysis.graph.nodes.some(node => node.type === 'k8s_event'));
+  assert.equal(analysis.graph.nodes.find(node => node.id === `sample:${sampleId}`).label, 'error');
+});
+
 test('event graph connects SQL fingerprint, slow log, plan, waits and blocking session with raw sources', () => {
   const logId = '55555555-5555-4555-8555-555555555555';
   const planId = '66666666-6666-4666-8666-666666666666';

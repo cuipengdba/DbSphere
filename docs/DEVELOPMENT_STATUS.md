@@ -22,6 +22,8 @@ Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应�
 
 V0.6 后续开发将 SQL 指纹、慢日志、计划、锁链、等待、WAL/复制及 autovacuum 信号纳入同一事件的时间窗证据图，所有新节点提供原始数据入口；新增相应候选规则。当前为代码与本地 PG18 验证阶段，尚未完成完整故障演练或 V0.6 正式发布。
 
+本机 kind 的临时 Pending Pod 已由只读采集器读取 `PodScheduled=False` 与真实 `FailedScheduling` 事件，并与注入的 PG 连接失败归入同一事件 ID；演练 Pod 已删除。该混合演练不替代真实业务 PG 调度故障与恢复测试。
+
 ## V0.5 已发布能力
 
 PG14–18 真实容器的 pg_stat_statements 聚合采集已通过；Top SQL 只保留指纹与计数，显示采样增量、退化门槛、Linux/K8S 同期状态及已有事件入口。管理员可导入 PostgreSQL CSV/JSON 慢日志和已有 EXPLAIN (FORMAT JSON) 计划，原始 SQL、参数、过滤表达式和对象名不入库。SQLite → PG18 演练已覆盖巡检、慢日志和计划记录，真实 PG18 查询延迟演练产生退化提示。真实 PG18 浏览器验收已覆盖 Top SQL、慢日志和计划导入；[发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44053161066) 11 个作业全部通过，含五版 SQL 采集与无扩展降级矩阵。V0.5.0 已发布。详见 [SQL 性能开发记录](SQL_PERFORMANCE_V0.5.md)。

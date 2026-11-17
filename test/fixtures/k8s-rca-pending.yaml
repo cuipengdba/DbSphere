@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dbsphere-rca-pending
+  namespace: dbsphere-smoke
+  labels:
+    app: dbsphere-rca-drill
+spec:
+  nodeSelector:
+    dbsphere.example/never: "true"
+  containers:
+    - name: postgres
+      image: postgres:18-bookworm
+      ports:
+        - containerPort: 5432

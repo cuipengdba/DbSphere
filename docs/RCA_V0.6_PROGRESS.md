@@ -13,3 +13,13 @@
 后续开发已把同一事件起点附近的原始样本纳入证据图：等待分布、阻塞 PID 关系、WAL/复制、autovacuum 表统计和 SQL 指纹均链接到原始采样 API；同时间窗的慢日志、人工导入计划以精确 Query ID 关联指纹并提供原始脱敏记录 API。链接只说明同一时间窗或 Query ID 匹配，不证明因果。规则新增 WAL 接收中断/归档失败、Pod 重启、Node 压力、autovacuum 关闭与死元组积压候选，并能在已有延迟事件中提示重置安全的 SQL 退化和计划结构变化。针对 SQL 指纹、日志、计划、锁链及缺失信号的单元测试与 PG18 事件读取已通过；完整故障实验和正式 V0.6 验收仍在进行。
 
 根因候选现在列出来自告警的实际指标值/阈值、首次证据时间与事件开始时间，并展示可用反证和缺失信号。Pod OOMKilled 的容器终止时间必须早于 PostgreSQL 连接失败且位于十分钟窗口内；未来时间戳不再产生连接故障的 OOM 候选。历史候选若缺少容器终止时间，时间顺序标记为未知。
+
+新增 Kubernetes 调度失败信号：`PodScheduled=False` 和同 Pod 近 15 分钟 `FailedScheduling`、`FailedMount` 或 `FailedAttachVolume` 事件独立标记来源；权限不足或未来时间戳保持未知/正常观测，不当作根因。真实 kind 演练使用[临时 Pod 清单](../test/fixtures/k8s-rca-pending.yaml)的不可满足 Node 选择条件，只读 ServiceAccount 采集到 `Pending`、`PodScheduled=False` 与 `FailedScheduling`。`scripts/k8s-scheduling-rca-smoke.mjs` 将该真实 K8S 证据与**注入的** PG 连接失败写入一个事件 ID，检查调度候选、事件图和 PG 告警；演练后已删除 Pod。此实验验证跨层归并与真实 K8S 信号，不等于真实业务 PG Pod 调度失败的完整故障演练。
+
+复现时在已有的 `dbsphere-smoke` 测试 Namespace 中运行：
+
+```bash
+kubectl --kubeconfig <kind-admin-kubeconfig> apply -f test/fixtures/k8s-rca-pending.yaml
+DBSPHERE_KUBECONFIG=<readonly-kubeconfig> node scripts/k8s-scheduling-rca-smoke.mjs
+kubectl --kubeconfig <kind-admin-kubeconfig> -n dbsphere-smoke delete pod dbsphere-rca-pending
+```

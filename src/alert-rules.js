@@ -18,6 +18,8 @@ export const DEFAULT_RULES = Object.freeze([
   { id: 'linux_memory_high', title: 'Linux 内存使用率高', metric: 'linux.memory_used_percent', source: 'node_exporter', group: 'capacity', severity: 'warning', operator: '>=', threshold: 90, durationSeconds: 300 },
   { id: 'linux_disk_high', title: 'Linux 文件系统使用率高', metric: 'linux.disk_used_percent', source: 'node_exporter', group: 'storage', severity: 'warning', operator: '>=', threshold: 90, durationSeconds: 300 },
   { id: 'k8s_pod_not_ready', title: 'Kubernetes Pod 未就绪', metric: 'k8s.pod_not_ready', source: 'Kubernetes API', group: 'availability', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 60 },
+  { id: 'k8s_pod_unscheduled', title: 'Kubernetes Pod 调度失败', metric: 'k8s.pod_unscheduled', source: 'Kubernetes API', group: 'availability', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 60 },
+  { id: 'k8s_scheduling_event', title: 'Kubernetes 近期调度或挂载失败', metric: 'k8s.scheduling_failure_recent', source: 'Kubernetes Event', group: 'availability', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'k8s_pod_restarted', title: 'Kubernetes 容器重启', metric: 'k8s.restart_delta', source: 'Kubernetes API', group: 'availability', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'k8s_oom_killed', title: 'Kubernetes 容器发生 OOMKilled', metric: 'k8s.oom_recent', source: 'Kubernetes API', group: 'availability', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'k8s_node_pressure', title: 'Kubernetes Node 资源压力', metric: 'k8s.node_pressure', source: 'Kubernetes API', group: 'capacity', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 60 },
@@ -120,6 +122,23 @@ export function readSignal(metric, result, previous = null, error = null, now = 
       return ready?.status === 'True' || ready?.status === 'False'
         ? observed(ready.status === 'False' ? 1 : 0, 'Kubernetes API', { pod: k8s.pod.name })
         : unavailable('Kubernetes API', 'Pod Ready 条件未采集');
+    }
+    case 'k8s.pod_unscheduled': {
+      const scheduled = k8s?.status === 'ok' && k8s.pod?.conditions?.find(item => item.type === 'PodScheduled');
+      return scheduled?.status === 'True' || scheduled?.status === 'False'
+        ? observed(scheduled.status === 'False' ? 1 : 0, 'Kubernetes API',
+          { pod: k8s.pod.name, reason: scheduled.reason ?? null, changedAt: scheduled.changedAt ?? null })
+        : unavailable('Kubernetes API', 'PodScheduled 条件未采集');
+    }
+    case 'k8s.scheduling_failure_recent': {
+      if (k8s?.status !== 'ok' || k8s.eventsError || !Array.isArray(k8s.events)) {
+        return unavailable('Kubernetes Event', k8s?.eventsError ?? 'Pod 事件未采集');
+      }
+      const matching = k8s.events.filter(item => /FailedScheduling|FailedMount|FailedAttachVolume/i.test(item.reason ?? '') &&
+        item.at && now - new Date(item.at).getTime() >= 0 &&
+        now - new Date(item.at).getTime() <= 15 * 60_000);
+      return observed(matching.length, 'Kubernetes Event', { pod: k8s.pod?.name ?? null,
+        firstAt: matching[0]?.at ?? null, reasons: matching.map(item => item.reason).slice(0, 5) });
     }
     case 'k8s.restart_delta': {
       if (k8s?.status !== 'ok' || previous?.k8s?.status !== 'ok' || !k8s.pod?.uid || k8s.pod.uid !== previous.k8s.pod?.uid) {

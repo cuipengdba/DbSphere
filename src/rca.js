@@ -53,6 +53,12 @@ export function analyzeEvent(event, samples, context = {}) {
         addNode(pvcNode, 'pvc', pvc.name, sample.collectedAt, sampleLink(event.assetId, sample.id));
         edges.push({ from: sampleNode, to: pvcNode, relation: 'collected_with' });
       }
+      for (const [index, incident] of (k8s.events ?? []).entries()) {
+        const k8sEvent = `k8s_event:${sample.id}:${index}`;
+        addNode(k8sEvent, 'k8s_event', incident.reason ?? 'Event', incident.at,
+          sampleLink(event.assetId, sample.id));
+        edges.push({ from: podNode, to: k8sEvent, relation: 'observed_event' });
+      }
     }
     if (sample.metrics?.linux?.status === 'ok') {
       const hostNode = `linux:${event.assetId}`;
@@ -69,17 +75,17 @@ export function analyzeEvent(event, samples, context = {}) {
     edges.push({ from: eventNode, to: sampleNode, relation: 'time_window' });
     edges.push({ from: sampleNode, to: assetNode, relation: 'collected_from' });
   }
-  for (const sample of samples.filter(item => item.status === 'ok')) {
+  for (const sample of samples) {
     const sampleNode = `sample:${sample.id}`;
     if (!nodes.some(node => node.id === sampleNode)) continue;
     const diagnostics = sample.metrics?.diagnostics ?? {};
     const source = sampleLink(event.assetId, sample.id);
-    for (const row of diagnostics.activity?.status === 'ok' ? diagnostics.activity.data : []) {
+    for (const row of sample.status === 'ok' && diagnostics.activity?.status === 'ok' ? diagnostics.activity.data : []) {
       const waitNode = `wait:${sample.id}:${row.state}:${row.waitType}`;
       addNode(waitNode, 'wait', `${row.state} / ${row.waitType} / ${row.sessions}`, sample.collectedAt, source);
       edges.push({ from: sampleNode, to: waitNode, relation: 'observed_wait', source });
     }
-    for (const row of diagnostics.lockChain?.status === 'ok' ? diagnostics.lockChain.data : []) {
+    for (const row of sample.status === 'ok' && diagnostics.lockChain?.status === 'ok' ? diagnostics.lockChain.data : []) {
       const waiter = `session:${sample.id}:${row.waitingPid}`;
       const blocker = `session:${sample.id}:${row.blockerPid}`;
       addNode(waiter, 'session', `PID ${row.waitingPid}`, sample.collectedAt, source);
@@ -87,24 +93,25 @@ export function analyzeEvent(event, samples, context = {}) {
       edges.push({ from: sampleNode, to: waiter, relation: 'observed_session', source });
       edges.push({ from: waiter, to: blocker, relation: 'blocked_by', source });
     }
-    if (diagnostics.wal?.status === 'ok') {
+    if (sample.status === 'ok' && diagnostics.wal?.status === 'ok') {
       const walNode = `wal:${sample.id}`;
       addNode(walNode, 'wal', `WAL ${diagnostics.wal.data.bytes ?? '未知'} bytes`, sample.collectedAt, source);
       edges.push({ from: sampleNode, to: walNode, relation: 'observed_wal', source });
     }
-    for (const row of diagnostics.vacuum?.status === 'ok' ? diagnostics.vacuum.data.slice(0, 10) : []) {
+    for (const row of sample.status === 'ok' && diagnostics.vacuum?.status === 'ok'
+      ? diagnostics.vacuum.data.slice(0, 10) : []) {
       const vacuumNode = `vacuum:${sample.id}:${row.schema}:${row.table}`;
       addNode(vacuumNode, 'vacuum', `${row.schema}.${row.table} / dead ${row.deadRowsEstimate}`,
         sample.collectedAt, source);
       edges.push({ from: sampleNode, to: vacuumNode, relation: 'observed_vacuum', source });
     }
-    if (sample.metrics?.replication_observed) {
+    if (sample.status === 'ok' && sample.metrics?.replication_observed) {
       const replicationNode = `replication:${sample.id}`;
       addNode(replicationNode, 'replication',
         `角色 ${sample.metrics.role} / 延迟 ${sample.metrics.replication_lag_bytes ?? '未知'} bytes`, sample.collectedAt, source);
       edges.push({ from: sampleNode, to: replicationNode, relation: 'observed_replication', source });
     }
-    const statements = sample.metrics?.sqlPerformance?.status === 'ok'
+    const statements = sample.status === 'ok' && sample.metrics?.sqlPerformance?.status === 'ok'
       ? sample.metrics.sqlPerformance.statements.slice(0, 20) : [];
     for (const statement of statements) {
       const sqlNode = `sql:${event.assetId}:${statement.fingerprint}`;
@@ -146,10 +153,11 @@ export function analyzeEvent(event, samples, context = {}) {
   for (const item of evidence) {
     if (item.kind !== 'alert_firing' && item.kind !== 'alert_unsuppressed') continue;
     const sample = byId.get(item.payload?.sampleId);
-    if (!sample || sample.status !== 'ok') continue;
+    if (!sample) continue;
     const metrics = sample.metrics ?? {};
+    const pgObserved = sample.status === 'ok';
     const supports = [item.id, `sample:${sample.id}`];
-    if (item.payload.metric === 'pg.blocked_sessions') {
+    if (pgObserved && item.payload.metric === 'pg.blocked_sessions') {
       const chain = metrics.diagnostics?.lockChain;
       if (chain?.status === 'ok' && chain.data?.length) {
         candidates.push({ code: 'lock_chain', title: 'PostgreSQL 锁阻塞链与延迟告警同时出现',
@@ -159,7 +167,7 @@ export function analyzeEvent(event, samples, context = {}) {
           limitation: '锁链解释等待关系；尚不能证明业务慢请求的唯一根因。', state: 'hypothesis' });
       } else missingSignals.add('锁链诊断不可用或当前采样已无阻塞');
     }
-    if (item.payload.metric === 'pg.connection_utilization' &&
+    if (pgObserved && item.payload.metric === 'pg.connection_utilization' &&
       finite(metrics.connections) && finite(metrics.max_connections) &&
       metrics.max_connections > 0 && metrics.connections / metrics.max_connections >= 0.85) {
       candidates.push({ code: 'connection_pressure', title: 'PostgreSQL 连接数接近上限',
@@ -167,28 +175,28 @@ export function analyzeEvent(event, samples, context = {}) {
         detail: { connections: metrics.connections, maxConnections: metrics.max_connections },
         limitation: '高使用率是容量风险，尚未证明已发生连接拒绝。', state: 'hypothesis' });
     }
-    if (item.payload.metric === 'pg.replication_lag_bytes' &&
+    if (pgObserved && item.payload.metric === 'pg.replication_lag_bytes' &&
       finite(metrics.replication_lag_bytes) && metrics.replication_lag_bytes >= 64 * 1024 * 1024) {
       candidates.push({ code: 'replication_lag', title: 'PostgreSQL 复制回放延迟与告警同时出现',
         confidence: 'medium', supports, against: [], missing: ['复制端资源与 WAL 传输原因未验证'],
         detail: { lagBytes: metrics.replication_lag_bytes },
         limitation: '确认延迟现象，尚未定位造成延迟的上游原因。', state: 'hypothesis' });
     }
-    if (item.payload.metric === 'pg.wal_receiver_down' && metrics.role === 'standby' &&
+    if (pgObserved && item.payload.metric === 'pg.wal_receiver_down' && metrics.role === 'standby' &&
       metrics.replication_observed && metrics.wal_receiver !== 'streaming') {
       candidates.push({ code: 'wal_receiver_down', title: '备库 WAL 接收器中断',
         confidence: 'medium', supports, against: [], missing: ['主库发送端和网络状态未关联'],
         detail: { receiver: metrics.wal_receiver ?? 'unknown' },
         limitation: '接收中断已观测，不能单凭备库侧信号判断主库或网络根因。', state: 'hypothesis' });
     }
-    if (item.payload.metric === 'pg.archive_fail_delta' && finite(item.payload.value) &&
+    if (pgObserved && item.payload.metric === 'pg.archive_fail_delta' && finite(item.payload.value) &&
       item.payload.value > 0 && metrics.diagnostics?.archiver?.status === 'ok') {
       candidates.push({ code: 'wal_archive_failures', title: 'WAL 归档失败增加',
         confidence: 'medium', supports, against: [], missing: ['归档命令错误日志和仓库状态未关联'],
         detail: { failureDelta: item.payload.value },
         limitation: '归档失败计数增加是恢复风险，尚未确认失败命令原因。', state: 'hypothesis' });
     }
-    if (item.payload.metric === 'pg.autovacuum_disabled' && item.payload.value === 1) {
+    if (pgObserved && item.payload.metric === 'pg.autovacuum_disabled' && item.payload.value === 1) {
       const backlog = metrics.diagnostics?.vacuum?.status === 'ok'
         ? metrics.diagnostics.vacuum.data.filter(row => row.deadRowsEstimate >= 10000) : [];
       candidates.push({ code: 'autovacuum_disabled', title: 'autovacuum 关闭，表维护可能积压',
@@ -198,7 +206,7 @@ export function analyzeEvent(event, samples, context = {}) {
         detail: { backlogTables: backlog.length },
         limitation: '参数关闭是风险因素；只有结合表积压和时间线才能分析业务影响。', state: 'hypothesis' });
     }
-    if (item.payload.metric === 'pg.vacuum_backlog_percent' &&
+    if (pgObserved && item.payload.metric === 'pg.vacuum_backlog_percent' &&
       finite(item.payload.value) && item.payload.value >= 20) {
       candidates.push({ code: 'vacuum_backlog', title: 'PostgreSQL 表死元组积压',
         confidence: 'medium', supports, against: [],
@@ -236,6 +244,35 @@ export function analyzeEvent(event, samples, context = {}) {
         confidence: 'low', supports, against: [], missing: ['容器终止原因与 PG 服务退化未核对'],
         detail: { pod: metrics.k8s.pod?.name, restartDelta: item.payload.value },
         limitation: '重启与事件同期，不自动推断重启是唯一故障原因。', state: 'hypothesis' });
+    }
+    if (item.payload.metric === 'k8s.pod_not_ready' && item.payload.value === 1 &&
+      metrics.k8s?.pod?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'False')) {
+      candidates.push({ code: 'k8s_pod_not_ready', title: 'PostgreSQL Pod 未就绪',
+        confidence: 'low', supports, against: [], missing: ['探针失败、容器状态或数据库连接原因未确认'],
+        detail: { pod: metrics.k8s.pod.name },
+        limitation: 'Ready=False 是现象，尚不能说明根因。', state: 'hypothesis' });
+    }
+    if (item.payload.metric === 'k8s.pod_unscheduled' && item.payload.value === 1) {
+      const scheduled = metrics.k8s?.pod?.conditions?.find(condition => condition.type === 'PodScheduled');
+      if (scheduled?.status === 'False') candidates.push({ code: 'k8s_scheduling',
+        title: 'PostgreSQL Pod 未能调度到 Node', confidence: event.eventGroup === 'availability' ? 'medium' : 'low',
+        supports, against: [], missing: ['需要核对调度器事件和数据库连接失败的先后顺序'],
+        detail: { pod: metrics.k8s.pod.name, reason: scheduled.reason ?? null },
+        limitation: 'PodScheduled=False 与可用性事件相关，尚需确认其为连接失败的直接原因。',
+        state: 'hypothesis' });
+    }
+    if (item.payload.metric === 'k8s.scheduling_failure_recent' &&
+      finite(item.payload.value) && item.payload.value > 0) {
+      const recent = metrics.k8s?.events?.filter(k8sEvent =>
+        /FailedScheduling|FailedMount|FailedAttachVolume/i.test(k8sEvent.reason ?? '') &&
+        k8sEvent.at && Date.parse(k8sEvent.at) <= Date.parse(item.observedAt) &&
+        Date.parse(k8sEvent.at) >= Date.parse(item.observedAt) - 15 * 60_000) ?? [];
+      if (recent.length) candidates.push({ code: 'k8s_scheduling_event',
+        title: '同 Pod 近期调度或卷挂载失败', confidence: 'low', supports,
+        against: [], missing: ['Pod 调度状态与 PG 服务退化需进一步关联'],
+        detail: { pod: metrics.k8s.pod?.name ?? null, reasons: recent.map(row => row.reason) },
+        limitation: 'K8S Event 证明调度或挂载异常；不能单独证明数据库连接故障。',
+        state: 'hypothesis' });
     }
   }
   if (event.eventGroup === 'latency' && Array.isArray(context.nearbySamples)) {
