@@ -1,6 +1,6 @@
 # DbSphere V0.2.0 发行说明
 
-V0.2 将监控数据长期存储迁至独立 PostgreSQL 18，并提供 Linux Docker Compose 一键部署。目标 PostgreSQL 仍支持 14–18；PG14 已结束上游维护，页面提示升级。
+V0.2 将监控数据长期存储迁至独立 PostgreSQL 18，并提供 Linux Docker Compose 一键部署。[发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44020986662) 的 6 个作业已通过。目标 PostgreSQL 仍支持 14–18；PG14 已结束上游维护，页面提示升级。
 
 ## 新增能力
 

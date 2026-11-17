@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-项目首个版本是 **[V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)**。V0.1 使用 SQLite 保存早期样例数据；当前主分支的 V0.2 开发代码已接入 Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集，以及可选 PgBouncer 观测。V0.2 尚未发行，后续版本仅在满足各自验收条件后发布。
+已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)。**V0.2.0 发布验收已通过**：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、可选 PgBouncer 观测。后续版本仅在满足各自验收条件后发布。
 
 ## 核心原则
 
@@ -24,7 +24,8 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [当前开发状态与测试记录](docs/DEVELOPMENT_STATUS.md)
 - [部署与接入](docs/DEPLOYMENT.md)
 - [V0.1.0 发行说明](docs/RELEASE_NOTES_V0.1.md)
-- [V0.2 一键部署与 PG18 存储（开发中）](docs/DEPLOYMENT_V0.2.md)
+- [V0.2.0 发行说明](docs/RELEASE_NOTES_V0.2.md)
+- [V0.2 一键部署与 PG18 存储](docs/DEPLOYMENT_V0.2.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 当前可用范围

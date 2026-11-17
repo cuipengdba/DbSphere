@@ -1,6 +1,6 @@
-# DbSphere V0.2 容器化一键部署（开发中）
+# DbSphere V0.2 容器化一键部署
 
-> 本文对应主分支上的 V0.2 开发功能；默认和外部 PG18 Compose 已通过 Linux CI，正式发行仍需安装/升级/恢复演练。V0.1.0 的手动启动见[部署与接入](DEPLOYMENT.md)。
+> 本文对应 V0.2.0；默认和外部 PG18 Compose、更新和存储故障已通过 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44020986662)。生产规模的备份恢复演练仍待完成。V0.1.0 的手动启动见[部署与接入](DEPLOYMENT.md)。
 
 ## 一条命令启动
 
@@ -36,7 +36,7 @@ bash scripts/one-click.sh --migrate-from /absolute/path/to/v0.1/data
 
 Linux 主机增强采集可按 [Prometheus 官方指南](https://prometheus.io/docs/guides/node-exporter/)在目标主机安装 `node_exporter`，资产中填写 Linux 主机名和 exporter 端口（默认常见端口 9100）。DbSphere 只读取 `/metrics`，设置 4 秒超时和 5 MiB 响应上限，不在目标主机执行脚本；请将 exporter 限制在可信内网，不要直接暴露到公网。未配置时界面明确显示“未采集”。CPU 使用率与 IO/网络速率由相邻两次累计计数计算，首次采样仅显示累计量。
 
-PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。外部 PG18 一键启动已通过 Linux CI；分区、保留期、备份恢复和真实环境的安装升级验收尚未完成。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。
+PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔离。外部 PG18 一键启动与更新已通过 Linux CI；分区、保留期、备份恢复和真实生产规模升级验收尚未完成。连接 PostgreSQL 14–18 监控目标的只读权限和 K8S 凭据说明仍见[部署与接入](DEPLOYMENT.md)。
 
 ### Kubernetes 只读发现与指标
 
