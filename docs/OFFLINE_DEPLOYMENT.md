@@ -28,7 +28,7 @@ bash DbSphere-offline-<版本>-linux-amd64.run
 
 ## 升级、回滚与边界
 
-后续版本的 `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。升级前应使用[PG18 存储备份与恢复演练](INSPECTIONS_V0.4.md)备份数据并保存当前安装包；回滚需实际验证目标 PG18 schema 与旧版本兼容，不能仅重跑旧包就假定数据兼容。V1.0 将正式验收断网升级与回滚。
+后续版本的 `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。[Linux CI 演练](https://github.com/cuipengdba/DbSphere/actions/runs/44058038127)已使用真实 V0.5 应用镜像构造旧离线包，建资产后升级到 V0.6 开发版、再回到 V0.5 应用，三阶段均在同一 PG18 存储读到该资产。这只验证了目前两版的应用切换和该数据路径。升级前仍应使用[PG18 存储备份与恢复演练](INSPECTIONS_V0.4.md)备份数据并保存当前安装包；未来 schema 变更的回滚需单独验证兼容或先恢复备份。V1.0 将正式验收断网升级与回滚。
 
 ## 可选的 Node.js 轻量离线包
 

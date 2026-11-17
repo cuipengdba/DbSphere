@@ -438,6 +438,23 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         const samples = await store.getSamplesByIds(event.assetId, eventSampleIds(event));
         return send(res, 200, { event, analysis: analyzeEvent(event, samples) });
       }
+      const decisionMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})\/rca-decision$/);
+      if (req.method === 'POST' && decisionMatch) {
+        const input = await body(req);
+        if (!['confirmed', 'rejected'].includes(input?.decision) ||
+          typeof input.code !== 'string' || !/^[a-z][a-z0-9_]{1,63}$/.test(input.code) ||
+          typeof input.reason !== 'string' || input.reason.trim().length < 5 || input.reason.length > 500) {
+          return send(res, 400, { error: 'Valid candidate, decision and reason are required' });
+        }
+        const event = await store.getEvent(decisionMatch[1]);
+        if (!event) return send(res, 404, { error: 'Event not found' });
+        const analysis = analyzeEvent(event, await store.getSamplesByIds(event.assetId, eventSampleIds(event)));
+        const candidate = analysis.candidates.find(item => item.code === input.code);
+        if (!candidate) return send(res, 400, { error: 'Candidate is not supported by this event' });
+        await store.recordRcaDecision(event.id, candidate.code, input.decision,
+          candidate.supports, input.reason.trim());
+        return send(res, 200, { ok: true });
+      }
       const ackMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})\/ack$/);
       if (req.method === 'POST' && ackMatch) {
         const event = await store.acknowledgeEvent(ackMatch[1]);

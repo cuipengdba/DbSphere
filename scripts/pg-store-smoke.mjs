@@ -62,6 +62,11 @@ try {
   assert.equal(event.analysis.eventId, eventId);
   assert.equal(event.analysis.status, 'candidates');
   assert.ok(event.analysis.graph.nodes.some(node => node.type === 'sample'));
+  const reviewed = await fetch(`${base}/api/events/${eventId}/rca-decision`, {
+    method: 'POST', headers, body: JSON.stringify({ code: 'pod_oom_correlated',
+      decision: 'confirmed', reason: '同 Pod 的 OOM 时间与连接失败一致，待复核容器日志' })
+  });
+  assert.equal(reviewed.status, 200);
   const linuxCreated = await fetch(`${base}/api/assets`, { method: 'POST', headers,
     body: JSON.stringify({ name: 'Linux exporter mapping', host: '127.0.0.1', port: 5432,
       database: 'postgres', username: 'monitor', password: 'test-monitor-secret',
@@ -95,5 +100,7 @@ try {
   assert.equal(event.event.evidence.filter(item => item.kind === 'alert_recovered').length, 1);
   assert.equal(event.analysis.eventId, eventId);
   assert.ok(event.analysis.candidates.some(candidate => candidate.code === 'pod_oom_correlated'));
+  assert.equal(event.analysis.candidates.find(candidate => candidate.code === 'pod_oom_correlated').review.decision,
+    'confirmed');
   console.log('PostgreSQL 18 store: B/S assets, samples, one event, evidence and restart passed');
 } finally { await stop(); }

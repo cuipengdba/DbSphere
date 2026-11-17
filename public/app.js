@@ -611,6 +611,20 @@ async function showEvent(id) {
   for (const candidate of analysis.candidates) {
     diagnosis.append(cell('p', `${candidate.title} · 置信级别 ${candidate.confidence} · 证据 ${candidate.supports.join('、')}。${candidate.limitation}`, 'warning'));
     if (candidate.missing.length) diagnosis.append(cell('small', `缺失：${candidate.missing.join('；')}`));
+    if (candidate.review) diagnosis.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));
+    for (const [decision, label] of [['confirmed', '确认候选'], ['rejected', '驳回候选']]) {
+      const button = cell('button', label, 'ghost small-button');
+      button.addEventListener('click', async () => {
+        const reason = window.prompt(`${label}：请填写依据（至少 5 个字符）`);
+        if (reason === null) return;
+        try {
+          await api(`/api/events/${event.id}/rca-decision`, 'POST',
+            { code: candidate.code, decision, reason });
+          await showEvent(event.id);
+        } catch (error) { notice(error.message, true); }
+      });
+      diagnosis.append(button);
+    }
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
   target.append(diagnosis);
@@ -637,6 +651,7 @@ async function showEvent(id) {
       : evidence.payload.reason || evidence.payload.status;
     if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
+    if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
 }

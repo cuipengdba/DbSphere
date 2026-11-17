@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { analyzeEvent, eventSampleIds } from '../src/rca.js';
+import { createApp } from '../src/server.js';
 
 const eventId = '11111111-1111-4111-8111-111111111111';
 const sampleId = '22222222-2222-4222-8222-222222222222';
@@ -25,6 +29,8 @@ test('lock evidence stays under one incident and exposes blocking pair', () => {
     { waitingPid: 21, blockerPid: 10, waitingSince: '2026-11-17T00:00:30Z' });
   assert.ok(analysis.graph.edges.some(edge => edge.from === `evidence:${evidenceId}` &&
     edge.to === `sample:${sampleId}`));
+  assert.ok(analysis.graph.edges.some(edge => edge.from === 'candidate:lock_chain' &&
+    edge.to === `sample:${sampleId}`));
   assert.ok(analysis.graph.nodes.some(node => node.id === 'pod:pod-1'));
 });
 
@@ -37,4 +43,52 @@ test('alert without diagnostic proof remains unlocated', () => {
   assert.equal(analysis.status, 'unlocated');
   assert.equal(analysis.candidates.length, 0);
   assert.ok(analysis.missingSignals.some(signal => signal.includes('锁链')));
+});
+
+test('administrator confirms a supported candidate with CSRF and a recorded reason', async t => {
+  const root = resolve(process.env.DBSPHERE_TEST_TMP_DIR || tmpdir());
+  mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, 'dbsphere-rca-'));
+  const priorPassword = process.env.DBSPHERE_ADMIN_PASSWORD;
+  process.env.DBSPHERE_ADMIN_PASSWORD = 'rca-test-admin-password';
+  const app = await createApp({ dataDir: directory,
+    collectFn: async () => { throw new Error('connection refused'); },
+    k8sFn: async () => ({ status: 'ok', pod: { uid: 'pod-1', name: 'pg-0' },
+      containers: [{ name: 'postgres', terminatedReason: 'OOMKilled',
+        lastTerminatedAt: new Date().toISOString() }], pvcs: [] }) });
+  t.after(async () => {
+    await app.stop();
+    if (priorPassword === undefined) delete process.env.DBSPHERE_ADMIN_PASSWORD;
+    else process.env.DBSPHERE_ADMIN_PASSWORD = priorPassword;
+    if (!resolve(directory).startsWith(root + sep)) throw new Error('Unexpected test directory');
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${app.server.address().port}`;
+  const login = await fetch(`${baseUrl}/api/login`, { method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: process.env.DBSPHERE_ADMIN_PASSWORD }) });
+  const csrf = (await login.json()).csrf;
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const headers = { 'content-type': 'application/json', cookie, 'x-csrf-token': csrf };
+  const created = await fetch(`${baseUrl}/api/assets`, { method: 'POST', headers,
+    body: JSON.stringify({ name: 'rca test', host: '127.0.0.1', port: 5432,
+      database: 'postgres', username: 'monitor', password: 'dummy', sslMode: 'disable',
+      runtime: 'k8s', k8sCluster: 'test', namespace: 'database', pod: 'pg-0' }) });
+  const asset = (await created.json()).asset;
+  assert.equal(created.status, 201);
+  await fetch(`${baseUrl}/api/assets/${asset.id}/check`, { method: 'POST', headers });
+  const event = (await (await fetch(`${baseUrl}/api/events`, { headers: { cookie } })).json()).events[0];
+  const path = `${baseUrl}/api/events/${event.id}/rca-decision`;
+  assert.equal((await fetch(path, { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ code: 'pod_oom_correlated', decision: 'confirmed', reason: '同一 Pod 的 OOM 时间先于连接失败' }) })).status, 403);
+  assert.equal((await fetch(path, { method: 'POST', headers,
+    body: JSON.stringify({ code: 'made_up', decision: 'confirmed', reason: '没有任何支持证据' }) })).status, 400);
+  assert.equal((await fetch(path, { method: 'POST', headers,
+    body: JSON.stringify({ code: 'pod_oom_correlated', decision: 'confirmed',
+      reason: '同一 Pod 的 OOM 时间先于连接失败' }) })).status, 200);
+  const detail = await (await fetch(`${baseUrl}/api/events/${event.id}`, { headers: { cookie } })).json();
+  assert.equal(detail.analysis.eventId, event.id);
+  assert.equal(detail.analysis.candidates[0].review.decision, 'confirmed');
+  assert.equal(detail.event.evidence.filter(item => item.kind === 'rca_decision').length, 1);
 });

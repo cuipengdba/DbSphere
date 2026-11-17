@@ -109,7 +109,25 @@ export function analyzeEvent(event, samples) {
     }
   }
   if (!samples.length) missingSignals.add('事件引用的 PostgreSQL 样本不可用');
-  return { eventId: event.id, status: candidates.length ? 'candidates' : 'unlocated',
-    candidates, missingSignals: [...missingSignals], graph: { nodes, edges },
+  const uniqueCandidates = [...new Map(candidates.map(candidate => [candidate.code, candidate])).values()];
+  const reviews = new Map(evidence.filter(item => item.kind === 'rca_decision')
+    .map(item => [item.payload.code, { decision: item.payload.decision,
+      actor: item.payload.actor, reason: item.payload.reason, at: item.observedAt, evidenceId: item.id }]));
+  for (const candidate of uniqueCandidates) {
+    candidate.review = reviews.get(candidate.code) ?? null;
+    const candidateNode = `candidate:${candidate.code}`;
+    addNode(candidateNode, 'candidate', candidate.title);
+    edges.push({ from: eventNode, to: candidateNode, relation: 'hypothesizes' });
+    for (const support of candidate.supports) {
+      const supportNode = support.startsWith('sample:') ? support : `evidence:${support}`;
+      if (nodes.some(node => node.id === supportNode)) {
+        edges.push({ from: candidateNode, to: supportNode, relation: 'supported_by' });
+      }
+    }
+    if (candidate.review) edges.push({ from: candidateNode,
+      to: `evidence:${candidate.review.evidenceId}`, relation: 'reviewed_by' });
+  }
+  return { eventId: event.id, status: uniqueCandidates.length ? 'candidates' : 'unlocated',
+    candidates: uniqueCandidates, missingSignals: [...missingSignals], graph: { nodes, edges },
     timeline: evidence.map(item => ({ evidenceId: item.id, kind: item.kind, at: item.observedAt })) };
 }

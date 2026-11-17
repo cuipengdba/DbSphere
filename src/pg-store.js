@@ -847,6 +847,13 @@ export class PgStore {
     finally { client.release(); }
   }
 
+  async recordRcaDecision(id, code, decision, supports, reason) {
+    const inserted = await this.pool.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+      SELECT $2,id,'rca_decision',now(),$3 FROM events WHERE id=$1 RETURNING id`,
+    [id, randomUUID(), JSON.stringify({ code, decision, supports, reason, actor: 'admin' })]);
+    return inserted.rowCount ? this.getEvent(id) : null;
+  }
+
   async getEvent(id) {
     const row = (await this.pool.query(`SELECT e.*, a.name AS asset_name FROM events e
       JOIN assets a ON a.id=e.asset_id WHERE e.id=$1`, [id])).rows[0];

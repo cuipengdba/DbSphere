@@ -577,6 +577,14 @@ export class Store {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
+  recordRcaDecision(id, code, decision, supports, reason) {
+    const now = new Date().toISOString();
+    const inserted = this.db.prepare(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+      SELECT ?,id,'rca_decision',?,? FROM events WHERE id=?`).run(randomUUID(), now,
+      JSON.stringify({ code, decision, supports, reason, actor: 'admin' }), id);
+    return inserted.changes ? this.getEvent(id) : null;
+  }
+
   getEvent(id) {
     const r = this.db.prepare('SELECT e.*, a.name AS asset_name FROM events e JOIN assets a ON a.id=e.asset_id WHERE e.id=?').get(id);
     if (!r) return null;
