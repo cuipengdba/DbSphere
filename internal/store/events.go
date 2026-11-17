@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 var evidenceUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var rcaCode = regexp.MustCompile(`^[a-z][a-z0-9_]{1,63}$`)
+var ErrInvalidRCADecision = errors.New("invalid RCA decision or unsupported candidate")
+var ErrEventNotFound = errors.New("event not found")
 
 type eventEvidence struct {
 	ID         string          `json:"id"`
@@ -87,6 +91,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		nodes = append(nodes, map[string]any{"id": id, "type": kind, "label": label, "source": source, "at": at})
 	}
 	missing := []string{}
+	samples := map[string]sampleObservation{}
 	for _, item := range event.Evidence {
 		evidenceNode := "evidence:" + item.ID
 		addNode(evidenceNode, "evidence", item.Kind, "/api/events/"+event.ID, item.ObservedAt)
@@ -103,10 +108,16 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			missing = append(missing, "事件中的样本标识无效")
 			continue
 		}
+		if _, exists := samples[sampleID]; exists {
+			edges = append(edges, map[string]string{"from": evidenceNode,
+				"to": "sample:" + sampleID, "relation": "observed_in"})
+			continue
+		}
 		var sampleAt time.Time
 		var sampleStatus string
-		err := s.pool.QueryRow(ctx, `SELECT collected_at,status FROM samples
-			WHERE asset_id=$1 AND id=$2 ORDER BY collected_at DESC LIMIT 1`, event.AssetID, sampleID).Scan(&sampleAt, &sampleStatus)
+		var metricsJSON []byte
+		err := s.pool.QueryRow(ctx, `SELECT collected_at,status,metrics_json FROM samples
+			WHERE asset_id=$1 AND id=$2 ORDER BY collected_at DESC LIMIT 1`, event.AssetID, sampleID).Scan(&sampleAt, &sampleStatus, &metricsJSON)
 		if errors.Is(err, pgx.ErrNoRows) {
 			missing = append(missing, "样本 "+sampleID+" 已被清理或未迁移")
 			continue
@@ -115,14 +126,22 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			return nil, err
 		}
 		sampleNode := "sample:" + sampleID
+		var metrics map[string]any
+		if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
+			missing = append(missing, "样本 "+sampleID+" 的指标格式无效")
+		}
+		samples[sampleID] = sampleObservation{ID: sampleID, At: sampleAt, Status: sampleStatus, Metrics: metrics}
 		addNode(sampleNode, "sample", sampleStatus,
 			"/api/assets/"+event.AssetID+"/samples/"+sampleID, sampleAt)
 		edges = append(edges, map[string]string{"from": evidenceNode, "to": sampleNode, "relation": "observed_in"},
 			map[string]string{"from": sampleNode, "to": assetNode, "relation": "collected_from"})
+		addSampleLayers(event.AssetID, samples[sampleID], addNode, &edges)
 	}
+	candidates := analyzeCandidates(event, samples, addNode, &edges)
 	traceCount := 0
+	databaseSpans := 0
 	services := []string{}
-	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,service,started_at FROM trace_spans
+	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY started_at DESC LIMIT 100`, event.AssetID, event.StartedAt, event.EndedAt)
@@ -130,10 +149,13 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		return nil, err
 	}
 	serviceSet := map[string]bool{}
+	spanSet := map[string]bool{}
+	parentEdges := []map[string]string{}
 	for traceRows.Next() {
-		var traceID, spanID, service string
-		var at time.Time
-		if err := traceRows.Scan(&traceID, &spanID, &service, &at); err != nil {
+		var traceID, spanID, service, kind, spanStatus string
+		var parentID *string
+		var at, endedAt time.Time
+		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt, &spanStatus); err != nil {
 			traceRows.Close()
 			return nil, err
 		}
@@ -143,24 +165,50 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			services = append(services, service)
 		}
 		spanNode := "span:" + traceID + ":" + spanID
-		addNode(spanNode, "db_client_span", service,
+		spanSet[spanNode] = true
+		serviceNode := "service:" + service
+		addNode(serviceNode, "service", service,
 			"/api/assets/"+event.AssetID+"/traces/"+traceID, at)
-		edges = append(edges, map[string]string{"from": eventNode, "to": spanNode, "relation": "time_window"},
-			map[string]string{"from": spanNode, "to": assetNode, "relation": "calls"})
+		spanType := "service_span"
+		if kind == "postgresql_client" {
+			databaseSpans++
+			spanType = "db_client_span"
+		}
+		addNode(spanNode, spanType, fmt.Sprintf("%s · %d ms · %s", service,
+			endedAt.Sub(at).Milliseconds(), spanStatus),
+			"/api/assets/"+event.AssetID+"/traces/"+traceID, at)
+		edges = append(edges, map[string]string{"from": serviceNode, "to": spanNode, "relation": "emitted"},
+			map[string]string{"from": eventNode, "to": spanNode, "relation": "time_window"})
+		if kind == "postgresql_client" {
+			edges = append(edges, map[string]string{"from": spanNode, "to": assetNode, "relation": "calls"})
+		}
+		if parentID != nil {
+			parentEdges = append(parentEdges, map[string]string{"from": "span:" + traceID + ":" + *parentID,
+				"to": spanNode, "relation": "parent_of"})
+		}
 	}
 	if err := traceRows.Err(); err != nil {
 		traceRows.Close()
 		return nil, err
 	}
 	traceRows.Close()
+	for _, edge := range parentEdges {
+		if spanSet[edge["from"]] {
+			edges = append(edges, edge)
+		}
+	}
 	if traceCount == 0 {
 		missing = append(missing, "应用 Trace 未接入或当前时间窗无可关联 Span")
 	}
-	missing = append(missing, "Go 深度根因规则与跨层证据映射仍在迁移")
+	missing = append(missing, "Go 全量根因规则和自动跨层采集仍在迁移")
+	status := "unlocated"
+	if len(candidates) > 0 {
+		status = "candidates"
+	}
 	analysis := map[string]any{
-		"status": "pending", "graph": map[string]any{"nodes": nodes, "edges": edges},
-		"timeline": event.Evidence, "candidates": []any{}, "missingSignals": missing,
-		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": traceCount, "services": services},
+		"status": status, "graph": map[string]any{"nodes": nodes, "edges": edges},
+		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
+		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans, "services": services},
 	}
 	return map[string]any{"event": event, "analysis": analysis}, nil
 }
@@ -201,6 +249,41 @@ func (s *Postgres) AcknowledgeEvent(ctx context.Context, id string) (any, error)
 	return map[string]any{"event": event}, nil
 }
 
+func (s *Postgres) RecordRCADecision(ctx context.Context, id, code, decision, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if !rcaCode.MatchString(code) || (decision != "confirmed" && decision != "rejected") ||
+		len([]rune(reason)) < 5 || len([]rune(reason)) > 500 {
+		return ErrInvalidRCADecision
+	}
+	detail, err := s.EventByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return ErrEventNotFound
+	}
+	analysis := object(detail.(map[string]any)["analysis"])
+	var supports []string
+	for _, candidate := range analysis["candidates"].([]map[string]any) {
+		if candidate["code"] == code {
+			supports = candidate["supports"].([]string)
+			break
+		}
+	}
+	if supports == nil {
+		return ErrInvalidRCADecision
+	}
+	payload, err := json.Marshal(map[string]any{
+		"code": code, "decision": decision, "reason": reason,
+		"supports": supports, "actor": "admin"})
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'rca_decision',now(),$2)`, id, payload)
+	return err
+}
+
 func (s *Postgres) RawSample(ctx context.Context, assetID, sampleID string) (any, error) {
 	var raw []byte
 	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('id',id,'assetId',asset_id,
@@ -214,4 +297,18 @@ func (s *Postgres) RawSample(ctx context.Context, assetID, sampleID string) (any
 		return nil, err
 	}
 	return map[string]any{"sample": json.RawMessage(raw)}, nil
+}
+
+func (s *Postgres) RawTrace(ctx context.Context, assetID, traceID string) (any, error) {
+	spans, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
+		'assetId',asset_id,'traceId',trace_id,'spanId',span_id,'parentSpanId',parent_span_id,
+		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status)
+		FROM trace_spans WHERE asset_id=$1 AND trace_id=$2 ORDER BY started_at LIMIT 256`, assetID, traceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(spans) == 0 {
+		return nil, nil
+	}
+	return map[string]any{"spans": spans}, nil
 }

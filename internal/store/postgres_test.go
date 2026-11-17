@@ -154,6 +154,47 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		FROM events WHERE asset_id=$1 AND status='open' LIMIT 1`, asset.ID).Scan(&eventID); err != nil {
 		t.Fatal("failure event missing", err)
 	}
+	var diagnosticSampleID string
+	metrics := map[string]any{
+		"connections": 90, "max_connections": 100,
+		"linux": map[string]any{"status": "ok"},
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "pod-test", "name": "pg-0"},
+			"node": map[string]any{"name": "worker-1"},
+			"pvcs": []any{map[string]any{"namespace": "database", "name": "pg-data"}}},
+		"diagnostics": map[string]any{"lockChain": map[string]any{"status": "ok",
+			"data": []any{map[string]any{"waitingPid": 101, "blockerPid": 202}}}},
+		"sqlPerformance": map[string]any{"status": "ok", "statements": []any{
+			map[string]any{"fingerprint": "test-fingerprint", "queryId": "42"}}},
+	}
+	metricsJSON, _ := json.Marshal(metrics)
+	if err := pg.pool.QueryRow(context.Background(), `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+		VALUES(gen_random_uuid(),$1,now(),'ok',$2) RETURNING id`, asset.ID, metricsJSON).Scan(&diagnosticSampleID); err != nil {
+		t.Fatal(err)
+	}
+	for _, metric := range []string{"pg.connection_utilization", "pg.blocked_sessions"} {
+		payload, _ := json.Marshal(map[string]any{"sampleId": diagnosticSampleID, "metric": metric,
+			"value": 90, "operator": ">=", "threshold": 85})
+		if _, err := pg.pool.Exec(context.Background(), `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			VALUES(gen_random_uuid(),$1,'alert_firing',now(),$2)`, eventID, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	traceID := strings.Repeat("a", 32)
+	for _, span := range []struct{ id, parent, kind string }{
+		{"1111111111111111", "", "service"},
+		{"2222222222222222", "1111111111111111", "postgresql_client"},
+	} {
+		var parent any
+		if span.parent != "" {
+			parent = span.parent
+		}
+		if _, err := pg.pool.Exec(context.Background(), `INSERT INTO trace_spans
+			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
+			VALUES($1,$2,$3,$4,'api',$5,now()-interval '1 second',now(),'ok')`,
+			asset.ID, traceID, span.id, parent, span.kind); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := pg.pool.QueryRow(context.Background(), `SELECT count(*)::int
 		FROM events WHERE asset_id=$1 AND status='open'`, asset.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("repeated failures did not share one event: %q %d %v", eventID, count, err)
@@ -163,8 +204,26 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(detail)
-	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) {
+	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) ||
+		!strings.Contains(string(encoded), "connection_pressure") || !strings.Contains(string(encoded), "lock_chain") ||
+		!strings.Contains(string(encoded), "blocked_by") || !strings.Contains(string(encoded), "sql_fingerprint") ||
+		!strings.Contains(string(encoded), "scheduled_on") || !strings.Contains(string(encoded), "pvc:") ||
+		!strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), "parent_of") {
 		t.Fatal("same event ID did not expose its sample evidence graph", err)
+	}
+	if rawTrace, err := pg.RawTrace(context.Background(), asset.ID, traceID); err != nil || rawTrace == nil {
+		t.Fatal("trace evidence is unavailable", err)
+	}
+	if err := pg.RecordRCADecision(context.Background(), eventID, "unknown", "confirmed", "测试候选无证据"); !errors.Is(err, ErrInvalidRCADecision) {
+		t.Fatalf("unsupported RCA candidate was accepted: %v", err)
+	}
+	if err := pg.RecordRCADecision(context.Background(), eventID, "lock_chain", "confirmed", "阻塞 PID 与采样匹配，需要继续核对业务请求"); err != nil {
+		t.Fatal("RCA review was not stored", err)
+	}
+	if reviewed, err := pg.EventByID(context.Background(), eventID); err != nil {
+		t.Fatal(err)
+	} else if data, err := json.Marshal(reviewed); err != nil || !strings.Contains(string(data), "confirmed") {
+		t.Fatal("RCA review did not appear in the same event", err)
 	}
 	if sample, err := pg.RawSample(context.Background(), asset.ID, first.SampleID); err != nil || sample == nil {
 		t.Fatal("raw sample evidence is unavailable", err)
@@ -184,7 +243,7 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	if err := pg.pool.QueryRow(context.Background(), "SELECT status FROM events WHERE id=$1", eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("event was not resolved under the same ID: %s %v", status, err)
 	}
-	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count != 4 {
+	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count != 7 {
 		t.Fatalf("failure/recovery evidence did not share one ID: %d %v", count, err)
 	}
 	input.Runtime = "k8s"

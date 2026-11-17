@@ -199,6 +199,22 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if eventDetail.Code != http.StatusOK || !strings.Contains(eventDetail.Body.String(), "observed_in") {
 		t.Fatalf("one-event evidence graph unavailable: %d %s", eventDetail.Code, eventDetail.Body.String())
 	}
+	decisionPath := "/api/events/" + eventID + "/rca-decision"
+	decisionRequest := httptest.NewRequest(http.MethodPost, decisionPath,
+		strings.NewReader(`{"code":"unknown","decision":"confirmed","reason":"no supporting evidence"}`))
+	decisionRequest.AddCookie(login.Result().Cookies()[0])
+	decisionRequest.Header.Set("Content-Type", "application/json")
+	withoutCSRF := httptest.NewRecorder()
+	handler.ServeHTTP(withoutCSRF, decisionRequest)
+	if withoutCSRF.Code != http.StatusForbidden {
+		t.Fatalf("RCA review accepted without CSRF: %d", withoutCSRF.Code)
+	}
+	decisionRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	unsupported := httptest.NewRecorder()
+	handler.ServeHTTP(unsupported, decisionRequest)
+	if unsupported.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported RCA candidate accepted: %d %s", unsupported.Code, unsupported.Body.String())
+	}
 	sampleRequest := httptest.NewRequest(http.MethodGet, "/api/assets/"+result.Asset.ID+"/samples/"+checkResult.Result.SampleID, nil)
 	if !rawSamplePath.MatchString(sampleRequest.URL.Path) {
 		t.Fatalf("sample route does not match %q", sampleRequest.URL.Path)

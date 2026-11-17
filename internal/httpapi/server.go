@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net"
@@ -34,8 +35,10 @@ type AssetStore interface {
 var assetPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var assetCheckPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/check$`)
 var rawSamplePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/samples/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var rawTracePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/traces/([0-9a-f]{32})$`)
 var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
+var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 
 type AssetChecker interface {
@@ -45,6 +48,8 @@ type EventStore interface {
 	EventByID(context.Context, string) (any, error)
 	AcknowledgeEvent(context.Context, string) (any, error)
 	RawSample(context.Context, string, string) (any, error)
+	RawTrace(context.Context, string, string) (any, error)
+	RecordRCADecision(context.Context, string, string, string, string) error
 }
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
@@ -283,8 +288,47 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					respond(w, http.StatusOK, value)
 					return
 				}
+				if match := rawTracePath.FindStringSubmatch(r.URL.Path); match != nil {
+					value, err := eventsDB.RawTrace(r.Context(), match[1], match[2])
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace data unavailable"})
+						return
+					}
+					if value == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Trace not found"})
+						return
+					}
+					respond(w, http.StatusOK, value)
+					return
+				}
 			}
 			if r.Method == http.MethodPost {
+				if match := eventDecisionPath.FindStringSubmatch(r.URL.Path); match != nil {
+					var input struct {
+						Code     string `json:"code"`
+						Decision string `json:"decision"`
+						Reason   string `json:"reason"`
+					}
+					if readJSON(w, r, &input) != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid RCA decision"})
+						return
+					}
+					err := eventsDB.RecordRCADecision(r.Context(), match[1], input.Code, input.Decision, input.Reason)
+					if errors.Is(err, storepkg.ErrInvalidRCADecision) {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Valid candidate, decision and reason are required"})
+						return
+					}
+					if errors.Is(err, storepkg.ErrEventNotFound) {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+						return
+					}
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "RCA decision unavailable"})
+						return
+					}
+					respond(w, http.StatusOK, map[string]bool{"ok": true})
+					return
+				}
 				if match := eventAckPath.FindStringSubmatch(r.URL.Path); match != nil {
 					value, err := eventsDB.AcknowledgeEvent(r.Context(), match[1])
 					if err != nil {
