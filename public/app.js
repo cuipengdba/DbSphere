@@ -580,6 +580,11 @@ function renderRules(rules) {
   for (const rule of rules) {
     const details = document.createElement('details'); details.className = 'rule-card';
     details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${rule.threshold} · ${rule.durationSeconds}s`));
+    if (rule.editable === false) {
+      details.append(cell('p', 'Go 采集器尚未接入此规则；历史配置可查看，暂不能修改。', 'warning'));
+      list.append(details);
+      continue;
+    }
     const form = document.createElement('form'); form.className = 'rule-form';
     const threshold = document.createElement('input'); threshold.type = 'number'; threshold.step = 'any'; threshold.min = '0'; threshold.value = rule.threshold; threshold.required = true;
     const duration = document.createElement('input'); duration.type = 'number'; duration.step = '1'; duration.min = '0'; duration.max = '86400'; duration.value = rule.durationSeconds; duration.required = true;

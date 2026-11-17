@@ -125,7 +125,10 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 }
 
 func (s *Postgres) recordCheck(ctx context.Context, id string, metrics map[string]any, group, reason string) (CheckResult, error) {
-	now := time.Now().UTC()
+	return s.recordCheckAt(ctx, id, metrics, group, reason, time.Now().UTC())
+}
+
+func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time) (CheckResult, error) {
 	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
 		return CheckResult{}, err
 	}
@@ -233,6 +236,13 @@ func (s *Postgres) recordCheck(ctx context.Context, id string, metrics map[strin
 				return CheckResult{}, err
 			}
 		}
+	}
+	var observed map[string]any
+	if err := json.Unmarshal(encoded, &observed); err != nil {
+		return CheckResult{}, err
+	}
+	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, now); err != nil {
+		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CheckResult{}, err

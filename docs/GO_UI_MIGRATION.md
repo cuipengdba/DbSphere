@@ -17,11 +17,11 @@
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
 
-当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及基础 PostgreSQL 只读手工采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情现读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。真实浏览器验证总览一键进入 Go 事件证据、资产详情无控制台错误。Go 现支持 Linux PG 与可选 node_exporter 联合采集；K8S、PgBouncer 资产返回明确的未实现状态，避免只采数据库就误报全局健康。**跨层采集、告警/巡检写入、完整根因候选、SQL/容量分析、默认规则/模板与 Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 现支持 Linux PG 与可选 node_exporter 联合采集；五条 PG/Linux 默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。其余 Node 历史规则只读显示。K8S、PgBouncer 资产返回明确的未实现状态，避免只采数据库就误报全局健康。**K8S/PgBouncer 跨层采集、完整告警投递和巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
 
 ## 页面信息架构
 
-Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指标，并把 Linux 节点连入同一事件 ID 的图。本机真实 PG14/node_exporter/PG18 演练已通过；CI 仍待验收。K8S 与 PgBouncer 仍在适配器迁移队列。
+Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指标，并把 Linux 节点连入同一事件 ID 的图。本机真实 PG14/node_exporter/PG18 演练和 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44096143595) 已通过。K8S 与 PgBouncer 仍在适配器迁移队列。
 
 Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查询失败分别显示状态；只存指纹与统计量。资产页从 PG18 样本计算相邻窗口增量和退化倍数，本地 PG18 真扩展与样本退化测试已通过；五版扩展 CI 正在验收。慢日志和计划导入写入仍需迁移。
 

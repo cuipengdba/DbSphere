@@ -28,6 +28,8 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 
 ## V0.6 开发中
 
+Go 告警迁移已加入 PG 连接使用率、锁等待、长事务和 Linux 内存/磁盘五条默认规则。采样事务写入规则状态与触发、信号缺失、恢复、静默状态变化证据；同一资产同一问题组的 PG 与 Linux 告警共用事件 ID，全部恢复后关闭。本机 PG18 测试验证规则修改持久化、连接压力根因候选及同 ID 恢复；Go API 的规则编辑受管理员登录和 CSRF 保护。旧版未移植规则在 Go 页面只读，通知投递、K8S/PgBouncer 规则和完整巡检写入仍待迁移。本段是开发进度，尚非正式版验收。
+
 Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 `.run`；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 `--no-build --pull never` 启动 B/S 和独立 PG18。[13 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672)验证删除本机镜像后的纯本地安装与重复执行。另有 Node.js 24 + 外部 PG18 的轻量离线包，CI 验证解压后不运行包管理器即可启动。两种产物均由[独立工作流](https://github.com/cuipengdba/DbSphere/actions/runs/44056371453)构建并校验；单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
 
 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)已附上 `.run`、Node 轻量包及各自 SHA-256 文件；该预览不代表 V0.6 正式版验收。事件详情现从已存证据和原始样本派生同一事件 ID 的证据关系与首批无模型根因候选；证据不足显示“未定位”。本地 51 项测试和 PG18 实库事件读取通过。范围及未完成项见[根因分析开发记录](RCA_V0.6_PROGRESS.md)。

@@ -53,6 +53,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply DbSphere schema: %w", err)
 	}
+	if err := seedGoRules(ctx, tx); err != nil {
+		return fmt.Errorf("seed supported Go alert rules: %w", err)
+	}
 	for _, table := range []string{"samples", "events"} {
 		now := time.Now().UTC()
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)

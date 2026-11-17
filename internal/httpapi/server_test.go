@@ -20,6 +20,68 @@ type healthStub struct{ err error }
 
 func (stub healthStub) Health(context.Context) error { return stub.err }
 
+type alertRuleStub struct {
+	healthStub
+	called int
+}
+
+func (stub *alertRuleStub) UpdateAlertRule(_ context.Context, id string, patch store.AlertRulePatch) (any, error) {
+	stub.called++
+	if id == "missing_rule" {
+		return nil, store.ErrAlertRuleNotFound
+	}
+	return map[string]any{"rule": map[string]any{"id": id, "enabled": patch.Enabled}}, nil
+}
+
+func TestGoAlertRulePatchRequiresLoginAndCSRF(t *testing.T) {
+	hash, err := security.HashPassword("rule-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &alertRuleStub{}
+	handler := New(stub, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"), PasswordHash: hash})
+	patch := func(cookie *http.Cookie, csrf string, path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		if csrf != "" {
+			request.Header.Set("X-CSRF-Token", csrf)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := patch(nil, "", "/api/alert-rules/pg_connections_high", `{"enabled":false}`); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous rule update: %d", response.Code)
+	}
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"password":"rule-test-password"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, loginRequest)
+	if login.Code != http.StatusOK {
+		t.Fatalf("rule test login failed: %d", login.Code)
+	}
+	cookie := login.Result().Cookies()[0]
+	if response := patch(cookie, "", "/api/alert-rules/pg_connections_high", `{"enabled":false}`); response.Code != http.StatusForbidden {
+		t.Fatalf("rule update without CSRF: %d", response.Code)
+	}
+	csrf := security.CSRFToken([]byte("01234567890123456789012345678901"), cookie.Value)
+	if response := patch(cookie, csrf, "/api/alert-rules/pg_connections_high", `{"enabled":false}`); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "pg_connections_high") {
+		t.Fatalf("valid rule update failed: %d %s", response.Code, response.Body.String())
+	}
+	if response := patch(cookie, csrf, "/api/alert-rules/pg_connections_high", `{"threshold":"wrong"}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid rule update accepted: %d", response.Code)
+	}
+	if response := patch(cookie, csrf, "/api/alert-rules/missing_rule", `{"enabled":true}`); response.Code != http.StatusNotFound {
+		t.Fatalf("missing rule status: %d", response.Code)
+	}
+	if stub.called != 2 {
+		t.Fatalf("unexpected storage calls: %d", stub.called)
+	}
+}
+
 func TestEmbeddedFrontendAndReadiness(t *testing.T) {
 	handler := New(healthStub{})
 	for _, path := range []string{"/", "/app.js", "/styles.css", "/favicon.svg"} {

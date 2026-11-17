@@ -41,6 +41,7 @@ var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
 
 type AssetChecker interface {
 	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
@@ -55,6 +56,9 @@ type EventStore interface {
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
 	RawSQLEvidence(context.Context, string, string, string) (any, error)
+}
+type AlertRuleStore interface {
+	UpdateAlertRule(context.Context, string, storepkg.AlertRulePatch) (any, error)
 }
 
 type AuthConfig struct {
@@ -180,6 +184,34 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
+		}
+		if r.Method == http.MethodPatch {
+			if match := alertRulePath.FindStringSubmatch(r.URL.Path); match != nil {
+				rulesDB, ok := store.(AlertRuleStore)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Alert rule updates unavailable"})
+					return
+				}
+				var patch storepkg.AlertRulePatch
+				if readJSON(w, r, &patch) != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid alert rule update"})
+					return
+				}
+				value, err := rulesDB.UpdateAlertRule(r.Context(), match[1], patch)
+				switch {
+				case errors.Is(err, storepkg.ErrAlertRuleNotFound):
+					respond(w, http.StatusNotFound, map[string]string{"error": "Alert rule not found"})
+				case errors.Is(err, storepkg.ErrAlertRuleUnsupported):
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "This alert rule is not yet supported by Go"})
+				case errors.Is(err, storepkg.ErrInvalidAlertRule):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid alert rule update"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Alert rule storage unavailable"})
+				default:
+					respond(w, http.StatusOK, value)
+				}
+				return
+			}
 		}
 		if assetsDB, ok := store.(AssetStore); ok {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {

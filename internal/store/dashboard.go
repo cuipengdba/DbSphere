@@ -33,7 +33,10 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			'rule',r.definition_json,'state',s.state_json)
 			FROM alert_states s JOIN assets a ON a.id=s.asset_id
 			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing'`},
-		"/api/alert-rules": {"rules", `SELECT definition_json FROM alert_rules ORDER BY id`},
+		"/api/alert-rules": {"rules", `SELECT definition_json || jsonb_build_object('editable',
+			definition_json->>'metric' IN ('pg.connection_utilization','pg.blocked_sessions',
+			'pg.long_transactions','linux.memory_used_percent','linux.disk_used_percent'))
+			FROM alert_rules ORDER BY id`},
 		"/api/silences": {"silences", `SELECT jsonb_build_object(
 			'id',id,'kind',kind,'assetId',asset_id,'ruleId',rule_id,
 			'startsAt',starts_at,'endsAt',ends_at,'reason',reason,
