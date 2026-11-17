@@ -336,5 +336,34 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			result["eventsError"] = err.Error()
 		}
 	}
+	metricPath := "/apis/metrics.k8s.io/v1beta1"
+	if podMetrics, err := k.get(ctx, metricPath+"/namespaces/"+url.PathEscape(target.Namespace)+
+		"/pods/"+url.PathEscape(target.Pod), nil); err == nil {
+		usage := []any{}
+		for _, raw := range kubeList(podMetrics["containers"]) {
+			container := kubeObject(raw)
+			resources := kubeObject(container["usage"])
+			usage = append(usage, map[string]any{"name": container["name"],
+				"cpu": resources["cpu"], "memory": resources["memory"]})
+		}
+		result["resourceMetrics"] = map[string]any{"source": "metrics.k8s.io",
+			"observedAt": podMetrics["timestamp"], "containers": usage, "node": nil}
+		delete(result, "resourceMetricsError")
+	} else {
+		result["resourceMetricsError"] = err.Error()
+	}
+	if nodeName != "" && kubeName.MatchString(nodeName) {
+		if nodeMetrics, err := k.get(ctx, metricPath+"/nodes/"+url.PathEscape(nodeName), nil); err == nil {
+			resources := kubeObject(nodeMetrics["usage"])
+			if metrics := kubeObject(result["resourceMetrics"]); len(metrics) != 0 {
+				metrics["node"] = map[string]any{"cpu": resources["cpu"], "memory": resources["memory"]}
+				if metrics["observedAt"] == nil {
+					metrics["observedAt"] = nodeMetrics["timestamp"]
+				}
+			}
+		} else {
+			result["nodeMetricsError"] = err.Error()
+		}
+	}
 	return result
 }

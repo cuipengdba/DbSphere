@@ -58,6 +58,10 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 				t.Errorf("events were not scoped by Pod UID: %s", r.URL.RawQuery)
 			}
 			fmt.Fprint(w, `{"items":[{"reason":"Unhealthy","message":"readiness probe failed","lastTimestamp":"2026-11-17T00:01:00Z"}]}`)
+		case "/apis/metrics.k8s.io/v1beta1/namespaces/db/pods/pg-0":
+			fmt.Fprint(w, `{"timestamp":"2026-11-17T00:01:00Z","containers":[{"name":"postgres","usage":{"cpu":"20m","memory":"128Mi"}}]}`)
+		case "/apis/metrics.k8s.io/v1beta1/nodes/worker-1":
+			fmt.Fprint(w, `{"timestamp":"2026-11-17T00:01:00Z","usage":{"cpu":"150m","memory":"512Mi"}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -78,7 +82,12 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	if kubeObject(kubeList(value["pvcs"])[0])["volume"] == nil {
 		t.Fatal("bound PersistentVolume was not linked to its PVC")
 	}
-	if len(paths) != 5 {
+	resources := kubeObject(value["resourceMetrics"])
+	if resources["source"] != "metrics.k8s.io" || len(kubeList(resources["containers"])) != 1 ||
+		kubeObject(resources["node"])["memory"] != "512Mi" {
+		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
+	}
+	if len(paths) != 7 {
 		t.Fatalf("unexpected Kubernetes API calls: %v", paths)
 	}
 }
@@ -92,6 +101,29 @@ func TestKubernetesRejectsDynamicCredentialsAndInvalidScope(t *testing.T) {
 	value = Kubernetes(context.Background(), KubernetesTarget{Cluster: "test-context", Namespace: "../other", Pod: "pg-0"})
 	if value["status"] != "error" {
 		t.Fatalf("invalid namespace accepted: %+v", value)
+	}
+}
+
+func TestKubernetesMetricsPermissionGapDoesNotHidePodStatus(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/namespaces/db/pods/pg-0" {
+			fmt.Fprint(w, `{"metadata":{"name":"pg-0","uid":"pod-uid"},"spec":{"nodeName":"worker-1"},"status":{"phase":"Running","containerStatuses":[]}}`)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/apis/metrics.k8s.io/") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	value := Kubernetes(context.Background(), KubernetesTarget{Cluster: "test-context", Namespace: "db", Pod: "pg-0"})
+	if value["status"] != "ok" || kubeObject(value["pod"])["name"] != "pg-0" ||
+		value["resourceMetrics"] != nil || !strings.Contains(fmt.Sprint(value["resourceMetricsError"]), "403") ||
+		!strings.Contains(fmt.Sprint(value["nodeMetricsError"]), "403") {
+		t.Fatalf("metrics permission gap hid Pod health or fabricated CPU/memory: %+v", value)
 	}
 }
 
