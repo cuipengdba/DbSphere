@@ -1,6 +1,6 @@
-# V0.4 巡检开发记录
+# V0.4 巡检与可恢复性
 
-V0.4 开发代码提供 PostgreSQL、Linux 和 Kubernetes 三个版本化巡检模板。管理员在浏览器选择资产和模板，可手动重新采样并巡检，或启用 15–10080 分钟的定时计划。模板只允许修改已知检查项的数值阈值；每次修改递增模板版本，历史运行保留执行时版本和样本 ID。
+V0.4 提供 PostgreSQL、Linux、Kubernetes 和备份四个版本化巡检模板。管理员在浏览器选择资产和模板，可手动重新采样并巡检，或启用 15–10080 分钟的定时计划。模板只允许修改已知检查项的数值阈值；每次修改递增模板版本，历史运行保留执行时版本和样本 ID。
 
 结果区分“风险”“通过”“未知”。采集失败、权限不足或指标不可用时显示未知及原因；不能把缺失数据判断为健康。历史记录保存结果及相对上一次巡检的状态变化；失败运行保留可重试记录。当前定时任务每分钟检查到期计划，单次运行重新采集资产。多副本并发部署尚未作为 V0.4 支持配置。
 
@@ -20,4 +20,4 @@ PostgreSQL 模板涵盖不可用、监控角色、PG14 EOL、连接、锁、长�
 
 V0.4 的 PostgreSQL 采集新增 `pg_database.datfrozenxid` 年龄、`autovacuum_freeze_max_age`、`pg_replication_slots` 复制槽明细及选定的非敏感关键参数。五个 PostgreSQL 大版本的只读采集和真实锁等待测试通过。[PostgreSQL 冻结机制](https://www.postgresql.org/docs/18/routine-vacuuming.html)及[复制槽视图字段](https://www.postgresql.org/docs/18/view-pg-replication-slots.html)用于字段与阈值设计。
 
-PG14–18 的只读监控 SQL 与 PG14 EOL 巡检已验证；真实 PG18 复制槽保留 WAL 演练、K8S/PVC 和备份失败信号测试已覆盖。真实 pgBackRest 服务及生产备份计划、生产规模恢复时间和多副本巡检仍需后续验收。本文件在 V0.4 发布前记录开发状态。
+PG14–18 的只读监控 SQL 与 PG14 EOL 巡检已验证；真实 PG18 复制槽保留 WAL 演练、K8S/PVC 和备份失败信号测试已覆盖。真实 pgBackRest 服务及生产备份计划、生产规模恢复时间和多副本巡检仍需后续验收。Linux 发布验收见[六个 CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44047383649)。

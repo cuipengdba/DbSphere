@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0) 和 [V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗和可选通知。后续版本仅在满足各自验收条件后发布。
+已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0) 和 [V0.4.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗、可选通知、版本化巡检及监控存储备份恢复演练。后续版本仅在满足各自验收条件后发布。
 
 ## 核心原则
 
@@ -26,15 +26,16 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [V0.1.0 发行说明](docs/RELEASE_NOTES_V0.1.md)
 - [V0.2.0 发行说明](docs/RELEASE_NOTES_V0.2.md)
 - [V0.3.0 发行说明](docs/RELEASE_NOTES_V0.3.md)
+- [V0.4.0 发行说明](docs/RELEASE_NOTES_V0.4.md)
 - [V0.2 一键部署与 PG18 存储](docs/DEPLOYMENT_V0.2.md)
 - [V0.3 告警通知配置](docs/NOTIFICATIONS_V0.3.md)
 - [V0.3 PG18 分区与保留策略](docs/STORAGE_V0.3.md)
-- [V0.4 巡检开发记录](docs/INSPECTIONS_V0.4.md)
+- [V0.4 巡检与可恢复性](docs/INSPECTIONS_V0.4.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 当前可用范围
 
-已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。V0.3 加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗、持久化 Webhook/邮件通知和 PG18 月度采样/事件分区。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
+已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。V0.3 加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗、持久化 Webhook/邮件通知和 PG18 月度采样/事件分区。V0.4 加入 PostgreSQL/Linux/K8S/备份巡检、容量粗估、Markdown/HTML 报告和 PG18 存储恢复演练。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
 
 ### 本机开发启动
 
