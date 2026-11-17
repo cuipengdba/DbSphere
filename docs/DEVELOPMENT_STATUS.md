@@ -24,6 +24,8 @@ V0.6 后续开发将 SQL 指纹、慢日志、计划、锁链、等待、WAL/复
 
 本机 kind 的临时 Pending Pod 已由只读采集器读取 `PodScheduled=False` 与真实 `FailedScheduling` 事件，并与注入的 PG 连接失败归入同一事件 ID；演练 Pod 已删除。该混合演练不替代真实业务 PG 调度故障与恢复测试。
 
+PG14–18 的真实锁等待 → 只读锁链采集 → 同一事件 ID 的候选和 PID 证据图已通过 [14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44064849447)。十类注入式跨层故障矩阵通过本地测试；真实故障恢复矩阵仍是 V0.6 发布前缺口。
+
 ## V0.5 已发布能力
 
 PG14–18 真实容器的 pg_stat_statements 聚合采集已通过；Top SQL 只保留指纹与计数，显示采样增量、退化门槛、Linux/K8S 同期状态及已有事件入口。管理员可导入 PostgreSQL CSV/JSON 慢日志和已有 EXPLAIN (FORMAT JSON) 计划，原始 SQL、参数、过滤表达式和对象名不入库。SQLite → PG18 演练已覆盖巡检、慢日志和计划记录，真实 PG18 查询延迟演练产生退化提示。真实 PG18 浏览器验收已覆盖 Top SQL、慢日志和计划导入；[发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44053161066) 11 个作业全部通过，含五版 SQL 采集与无扩展降级矩阵。V0.5.0 已发布。详见 [SQL 性能开发记录](SQL_PERFORMANCE_V0.5.md)。

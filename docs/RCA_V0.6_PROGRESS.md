@@ -24,4 +24,6 @@ DBSPHERE_KUBECONFIG=<readonly-kubeconfig> node scripts/k8s-scheduling-rca-smoke.
 kubectl --kubeconfig <kind-admin-kubeconfig> -n dbsphere-smoke delete pod dbsphere-rca-pending
 ```
 
-真实 PostgreSQL 锁演练也已接入 `scripts/pg-compat.mjs`：一个会话持有 advisory lock，另一个会话等待；只读监控账号读取真实 `pg_blocking_pids`，即时规则创建一个事件 ID，事件图连到等待 PID、阻塞 PID 与原始采样。PG14 本机演练通过；CI 将对 PG14–18 五个大版本运行同样步骤。
+真实 PostgreSQL 锁演练也已接入 `scripts/pg-compat.mjs`：一个会话持有 advisory lock，另一个会话等待；只读监控账号读取真实 `pg_blocking_pids`，即时规则创建一个事件 ID，事件图连到等待 PID、阻塞 PID 与原始采样。PG14 本机演练通过，CI 已对 PG14–18 五个大版本运行同样步骤。
+
+[五版 PG 锁链 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44064849447)已全部通过，且离线安装、PG18 存储和其余作业共 14 项均为绿色。另有十类**注入式**故障矩阵测试，逐资产检查连接压力、锁、复制延迟、归档失败、autovacuum、Linux 磁盘、K8S OOM/PVC/Node/调度候选各自关联一个事件 ID。注入式矩阵用于规则回归；正式 06-06 仍需真实故障的恢复过程与影响面演练。
