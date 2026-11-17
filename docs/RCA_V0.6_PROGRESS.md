@@ -23,3 +23,5 @@ kubectl --kubeconfig <kind-admin-kubeconfig> apply -f test/fixtures/k8s-rca-pend
 DBSPHERE_KUBECONFIG=<readonly-kubeconfig> node scripts/k8s-scheduling-rca-smoke.mjs
 kubectl --kubeconfig <kind-admin-kubeconfig> -n dbsphere-smoke delete pod dbsphere-rca-pending
 ```
+
+真实 PostgreSQL 锁演练也已接入 `scripts/pg-compat.mjs`：一个会话持有 advisory lock，另一个会话等待；只读监控账号读取真实 `pg_blocking_pids`，即时规则创建一个事件 ID，事件图连到等待 PID、阻塞 PID 与原始采样。PG14 本机演练通过；CI 将对 PG14–18 五个大版本运行同样步骤。

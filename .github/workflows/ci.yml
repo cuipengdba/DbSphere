@@ -109,6 +109,11 @@ jobs:
           DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
           DBSPHERE_SQL_EXPECTED: not_configured
         run: node scripts/pg-sql-performance-smoke.mjs
+      - name: Verify diagnostics and one-event real lock RCA
+        env:
+          DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
+          DBSPHERE_TEST_TMP_DIR: ${{ runner.temp }}
+        run: node scripts/pg-compat.mjs
       - name: Enable pg_stat_statements
         run: |
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-sql-pg \
