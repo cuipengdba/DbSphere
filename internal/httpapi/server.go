@@ -44,6 +44,7 @@ var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
+var inspectionTemplatePath = regexp.MustCompile(`^/api/inspection-templates/([a-z][a-z0-9_]{1,63})$`)
 var silencePath = regexp.MustCompile(`^/api/silences/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var notificationRetryPath = regexp.MustCompile(`^/api/notifications/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/retry$`)
 
@@ -63,6 +64,10 @@ type AssetSectionReader interface {
 }
 type AlertRuleStore interface {
 	UpdateAlertRule(context.Context, string, storepkg.AlertRulePatch) (any, error)
+}
+type InspectionConfigStore interface {
+	UpdateInspectionTemplate(context.Context, string, storepkg.InspectionTemplatePatch) (any, error)
+	UpsertInspectionSchedule(context.Context, storepkg.InspectionScheduleInput) (any, error)
 }
 type SilenceStore interface {
 	CreateSilence(context.Context, storepkg.SilenceInput) (json.RawMessage, error)
@@ -256,6 +261,30 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.Method == http.MethodPatch {
+			if match := inspectionTemplatePath.FindStringSubmatch(r.URL.Path); match != nil {
+				configDB, ok := store.(InspectionConfigStore)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Inspection configuration unavailable"})
+					return
+				}
+				var patch storepkg.InspectionTemplatePatch
+				if readJSON(w, r, &patch) != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid inspection thresholds"})
+					return
+				}
+				value, err := configDB.UpdateInspectionTemplate(r.Context(), match[1], patch)
+				switch {
+				case errors.Is(err, storepkg.ErrInspectionTemplateNotFound):
+					respond(w, http.StatusNotFound, map[string]string{"error": "Inspection template not found"})
+				case errors.Is(err, storepkg.ErrInvalidInspection):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid inspection thresholds"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Inspection template storage unavailable"})
+				default:
+					respond(w, http.StatusOK, value)
+				}
+				return
+			}
 			if match := alertRulePath.FindStringSubmatch(r.URL.Path); match != nil {
 				rulesDB, ok := store.(AlertRuleStore)
 				if !ok {
@@ -282,6 +311,32 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				return
 			}
+		}
+		if r.Method == http.MethodPut && r.URL.Path == "/api/inspection-schedules" {
+			configDB, ok := store.(InspectionConfigStore)
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Inspection scheduling unavailable"})
+				return
+			}
+			var input storepkg.InspectionScheduleInput
+			if readJSON(w, r, &input) != nil ||
+				!assetPath.MatchString("/api/assets/"+input.AssetID) ||
+				!inspectionTemplatePath.MatchString("/api/inspection-templates/"+input.TemplateID) {
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid inspection schedule"})
+				return
+			}
+			value, err := configDB.UpsertInspectionSchedule(r.Context(), input)
+			switch {
+			case errors.Is(err, storepkg.ErrInspectionScheduleReference):
+				respond(w, http.StatusNotFound, map[string]string{"error": "Inspection asset or template not found"})
+			case errors.Is(err, storepkg.ErrInvalidInspection):
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid inspection schedule"})
+			case err != nil:
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Inspection schedule storage unavailable"})
+			default:
+				respond(w, http.StatusOK, value)
+			}
+			return
 		}
 		if silencesDB, ok := store.(SilenceStore); ok {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/silences" {
