@@ -18,6 +18,8 @@ Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应�
 
 同一事件的根因候选新增人工确认/驳回，需填写依据并经过登录、CSRF 与候选归属校验；决定作为新证据写入事件时间线。SQLite API 测试与真实 PG18 存储重启后读取已通过。现阶段仍是有限规则候选与人工判断记录，不能宣称已经完成全链路根因分析。
 
+[最新 14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44059040861)全部通过。真实浏览器也已打开 PG18 存储中的已恢复事件，验证证据关系、Pod OOM 候选、缺失说明和人工确认理由在 B/S 页面显示。
+
 ## V0.5 已发布能力
 
 PG14–18 真实容器的 pg_stat_statements 聚合采集已通过；Top SQL 只保留指纹与计数，显示采样增量、退化门槛、Linux/K8S 同期状态及已有事件入口。管理员可导入 PostgreSQL CSV/JSON 慢日志和已有 EXPLAIN (FORMAT JSON) 计划，原始 SQL、参数、过滤表达式和对象名不入库。SQLite → PG18 演练已覆盖巡检、慢日志和计划记录，真实 PG18 查询延迟演练产生退化提示。真实 PG18 浏览器验收已覆盖 Top SQL、慢日志和计划导入；[发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44053161066) 11 个作业全部通过，含五版 SQL 采集与无扩展降级矩阵。V0.5.0 已发布。详见 [SQL 性能开发记录](SQL_PERFORMANCE_V0.5.md)。
