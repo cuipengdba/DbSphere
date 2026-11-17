@@ -46,6 +46,8 @@ Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力和�
 
 Go 告警静默/维护窗已接入创建与撤销 API，窗口最长 30 天，按资产和规则限定；PG18 实库验证锁等待告警的抑制和解除抑制证据均写入同一事件 ID。Go 通知工作器已接入 PG18 持久化队列、Webhook/SMTP、严重度路由、失败退避和 B/S 重试；PG18 实库验证最多五次失败后的手动重试仍使用原投递 ID，本地 TLS Webhook 签名与环回 SMTP 已通过模拟收件端。未确认严重告警超过 15 分钟仅在同一事件 ID 升级一次；PG18 实库已验证未到期、静默和解除静默的边界。生产通知通道仍待验收。
 
+Go RCA 在 PG 连接失败的样本上继续读取 K8S/Linux/PgBouncer 的有效告警证据；新增 Pod 未就绪/OOM/调度、Node/PVC 压力、Linux 内存/磁盘和连接池等待候选。候选仍标为假设，附原始样本、告警证据、时间顺序和未验证条件。PG18 实库验证 PG 连接失败 + K8S OOM 同一事件 ID 下同时保留关联候选和 K8S 告警候选；其余候选经合成证据测试。复制/WAL、SQL 性能根因和真实 K8S 故障矩阵仍待开发验收。
+
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
 
 PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。

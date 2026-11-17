@@ -379,6 +379,7 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(detail)
 	if !strings.Contains(string(encoded), "pod_oom_correlated") ||
+		!strings.Contains(string(encoded), "k8s_oom_killed") ||
 		!strings.Contains(string(encoded), "pod:pod-uid") ||
 		!strings.Contains(string(encoded), "routes_to") ||
 		!strings.Contains(string(encoded), "supported_by") {

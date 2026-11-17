@@ -199,10 +199,13 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 		sampleID := stringValue(payload["sampleId"])
 		sample, ok := samples[sampleID]
-		if !ok || (sample.Status != "ok" && sample.Metrics["version_num"] == nil) {
+		if !ok {
 			continue
 		}
 		metric := stringValue(payload["metric"])
+		if strings.HasPrefix(metric, "pg.") && sample.Status != "ok" && sample.Metrics["version_num"] == nil {
+			continue
+		}
 		condition := map[string]any{"metric": metric, "observed": payload["value"],
 			"operator": payload["operator"], "threshold": payload["threshold"],
 			"at": item.ObservedAt, "evidenceId": item.ID}
@@ -224,6 +227,118 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					[]string{"阻塞会话执行 SQL 与业务请求未关联"},
 					"锁链解释等待关系，尚不能证明业务慢请求的唯一根因。",
 					map[string]any{"pairs": chain["data"]}, item.ObservedAt, condition)
+			}
+		case "linux.memory_used_percent":
+			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {
+				addCandidate("linux_memory_pressure", "Linux 主机内存使用率高", "low", supports,
+					[]string{"尚未证明 PostgreSQL 进程是内存压力来源"},
+					"主机内存压力与事件同期出现，不能单独解释数据库故障。",
+					map[string]any{"usedPercent": payload["value"]}, item.ObservedAt, condition)
+			}
+		case "linux.disk_used_percent":
+			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {
+				addCandidate("linux_disk_pressure", "Linux 文件系统空间压力", "medium", supports,
+					[]string{"PG 数据/WAL 目录与该挂载点映射未验证"},
+					"空间压力与事件同期出现，尚未证明 PostgreSQL 写入已经失败。",
+					map[string]any{"usedPercent": payload["value"],
+						"mountpoint": object(payload["detail"])["mountpoint"]}, item.ObservedAt, condition)
+			}
+		case "pgbouncer.waiting_clients":
+			if stringValue(object(sample.Metrics["pgbouncer"])["status"]) == "ok" && number(payload["value"]) > 0 {
+				addCandidate("pooler_queue", "PgBouncer 客户端连接等待", "low", supports,
+					[]string{"连接池等待与 PostgreSQL 锁/连接限制的因果关系未确认"},
+					"连接池排队是延迟现象，需要与数据库会话和应用请求联合分析。",
+					map[string]any{"waitingClients": payload["value"]}, item.ObservedAt, condition)
+			}
+		case "k8s.pvc_used_percent":
+			if stringValue(object(sample.Metrics["k8s"])["status"]) == "ok" && number(payload["value"]) >= 85 {
+				addCandidate("pvc_pressure", "Kubernetes PVC 容量压力", "medium", supports,
+					[]string{"该 PVC 与 PG 数据/WAL 目录映射未验证"},
+					"PVC 用量高不等于 PostgreSQL 已发生磁盘写入故障。",
+					map[string]any{"usedPercent": payload["value"], "pvc": object(payload["detail"])["pvc"]},
+					item.ObservedAt, condition)
+			}
+		case "k8s.node_pressure":
+			k8s := object(sample.Metrics["k8s"])
+			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) != 1 {
+				continue
+			}
+			conditions := []string{}
+			for _, raw := range list(object(k8s["node"])["conditions"]) {
+				item := object(raw)
+				name := stringValue(item["type"])
+				if stringValue(item["status"]) == "True" &&
+					(name == "MemoryPressure" || name == "DiskPressure" || name == "PIDPressure") {
+					conditions = append(conditions, name)
+				}
+			}
+			if len(conditions) > 0 {
+				addCandidate("k8s_node_pressure", "承载 PostgreSQL Pod 的 Node 发生资源压力", "low", supports,
+					[]string{"Node 压力与 PG 性能退化的先后关系未证实"},
+					"确认同 Node 压力，不能直接归因数据库故障。",
+					map[string]any{"node": object(k8s["node"])["name"], "conditions": conditions},
+					item.ObservedAt, condition)
+			}
+		case "k8s.pod_not_ready", "k8s.pod_unscheduled":
+			k8s := object(sample.Metrics["k8s"])
+			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) != 1 {
+				continue
+			}
+			wanted := "Ready"
+			code, title := "k8s_pod_not_ready", "PostgreSQL Pod 未就绪"
+			if metric == "k8s.pod_unscheduled" {
+				wanted, code, title = "PodScheduled", "k8s_scheduling", "PostgreSQL Pod 未能调度到 Node"
+			}
+			for _, raw := range list(object(k8s["pod"])["conditions"]) {
+				state := object(raw)
+				if stringValue(state["type"]) == wanted && stringValue(state["status"]) == "False" {
+					addCandidate(code, title, "low", supports,
+						[]string{"探针、容器状态与数据库连接故障的先后顺序需核对"},
+						"Pod 条件是异常现象，需要结合事件和数据库连接证据判断原因。",
+						map[string]any{"pod": object(k8s["pod"])["name"], "reason": state["reason"]},
+						item.ObservedAt, condition)
+					break
+				}
+			}
+		case "k8s.oom_recent":
+			k8s := object(sample.Metrics["k8s"])
+			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) != 1 {
+				continue
+			}
+			for _, raw := range list(k8s["containers"]) {
+				container := object(raw)
+				at, err := time.Parse(time.RFC3339Nano, stringValue(container["lastTerminatedAt"]))
+				if err == nil && stringValue(container["terminatedReason"]) == "OOMKilled" &&
+					!at.After(item.ObservedAt) && item.ObservedAt.Sub(at) <= 10*time.Minute {
+					addCandidate("k8s_oom_killed", "PostgreSQL Pod 容器近期 OOMKilled", "medium", supports,
+						[]string{"容器内存限制与数据库内存负载未核对"},
+						"OOM 发生在事件时间窗内，仍需排除同时发生的其他故障。",
+						map[string]any{"pod": object(k8s["pod"])["name"], "container": container["name"], "at": at},
+						at, condition)
+					break
+				}
+			}
+		case "k8s.scheduling_failure_recent":
+			k8s := object(sample.Metrics["k8s"])
+			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) < 1 {
+				continue
+			}
+			reasons := []string{}
+			for _, raw := range list(k8s["events"]) {
+				entry := object(raw)
+				reason := stringValue(entry["reason"])
+				at, err := time.Parse(time.RFC3339Nano, stringValue(entry["at"]))
+				if err == nil && !at.After(item.ObservedAt) && item.ObservedAt.Sub(at) <= 15*time.Minute &&
+					(reason == "FailedScheduling" || reason == "FailedMount" || reason == "FailedAttachVolume") {
+					reasons = append(reasons, reason)
+				}
+			}
+			if len(reasons) > 0 {
+				addCandidate("k8s_scheduling_event", "同 Pod 近期调度或卷挂载失败", "low", supports,
+					[]string{"调度/挂载异常与 PG 服务退化需进一步关联"},
+					"K8S Event 证明调度或挂载异常，不能单独证明数据库连接故障。",
+					map[string]any{"pod": object(k8s["pod"])["name"], "reasons": reasons},
+					item.ObservedAt, condition)
 			}
 		}
 	}
