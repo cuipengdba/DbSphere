@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -116,5 +117,49 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 		if record.Code != http.StatusOK || !strings.Contains(record.Body.String(), `":`) {
 			t.Fatalf("dashboard read %s failed: %d %s", path, record.Code, record.Body.String())
 		}
+	}
+	var credentials struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &credentials); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"name":"Go HTTP test","host":"127.0.0.1","port":5432,"database":"postgres",
+		"username":"dbsphere_monitor","password":"test-secret","sslMode":"disable","runtime":"linux"}`
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/assets", strings.NewReader(input))
+	createRequest.AddCookie(login.Result().Cookies()[0])
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, createRequest)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("asset create failed: %d %s", created.Code, created.Body.String())
+	}
+	var result struct {
+		Asset struct {
+			ID string `json:"id"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &result); err != nil || result.Asset.ID == "" {
+		t.Fatal("created asset ID missing", err)
+	}
+	defer pg.DeleteAsset(context.Background(), result.Asset.ID)
+	if strings.Contains(created.Body.String(), "test-secret") || strings.Contains(created.Body.String(), "password_enc") {
+		t.Fatal("asset response leaked credential")
+	}
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/assets/"+result.Asset.ID, nil)
+	getRequest.AddCookie(login.Result().Cookies()[0])
+	got := httptest.NewRecorder()
+	handler.ServeHTTP(got, getRequest)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "Go HTTP test") {
+		t.Fatal("asset read failed")
+	}
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/assets/"+result.Asset.ID, nil)
+	deleteRequest.AddCookie(login.Result().Cookies()[0])
+	deleteRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	deleted := httptest.NewRecorder()
+	handler.ServeHTTP(deleted, deleteRequest)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("asset delete failed: %d", deleted.Code)
 	}
 }

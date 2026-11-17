@@ -56,6 +56,45 @@ jobs:
           curl --fail --silent -b "$RUNNER_TEMP/dbsphere-go-cookies" \
             http://127.0.0.1:18085/api/session | grep '"authenticated":true'
 
+  go-pg-compat-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['14', '15', '16', '17', '18']
+    services:
+      store:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+      target:
+        image: postgres:${{ matrix.pg }}-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-target-test
+        ports:
+          - 15435:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify Go read-only collection and one event ID on PostgreSQL ${{ matrix.pg }}
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_PG_TARGET_PORT: '15435'
+          DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-target-test
+          DBSPHERE_TEST_PG_TARGET_MAJOR: ${{ matrix.pg }}
+        run: go test ./internal/collector ./internal/store -count=1 -v
+
   offline-upgrade-rollback:
     runs-on: ubuntu-latest
     steps:

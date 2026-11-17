@@ -9,17 +9,33 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cuipengdba/dbsphere"
+	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/security"
+	storepkg "github.com/cuipengdba/dbsphere/internal/store"
 )
 
 type HealthStore interface{ Health(context.Context) error }
 type CollectionReader interface {
 	ReadCollection(context.Context, string) (any, bool, error)
+}
+type AssetStore interface {
+	AssetByID(context.Context, string) (json.RawMessage, error)
+	CreateAsset(context.Context, assets.Input, []byte) (json.RawMessage, error)
+	UpdateAsset(context.Context, string, assets.Input, []byte) (json.RawMessage, error)
+	DeleteAsset(context.Context, string) (bool, error)
+}
+
+var assetPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var assetCheckPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/check$`)
+
+type AssetChecker interface {
+	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
 }
 
 type AuthConfig struct {
@@ -145,6 +161,87 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
+		}
+		if assetsDB, ok := store.(AssetStore); ok {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+				var input assets.Input
+				if readJSON(w, r, &input) != nil || input.Validate() != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset fields"})
+					return
+				}
+				asset, err := assetsDB.CreateAsset(r.Context(), input, credentials.MasterKey)
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
+					return
+				}
+				respond(w, http.StatusCreated, map[string]any{"asset": asset})
+				return
+			}
+			if match := assetPath.FindStringSubmatch(r.URL.Path); match != nil {
+				id := match[1]
+				switch r.Method {
+				case http.MethodGet:
+					asset, err := assetsDB.AssetByID(r.Context(), id)
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
+						return
+					}
+					if asset == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+						return
+					}
+					respond(w, http.StatusOK, map[string]any{"asset": asset})
+					return
+				case http.MethodPatch:
+					var input assets.Input
+					if readJSON(w, r, &input) != nil || input.Validate() != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset fields"})
+						return
+					}
+					asset, err := assetsDB.UpdateAsset(r.Context(), id, input, credentials.MasterKey)
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
+						return
+					}
+					if asset == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+						return
+					}
+					respond(w, http.StatusOK, map[string]any{"asset": asset})
+					return
+				case http.MethodDelete:
+					deleted, err := assetsDB.DeleteAsset(r.Context(), id)
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
+						return
+					}
+					if !deleted {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+						return
+					}
+					respond(w, http.StatusOK, map[string]bool{"ok": true})
+					return
+				}
+			}
+		}
+		if checker, ok := store.(AssetChecker); ok && r.Method == http.MethodPost {
+			if match := assetCheckPath.FindStringSubmatch(r.URL.Path); match != nil {
+				result, err := checker.CheckAsset(r.Context(), match[1], credentials.MasterKey)
+				if err == storepkg.ErrAssetNotFound {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+					return
+				}
+				if err == storepkg.ErrCollectionUnavailable {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Cross-layer Go collection is still in development"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset collection unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, map[string]any{"result": result})
+				return
+			}
 		}
 		if r.Method == http.MethodGet {
 			if reader, ok := store.(CollectionReader); ok {
