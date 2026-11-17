@@ -21,6 +21,8 @@
 
 ## 页面信息架构
 
+Go 只读 PostgreSQL 诊断现覆盖 14 个分区，PG14 与 PG18 实库及真实 advisory lock 阻塞关系通过本机测试；PG15–17 交由五版 CI 确认。采集指标写入 PG18 原始样本，事件图可显示等待 PID 与阻塞 PID；独立诊断失败显示不可用原因，仍需规则告警和完整故障演练。
+
 Go 自动采集调度已实现：纯 Linux PostgreSQL 资产按配置间隔采集并在 PG18 写入样本/事件；默认 Compose 启用，连接外部 PG18 的 Go 开发配置默认关闭，需显式启用，避免与历史 Node 采集并行。K8S、Linux exporter 和 PgBouncer 资产在对应适配器迁移前不进入 Go 调度。本机真实 PG18 演练验证自动连接失败生成同一事件入口，仍须五版与恢复矩阵 CI。
 
 Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 升级回滚和功能对等仍须完成。

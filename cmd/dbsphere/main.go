@@ -114,7 +114,7 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
 			for _, id := range ids {
-				checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				checkCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 				result, err := pg.CheckAsset(checkCtx, id, key)
 				cancel()
 				if err != nil {

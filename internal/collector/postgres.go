@@ -88,5 +88,8 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 			metrics["replication_observed"] = true
 		}
 	}
+	diagCtx, stopDiagnostics := context.WithTimeout(ctx, 15*time.Second)
+	defer stopDiagnostics()
+	metrics["diagnostics"] = collectDiagnostics(diagCtx, conn, major, recovery)
 	return metrics, nil
 }
