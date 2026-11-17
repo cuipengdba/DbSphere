@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/collector"
@@ -98,7 +99,43 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("decrypt monitoring credential: %w", err)
 	}
-	metrics, collectErr := collector.PostgreSQL(ctx, target, password)
+	poolerURL := ""
+	if poolerEncrypted != nil {
+		poolerURL, err = security.Decrypt(key, *poolerEncrypted)
+		if err != nil {
+			return CheckResult{}, fmt.Errorf("decrypt PgBouncer credential: %w", err)
+		}
+	}
+	var metrics, kube, linux, pooler map[string]any
+	var collectErr, linuxErr, poolerErr error
+	var groupWait sync.WaitGroup
+	groupWait.Add(1)
+	go func() {
+		defer groupWait.Done()
+		metrics, collectErr = collector.PostgreSQL(ctx, target, password)
+	}()
+	if runtime == "k8s" {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			kube = collector.Kubernetes(ctx, collector.KubernetesTarget{Cluster: dereference(k8sCluster),
+				Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod)})
+		}()
+	} else if exporterPort != nil && linuxHost != nil {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			linux, linuxErr = collector.Linux(ctx, *linuxHost, *exporterPort)
+		}()
+	}
+	if poolerURL != "" {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			pooler, poolerErr = collector.PgBouncer(ctx, poolerURL, target.Database)
+		}()
+	}
+	groupWait.Wait()
 	group, reason := "", ""
 	if collectErr != nil {
 		group, reason = collectionError(collectErr)
@@ -107,14 +144,11 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		metrics = map[string]any{}
 	}
 	if runtime == "k8s" {
-		kube := collector.Kubernetes(ctx, collector.KubernetesTarget{Cluster: dereference(k8sCluster),
-			Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod)})
 		metrics["k8s"] = kube
 		if kube["status"] != "ok" && collectErr == nil {
 			group, reason = "telemetry", "Kubernetes resource collection is unavailable"
 		}
 	} else if exporterPort != nil && linuxHost != nil {
-		linux, linuxErr := collector.Linux(ctx, *linuxHost, *exporterPort)
 		if linuxErr != nil {
 			metrics["linux"] = map[string]any{"status": "error", "reason": linuxErr.Error()}
 			if collectErr == nil {
@@ -127,12 +161,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		metrics["linux"] = map[string]any{"status": "not_configured",
 			"reason": "Linux node_exporter host and port are not configured"}
 	}
-	if poolerEncrypted != nil {
-		poolerURL, err := security.Decrypt(key, *poolerEncrypted)
-		if err != nil {
-			return CheckResult{}, fmt.Errorf("decrypt PgBouncer credential: %w", err)
-		}
-		pooler, poolerErr := collector.PgBouncer(ctx, poolerURL, target.Database)
+	if poolerURL != "" {
 		if poolerErr != nil {
 			metrics["pgbouncer"] = map[string]any{"status": "error",
 				"reason": "PgBouncer admin connection or query failed"}

@@ -231,6 +231,8 @@ func kubeShort(value any) string {
 
 // Kubernetes reads only the mapped Pod and related read-only resources.
 func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
 	if !kubeName.MatchString(target.Namespace) || len(target.Namespace) > 63 ||
 		(target.Pod != "" && (!kubeName.MatchString(target.Pod) || len(target.Pod) > 253)) {
 		return map[string]any{"status": "error", "reason": "Invalid Kubernetes namespace or Pod mapping"}

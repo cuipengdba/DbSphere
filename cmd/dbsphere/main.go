@@ -73,7 +73,7 @@ func run(log *slog.Logger) error {
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			SecureCookie: os.Getenv("DBSPHERE_COOKIE_SECURE") == "true"}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -114,7 +114,7 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
 			for _, id := range ids {
-				checkCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+				checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 				result, err := pg.CheckAsset(checkCtx, id, key)
 				cancel()
 				if err != nil {
