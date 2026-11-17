@@ -71,6 +71,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
+	if err := seedGoInspections(ctx, tx); err != nil {
+		return fmt.Errorf("seed Go inspection templates: %w", err)
+	}
 	for _, table := range []string{"samples", "events"} {
 		now := time.Now().UTC()
 		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)

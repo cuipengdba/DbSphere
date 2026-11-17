@@ -1,0 +1,285 @@
+[
+  {
+    "id": "pg_daily",
+    "title": "PostgreSQL 每日基础巡检",
+    "scope": "all",
+    "version": 1,
+    "catalogVersion": 3,
+    "checks": [
+      {
+        "id": "unavailable",
+        "title": "数据库无法连接",
+        "metric": "pg.unavailable",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "monitor_permission",
+        "title": "监控账号缺少 pg_monitor",
+        "metric": "pg.monitor_role_missing",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "pg14_eol",
+        "title": "PostgreSQL 14 已结束上游维护",
+        "metric": "pg.pg14_eol",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "connections",
+        "title": "连接使用率超过 85%",
+        "metric": "pg.connection_utilization",
+        "operator": ">=",
+        "threshold": 85,
+        "severity": "warning"
+      },
+      {
+        "id": "locks",
+        "title": "存在被锁阻塞的会话",
+        "metric": "pg.blocked_sessions",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "long_transactions",
+        "title": "存在长事务",
+        "metric": "pg.long_transactions",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "archive_failures",
+        "title": "WAL 归档失败计数增加",
+        "metric": "pg.archive_fail_delta",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "freeze_age",
+        "title": "事务冻结年龄达到阈值的 80%",
+        "metric": "pg.freeze_age_percent",
+        "operator": ">=",
+        "threshold": 80,
+        "severity": "critical"
+      },
+      {
+        "id": "inactive_slots",
+        "title": "存在未活跃复制槽",
+        "metric": "pg.inactive_slots",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "slot_retention",
+        "title": "复制槽保留 WAL 超过 10 GiB",
+        "metric": "pg.slot_retained_bytes",
+        "operator": ">=",
+        "threshold": 10737418240,
+        "severity": "warning"
+      },
+      {
+        "id": "lost_slots",
+        "title": "存在失效复制槽",
+        "metric": "pg.lost_slots",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "privileged_monitor",
+        "title": "监控账号具有高权限",
+        "metric": "pg.monitor_privileged",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "autovacuum_disabled",
+        "title": "autovacuum 已关闭",
+        "metric": "pg.autovacuum_disabled",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "replication_lag",
+        "title": "主库复制延迟超过 64 MiB",
+        "metric": "pg.replication_lag_bytes",
+        "operator": ">=",
+        "threshold": 67108864,
+        "severity": "warning"
+      },
+      {
+        "id": "wal_receiver",
+        "title": "备库 WAL 接收中断",
+        "metric": "pg.wal_receiver_down",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      }
+    ]
+  },
+  {
+    "id": "linux_daily",
+    "title": "Linux 主机每日巡检",
+    "scope": "linux",
+    "version": 1,
+    "catalogVersion": 2,
+    "checks": [
+      {
+        "id": "collector",
+        "title": "Linux 主机采集失败",
+        "metric": "collector.linux_failed",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "cpu",
+        "title": "CPU 使用率超过 90%",
+        "metric": "linux.cpu_used_percent",
+        "operator": ">=",
+        "threshold": 90,
+        "severity": "warning"
+      },
+      {
+        "id": "memory",
+        "title": "内存使用率超过 90%",
+        "metric": "linux.memory_used_percent",
+        "operator": ">=",
+        "threshold": 90,
+        "severity": "warning"
+      },
+      {
+        "id": "disk",
+        "title": "文件系统使用率超过 85%",
+        "metric": "linux.disk_used_percent",
+        "operator": ">=",
+        "threshold": 85,
+        "severity": "warning"
+      },
+      {
+        "id": "permissions",
+        "title": "node_exporter 读取权限异常",
+        "metric": "linux.permission_error",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      }
+    ]
+  },
+  {
+    "id": "k8s_daily",
+    "title": "Kubernetes 工作负载每日巡检",
+    "scope": "k8s",
+    "version": 1,
+    "catalogVersion": 2,
+    "checks": [
+      {
+        "id": "collector",
+        "title": "Kubernetes API 采集失败",
+        "metric": "collector.k8s_failed",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "pod",
+        "title": "Pod 未就绪",
+        "metric": "k8s.pod_not_ready",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "oom",
+        "title": "容器近期 OOMKilled",
+        "metric": "k8s.oom_recent",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "node",
+        "title": "Node 存在资源压力",
+        "metric": "k8s.node_pressure",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "pvc",
+        "title": "PVC 使用率超过 85%",
+        "metric": "k8s.pvc_used_percent",
+        "operator": ">=",
+        "threshold": 85,
+        "severity": "warning"
+      },
+      {
+        "id": "probe_events",
+        "title": "近期探针失败事件",
+        "metric": "k8s.probe_failure_recent",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "scheduling_events",
+        "title": "近期调度或挂载失败事件",
+        "metric": "k8s.scheduling_failure_recent",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      },
+      {
+        "id": "unbound_pvc",
+        "title": "存在未绑定 PVC",
+        "metric": "k8s.unbound_pvc",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "warning"
+      }
+    ]
+  },
+  {
+    "id": "backup_daily",
+    "title": "备份与恢复准备巡检",
+    "scope": "all",
+    "version": 1,
+    "checks": [
+      {
+        "id": "backup_age",
+        "title": "最近成功备份超过 24 小时",
+        "metric": "backup.age_hours",
+        "operator": ">=",
+        "threshold": 24,
+        "severity": "critical"
+      },
+      {
+        "id": "repository",
+        "title": "备份仓库状态异常",
+        "metric": "backup.repository_problem",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      },
+      {
+        "id": "last_attempt",
+        "title": "最近备份尝试失败",
+        "metric": "backup.last_attempt_failed",
+        "operator": ">=",
+        "threshold": 1,
+        "severity": "critical"
+      }
+    ]
+  }
+]
