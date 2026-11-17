@@ -15,7 +15,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: dbsphere-store-test
         options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
           --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v7
@@ -70,7 +70,7 @@ jobs:
         ports:
           - 15434:5432
         options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
           --health-timeout 3s --health-retries 20
       target:
         image: postgres:${{ matrix.pg }}-bookworm
@@ -79,7 +79,7 @@ jobs:
         ports:
           - 15435:5432
         options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
           --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v7
@@ -126,7 +126,7 @@ jobs:
           docker run -d --rm --name dbsphere-node-offline-store -p 15434:5432 \
             -e POSTGRES_PASSWORD=dbsphere-store-test postgres:18-bookworm
           for i in $(seq 1 60); do
-            if docker exec dbsphere-node-offline-store pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-node-offline-store pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           mkdir -p "$RUNNER_TEMP/dbsphere-node-extracted"
@@ -188,7 +188,7 @@ jobs:
             -e POSTGRES_PASSWORD=dbsphere-root-test postgres:${{ matrix.pg }}-bookworm \
             -c shared_preload_libraries=pg_stat_statements
           for i in $(seq 1 60); do
-            if docker exec dbsphere-sql-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-sql-pg pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-sql-pg \
@@ -245,7 +245,7 @@ jobs:
         ports:
           - 15434:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -316,7 +316,7 @@ jobs:
           docker run -d --rm --name dbsphere-wrong-store -p 15437:5432 \
             -e POSTGRES_PASSWORD=dbsphere-store-test postgres:17-bookworm
           for i in $(seq 1 60); do
-            if docker exec dbsphere-wrong-store pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-wrong-store pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           node scripts/reject-non18-store.mjs
@@ -341,7 +341,7 @@ jobs:
           docker run -d --rm --name dbsphere-compose-pg14 -p 15435:5432 \
             -e POSTGRES_PASSWORD=dbsphere-root-test postgres:14-bookworm
           for i in $(seq 1 60); do
-            if docker exec dbsphere-compose-pg14 pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-compose-pg14 pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-compose-pg14 \
@@ -421,7 +421,7 @@ jobs:
         ports:
           - 15434:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -442,7 +442,7 @@ jobs:
             --pid host -v /:/host:ro,rslave quay.io/prometheus/node-exporter:v1.12.1 \
             --path.rootfs=/host
           for i in $(seq 1 60); do
-            if docker exec dbsphere-linux-pgtest pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-linux-pgtest pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-linux-pgtest \
@@ -467,7 +467,7 @@ jobs:
         ports:
           - 15434:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -486,7 +486,7 @@ jobs:
           docker run -d --rm --name dbsphere-pg14-pooltest --network dbsphere-pooltest \
             -p 15435:5432 -e POSTGRES_PASSWORD=dbsphere-root-test postgres:14-bookworm
           for i in $(seq 1 60); do
-            if docker exec dbsphere-pg14-pooltest pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-pg14-pooltest pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-pg14-pooltest \

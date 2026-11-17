@@ -55,6 +55,12 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 			t.Fatalf("Go read API %s exposed secrets or invalid JSON: %v", path, err)
 		}
 	}
+	var historicalEventID string
+	if err := store.pool.QueryRow(context.Background(), "SELECT id::text FROM events ORDER BY started_at DESC LIMIT 1").Scan(&historicalEventID); err == nil {
+		if detail, err := store.EventByID(context.Background(), historicalEventID); err != nil || detail == nil {
+			t.Fatalf("existing PG18 event evidence is unreadable: %v", err)
+		}
+	}
 	key := []byte("01234567890123456789012345678901")
 	input := assets.Input{Name: "Go CRUD test", Host: "127.0.0.1", Port: 5432, Database: "postgres",
 		Username: "dbsphere_monitor", Password: "fixture-secret", SSLMode: "disable", Runtime: "linux"}
@@ -152,6 +158,20 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		FROM events WHERE asset_id=$1 AND status='open'`, asset.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("repeated failures did not share one event: %q %d %v", eventID, count, err)
 	}
+	detail, err := pg.EventByID(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(detail)
+	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) {
+		t.Fatal("same event ID did not expose its sample evidence graph", err)
+	}
+	if sample, err := pg.RawSample(context.Background(), asset.ID, first.SampleID); err != nil || sample == nil {
+		t.Fatal("raw sample evidence is unavailable", err)
+	}
+	if acknowledged, err := pg.AcknowledgeEvent(context.Background(), eventID); err != nil || acknowledged == nil {
+		t.Fatal("event acknowledgement failed", err)
+	}
 	input.Port = port
 	if _, err := pg.UpdateAsset(context.Background(), asset.ID, input, key); err != nil {
 		t.Fatal(err)
@@ -164,7 +184,7 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	if err := pg.pool.QueryRow(context.Background(), "SELECT status FROM events WHERE id=$1", eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("event was not resolved under the same ID: %s %v", status, err)
 	}
-	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count != 3 {
+	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("failure/recovery evidence did not share one ID: %d %v", count, err)
 	}
 	input.Runtime = "k8s"

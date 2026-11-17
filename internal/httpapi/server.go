@@ -33,9 +33,21 @@ type AssetStore interface {
 
 var assetPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var assetCheckPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/check$`)
+var rawSamplePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/samples/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
+var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 
 type AssetChecker interface {
 	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
+}
+type EventStore interface {
+	EventByID(context.Context, string) (any, error)
+	AcknowledgeEvent(context.Context, string) (any, error)
+	RawSample(context.Context, string, string) (any, error)
+}
+type AssetSectionReader interface {
+	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
 }
 
 type AuthConfig struct {
@@ -240,6 +252,77 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					return
 				}
 				respond(w, http.StatusOK, map[string]any{"result": result})
+				return
+			}
+		}
+		if eventsDB, ok := store.(EventStore); ok {
+			if r.Method == http.MethodGet {
+				if match := eventPath.FindStringSubmatch(r.URL.Path); match != nil {
+					value, err := eventsDB.EventByID(r.Context(), match[1])
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event data unavailable"})
+						return
+					}
+					if value == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+						return
+					}
+					respond(w, http.StatusOK, value)
+					return
+				}
+				if match := rawSamplePath.FindStringSubmatch(r.URL.Path); match != nil {
+					value, err := eventsDB.RawSample(r.Context(), match[1], match[2])
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Sample data unavailable"})
+						return
+					}
+					if value == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Sample not found"})
+						return
+					}
+					respond(w, http.StatusOK, value)
+					return
+				}
+			}
+			if r.Method == http.MethodPost {
+				if match := eventAckPath.FindStringSubmatch(r.URL.Path); match != nil {
+					value, err := eventsDB.AcknowledgeEvent(r.Context(), match[1])
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event update unavailable"})
+						return
+					}
+					if value == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+						return
+					}
+					respond(w, http.StatusOK, value)
+					return
+				}
+			}
+		}
+		if sections, ok := store.(AssetSectionReader); ok && r.Method == http.MethodGet {
+			if match := assetSectionPath.FindStringSubmatch(r.URL.Path); match != nil {
+				if assetsDB, ok := store.(AssetStore); ok {
+					asset, err := assetsDB.AssetByID(r.Context(), match[1])
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
+						return
+					}
+					if asset == nil {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+						return
+					}
+				}
+				value, err := sections.ReadAssetSection(r.Context(), match[1], match[2], r.URL.Query())
+				if err == storepkg.ErrInvalidRange {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid monitoring time range"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset detail unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, value)
 				return
 			}
 		}

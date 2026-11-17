@@ -6,9 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/store"
@@ -124,7 +126,7 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if err := json.Unmarshal(login.Body.Bytes(), &credentials); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"name":"Go HTTP test","host":"127.0.0.1","port":5432,"database":"postgres",
+	input := `{"name":"Go HTTP test","host":"127.0.0.1","port":65534,"database":"postgres",
 		"username":"dbsphere_monitor","password":"test-secret","sslMode":"disable","runtime":"linux"}`
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/assets", strings.NewReader(input))
 	createRequest.AddCookie(login.Result().Cookies()[0])
@@ -153,6 +155,70 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	handler.ServeHTTP(got, getRequest)
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "Go HTTP test") {
 		t.Fatal("asset read failed")
+	}
+	checkRequest := httptest.NewRequest(http.MethodPost, "/api/assets/"+result.Asset.ID+"/check", nil)
+	checkRequest.AddCookie(login.Result().Cookies()[0])
+	checkRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	checked := httptest.NewRecorder()
+	handler.ServeHTTP(checked, checkRequest)
+	if checked.Code != http.StatusOK || !strings.Contains(checked.Body.String(), `"status":"error"`) {
+		t.Fatalf("Go collection failure not recorded: %d %s", checked.Code, checked.Body.String())
+	}
+	var checkResult struct {
+		Result struct {
+			SampleID string `json:"sampleId"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(checked.Body.Bytes(), &checkResult); err != nil {
+		t.Fatal(err)
+	}
+	eventsRequest := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	eventsRequest.AddCookie(login.Result().Cookies()[0])
+	events := httptest.NewRecorder()
+	handler.ServeHTTP(events, eventsRequest)
+	var eventList struct {
+		Events []struct{ ID, AssetID string } `json:"events"`
+	}
+	if err := json.Unmarshal(events.Body.Bytes(), &eventList); err != nil {
+		t.Fatal(err)
+	}
+	eventID := ""
+	for _, event := range eventList.Events {
+		if event.AssetID == result.Asset.ID {
+			eventID = event.ID
+			break
+		}
+	}
+	if eventID == "" {
+		t.Fatal("collection failure event missing")
+	}
+	eventRequest := httptest.NewRequest(http.MethodGet, "/api/events/"+eventID, nil)
+	eventRequest.AddCookie(login.Result().Cookies()[0])
+	eventDetail := httptest.NewRecorder()
+	handler.ServeHTTP(eventDetail, eventRequest)
+	if eventDetail.Code != http.StatusOK || !strings.Contains(eventDetail.Body.String(), "observed_in") {
+		t.Fatalf("one-event evidence graph unavailable: %d %s", eventDetail.Code, eventDetail.Body.String())
+	}
+	sampleRequest := httptest.NewRequest(http.MethodGet, "/api/assets/"+result.Asset.ID+"/samples/"+checkResult.Result.SampleID, nil)
+	if !rawSamplePath.MatchString(sampleRequest.URL.Path) {
+		t.Fatalf("sample route does not match %q", sampleRequest.URL.Path)
+	}
+	sampleRequest.AddCookie(login.Result().Cookies()[0])
+	sample := httptest.NewRecorder()
+	handler.ServeHTTP(sample, sampleRequest)
+	if sample.Code != http.StatusOK || !strings.Contains(sample.Body.String(), checkResult.Result.SampleID) {
+		t.Fatalf("raw sample link failed: %d sample=%q body=%s", sample.Code, checkResult.Result.SampleID, sample.Body.String())
+	}
+	seriesQuery := "?from=" + neturl.QueryEscape(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano)) +
+		"&to=" + neturl.QueryEscape(time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
+	for _, section := range []string{"samples", "sql", "slow-logs", "sql-plans", "capacity", "series" + seriesQuery} {
+		request := httptest.NewRequest(http.MethodGet, "/api/assets/"+result.Asset.ID+"/"+section, nil)
+		request.AddCookie(login.Result().Cookies()[0])
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("asset section %s failed: %d %s", section, response.Code, response.Body.String())
+		}
 	}
 	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/assets/"+result.Asset.ID, nil)
 	deleteRequest.AddCookie(login.Result().Cookies()[0])
