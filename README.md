@@ -6,6 +6,8 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
+**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现；仓库中的 Go 代码处于迁移起步阶段，尚不能替代已发布的监控 API。六视图工作台的静态页面已开始重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
+
 已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0) 和 [V0.5.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗、可选通知、版本化巡检、监控存储备份恢复演练及 SQL 性能洞察。后续版本仅在满足各自验收条件后发布。
 
 ## 核心原则
@@ -34,6 +36,8 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [V0.4 巡检与可恢复性](docs/INSPECTIONS_V0.4.md)
 - [V0.5 SQL 性能洞察](docs/SQL_PERFORMANCE_V0.5.md)
 - [V0.6 Linux 一键离线部署开发记录](docs/OFFLINE_DEPLOYMENT.md)
+- [Go 后端与分层工作台迁移清单](docs/GO_UI_MIGRATION.md)
+- [V0.7 Trace 开发记录](docs/TRACE_V0.7_PROGRESS.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 当前可用范围

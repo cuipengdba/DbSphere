@@ -38,4 +38,9 @@ DbSphere 自身长期存储选择独立 PG18，产品交付选择最小权限的
 
 ## 设计归纳
 
+### 界面组织补充（2026-11-17）
+
+用户指定的 [Pigsty 中文站](https://doc.pigsty.cc/)以清晰标题层级和聚焦入口组织内容；其[监控仪表盘目录](https://pigsty.io/docs/pgsql/dashboard/)按总览、集群、实例、数据库/查询逐级下钻。[DBdoctor 官方首页](https://www.dbdoctor.cn/)把性能问题、锁、慢 SQL 和根因诊断放在同一处置路径。本地 DeepLens 使用说明明确左侧菜单的监控中心、资源中心和执行中心。DbSphere 据此采用左侧任务导航与事件列表/证据双栏；视觉使用自己的蓝色动作色、状态色和组件实现，不复用参考站点图像、CSS 或仪表盘。
+
+
 DeepLens 提供巡检与报告的流程启发，DBdoctor 提供 SQL/锁问题诊断的目标启发，Pigsty 提供 PostgreSQL 多层观测与既有环境接入的边界启发。DbSphere 的独立定位是：**面向已有 PostgreSQL 环境、以证据关联和可解释根因为核心、AI 可选且默认不参与生产操作的开源运维工作台**。

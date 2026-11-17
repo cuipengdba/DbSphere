@@ -4,6 +4,46 @@ let editingAsset = null;
 let pg18Store = false;
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
+const views = {
+  overview: ['总览', '先看异常，再进入资产和证据。'],
+  incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
+  assets: ['资产与实例', '纳管 PostgreSQL 14–18，并查看实例与基础设施状态。'],
+  alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
+  inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
+  settings: ['系统状态', '检查监控数据存储与部署状态。']
+};
+
+function setView(view, updateHash = true) {
+  const selected = views[view] ? view : 'overview';
+  for (const section of document.querySelectorAll('[data-view]')) section.hidden = section.dataset.view !== selected;
+  for (const button of document.querySelectorAll('[data-nav]')) {
+    const active = button.dataset.nav === selected;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  $('view-title').textContent = views[selected][0];
+  $('view-description').textContent = views[selected][1];
+  if (updateHash && location.hash !== `#${selected}`) location.hash = selected;
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+function renderOverview(assets, events) {
+  const focus = $('overview-events'); focus.replaceChildren();
+  const open = events.filter(event => event.status === 'open').slice(0, 5);
+  if (!open.length) focus.append(cell('p', '当前没有待处理事件。', 'empty'));
+  for (const event of open) {
+    const button = cell('button', `${event.assetName} · ${event.title} · ${formatTime(event.startedAt)}`, 'event-button event-open');
+    button.addEventListener('click', () => showEvent(event.id)); focus.append(button);
+  }
+  const fleet = $('overview-assets'); fleet.replaceChildren();
+  if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
+  for (const asset of assets.slice(0, 6)) {
+    const button = cell('button', `${asset.name} · ${asset.runtime === 'k8s' ? 'K8S' : 'Linux'} · ${asset.lastStatus === 'ok' ? '正常' : asset.lastStatus === 'error' ? '采集失败' : '待采集'}`, `event-button ${asset.lastStatus === 'ok' ? 'health-ok' : asset.lastStatus === 'error' ? 'health-failed' : ''}`);
+    button.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
+    fleet.append(button);
+  }
+}
 
 async function api(path, method = 'GET', payload) {
   const response = await fetch(path, {
@@ -38,6 +78,8 @@ async function refresh() {
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
   $('event-count').textContent = events.filter(e => e.status === 'open').length;
+  $('event-count').closest('.stat').classList.toggle('alerting', events.some(e => e.status === 'open'));
+  renderOverview(assets, events);
   renderAssets(assets);
   renderEvents(events);
   renderAlerts(alerts);
@@ -140,7 +182,7 @@ function renderAssets(assets) {
     info.append(cell('small', `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
     actions.append(cell('span', asset.lastStatus === 'ok' ? '正常' : asset.lastStatus === 'error' ? '采集失败' : '待采集', `pill ${asset.lastStatus}`));
-    const view = cell('button', '查看', 'ghost small-button'); view.addEventListener('click', () => showAsset(asset.id));
+    const view = cell('button', '查看', 'ghost small-button'); view.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     const edit = cell('button', '编辑', 'ghost small-button'); edit.addEventListener('click', () => editAsset(asset));
     const check = cell('button', '采集', 'ghost small-button'); check.addEventListener('click', async () => {
       try { await api(`/api/assets/${asset.id}/check`, 'POST'); notice(`${asset.name} 采集完成`); await refresh(); }
@@ -592,6 +634,7 @@ function resetEdit() {
 }
 
 async function showEvent(id) {
+  setView('incidents');
   const { event, analysis } = await api(`/api/events/${id}`);
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
@@ -602,6 +645,21 @@ async function showEvent(id) {
   if (analysis.traceCoverage) diagnosis.append(cell('small', analysis.traceCoverage.spans
     ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
     : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
+  const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
+  const chain = document.createElement('div'); chain.className = 'flow-strip';
+  for (const [title, present, available, missing] of [
+    ['应用请求', graphTypes.has('db_client_span'), '有数据库调用 Span', '未接入 Trace'],
+    ['PostgreSQL', graphTypes.has('sample'), '有采样证据', '样本缺失'],
+    ['会话与 SQL', ['wait', 'session', 'sql_fingerprint', 'slow_log', 'plan'].some(type => graphTypes.has(type)),
+      '有等待、锁或 SQL 证据', '尚无会话或 SQL 证据'],
+    ['Linux / K8S', ['linux', 'pod', 'pvc', 'k8s_node'].some(type => graphTypes.has(type)),
+      '有主机或容器证据', '基础设施信号缺失']
+  ]) {
+    const step = document.createElement('div'); step.className = `flow-step ${present ? 'present' : 'missing'}`;
+    step.append(cell('strong', title), cell('span', present ? available : missing));
+    chain.append(step);
+  }
+  diagnosis.append(chain);
   const graphDetails = document.createElement('details');
   graphDetails.append(cell('summary', '查看证据关系'));
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
@@ -678,8 +736,12 @@ async function boot() {
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
   $('logout').hidden = !session.authenticated;
-  if (session.authenticated) await refresh();
+  if (session.authenticated) { setView(location.hash.slice(1), false); await refresh(); }
 }
+
+for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click', () => setView(button.dataset.nav));
+for (const button of document.querySelectorAll('[data-open-view]')) button.addEventListener('click', () => setView(button.dataset.openView));
+window.addEventListener('hashchange', () => setView(location.hash.slice(1), false));
 
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();

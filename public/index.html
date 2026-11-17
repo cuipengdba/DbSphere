@@ -24,18 +24,32 @@
       </form>
     </section>
 
-    <div id="workspace" hidden>
-      <section class="hero">
-        <div><p class="eyebrow">PostgreSQL 14–18 · Linux / Kubernetes</p><h1>数据库运行态势</h1><p>从资产、采样和事件进入同一问题的证据时间线。</p></div>
-        <div class="hero-badge">B/S 架构<br><b>V0.6 DEV</b></div>
-      </section>
+    <div id="workspace" class="workspace-shell" hidden>
+      <aside class="workspace-sidebar" aria-label="主导航">
+        <div class="sidebar-brand">DbSphere <small>数据库运维工作台</small></div>
+        <nav class="workspace-nav">
+          <button type="button" data-nav="overview">总览</button>
+          <button type="button" data-nav="incidents">问题事件</button>
+          <button type="button" data-nav="assets">资产与实例</button>
+          <button type="button" data-nav="alerts">告警与通知</button>
+          <button type="button" data-nav="inspections">巡检与报告</button>
+          <button type="button" data-nav="settings">系统状态</button>
+        </nav>
+        <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes</div>
+      </aside>
+      <div class="workspace-main">
+      <div class="workspace-heading"><div><p class="eyebrow">DBSPHERE CONTROL CENTER</p><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label">开发预览</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
-      <section class="summary" aria-label="总览">
+      <section class="summary" aria-label="总览" data-view="overview">
         <div class="stat"><span>纳管实例</span><strong id="asset-count">0</strong></div>
         <div class="stat"><span>采集正常</span><strong id="healthy-count">0</strong></div>
         <div class="stat"><span>开放事件</span><strong id="event-count">0</strong></div>
       </section>
-      <div class="grid">
+      <div class="grid overview-grid" data-view="overview">
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">FOCUS</p><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">FLEET</p><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="assets">管理资产</button></div><div id="overview-assets" class="list"></div></section>
+      </div>
+      <div class="grid" data-view="assets">
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">ASSETS</p><h2>PostgreSQL 资产</h2></div><button id="refresh" class="ghost">刷新</button></div>
           <div id="asset-list" class="list"></div>
@@ -70,15 +84,17 @@
           <p class="hint">Linux 主机指标需部署 node_exporter 并填写端口；K8S Pod/PVC 采集需只读 API 凭据。请使用最小权限监控账号。</p>
         </section>
       </div>
-      <div class="grid lower">
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div><div id="event-list" class="list"></div><div id="event-detail"></div></section>
+      <section class="panel lower" data-view="assets"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
+      <div class="grid incident-grid" data-view="incidents">
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div><div id="event-list" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">EVIDENCE</p><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择左侧事件查看同一事件 ID 的全链路证据。</div></section>
       </div>
-      <div class="grid lower">
+      <div class="grid" data-view="alerts">
         <section class="panel"><div class="section-head"><div><p class="eyebrow">ALERTS</p><h2>当前告警</h2></div></div><div id="alert-list" class="list"></div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">RULES</p><h2>告警规则</h2></div></div><div id="rule-list" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">DELIVERY</p><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
       </div>
-      <div class="grid lower">
+      <details class="panel lower settings-details" data-view="alerts"><summary>告警规则与阈值配置</summary><div id="rule-list" class="list"></div></details>
+      <div class="grid lower" data-view="alerts">
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">SILENCES</p><h2>静默与维护窗</h2></div></div>
           <form id="silence-form" class="form-grid">
@@ -93,8 +109,7 @@
         </section>
         <section class="panel"><div class="section-head"><div><p class="eyebrow">WINDOWS</p><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
       </div>
-      <section class="panel lower"><div class="section-head"><div><p class="eyebrow">DELIVERY</p><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
-      <div class="grid lower">
+      <div class="grid" data-view="inspections">
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">INSPECT</p><h2>巡检模板与计划</h2></div></div>
           <form id="inspection-form" class="form-grid">
@@ -107,11 +122,12 @@
           </form>
           <p class="hint">巡检会重新采样；采集失败和缺失信号记录为未知。模板版本随阈值修改递增。</p>
           <div id="inspection-schedules" class="list"></div>
-          <div id="inspection-templates" class="list"></div>
+          <details class="settings-details"><summary>巡检模板与阈值配置</summary><div id="inspection-templates" class="list"></div></details>
         </section>
         <section class="panel"><div class="section-head"><div><p class="eyebrow">HISTORY</p><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
       </div>
-      <section class="panel lower"><div class="section-head"><div><p class="eyebrow">STORAGE</p><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
+      <section class="panel" data-view="settings"><div class="section-head"><div><p class="eyebrow">STORAGE</p><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
+      </div>
     </div>
   </main>
 </body>

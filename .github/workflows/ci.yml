@@ -5,6 +5,51 @@ on:
   pull_request:
 
 jobs:
+  go-foundation:
+    runs-on: ubuntu-latest
+    services:
+      pg18:
+        image: postgres:18-bookworm
+        ports:
+          - 15434:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test and vet Go foundation against PostgreSQL 18
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build and start Go binary with embedded static pages
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_ADMIN_PASSWORD: dbsphere-go-smoke-password
+          DBSPHERE_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DBSPHERE_HOST: 127.0.0.1
+          DBSPHERE_PORT: '18085'
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/dbsphere-go" ./cmd/dbsphere
+          "$RUNNER_TEMP/dbsphere-go" > "$RUNNER_TEMP/dbsphere-go.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18085/readyz >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18085/healthz
+          curl --fail --silent http://127.0.0.1:18085/readyz
+          curl --fail --silent http://127.0.0.1:18085/api/version | grep '"backend":"go"'
+          curl --fail --silent http://127.0.0.1:18085/ | grep 'DbSphere'
+
   offline-upgrade-rollback:
     runs-on: ubuntu-latest
     steps:
