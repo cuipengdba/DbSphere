@@ -164,6 +164,7 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
             -f deploy/compose/compose.k8s.yaml -f deploy/compose/compose.backup.yaml \
             -f deploy/compose/compose.store-backup.yaml exec -T app test -r /etc/dbsphere/store-backup.json
+          node scripts/compose-store-backup-smoke.mjs
       - name: Reject an invalid kubeconfig path clearly
         run: |
           printf 'DBSPHERE_KUBECONFIG_HOST_PATH=/definitely/missing/kubeconfig\n' >> deploy/compose/.env

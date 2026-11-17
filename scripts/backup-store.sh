@@ -39,6 +39,7 @@ completed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '{"status":"success","backupId":"%s","completedAt":"%s","restorePointAt":"%s"}\n' \
   "$backup_id" "$completed" "$restore_point" > "$manifest_partial"
 mv -- "$manifest_partial" "$manifest"
-chmod 0600 "$archive" "$manifest"
+chmod 0600 "$archive"
+chmod 0644 "$manifest"
 echo "PG18 monitoring store backup: $archive"
 echo "Backup manifest: $manifest"

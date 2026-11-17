@@ -204,7 +204,9 @@ async function showAsset(id) {
     const label = backup.status === 'ok'
       ? `pgBackRest ${backup.stanza} · 仓库${backup.repositoryHealthy ? '正常' : '异常'} · 最近成功备份 ${formatTime(backup.lastSuccessAt)} · 最近尝试 ${backup.lastAttemptStatus ?? '未提供'}`
       : `备份状态未知：${backup.reason ?? backup.status}`;
-    detail.append(cell('p', label, backup.status === 'ok' && backup.repositoryHealthy ? 'evidence' : 'warning'));
+    const fresh = backup.lastSuccessAt && Date.now() - new Date(backup.lastSuccessAt).getTime() <= 24 * 3600000;
+    detail.append(cell('p', label, backup.status === 'ok' && backup.repositoryHealthy &&
+      backup.lastAttemptStatus !== 'failed' && fresh ? 'evidence' : 'warning'));
   }
   if (currentSample?.metrics?.k8s) {
     const k8s = currentSample.metrics.k8s;

@@ -14,7 +14,7 @@ PostgreSQL 模板涵盖不可用、监控角色、PG14 EOL、连接、锁、长�
 
 `scripts/pg18-backup-restore-drill.mjs` 在独立测试数据库中写入资产、样本、事件证据和巡检记录，使用 PostgreSQL 18 的 `pg_dump` 生成备份文件，再恢复至另一个独立 PG18 数据库，验证以上记录一致后清理自己的测试数据库与临时文件。本地真实 PG18 容器已通过；此脚本是恢复演练，不是正式环境的自动备份计划。
 
-一键 Compose 的内置 PG18 可执行 `bash scripts/backup-store.sh /absolute/backup/output/directory`，生成权限为 `0600` 的自定义格式 `pg_dump` 归档和 `monitor-store-backup.json` 清单；脚本会用 PG18 `pg_restore --list` 检查归档格式。应把输出目录放在 Compose 数据卷之外，定期将备份复制到独立存储，并按恢复演练验证可用性。外部 PG18 使用其对应的 PostgreSQL 18 客户端和备份体系。
+一键 Compose 的内置 PG18 可执行 `bash scripts/backup-store.sh /absolute/backup/output/directory`，生成权限为 `0600` 的自定义格式 `pg_dump` 归档和不含凭据、供容器只读读取的 `0644` `monitor-store-backup.json` 清单；脚本会用 PG18 `pg_restore --list` 检查归档格式。应把输出目录放在 Compose 数据卷之外，定期将备份复制到独立存储，并按恢复演练验证可用性。外部 PG18 使用其对应的 PostgreSQL 18 客户端和备份体系。
 
 若要在 B/S 存储面板显示**上报的**备份年龄与恢复点，Linux 原生服务设置 `DBSPHERE_STORE_BACKUP_MANIFEST`；一键 Compose 在 `.env` 设置 `DBSPHERE_STORE_BACKUP_HOST_PATH=/absolute/backup/output/directory/monitor-store-backup.json` 后重新运行一键部署。清单格式为 `{ "status": "success", "backupId": "dbsphere-...", "completedAt": "2026-11-17T08:00:00Z", "restorePointAt": "2026-11-17T07:59:00Z" }`。恢复点由备份作业保守上报；页面仅展示清单信息，**不会仅凭清单声称已验证恢复**。未配置、文件无效或不可读时状态保持未知。独立恢复演练脚本才实际执行还原并核对数据。
 
