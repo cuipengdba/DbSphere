@@ -1,0 +1,56 @@
+package security
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestNodePasswordAndSecretCompatibility(t *testing.T) {
+	stored := "000102030405060708090a0b0c0d0e0f:82cd5015b8d8987f370dae5b0df403b3cf1b4f3671c6adc27b3351d0bb53dc59"
+	if !VerifyPassword("migration-password", stored) || VerifyPassword("wrong", stored) {
+		t.Fatal("Node scrypt password format is incompatible")
+	}
+	if VerifyPassword("migration-password", "malformed") {
+		t.Fatal("malformed password hash was accepted")
+	}
+	key := bytes.Repeat([]byte{7}, 32)
+	plain, err := Decrypt(key, "CQkJCQkJCQkJCQkJd1W2U51eMLFHSwU5rfQtbFfiqefbk7ME1A==")
+	if err != nil || plain != "pg-secret" {
+		t.Fatalf("Node AES-GCM secret is incompatible: %q %v", plain, err)
+	}
+	encoded, err := Encrypt(key, "new-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err = Decrypt(key, encoded)
+	if err != nil || plain != "new-secret" {
+		t.Fatal("secret round trip failed")
+	}
+}
+
+func TestSessionExpirySignatureAndCSRF(t *testing.T) {
+	key := bytes.Repeat([]byte{3}, 32)
+	now := time.Now().UTC()
+	token, err := CreateSession(key, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifySession(key, token, now) || VerifySession(key, token, now.Add(13*time.Hour)) ||
+		VerifySession(key, token+"x", now) || VerifySession(bytes.Repeat([]byte{4}, 32), token, now) {
+		t.Fatal("session authentication or expiration failed")
+	}
+	if len(CSRFToken(key, token)) != 64 || strings.Contains(CSRFToken(key, token), "+") {
+		t.Fatal("CSRF format is invalid")
+	}
+}
+
+func TestNodeSessionCompatibility(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	token := "eyJleHAiOjk5OTk5OTk5OTk5OTksIm5vbmNlIjoiMDAwMTAyMDMwNDA1MDYwNzA4MDkwYTBiMGMwZDBlMGYifQ.Y2xRmFlsu57CkZsdF4CpJrytLZT-KR3qDiPFGN4hzBA"
+	if !VerifySession(key, token, time.Now()) ||
+		CSRFToken(key, token) != "a8d30d578dbceaa7ece3167d1392f1f3b0306e589c7ebdd1034040de8622495a" {
+		t.Fatal("historical Node session and CSRF token are incompatible")
+	}
+}

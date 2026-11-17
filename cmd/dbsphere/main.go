@@ -35,7 +35,13 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pg.Close()
-	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg),
+	passwordHash, err := pg.AdminPasswordHash(ctx, cfg.AdminPass)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
+		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
+			SecureCookie: os.Getenv("DBSPHERE_COOKIE_SECURE") == "true"}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {

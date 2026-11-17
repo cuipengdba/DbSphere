@@ -11,11 +11,13 @@
 
 ## Go 工程与功能对等清单
 
-- [ ] `go.mod`、`cmd/dbsphere`、`internal` 分层、嵌入静态资源、配置校验、健康/就绪接口、结构化日志、优雅退出。
+- [x] `go.mod`、`cmd/dbsphere`、`internal` 分层、嵌入静态资源、配置校验、健康/就绪接口、结构化日志、优雅退出；Linux amd64 `CGO_ENABLED=0` 静态构建通过。
 - [ ] PG18 schema 迁移与版本管理；既有资产、样本、事件、证据、规则、巡检、通知、慢日志、计划和 Trace 可在 Go 版读取，升级不丢数据。
 - [ ] 管理员登录、密码哈希迁移、Session/CSRF、凭据加密、审计、TLS 入口与权限边界在 Go API 中验收。
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
+
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。**业务读写 API、采集器、事件根因、默认规则/巡检模板与离线交付仍未迁移**，所以 Go 服务只用于开发验收。
 
 ## 页面信息架构
 

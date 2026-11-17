@@ -32,7 +32,7 @@ jobs:
       - name: Build and start Go binary with embedded static pages
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
-          DBSPHERE_ADMIN_PASSWORD: dbsphere-go-smoke-password
+          DBSPHERE_ADMIN_PASSWORD: first-bootstrap-password
           DBSPHERE_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           DBSPHERE_HOST: 127.0.0.1
           DBSPHERE_PORT: '18085'
@@ -49,6 +49,12 @@ jobs:
           curl --fail --silent http://127.0.0.1:18085/readyz
           curl --fail --silent http://127.0.0.1:18085/api/version | grep '"backend":"go"'
           curl --fail --silent http://127.0.0.1:18085/ | grep 'DbSphere'
+          curl --fail --silent -c "$RUNNER_TEMP/dbsphere-go-cookies" \
+            -H 'Content-Type: application/json' \
+            -d '{"password":"first-bootstrap-password"}' \
+            http://127.0.0.1:18085/api/login | grep '"authenticated":true'
+          curl --fail --silent -b "$RUNNER_TEMP/dbsphere-go-cookies" \
+            http://127.0.0.1:18085/api/session | grep '"authenticated":true'
 
   offline-upgrade-rollback:
     runs-on: ubuntu-latest
