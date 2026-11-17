@@ -42,6 +42,7 @@ var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
+var silencePath = regexp.MustCompile(`^/api/silences/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 
 type AssetChecker interface {
 	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
@@ -59,6 +60,10 @@ type AssetSectionReader interface {
 }
 type AlertRuleStore interface {
 	UpdateAlertRule(context.Context, string, storepkg.AlertRulePatch) (any, error)
+}
+type SilenceStore interface {
+	CreateSilence(context.Context, storepkg.SilenceInput) (json.RawMessage, error)
+	RevokeSilence(context.Context, string) (json.RawMessage, error)
 }
 
 type AuthConfig struct {
@@ -211,6 +216,40 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					respond(w, http.StatusOK, value)
 				}
 				return
+			}
+		}
+		if silencesDB, ok := store.(SilenceStore); ok {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/silences" {
+				var input storepkg.SilenceInput
+				if readJSON(w, r, &input) != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid silence window"})
+					return
+				}
+				value, err := silencesDB.CreateSilence(r.Context(), input)
+				switch {
+				case errors.Is(err, storepkg.ErrInvalidSilence):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid silence window"})
+				case errors.Is(err, storepkg.ErrSilenceReference):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Silence asset or rule not found"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Silence storage unavailable"})
+				default:
+					respond(w, http.StatusCreated, map[string]any{"silence": value})
+				}
+				return
+			}
+			if r.Method == http.MethodDelete {
+				if match := silencePath.FindStringSubmatch(r.URL.Path); match != nil {
+					value, err := silencesDB.RevokeSilence(r.Context(), match[1])
+					if errors.Is(err, storepkg.ErrSilenceNotFound) {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Silence not found or already revoked"})
+					} else if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Silence storage unavailable"})
+					} else {
+						respond(w, http.StatusOK, map[string]any{"silence": value})
+					}
+					return
+				}
 			}
 		}
 		if assetsDB, ok := store.(AssetStore); ok {

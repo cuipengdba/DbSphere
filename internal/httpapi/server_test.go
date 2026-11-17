@@ -20,6 +20,77 @@ type healthStub struct{ err error }
 
 func (stub healthStub) Health(context.Context) error { return stub.err }
 
+type silenceStub struct {
+	healthStub
+	created, revoked int
+}
+
+func (stub *silenceStub) CreateSilence(_ context.Context, input store.SilenceInput) (json.RawMessage, error) {
+	stub.created++
+	if input.Reason == "invalid" {
+		return nil, store.ErrInvalidSilence
+	}
+	return json.RawMessage(`{"id":"11111111-1111-1111-1111-111111111111"}`), nil
+}
+
+func (stub *silenceStub) RevokeSilence(_ context.Context, id string) (json.RawMessage, error) {
+	stub.revoked++
+	if id == "22222222-2222-2222-2222-222222222222" {
+		return nil, store.ErrSilenceNotFound
+	}
+	return json.RawMessage(`{"id":"` + id + `","revokedAt":"2026-11-17T00:00:00Z"}`), nil
+}
+
+func TestGoSilenceAPIRequiresLoginAndCSRF(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	hash, err := security.HashPassword("silence-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &silenceStub{}
+	handler := New(stub, AuthConfig{MasterKey: key, PasswordHash: hash})
+	call := func(method, path, body string, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		if csrf != "" {
+			r.Header.Set("X-CSRF-Token", csrf)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if got := call(http.MethodPost, "/api/silences", `{}`, nil, ""); got.Code != http.StatusUnauthorized {
+		t.Fatal("anonymous silence accepted")
+	}
+	login := call(http.MethodPost, "/api/login", `{"password":"silence-test-password"}`, nil, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: %d", login.Code)
+	}
+	cookie := login.Result().Cookies()[0]
+	if got := call(http.MethodPost, "/api/silences", `{}`, cookie, ""); got.Code != http.StatusForbidden {
+		t.Fatal("missing CSRF accepted")
+	}
+	csrf := security.CSRFToken(key, cookie.Value)
+	if got := call(http.MethodPost, "/api/silences", `{"reason":"valid"}`, cookie, csrf); got.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", got.Code, got.Body.String())
+	}
+	if got := call(http.MethodPost, "/api/silences", `{"reason":"invalid"}`, cookie, csrf); got.Code != http.StatusBadRequest {
+		t.Fatal("invalid silence accepted")
+	}
+	if got := call(http.MethodDelete, "/api/silences/11111111-1111-1111-1111-111111111111", "", cookie, csrf); got.Code != http.StatusOK {
+		t.Fatalf("revoke: %d", got.Code)
+	}
+	if got := call(http.MethodDelete, "/api/silences/22222222-2222-2222-2222-222222222222", "", cookie, csrf); got.Code != http.StatusNotFound {
+		t.Fatal("missing silence not reported")
+	}
+	if stub.created != 2 || stub.revoked != 2 {
+		t.Fatalf("wrong calls: %d %d", stub.created, stub.revoked)
+	}
+}
+
 type alertRuleStub struct {
 	healthStub
 	called int
