@@ -80,10 +80,54 @@ func run(log *slog.Logger) error {
 		defer stop()
 		_ = server.Shutdown(shutdown)
 	}()
+	var collectorDone <-chan struct{}
+	if cfg.AutoCollect {
+		done := make(chan struct{})
+		collectorDone = done
+		go func() {
+			defer close(done)
+			runCollector(ctx, pg, cfg.MasterKey, time.Duration(cfg.CollectEvery)*time.Second, log)
+		}()
+		log.Info("Go PostgreSQL collector enabled", "intervalSeconds", cfg.CollectEvery)
+	}
 	log.Info("DbSphere Go migration server listening", "address", cfg.ListenAddr)
 	err = server.ListenAndServe()
+	cancel()
+	if collectorDone != nil {
+		<-collectorDone
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval time.Duration, log *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		ids, err := pg.DueAssetIDs(ctx, interval, 100)
+		if err != nil {
+			log.Error("Go collector could not list due assets", "error", err)
+		} else {
+			for _, id := range ids {
+				checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				result, err := pg.CheckAsset(checkCtx, id, key)
+				cancel()
+				if err != nil {
+					log.Error("Go collector failed to persist asset sample", "assetId", id, "error", err)
+				} else if result.Status == "error" {
+					log.Warn("Go collector observed asset failure", "assetId", id, "sampleId", result.SampleID)
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/security"
@@ -133,9 +135,17 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.DeleteAsset(context.Background(), asset.ID)
+	due, err := pg.DueAssetIDs(context.Background(), time.Minute, 100)
+	if err != nil || !slices.Contains(due, asset.ID) {
+		t.Fatalf("new PostgreSQL asset was not scheduled for Go collection: %v %v", due, err)
+	}
 	first, err := pg.CheckAsset(context.Background(), asset.ID, key)
 	if err != nil || first.Status != "ok" {
 		t.Fatalf("initial PG14–18 sample failed: %v %v", first, err)
+	}
+	due, err = pg.DueAssetIDs(context.Background(), time.Minute, 100)
+	if err != nil || slices.Contains(due, asset.ID) {
+		t.Fatalf("freshly sampled asset was still due: %v %v", due, err)
 	}
 	input.Port = 1
 	input.Password = ""

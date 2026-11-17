@@ -4,6 +4,8 @@
 
 ## 当前阶段
 
+Go 自动采集调度已在本机真实 PG18 开发库演练：15 秒间隔自动发现新 Linux PG 资产，连接失败写入样本与同一事件 ID；API 查询看到了 1 条样本和 1 个开放事件。调度仅选用 Go 已具备完整适配器的纯 PostgreSQL 资产，K8S、node_exporter 和 PgBouncer 资产不会被误采。隔离的 Go Compose 新库默认启用调度；连接历史/外部 PG18 时默认关闭，需显式设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true`。尚未通过本轮 CI。
+
 Go 独立部署开发路径已通过 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)：`Dockerfile-go` 将后端静态编译并嵌入前端，Compose 默认启用独立 PG18，Go `.run` 包在删除本机镜像后从包内导入应用与 PG18，再次运行复用配置和数据卷。Go 单容器本地测试验证健康检查、页面与首次管理员登录。该路径仍是开发版；功能对等、跨层故障、升级/回滚未验收。
 
 Go 同一事件证据图新增 PG18 慢日志、导入的执行计划与 SQL 指纹 Query ID 关联，原始脱敏记录可从图中打开。PG18 实库测试覆盖这两类链接，仍需本轮 CI 验证；SQL 趋势计算和自动慢日志采集尚未迁移。

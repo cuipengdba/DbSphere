@@ -23,6 +23,31 @@ type CheckResult struct {
 	CollectedAt time.Time `json:"collectedAt"`
 }
 
+// DueAssetIDs returns only assets for which the Go collector has all enabled adapters.
+// It intentionally leaves K8S, Linux exporter, and PgBouncer assets to their existing collector.
+func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
+	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("invalid Go collection schedule")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
+		WHERE runtime='linux' AND linux_exporter_port IS NULL AND pooler_url_enc IS NULL
+		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
+		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func collectionError(err error) (string, string) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

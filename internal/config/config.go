@@ -9,10 +9,12 @@ import (
 )
 
 type Config struct {
-	ListenAddr  string
-	DatabaseURL string
-	MasterKey   []byte
-	AdminPass   string
+	ListenAddr   string
+	DatabaseURL  string
+	MasterKey    []byte
+	AdminPass    string
+	AutoCollect  bool
+	CollectEvery int
 }
 
 func Load() (Config, error) {
@@ -39,6 +41,19 @@ func Load() (Config, error) {
 			return Config{}, errors.New("DBSPHERE_PORT must be between 1 and 65535")
 		}
 	}
+	interval := 60
+	if value := os.Getenv("DBSPHERE_COLLECT_INTERVAL_SECONDS"); value != "" {
+		interval, err = strconv.Atoi(value)
+		if err != nil || interval < 15 || interval > 3600 {
+			return Config{}, errors.New("DBSPHERE_COLLECT_INTERVAL_SECONDS must be between 15 and 3600")
+		}
+	}
+	collectorFlag := os.Getenv("DBSPHERE_ENABLE_GO_COLLECTOR")
+	if collectorFlag != "" && collectorFlag != "true" && collectorFlag != "false" {
+		return Config{}, errors.New("DBSPHERE_ENABLE_GO_COLLECTOR must be true or false")
+	}
+	autoCollect := collectorFlag == "true"
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
-		DatabaseURL: url, MasterKey: key, AdminPass: password}, nil
+		DatabaseURL: url, MasterKey: key, AdminPass: password,
+		AutoCollect: autoCollect, CollectEvery: interval}, nil
 }

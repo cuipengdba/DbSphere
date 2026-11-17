@@ -21,6 +21,8 @@
 
 ## 页面信息架构
 
+Go 自动采集调度已实现：纯 Linux PostgreSQL 资产按配置间隔采集并在 PG18 写入样本/事件；默认 Compose 启用，连接外部 PG18 的 Go 开发配置默认关闭，需显式启用，避免与历史 Node 采集并行。K8S、Linux exporter 和 PgBouncer 资产在对应适配器迁移前不进入 Go 调度。本机真实 PG18 演练验证自动连接失败生成同一事件入口，仍须五版与恢复矩阵 CI。
+
 Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 升级回滚和功能对等仍须完成。
 
 根因分析迁移补充：Go 已能从同一事件 ID 关联原始样本、应用服务与父子 Span、锁链、SQL 指纹、Linux 和 K8S 拓扑。已有候选包括历史 Pod OOMKilled 关联证据、连接数压力和锁阻塞，显示证据、时间顺序与不确定性；管理员确认/驳回写入该事件的证据时间线。PG18 实库样例已验证这些路径；**Go 自动跨层采集和完整规则矩阵仍未完成，证据不足显示“未定位”**。

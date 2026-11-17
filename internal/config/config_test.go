@@ -28,4 +28,13 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 	if err != nil || cfg.ListenAddr != "127.0.0.1:8081" {
 		t.Fatalf("valid config should load: %+v, %v", cfg, err)
 	}
+	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "10")
+	if _, err := Load(); err == nil {
+		t.Fatal("collection interval below 15 seconds was accepted")
+	}
+	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "60")
+	t.Setenv("DBSPHERE_ENABLE_GO_COLLECTOR", "true")
+	if cfg, err := Load(); err != nil || !cfg.AutoCollect || cfg.CollectEvery != 60 {
+		t.Fatalf("automatic Go collection settings were not loaded: %+v %v", cfg, err)
+	}
 }
