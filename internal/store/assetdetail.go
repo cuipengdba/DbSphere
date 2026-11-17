@@ -23,8 +23,7 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			FROM samples WHERE asset_id=$1 ORDER BY collected_at DESC LIMIT 100`, id)
 		return map[string]any{"samples": values}, err
 	case "sql":
-		return map[string]any{"performance": map[string]any{"status": "unavailable",
-			"reason": "Go SQL 指纹趋势分析正在迁移", "eventIds": []string{}}}, nil
+		return s.SQLSummary(ctx, id)
 	case "slow-logs":
 		from, to, err := timeRange(params, 24*time.Hour, 31*24*time.Hour)
 		if err != nil {

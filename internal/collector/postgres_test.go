@@ -33,6 +33,9 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	if want := os.Getenv("DBSPHERE_TEST_PG_TARGET_MAJOR"); want != "" && strconv.Itoa(version/10000) != want {
 		t.Fatalf("expected PostgreSQL %s, got %d", want, version/10000)
 	}
+	if _, ok := metrics["sqlPerformance"].(map[string]any); !ok {
+		t.Fatal("SQL performance capability status missing")
+	}
 	diagnostics, ok := metrics["diagnostics"].(map[string]any)
 	if !ok {
 		t.Fatal("PostgreSQL diagnostic sections missing")
@@ -43,6 +46,51 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 		entry, ok := diagnostics[section].(map[string]any)
 		if !ok || entry["status"] != "ok" {
 			t.Fatalf("PostgreSQL %d diagnostic %s unavailable: %v", version/10000, section, entry)
+		}
+	}
+}
+
+func TestSQLPerformanceEnabledWithoutRawSQL(t *testing.T) {
+	if os.Getenv("DBSPHERE_TEST_SQL_ENABLED") != "1" {
+		t.Skip("pg_stat_statements enabled target is required")
+	}
+	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := url.URL{Scheme: "postgres", Host: "127.0.0.1:" + portText,
+		Path: "/postgres", User: url.UserPassword("postgres", os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD")),
+		RawQuery: "sslmode=disable"}
+	conn, err := pgx.Connect(context.Background(), address.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(context.Background(), "SELECT 42424242"); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close(context.Background())
+	metrics, err := PostgreSQL(context.Background(), Target{Host: "127.0.0.1", Port: port,
+		Database: "postgres", Username: "postgres", SSLMode: "disable"}, os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	performance := metrics["sqlPerformance"].(map[string]any)
+	if performance["status"] != "ok" {
+		t.Fatalf("enabled pg_stat_statements was unavailable: %v", performance)
+	}
+	statements := performance["statements"].([]map[string]any)
+	if len(statements) == 0 {
+		t.Fatal("enabled pg_stat_statements returned no query fingerprints")
+	}
+	for _, item := range statements {
+		if item["fingerprint"] == "" || item["queryId"] == "" {
+			t.Fatalf("SQL fingerprint missing: %v", item)
+		}
+		for _, field := range []string{"query", "queryText", "parameters", "normalizedQuery"} {
+			if _, leaked := item[field]; leaked {
+				t.Fatalf("raw SQL field %s leaked", field)
+			}
 		}
 	}
 }

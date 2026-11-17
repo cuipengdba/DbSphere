@@ -91,5 +91,8 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	diagCtx, stopDiagnostics := context.WithTimeout(ctx, 15*time.Second)
 	defer stopDiagnostics()
 	metrics["diagnostics"] = collectDiagnostics(diagCtx, conn, major, recovery)
+	sqlCtx, stopSQL := context.WithTimeout(ctx, 5*time.Second)
+	defer stopSQL()
+	metrics["sqlPerformance"] = collectSQLPerformance(sqlCtx, conn)
 	return metrics, nil
 }

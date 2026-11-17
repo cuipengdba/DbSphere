@@ -286,3 +286,54 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		t.Fatal("Go collector incorrectly marked a Kubernetes asset healthy", err)
 	}
 }
+
+func TestGoSQLIntervalAndRegressionFromPG18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PG18 store is required")
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(context.Background(), assets.Input{Name: "Go SQL trend test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	for index, snapshot := range []struct{ calls, total float64 }{
+		{100, 1000}, {110, 1100}, {120, 2600},
+	} {
+		statement := map[string]any{"fingerprint": "1:2:3:1", "queryId": "3",
+			"calls": snapshot.calls, "totalExecMs": snapshot.total, "rows": 0,
+			"sharedBlocksHit": 0, "sharedBlocksRead": 0, "sharedBlocksWritten": 0,
+			"tempBlocksRead": 0, "tempBlocksWritten": 0, "walBytes": 0}
+		metrics, _ := json.Marshal(map[string]any{"sqlPerformance": map[string]any{
+			"status": "ok", "source": "pg_stat_statements", "resetAt": "2026-11-17T00:00:00Z",
+			"truncated": false, "hiddenQueryCount": 0, "statements": []any{statement}}})
+		at := time.Now().UTC().Add(time.Duration(index-2) * time.Minute)
+		if _, err := pg.pool.Exec(context.Background(), `INSERT INTO samples
+			(id,asset_id,collected_at,status,metrics_json) VALUES(gen_random_uuid(),$1,$2,'ok',$3)`, asset.ID, at, metrics); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value, err := pg.SQLSummary(context.Background(), asset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(value)
+	if !strings.Contains(string(encoded), `"comparison":"interval"`) ||
+		!strings.Contains(string(encoded), `"regression"`) || !strings.Contains(string(encoded), `"ratio":15`) {
+		t.Fatalf("PG18 SQL samples did not produce interval regression: %s", encoded)
+	}
+}

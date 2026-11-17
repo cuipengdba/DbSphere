@@ -203,6 +203,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Install dependencies
         run: |
           corepack enable
@@ -238,6 +242,13 @@ jobs:
         env:
           DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
         run: node scripts/pg-sql-performance-smoke.mjs
+      - name: Verify Go query fingerprints without SQL text
+        env:
+          DBSPHERE_TEST_SQL_ENABLED: '1'
+          DBSPHERE_TEST_PG_TARGET_PORT: '15432'
+          DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
+          DBSPHERE_TEST_PG_TARGET_MAJOR: ${{ matrix.pg }}
+        run: go test ./internal/collector -run TestSQLPerformanceEnabledWithoutRawSQL -count=1 -v
       - name: Detect a real SQL latency regression
         if: matrix.pg == 18
         run: node scripts/pg-sql-regression-smoke.mjs
