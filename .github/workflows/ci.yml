@@ -5,6 +5,28 @@ on:
   pull_request:
 
 jobs:
+  offline-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build offline one-click package on Linux
+        run: bash scripts/build-offline-bundle.sh "$RUNNER_TEMP/dbsphere-offline-output"
+      - name: Install with local images only
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+          DBSPHERE_CONFIG_DIR: ${{ runner.temp }}/dbsphere-offline-config
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-offline-output/DbSphere-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+          docker image rm "dbsphere/offline-app:$version" postgres:18-bookworm
+          if docker image inspect "dbsphere/offline-app:$version" >/dev/null 2>&1; then exit 1; fi
+          bash "${archive[0]}"
+          curl --fail --silent http://127.0.0.1:8080/readyz
+          docker image inspect "dbsphere/offline-app:$version" postgres:18-bookworm >/dev/null
+          bash "${archive[0]}"
+          curl --fail --silent http://127.0.0.1:8080/readyz
+
   sql-performance-matrix:
     runs-on: ubuntu-latest
     strategy:

@@ -33,6 +33,7 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [V0.3 PG18 分区与保留策略](docs/STORAGE_V0.3.md)
 - [V0.4 巡检与可恢复性](docs/INSPECTIONS_V0.4.md)
 - [V0.5 SQL 性能洞察](docs/SQL_PERFORMANCE_V0.5.md)
+- [V0.6 Linux 一键离线部署开发记录](docs/OFFLINE_DEPLOYMENT.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 当前可用范围
