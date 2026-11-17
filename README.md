@@ -46,7 +46,7 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 
 ### 本机开发启动
 
-Go 后端开发版可在 Linux 联网构建机运行 `bash scripts/one-click-go.sh`，以独立 PG18 和默认 `127.0.0.1:8081` 启动；Go 静态二进制与一键离线包说明见[离线部署文档](docs/OFFLINE_DEPLOYMENT.md)。以下 Node.js 命令用于已发布历史实现。
+Go 后端开发版可在 Linux 联网构建机运行 `bash scripts/one-click-go.sh`，以独立 PG18 和默认 `127.0.0.1:8081` 启动；Go 静态二进制与一键离线包说明见[离线部署文档](docs/OFFLINE_DEPLOYMENT.md)。可选 OTLP/HTTP JSON Trace 接入已能把应用 Span 关联到现有事件 ID，范围与限制见[Trace 开发记录](docs/TRACE_V0.7_PROGRESS.md)。以下 Node.js 命令用于已发布历史实现。
 
 需要 Node.js 24 和 pnpm。首次启动先设置不少于 12 位的 `DBSPHERE_ADMIN_PASSWORD`，再执行：
 

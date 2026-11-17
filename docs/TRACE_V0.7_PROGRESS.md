@@ -2,6 +2,8 @@
 
 > 2026-11-17。当前是开发能力，尚未达到 V0.7 发布验收。
 
+Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。真实 OpenTelemetry SDK/Collector 导出兼容和完整应用故障矩阵仍待验收。
+
 ## 已实现的首段链路
 
 - 可选 `POST /v1/traces` 接收 **OTLP/HTTP JSON** 的 `resourceSpans`。设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN` 后启用；未设置时接口关闭。请求使用 `Authorization: Bearer <token>`，限制 1 MiB 和 256 个 Span。

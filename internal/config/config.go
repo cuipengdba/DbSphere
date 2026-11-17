@@ -15,6 +15,8 @@ type Config struct {
 	AdminPass    string
 	AutoCollect  bool
 	CollectEvery int
+	OTLPToken    string
+	TraceDays    int
 }
 
 func Load() (Config, error) {
@@ -53,7 +55,19 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DBSPHERE_ENABLE_GO_COLLECTOR must be true or false")
 	}
 	autoCollect := collectorFlag == "true"
+	otlpToken := os.Getenv("DBSPHERE_OTLP_TOKEN")
+	if otlpToken != "" && len(otlpToken) < 32 {
+		return Config{}, errors.New("DBSPHERE_OTLP_TOKEN must contain at least 32 characters")
+	}
+	traceDays := 7
+	if value := os.Getenv("DBSPHERE_TRACE_RETENTION_DAYS"); value != "" {
+		traceDays, err = strconv.Atoi(value)
+		if err != nil || traceDays < 1 || traceDays > 3650 {
+			return Config{}, errors.New("DBSPHERE_TRACE_RETENTION_DAYS must be between 1 and 3650")
+		}
+	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
 		DatabaseURL: url, MasterKey: key, AdminPass: password,
-		AutoCollect: autoCollect, CollectEvery: interval}, nil
+		AutoCollect: autoCollect, CollectEvery: interval,
+		OTLPToken: otlpToken, TraceDays: traceDays}, nil
 }

@@ -17,15 +17,15 @@
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
 
-当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；十二条 PG/Linux/K8S/PgBouncer 默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。其余 Node 历史规则只读显示。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、告警投递和巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；十二条 PG/Linux/K8S/PgBouncer 默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。Go OTLP/HTTP JSON 已用独立 Bearer 令牌接入，仅白名单 Span 字段按唯一 PG 资产身份入库，并与既有事件 ID 的证据图关联。其余 Node 历史规则只读显示。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、生产通知通道、巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
 
 ## 页面信息架构
 
-Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指标，并把 Linux 节点连入同一事件 ID 的图。本机真实 PG14/node_exporter/PG18 演练和 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44096143595) 已通过。K8S 深度信号与 PgBouncer 仍在适配器迁移队列。
+Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指标，并把 Linux 节点连入同一事件 ID 的图。本机真实 PG14/node_exporter/PG18 演练和 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44096143595) 已通过。K8S Pod/Node/PVC/Service 和 PgBouncer 的只读适配已接入；更深的重启增量、真实 PVC 用量与故障矩阵仍待验收。
 
 Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubeconfig，拒绝执行式凭据插件与关闭 TLS 校验。已用 TLS 测试 API 验证只读请求、按 Pod UID 限定事件、容器 OOM、Node/PVC/PV 信息、Pod/Node `metrics.k8s.io` 与 403 缺口；PG18 实库测试验证 PG 连接失败与近期同 Pod OOM 证据归入一个事件 ID，并在恢复时关闭。现有本地 kind 测试 token 过期，真实集群只读验收尚未通过；临时 token 签发被自动审批策略阻止，不能将模拟 API 测试记作 kind 验收。Go Compose 与离线包已支持可选的只读 kubeconfig 挂载。
 
-Go K8S 告警移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled、Node 压力及可选 Prometheus PVC 使用率规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。Pod 重启增量与未确认严重告警升级仍未移植；PVC 告警的真实 Prometheus 路径仍待验收。
+Go K8S 告警移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled、Node 压力及可选 Prometheus PVC 使用率规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。Pod 重启增量仍未移植；PVC 告警的真实 Prometheus 路径仍待验收。
 
 Go 告警静默与维护窗现支持 B/S 创建、查看和撤销；服务端校验资产/规则、起止时间、最长 30 天和原因，所有写操作要求登录和 CSRF。PG18 实库故障演练确认锁等待告警触发时写入 `alert_suppressed`，撤销维护窗后写入 `alert_unsuppressed`，两条证据使用同一个事件 ID。告警触发、解除静默及恢复会向 PG18 持久化 Webhook/邮件投递任务；Go 后台工作器支持级别路由、Webhook HMAC、SMTP TLS、失败退避和 B/S 手动重试。未确认的严重事件超过 15 分钟会在原事件 ID 下写入一次升级证据并再次通知；PG18 实库已验证未到期不升级、静默时不升级、解除静默后只升级一次。生产通知通道仍待验收。
 
@@ -37,7 +37,7 @@ Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查
 
 Go 只读 PostgreSQL 诊断现覆盖 14 个分区，PG14 与 PG18 实库及真实 advisory lock 阻塞关系通过本机测试；PG15–17 交由五版 CI 确认。采集指标写入 PG18 原始样本，事件图可显示等待 PID 与阻塞 PID；独立诊断失败显示不可用原因，仍需规则告警和完整故障演练。
 
-Go 自动采集调度已实现：纯 Linux PostgreSQL 资产按配置间隔采集并在 PG18 写入样本/事件；默认 Compose 启用，连接外部 PG18 的 Go 开发配置默认关闭，需显式启用，避免与历史 Node 采集并行。K8S 和 PgBouncer 资产在对应适配器迁移前不进入 Go 调度。本机真实 PG18 演练验证自动连接失败生成同一事件入口，仍须五版与恢复矩阵 CI。
+Go 自动采集调度已实现：Linux 与已映射的 K8S PostgreSQL 资产按配置间隔并发采集 PG、主机/K8S 与可选 PgBouncer，在 PG18 写入样本/事件；默认 Compose 启用，连接外部 PG18 的 Go 开发配置默认关闭，需显式启用，避免与历史 Node 采集并行。本机真实 PG18 演练验证自动连接失败生成同一事件入口，仍须五版与恢复矩阵 CI。
 
 Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 升级回滚和功能对等仍须完成。
 

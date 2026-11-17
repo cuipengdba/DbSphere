@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
@@ -14,11 +15,61 @@ import (
 
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/store"
+	"github.com/cuipengdba/dbsphere/internal/trace"
 )
 
 type healthStub struct{ err error }
 
 func (stub healthStub) Health(context.Context) error { return stub.err }
+
+type traceStub struct {
+	healthStub
+	spans []trace.Span
+}
+
+func (*traceStub) TraceAssets(context.Context) ([]trace.Asset, error) {
+	return []trace.Asset{{ID: "11111111-1111-1111-1111-111111111111",
+		Host: "pg.internal", Port: 5432, Database: "orders"}}, nil
+}
+
+func (stub *traceStub) SaveTraceSpans(_ context.Context, spans []trace.Span) (int, error) {
+	stub.spans = append(stub.spans, spans...)
+	return len(spans), nil
+}
+
+func TestGoOTLPIntakeRequiresSeparateTokenAndBounds(t *testing.T) {
+	token := strings.Repeat("t", 32)
+	stub := &traceStub{}
+	call := func(handler http.Handler, auth, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/v1/traces", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if got := call(New(stub, AuthConfig{}), "Bearer "+token, `{}`); got.Code != http.StatusNotFound {
+		t.Fatal("disabled trace intake accepted data")
+	}
+	handler := New(stub, AuthConfig{OTLPToken: token})
+	if got := call(handler, token, `{}`); got.Code != http.StatusUnauthorized {
+		t.Fatal("trace token without Bearer accepted")
+	}
+	if got := call(handler, "Bearer wrong", `{}`); got.Code != http.StatusUnauthorized {
+		t.Fatal("wrong trace token accepted")
+	}
+	if got := call(handler, "Bearer "+token, strings.Repeat("x", 1<<20+1)); got.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized trace body accepted: %d", got.Code)
+	}
+	now := time.Now().UnixNano()
+	payload := fmt.Sprintf(`{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeSpans":[{"spans":[{"traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spanId":"1111111111111111","kind":3,"startTimeUnixNano":"%d","endTimeUnixNano":"%d","attributes":[{"key":"db.system.name","value":{"stringValue":"postgresql"}},{"key":"server.address","value":{"stringValue":"pg.internal"}},{"key":"db.namespace","value":{"stringValue":"orders"}}]}]}]}]}`, now-1000000, now)
+	if got := call(handler, "Bearer "+token, payload); got.Code != http.StatusOK || len(stub.spans) != 1 ||
+		stub.spans[0].AssetID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("valid OTLP span was not mapped: %d %s", got.Code, got.Body.String())
+	}
+}
 
 type silenceStub struct {
 	healthStub

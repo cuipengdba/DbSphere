@@ -37,4 +37,17 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 	if cfg, err := Load(); err != nil || !cfg.AutoCollect || cfg.CollectEvery != 60 {
 		t.Fatalf("automatic Go collection settings were not loaded: %+v %v", cfg, err)
 	}
+	t.Setenv("DBSPHERE_OTLP_TOKEN", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("short OTLP write token was accepted")
+	}
+	t.Setenv("DBSPHERE_OTLP_TOKEN", strings.Repeat("t", 32))
+	t.Setenv("DBSPHERE_TRACE_RETENTION_DAYS", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid trace retention was accepted")
+	}
+	t.Setenv("DBSPHERE_TRACE_RETENTION_DAYS", "14")
+	if cfg, err := Load(); err != nil || cfg.TraceDays != 14 || len(cfg.OTLPToken) != 32 {
+		t.Fatalf("OTLP configuration was not loaded: %+v %v", cfg, err)
+	}
 }

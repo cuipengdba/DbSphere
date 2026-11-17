@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	storepkg "github.com/cuipengdba/dbsphere/internal/store"
+	"github.com/cuipengdba/dbsphere/internal/trace"
 )
 
 type HealthStore interface{ Health(context.Context) error }
@@ -69,11 +71,16 @@ type SilenceStore interface {
 type NotificationRetryStore interface {
 	RetryNotification(context.Context, string) (bool, error)
 }
+type TraceStore interface {
+	TraceAssets(context.Context) ([]trace.Asset, error)
+	SaveTraceSpans(context.Context, []trace.Span) (int, error)
+}
 
 type AuthConfig struct {
 	MasterKey    []byte
 	PasswordHash string
 	SecureCookie bool
+	OTLPToken    string
 }
 
 type loginAttempt struct {
@@ -106,6 +113,60 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	})
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"backend": "go", "stage": "migration-foundation"})
+	})
+	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
+		if credentials == nil || credentials.OTLPToken == "" {
+			respond(w, http.StatusNotFound, map[string]string{"error": "Trace intake disabled"})
+			return
+		}
+		authorization := r.Header.Get("Authorization")
+		received := strings.TrimPrefix(authorization, "Bearer ")
+		if !strings.HasPrefix(authorization, "Bearer ") ||
+			len(received) != len(credentials.OTLPToken) ||
+			subtle.ConstantTimeCompare([]byte(received), []byte(credentials.OTLPToken)) != 1 {
+			respond(w, http.StatusUnauthorized, map[string]string{"error": "Invalid trace token"})
+			return
+		}
+		mediaType, _, mediaErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if mediaErr != nil || mediaType != "application/json" {
+			respond(w, http.StatusUnsupportedMediaType, map[string]string{"error": "OTLP JSON required"})
+			return
+		}
+		tracesDB, ok := store.(TraceStore)
+		if !ok {
+			respond(w, http.StatusNotImplemented, map[string]string{"error": "Trace storage unavailable"})
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			respond(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Trace payload exceeds 1 MiB"})
+			return
+		}
+		assets, err := tracesDB.TraceAssets(r.Context())
+		if err != nil {
+			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace asset mapping unavailable"})
+			return
+		}
+		parsed, err := trace.Decode(body, assets, time.Now().UTC())
+		switch {
+		case errors.Is(err, trace.ErrTooMany):
+			respond(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Too many spans or scopes"})
+			return
+		case err != nil:
+			respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid OTLP resourceSpans"})
+			return
+		}
+		if _, err := tracesDB.SaveTraceSpans(r.Context(), parsed.Spans); err != nil {
+			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace storage unavailable"})
+			return
+		}
+		if parsed.Rejected > 0 {
+			respond(w, http.StatusOK, map[string]any{"partialSuccess": map[string]any{
+				"rejectedSpans": parsed.Rejected,
+				"errorMessage":  "Invalid or unmapped PostgreSQL spans were discarded"}})
+		} else {
+			respond(w, http.StatusOK, map[string]any{})
+		}
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		if credentials == nil {

@@ -76,7 +76,8 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
-			SecureCookie: os.Getenv("DBSPHERE_COOKIE_SECURE") == "true"}),
+			SecureCookie: os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
+			OTLPToken:    cfg.OTLPToken}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
@@ -90,6 +91,11 @@ func run(log *slog.Logger) error {
 	go func() {
 		defer close(notifierDone)
 		runNotifier(ctx, pg, notifyConfig, log)
+	}()
+	tracePrunerDone := make(chan struct{})
+	go func() {
+		defer close(tracePrunerDone)
+		runTracePruner(ctx, pg, cfg.TraceDays, log)
 	}()
 	if cfg.AutoCollect {
 		done := make(chan struct{})
@@ -107,10 +113,29 @@ func run(log *slog.Logger) error {
 		<-collectorDone
 	}
 	<-notifierDone
+	<-tracePrunerDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func runTracePruner(ctx context.Context, pg *store.Postgres, days int, log *slog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := pg.PruneTraceSpans(ctx, days); err != nil && ctx.Err() == nil {
+			log.Error("Go trace retention scan failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log *slog.Logger) {
