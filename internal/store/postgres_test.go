@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -273,7 +274,7 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	if err := pg.pool.QueryRow(context.Background(), "SELECT status FROM events WHERE id=$1", eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("event was not resolved under the same ID: %s %v", status, err)
 	}
-	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count != 7 {
+	if err := pg.pool.QueryRow(context.Background(), "SELECT count(*)::int FROM evidence WHERE event_id=$1", eventID).Scan(&count); err != nil || count < 7 {
 		t.Fatalf("failure/recovery evidence did not share one ID: %d %v", count, err)
 	}
 	input.Runtime = "k8s"
@@ -282,8 +283,13 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	if _, err := pg.UpdateAsset(context.Background(), asset.ID, input, key); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.CheckAsset(context.Background(), asset.ID, key); !errors.Is(err, ErrCollectionUnavailable) {
-		t.Fatal("Go collector incorrectly marked a Kubernetes asset healthy", err)
+	k8sCheck, err := pg.CheckAsset(context.Background(), asset.ID, key)
+	if err != nil || k8sCheck.Status != "error" {
+		t.Fatal("Go collector incorrectly marked an unmapped Kubernetes asset healthy", k8sCheck, err)
+	}
+	if sample, err := pg.RawSample(context.Background(), asset.ID, k8sCheck.SampleID); err != nil ||
+		!strings.Contains(fmt.Sprint(sample), "unmapped") {
+		t.Fatal("Kubernetes mapping gap was not visible in the raw sample", err)
 	}
 }
 

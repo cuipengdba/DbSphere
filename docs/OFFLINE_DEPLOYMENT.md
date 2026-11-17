@@ -8,6 +8,8 @@
 
 Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证删除本机镜像后的离线安装、健康接口及重复运行；本地 Go 容器也验证了首次管理员登录。Go 后端功能对等、故障演练及升级回滚尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
 
+Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发部署）或 `${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}/dbsphere-go.env`（离线包）追加 `DBSPHERE_KUBECONFIG_HOST_PATH=/absolute/path/to/read-only-kubeconfig` 后重新执行一键脚本。脚本校验文件存在并只读挂载；配置需使用静态 ServiceAccount token 和受信 CA，不执行 kubeconfig 中的 `exec` 凭据插件。Go K8S 适配器目前只覆盖已映射 Pod 的基础状态、Node、PVC 与 Pod 事件，真实集群验收尚未完成。
+
 当前可从 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev) 下载两种 Linux x86_64 安装包及各自的 SHA-256 文件。V0.6 的跨层根因分析仍在开发中。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。

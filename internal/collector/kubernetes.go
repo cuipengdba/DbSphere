@@ -1,0 +1,327 @@
+package collector
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+type KubernetesTarget struct {
+	Cluster   string
+	Namespace string
+	Pod       string
+}
+
+type kubeConfig struct {
+	CurrentContext string `yaml:"current-context"`
+	Clusters       []struct {
+		Name    string `yaml:"name"`
+		Cluster struct {
+			Server   string `yaml:"server"`
+			CAData   string `yaml:"certificate-authority-data"`
+			CAFile   string `yaml:"certificate-authority"`
+			Insecure bool   `yaml:"insecure-skip-tls-verify"`
+		} `yaml:"cluster"`
+	} `yaml:"clusters"`
+	Contexts []struct {
+		Name    string `yaml:"name"`
+		Context struct {
+			Cluster string `yaml:"cluster"`
+			User    string `yaml:"user"`
+		} `yaml:"context"`
+	} `yaml:"contexts"`
+	Users []struct {
+		Name string `yaml:"name"`
+		User struct {
+			Token                 string `yaml:"token"`
+			TokenFile             string `yaml:"tokenFile"`
+			Exec                  any    `yaml:"exec"`
+			AuthProvider          any    `yaml:"auth-provider"`
+			ClientCertificate     string `yaml:"client-certificate"`
+			ClientCertificateData string `yaml:"client-certificate-data"`
+			Username              string `yaml:"username"`
+			Password              string `yaml:"password"`
+		} `yaml:"user"`
+	} `yaml:"users"`
+}
+
+type kubeClient struct {
+	base   *url.URL
+	client *http.Client
+	token  string
+}
+
+var kubeName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+
+func kubeCredentials(target KubernetesTarget) (*kubeClient, error) {
+	configPath := os.Getenv("DBSPHERE_KUBECONFIG")
+	server, token, ca := "", "", []byte(nil)
+	if configPath != "" {
+		contents, err := os.ReadFile(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("read Kubernetes config: %w", err)
+		}
+		var config kubeConfig
+		if err := yaml.Unmarshal(contents, &config); err != nil {
+			return nil, fmt.Errorf("parse Kubernetes config: %w", err)
+		}
+		contextName := target.Cluster
+		if contextName == "" {
+			contextName = config.CurrentContext
+		}
+		clusterName, userName := "", ""
+		for _, item := range config.Contexts {
+			if item.Name == contextName {
+				clusterName, userName = item.Context.Cluster, item.Context.User
+				break
+			}
+		}
+		if clusterName == "" || userName == "" {
+			return nil, fmt.Errorf("Kubernetes context %q is not configured", contextName)
+		}
+		for _, item := range config.Clusters {
+			if item.Name != clusterName {
+				continue
+			}
+			if item.Cluster.Insecure {
+				return nil, errors.New("Kubernetes TLS verification cannot be disabled")
+			}
+			server = item.Cluster.Server
+			if item.Cluster.CAData != "" {
+				var err error
+				ca, err = base64.StdEncoding.DecodeString(item.Cluster.CAData)
+				if err != nil {
+					return nil, fmt.Errorf("decode Kubernetes CA: %w", err)
+				}
+			} else if item.Cluster.CAFile != "" {
+				path := item.Cluster.CAFile
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(filepath.Dir(configPath), path)
+				}
+				var err error
+				ca, err = os.ReadFile(path)
+				if err != nil {
+					return nil, fmt.Errorf("read Kubernetes CA: %w", err)
+				}
+			}
+			break
+		}
+		for _, item := range config.Users {
+			if item.Name != userName {
+				continue
+			}
+			if item.User.Exec != nil || item.User.AuthProvider != nil || item.User.ClientCertificate != "" ||
+				item.User.ClientCertificateData != "" || item.User.Username != "" || item.User.Password != "" {
+				return nil, errors.New("Kubernetes config requires a static read-only bearer token; credential helpers are forbidden")
+			}
+			token = item.User.Token
+			if token == "" && item.User.TokenFile != "" {
+				path := item.User.TokenFile
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(filepath.Dir(configPath), path)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return nil, fmt.Errorf("read Kubernetes token: %w", err)
+				}
+				token = strings.TrimSpace(string(data))
+			}
+			break
+		}
+	} else if host := os.Getenv("KUBERNETES_SERVICE_HOST"); host != "" {
+		if net.ParseIP(host) == nil && !kubeName.MatchString(host) {
+			return nil, errors.New("invalid Kubernetes Service host")
+		}
+		port := os.Getenv("KUBERNETES_SERVICE_PORT")
+		if port == "" {
+			port = "443"
+		}
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum < 1 || portNum > 65535 {
+			return nil, errors.New("invalid Kubernetes Service port")
+		}
+		server = "https://" + net.JoinHostPort(host, port)
+		ca, err = os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+		if err != nil {
+			return nil, fmt.Errorf("read ServiceAccount CA: %w", err)
+		}
+		secret, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+		if err != nil {
+			return nil, fmt.Errorf("read ServiceAccount token: %w", err)
+		}
+		token = strings.TrimSpace(string(secret))
+	} else {
+		return nil, errors.New("Kubernetes credentials are not configured")
+	}
+	parsed, err := url.Parse(server)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || token == "" {
+		return nil, errors.New("invalid Kubernetes API endpoint or bearer token")
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if len(ca) != 0 && !pool.AppendCertsFromPEM(ca) {
+		return nil, errors.New("invalid Kubernetes CA certificate")
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+	return &kubeClient{base: parsed, token: token, client: &http.Client{Transport: transport, Timeout: 4 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
+
+func (k *kubeClient) get(ctx context.Context, path string, query url.Values) (map[string]any, error) {
+	endpoint := *k.base
+	endpoint.Path = path
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+k.token)
+	request.Header.Set("Accept", "application/json")
+	response, err := k.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Kubernetes API HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1024*1024 {
+		return nil, errors.New("Kubernetes response exceeds 1 MiB")
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func kubeObject(value any) map[string]any { result, _ := value.(map[string]any); return result }
+func kubeList(value any) []any            { result, _ := value.([]any); return result }
+func kubeString(value any) string         { result, _ := value.(string); return result }
+func kubeShort(value any) string {
+	text := kubeString(value)
+	if len(text) > 300 {
+		return text[:300]
+	}
+	return text
+}
+
+// Kubernetes reads only the mapped Pod and related read-only resources.
+func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
+	if !kubeName.MatchString(target.Namespace) || len(target.Namespace) > 63 ||
+		(target.Pod != "" && (!kubeName.MatchString(target.Pod) || len(target.Pod) > 253)) {
+		return map[string]any{"status": "error", "reason": "Invalid Kubernetes namespace or Pod mapping"}
+	}
+	if target.Pod == "" {
+		return map[string]any{"status": "unmapped", "reason": "Namespace and Pod mapping are required"}
+	}
+	k, err := kubeCredentials(target)
+	if err != nil {
+		return map[string]any{"status": "not_configured", "reason": err.Error()}
+	}
+	base := "/api/v1/namespaces/" + url.PathEscape(target.Namespace)
+	pod, err := k.get(ctx, base+"/pods/"+url.PathEscape(target.Pod), nil)
+	if err != nil {
+		return map[string]any{"status": "error", "reason": err.Error()}
+	}
+	metadata, spec, state := kubeObject(pod["metadata"]), kubeObject(pod["spec"]), kubeObject(pod["status"])
+	uid, nodeName := kubeString(metadata["uid"]), kubeString(spec["nodeName"])
+	conditions := []any{}
+	for _, raw := range kubeList(state["conditions"]) {
+		item := kubeObject(raw)
+		switch kubeString(item["type"]) {
+		case "PodScheduled", "Initialized", "ContainersReady", "Ready":
+			conditions = append(conditions, map[string]any{"type": item["type"], "status": item["status"],
+				"reason": item["reason"], "message": kubeShort(item["message"]), "changedAt": item["lastTransitionTime"]})
+		}
+	}
+	containers := []any{}
+	for _, raw := range kubeList(state["containerStatuses"]) {
+		item := kubeObject(raw)
+		terminated := kubeObject(kubeObject(item["state"])["terminated"])
+		if len(terminated) == 0 {
+			terminated = kubeObject(kubeObject(item["lastState"])["terminated"])
+		}
+		containers = append(containers, map[string]any{"name": item["name"], "ready": item["ready"],
+			"restartCount": item["restartCount"], "terminatedReason": terminated["reason"],
+			"lastTerminatedAt": terminated["finishedAt"], "waitingReason": kubeObject(kubeObject(item["state"])["waiting"])["reason"]})
+	}
+	result := map[string]any{"status": "ok", "cluster": target.Cluster, "namespace": target.Namespace,
+		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"],
+			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName,
+			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
+		"node": nil, "resourceMetrics": nil}
+	if nodeName != "" && kubeName.MatchString(nodeName) {
+		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
+			info := kubeObject(node["status"])
+			result["node"] = map[string]any{"name": nodeName, "conditions": info["conditions"],
+				"allocatable": info["allocatable"]}
+		} else {
+			result["nodeError"] = err.Error()
+		}
+	}
+	pvcs := []any{}
+	seen := map[string]bool{}
+	for _, raw := range kubeList(spec["volumes"]) {
+		name := kubeString(kubeObject(kubeObject(raw)["persistentVolumeClaim"])["claimName"])
+		if name == "" || seen[name] || !kubeName.MatchString(name) {
+			continue
+		}
+		seen[name] = true
+		pvc, err := k.get(ctx, base+"/persistentvolumeclaims/"+url.PathEscape(name), nil)
+		if err != nil {
+			pvcs = append(pvcs, map[string]any{"name": name, "error": err.Error()})
+			continue
+		}
+		pvcs = append(pvcs, map[string]any{"name": name, "namespace": target.Namespace,
+			"phase":    kubeObject(pvc["status"])["phase"],
+			"capacity": kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
+			"volume":   kubeObject(pvc["spec"])["volumeName"],
+			"usage":    map[string]any{"status": "not_configured", "reason": "Prometheus PVC usage adapter is not available in Go"}})
+	}
+	result["pvcs"] = pvcs
+	if uid != "" {
+		query := url.Values{"fieldSelector": {"involvedObject.uid=" + uid}, "limit": {"20"}}
+		if events, err := k.get(ctx, base+"/events", query); err == nil {
+			items := []any{}
+			for _, raw := range kubeList(events["items"]) {
+				item := kubeObject(raw)
+				at := item["lastTimestamp"]
+				if at == nil {
+					at = item["eventTime"]
+				}
+				if at == nil {
+					at = kubeObject(item["metadata"])["creationTimestamp"]
+				}
+				items = append(items, map[string]any{"reason": item["reason"], "message": kubeShort(item["message"]), "at": at})
+			}
+			result["events"] = items
+		} else {
+			result["eventsError"] = err.Error()
+		}
+	}
+	return result
+}

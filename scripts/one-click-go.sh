@@ -26,8 +26,17 @@ fi
 if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   compose_file="$repo_dir/deploy/compose/compose.go.external.yaml"
 fi
-docker compose --env-file "$env_file" -f "$compose_file" config -q
-docker compose --env-file "$env_file" -f "$compose_file" up -d --build --wait --wait-timeout 180
+compose_args=(-f "$compose_file")
+if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
+  kubeconfig_path="$(sed -n 's/^DBSPHERE_KUBECONFIG_HOST_PATH=//p' "$env_file" | tail -n 1)"
+  if [[ "$kubeconfig_path" != /* || ! -f "$kubeconfig_path" ]]; then
+    echo 'DBSPHERE_KUBECONFIG_HOST_PATH must be an existing absolute file path.' >&2
+    exit 1
+  fi
+  compose_args+=(-f "$repo_dir/deploy/compose/compose.go.k8s.yaml")
+fi
+docker compose --env-file "$env_file" "${compose_args[@]}" config -q
+docker compose --env-file "$env_file" "${compose_args[@]}" up -d --build --wait --wait-timeout 180
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
 echo "DbSphere Go development server is ready at http://127.0.0.1:${web_port:-8081}"
 if [[ -n "$new_admin_password" && "${DBSPHERE_NO_PRINT_PASSWORD:-false}" != true ]]; then

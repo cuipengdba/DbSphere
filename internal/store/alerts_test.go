@@ -69,8 +69,13 @@ func TestGoAlertOneEventIDAndRCACandidateInPG18(t *testing.T) {
 		WHERE asset_id=$1 AND event_group='capacity'`, asset.ID).Scan(&count); err != nil || count != 0 {
 		t.Fatal("alert opened before its configured duration", count, err)
 	}
-	if _, err := pg.recordCheckAt(context.Background(), asset.ID, pressure, "", "", now.Add(121*time.Second)); err != nil {
+	second, err := pg.recordCheckAt(context.Background(), asset.ID, pressure, "telemetry",
+		"Linux node_exporter collection failed", now.Add(121*time.Second))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if second.Status != "error" {
+		t.Fatal("Linux collection error was not marked on the sample")
 	}
 	var eventID string
 	if err := pg.pool.QueryRow(context.Background(), `SELECT id::text FROM events
@@ -204,5 +209,67 @@ func TestGoAlertGroupsPostgresAndLinuxUnderOneEvent(t *testing.T) {
 	}
 	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("grouped event did not close after both signals recovered: %s %v", status, err)
+	}
+}
+
+func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(context.Background(), assets.Input{Name: "Go Kubernetes RCA test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "k8s", K8sCluster: "test",
+		Namespace: "db", Pod: "pg-0"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	now := time.Now().UTC()
+	k8s := map[string]any{"status": "ok", "namespace": "db", "pod": map[string]any{
+		"name": "pg-0", "uid": "pod-uid", "node": "worker-1"},
+		"node": map[string]any{"name": "worker-1"},
+		"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
+			"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}}}
+	if _, err := pg.recordCheckAt(context.Background(), asset.ID, map[string]any{"k8s": k8s},
+		"availability", "PostgreSQL connection refused", now); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT id::text FROM events
+		WHERE asset_id=$1 AND event_group='availability' AND status='open'`, asset.ID).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	if !strings.Contains(string(encoded), "pod_oom_correlated") ||
+		!strings.Contains(string(encoded), "pod:pod-uid") ||
+		!strings.Contains(string(encoded), "supported_by") {
+		t.Fatalf("PG/Kubernetes evidence missing from one event: %s", encoded)
+	}
+	if _, err := pg.recordCheckAt(context.Background(), asset.ID,
+		map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
+			"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "pod-uid"}}},
+		"", "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
+		t.Fatalf("Kubernetes incident did not recover under original ID: %s %v", status, err)
 	}
 }

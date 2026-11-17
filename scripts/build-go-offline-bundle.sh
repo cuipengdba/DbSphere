@@ -35,6 +35,7 @@ docker pull --platform linux/amd64 postgres:18-bookworm
 mkdir -p -- "$stage/deploy/compose"
 cp -- "$repo_dir/deploy/compose/compose.go.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/deploy/compose/compose.go.external.yaml" "$stage/deploy/compose/"
+cp -- "$repo_dir/deploy/compose/compose.go.k8s.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/deploy/compose/compose.go.offline.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/scripts/install-go-offline.sh" "$stage/install.sh"
 chmod 0755 "$stage/install.sh"

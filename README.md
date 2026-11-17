@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现；仓库中的 Go 代码处于迁移起步阶段，尚不能替代已发布的监控 API。六视图工作台的静态页面已开始重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
+**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现。Go 开发版已具备独立镜像/离线包、PG14–18 基础采集、Linux node_exporter、初步 K8S 只读采集、五条告警规则及同一事件 ID 的证据图；功能尚未与历史版本对等，不能作为 V1.0 正式版。六视图静态工作台已重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
 
 已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0) 和 [V0.5.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗、可选通知、版本化巡检、监控存储备份恢复演练及 SQL 性能洞察。后续版本仅在满足各自验收条件后发布。
 
@@ -45,6 +45,8 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。V0.3 加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗、持久化 Webhook/邮件通知和 PG18 月度采样/事件分区。V0.4 加入 PostgreSQL/Linux/K8S/备份巡检、容量粗估、Markdown/HTML 报告和 PG18 存储恢复演练。V0.5 加入 Top SQL 指纹趋势、退化提示、慢日志和执行计划安全导入。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
 
 ### 本机开发启动
+
+Go 后端开发版可在 Linux 联网构建机运行 `bash scripts/one-click-go.sh`，以独立 PG18 和默认 `127.0.0.1:8081` 启动；Go 静态二进制与一键离线包说明见[离线部署文档](docs/OFFLINE_DEPLOYMENT.md)。以下 Node.js 命令用于已发布历史实现。
 
 需要 Node.js 24 和 pnpm。首次启动先设置不少于 12 位的 `DBSPHERE_ADMIN_PASSWORD`，再执行：
 

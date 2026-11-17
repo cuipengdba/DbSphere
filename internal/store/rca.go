@@ -189,7 +189,7 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 		sampleID := stringValue(payload["sampleId"])
 		sample, ok := samples[sampleID]
-		if !ok || sample.Status != "ok" {
+		if !ok || (sample.Status != "ok" && sample.Metrics["version_num"] == nil) {
 			continue
 		}
 		metric := stringValue(payload["metric"])

@@ -45,14 +45,23 @@ base="$bundle_dir/deploy/compose/compose.go.yaml"
 if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   base="$bundle_dir/deploy/compose/compose.go.external.yaml"
 fi
+compose_args=(-f "$base")
+if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
+  kubeconfig_path="$(sed -n 's/^DBSPHERE_KUBECONFIG_HOST_PATH=//p' "$env_file" | tail -n 1)"
+  if [[ "$kubeconfig_path" != /* || ! -f "$kubeconfig_path" ]]; then
+    echo 'DBSPHERE_KUBECONFIG_HOST_PATH must be an existing absolute file path.' >&2
+    exit 1
+  fi
+  compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.k8s.yaml")
+fi
 docker image load --input "$bundle_dir/images.tar.gz" >/dev/null
 docker image inspect "$DBSPHERE_GO_OFFLINE_APP_IMAGE" >/dev/null
 if [[ "$base" == "$bundle_dir/deploy/compose/compose.go.yaml" ]]; then
   docker image inspect postgres:18-bookworm >/dev/null
 fi
-docker compose --env-file "$env_file" -f "$base" \
+docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" config -q
-docker compose --env-file "$env_file" -f "$base" \
+docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
   up -d --no-build --pull never --wait --wait-timeout 180
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"

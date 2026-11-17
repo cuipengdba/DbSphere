@@ -23,14 +23,14 @@ type CheckResult struct {
 	CollectedAt time.Time `json:"collectedAt"`
 }
 
-// DueAssetIDs returns only assets for which the Go collector has all enabled adapters.
-// It intentionally leaves K8S and PgBouncer assets to their existing collector.
+// DueAssetIDs schedules Linux and Kubernetes PostgreSQL assets. PgBouncer assets
+// remain outside this scheduler until their Go adapter is available.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
 	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime='linux' AND pooler_url_enc IS NULL
+		WHERE runtime IN ('linux','k8s') AND pooler_url_enc IS NULL
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -78,17 +78,20 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	var linuxHost *string
 	var exporterPort *int
 	var hasPooler bool
+	var k8sCluster, k8sNamespace, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
-		runtime,linux_host,linux_exporter_port,pooler_url_enc IS NOT NULL
+		runtime,linux_host,linux_exporter_port,pooler_url_enc IS NOT NULL,
+		k8s_cluster,k8s_namespace,k8s_pod
 		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
-		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort, &hasPooler)
+		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
+		&hasPooler, &k8sCluster, &k8sNamespace, &k8sPod)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if runtime != "linux" || hasPooler {
+	if (runtime != "linux" && runtime != "k8s") || hasPooler {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	password, err := security.Decrypt(key, encrypted)
@@ -103,7 +106,14 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	if metrics == nil {
 		metrics = map[string]any{}
 	}
-	if exporterPort != nil && linuxHost != nil {
+	if runtime == "k8s" {
+		kube := collector.Kubernetes(ctx, collector.KubernetesTarget{Cluster: dereference(k8sCluster),
+			Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod)})
+		metrics["k8s"] = kube
+		if kube["status"] != "ok" && collectErr == nil {
+			group, reason = "telemetry", "Kubernetes resource collection is unavailable"
+		}
+	} else if exporterPort != nil && linuxHost != nil {
 		linux, linuxErr := collector.Linux(ctx, *linuxHost, *exporterPort)
 		if linuxErr != nil {
 			metrics["linux"] = map[string]any{"status": "error", "reason": linuxErr.Error()}
@@ -113,7 +123,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		} else {
 			metrics["linux"] = linux
 		}
-	} else {
+	} else if runtime == "linux" {
 		metrics["linux"] = map[string]any{"status": "not_configured",
 			"reason": "Linux node_exporter host and port are not configured"}
 	}
@@ -122,6 +132,13 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		return CheckResult{}, err
 	}
 	return result, nil
+}
+
+func dereference(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *Postgres) recordCheck(ctx context.Context, id string, metrics map[string]any, group, reason string) (CheckResult, error) {
@@ -198,10 +215,54 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			return CheckResult{}, err
 		}
 		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "error": reason, "source": "go_postgres_collector"})
-		_, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-			VALUES(gen_random_uuid(),$1,'collection_error',$2,$3)`, eventID, now, payload)
+		var collectionEvidenceID string
+		err = tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			VALUES(gen_random_uuid(),$1,'collection_error',$2,$3) RETURNING id::text`, eventID, now, payload).
+			Scan(&collectionEvidenceID)
 		if err != nil {
 			return CheckResult{}, err
+		}
+		if k8s := object(metrics["k8s"]); len(k8s) != 0 {
+			k8sPayload, _ := json.Marshal(k8s)
+			var k8sEvidenceID string
+			if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'k8s_state',$2,$3) RETURNING id::text`,
+				eventID, now, k8sPayload).Scan(&k8sEvidenceID); err != nil {
+				return CheckResult{}, err
+			}
+			if group == "availability" && stringValue(k8s["status"]) == "ok" {
+				for _, raw := range list(k8s["containers"]) {
+					container := object(raw)
+					causeAt, parseErr := time.Parse(time.RFC3339Nano, stringValue(container["lastTerminatedAt"]))
+					if stringValue(container["terminatedReason"]) != "OOMKilled" || parseErr != nil ||
+						now.Before(causeAt) || now.Sub(causeAt) >= 10*time.Minute {
+						continue
+					}
+					var exists bool
+					if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence
+						WHERE event_id=$1 AND kind='root_cause_candidate')`, eventID).Scan(&exists); err != nil {
+						return CheckResult{}, err
+					}
+					if !exists {
+						candidate, _ := json.Marshal(map[string]any{"hypothesis": "Pod 容器 " + stringValue(container["name"]) +
+							" 最近发生 OOMKilled，可能导致 PostgreSQL 连接失败", "confidence": "medium",
+							"supports": []string{collectionEvidenceID, k8sEvidenceID}, "causeObservedAt": causeAt,
+							"limitation": "时间关联不等于因果；仍需核对容器日志、探针和服务端点。"})
+						if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+							VALUES(gen_random_uuid(),$1,'root_cause_candidate',$2,$3)`, eventID, now, candidate); err != nil {
+							return CheckResult{}, err
+						}
+					}
+					break
+				}
+			}
+		}
+		if linux := object(metrics["linux"]); len(linux) != 0 {
+			linuxPayload, _ := json.Marshal(linux)
+			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'linux_state',$2,$3)`, eventID, now, linuxPayload); err != nil {
+				return CheckResult{}, err
+			}
 		}
 	} else {
 		rows, err := tx.Query(ctx, `SELECT id FROM events WHERE asset_id=$1 AND status='open'
