@@ -771,6 +771,14 @@ export class PgStore {
       status: r.status, metrics: r.metrics_json, error: r.error }));
   }
 
+  async getSamplesByIds(assetId, ids) {
+    if (!ids.length) return [];
+    const rows = (await this.pool.query(`SELECT * FROM samples WHERE asset_id=$1 AND id=ANY($2::uuid[])
+      ORDER BY collected_at DESC`, [assetId, ids.slice(0, 200)])).rows;
+    return rows.map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at,
+      status: r.status, metrics: r.metrics_json, error: r.error }));
+  }
+
   async importSlowLogs(assetId, entries) {
     const client = await this.pool.connect();
     try {

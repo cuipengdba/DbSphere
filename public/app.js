@@ -592,10 +592,28 @@ function resetEdit() {
 }
 
 async function showEvent(id) {
-  const { event } = await api(`/api/events/${id}`);
+  const { event, analysis } = await api(`/api/events/${id}`);
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
   target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));
+  const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
+  diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
+  diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
+  const graphDetails = document.createElement('details');
+  graphDetails.append(cell('summary', '查看证据关系'));
+  const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
+  for (const edge of analysis.graph.edges) {
+    const from = graphNodes.get(edge.from); const to = graphNodes.get(edge.to);
+    graphDetails.append(cell('p', `${from?.type ?? '未知'} ${from?.label ?? edge.from} → ${edge.relation} → ${to?.type ?? '未知'} ${to?.label ?? edge.to}`, 'evidence'));
+  }
+  diagnosis.append(graphDetails);
+  if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));
+  for (const candidate of analysis.candidates) {
+    diagnosis.append(cell('p', `${candidate.title} · 置信级别 ${candidate.confidence} · 证据 ${candidate.supports.join('、')}。${candidate.limitation}`, 'warning'));
+    if (candidate.missing.length) diagnosis.append(cell('small', `缺失：${candidate.missing.join('；')}`));
+  }
+  if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
+  target.append(diagnosis);
   if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
     const acknowledge = cell('button', '确认事件', 'ghost small-button');

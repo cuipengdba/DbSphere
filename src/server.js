@@ -20,6 +20,7 @@ import { readStoreBackupManifest } from './store-backup.js';
 import { sqlPerformanceSummary } from './sql-trends.js';
 import { parseSlowLogs } from './slow-logs.js';
 import { sanitizePlan, comparePlans } from './sql-plans.js';
+import { analyzeEvent, eventSampleIds } from './rca.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -433,7 +434,9 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       const eventMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})$/);
       if (req.method === 'GET' && eventMatch) {
         const event = await store.getEvent(eventMatch[1]);
-        return event ? send(res, 200, { event }) : send(res, 404, { error: 'Event not found' });
+        if (!event) return send(res, 404, { error: 'Event not found' });
+        const samples = await store.getSamplesByIds(event.assetId, eventSampleIds(event));
+        return send(res, 200, { event, analysis: analyzeEvent(event, samples) });
       }
       const ackMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})\/ack$/);
       if (req.method === 'POST' && ackMatch) {

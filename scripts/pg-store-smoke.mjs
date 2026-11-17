@@ -59,6 +59,9 @@ try {
   assert.equal(event.event.evidence.filter(e => e.kind === 'root_cause_candidate').length, 1);
   assert.equal(event.event.evidence.filter(e => e.kind === 'collection_error').length, 2);
   assert.equal(event.event.evidence.filter(e => e.kind === 'collection_recovered').length, 1);
+  assert.equal(event.analysis.eventId, eventId);
+  assert.equal(event.analysis.status, 'candidates');
+  assert.ok(event.analysis.graph.nodes.some(node => node.type === 'sample'));
   const linuxCreated = await fetch(`${base}/api/assets`, { method: 'POST', headers,
     body: JSON.stringify({ name: 'Linux exporter mapping', host: '127.0.0.1', port: 5432,
       database: 'postgres', username: 'monitor', password: 'test-monitor-secret',
@@ -90,5 +93,7 @@ try {
   assert.equal(event.event.status, 'resolved');
   assert.equal(event.event.evidence.filter(item => item.kind === 'alert_firing').length, 1);
   assert.equal(event.event.evidence.filter(item => item.kind === 'alert_recovered').length, 1);
+  assert.equal(event.analysis.eventId, eventId);
+  assert.ok(event.analysis.candidates.some(candidate => candidate.code === 'pod_oom_correlated'));
   console.log('PostgreSQL 18 store: B/S assets, samples, one event, evidence and restart passed');
 } finally { await stop(); }

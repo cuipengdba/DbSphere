@@ -507,6 +507,15 @@ export class Store {
       .map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at, status: r.status, metrics: r.metrics_json ? JSON.parse(r.metrics_json) : null, error: r.error }));
   }
 
+  getSamplesByIds(assetId, ids) {
+    if (!ids.length) return [];
+    const selected = ids.slice(0, 200);
+    return this.db.prepare(`SELECT * FROM samples WHERE asset_id=? AND id IN (${selected.map(() => '?').join(',')})
+      ORDER BY collected_at DESC`).all(assetId, ...selected)
+      .map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at,
+        status: r.status, metrics: r.metrics_json ? JSON.parse(r.metrics_json) : null, error: r.error }));
+  }
+
   importSlowLogs(assetId, entries) {
     const insert = this.db.prepare(`INSERT OR IGNORE INTO slow_log_entries
       (id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
