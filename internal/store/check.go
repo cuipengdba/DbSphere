@@ -264,39 +264,6 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 				return CheckResult{}, err
 			}
 		}
-	} else {
-		rows, err := tx.Query(ctx, `SELECT id FROM events WHERE asset_id=$1 AND status='open'
-			AND kind='collection_failure' FOR UPDATE`, id)
-		if err != nil {
-			return CheckResult{}, err
-		}
-		var eventIDs []string
-		for rows.Next() {
-			var eventID string
-			if err := rows.Scan(&eventID); err != nil {
-				rows.Close()
-				return CheckResult{}, err
-			}
-			eventIDs = append(eventIDs, eventID)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return CheckResult{}, err
-		}
-		rows.Close()
-		for _, eventID := range eventIDs {
-			payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": "go_postgres_collector"})
-			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-				VALUES(gen_random_uuid(),$1,'collection_recovered',$2,$3)`, eventID, now, payload); err != nil {
-				return CheckResult{}, err
-			}
-			if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2`, now, eventID); err != nil {
-				return CheckResult{}, err
-			}
-			if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, eventID); err != nil {
-				return CheckResult{}, err
-			}
-		}
 	}
 	var observed map[string]any
 	if err := json.Unmarshal(encoded, &observed); err != nil {
@@ -305,10 +272,66 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, now); err != nil {
 		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}
+	if reason == "" {
+		if err := resolveGoCollectionFailures(ctx, tx, id, sampleID, now); err != nil {
+			return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return CheckResult{}, err
 	}
 	return CheckResult{SampleID: sampleID, Status: status, CollectedAt: now}, nil
+}
+
+func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID string, now time.Time) error {
+	rows, err := tx.Query(ctx, `SELECT id::text FROM events WHERE asset_id=$1 AND status='open'
+		AND kind='collection_failure' FOR UPDATE`, assetID)
+	if err != nil {
+		return err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, eventID := range ids {
+		var recovered bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence
+			WHERE event_id=$1 AND kind='collection_recovered')`, eventID).Scan(&recovered); err != nil {
+			return err
+		}
+		if !recovered {
+			payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": "go_postgres_collector"})
+			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'collection_recovered',$2,$3)`, eventID, now, payload); err != nil {
+				return err
+			}
+		}
+		var firing int
+		if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM alert_states WHERE asset_id=$1
+			AND state_json->>'eventId'=$2 AND state_json->>'status'='firing'`, assetID, eventID).Scan(&firing); err != nil {
+			return err
+		}
+		if firing != 0 {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2`, now, eventID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Postgres) ensureCollectionPartitions(ctx context.Context, at time.Time) error {

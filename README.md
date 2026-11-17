@@ -6,7 +6,7 @@
 
 DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
 
-**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现。Go 开发版已具备独立镜像/离线包、PG14–18 基础采集、Linux node_exporter、初步 K8S 只读采集、五条告警规则及同一事件 ID 的证据图；功能尚未与历史版本对等，不能作为 V1.0 正式版。六视图静态工作台已重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
+**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现。Go 开发版已具备独立镜像/离线包、PG14–18 基础采集、Linux node_exporter、初步 K8S 只读采集、十条 PG/Linux/K8S 告警规则及同一事件 ID 的证据图；功能尚未与历史版本对等，不能作为 V1.0 正式版。六视图静态工作台已重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
 
 已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0) 和 [V0.5.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗、可选通知、版本化巡检、监控存储备份恢复演练及 SQL 性能洞察。后续版本仅在满足各自验收条件后发布。
 

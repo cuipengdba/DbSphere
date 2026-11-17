@@ -35,7 +35,9 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing'`},
 		"/api/alert-rules": {"rules", `SELECT definition_json || jsonb_build_object('editable',
 			definition_json->>'metric' IN ('pg.connection_utilization','pg.blocked_sessions',
-			'pg.long_transactions','linux.memory_used_percent','linux.disk_used_percent'))
+			'pg.long_transactions','linux.memory_used_percent','linux.disk_used_percent',
+			'k8s.pod_not_ready','k8s.pod_unscheduled','k8s.scheduling_failure_recent',
+			'k8s.oom_recent','k8s.node_pressure'))
 			FROM alert_rules ORDER BY id`},
 		"/api/silences": {"silences", `SELECT jsonb_build_object(
 			'id',id,'kind',kind,'assetId',asset_id,'ruleId',rule_id,

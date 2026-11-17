@@ -35,6 +35,33 @@ func TestGoAlertPendingFiringMissingAndRecovery(t *testing.T) {
 	}
 }
 
+func TestGoKubernetesAlertSignalsAndMissingData(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	metrics := map[string]any{"k8s": map[string]any{"status": "ok",
+		"pod": map[string]any{"name": "pg-0", "uid": "pod-uid", "conditions": []any{
+			map[string]any{"type": "Ready", "status": "False"},
+			map[string]any{"type": "PodScheduled", "status": "True"}}},
+		"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
+			"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}},
+		"events": []any{map[string]any{"reason": "FailedMount", "at": now.Add(-time.Minute).Format(time.RFC3339Nano)}},
+		"node": map[string]any{"name": "worker-1", "conditions": []any{
+			map[string]any{"type": "MemoryPressure", "status": "True"}}}}}
+	for metric, want := range map[string]float64{"k8s.pod_not_ready": 1, "k8s.pod_unscheduled": 0,
+		"k8s.oom_recent": 1, "k8s.scheduling_failure_recent": 1, "k8s.node_pressure": 1} {
+		signal := readGoSignal(metric, metrics, now)
+		if !signal.Available || signal.Value != want {
+			t.Fatalf("%s signal mismatch: %+v", metric, signal)
+		}
+	}
+	metrics["k8s"] = map[string]any{"status": "error", "reason": "Kubernetes API HTTP 403"}
+	for metric := range map[string]bool{"k8s.pod_not_ready": true, "k8s.oom_recent": true,
+		"k8s.node_pressure": true} {
+		if readGoSignal(metric, metrics, now).Available {
+			t.Fatalf("%s treated missing Kubernetes data as healthy", metric)
+		}
+	}
+}
+
 func TestGoAlertOneEventIDAndRCACandidateInPG18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {
@@ -264,11 +291,20 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	}
 	if _, err := pg.recordCheckAt(context.Background(), asset.ID,
 		map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
-			"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "pod-uid"}}},
+			"k8s": k8s},
 		"", "", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	var status string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "open" {
+		t.Fatalf("Kubernetes incident closed while OOM signal still fires: %s %v", status, err)
+	}
+	k8s["containers"] = []any{}
+	if _, err := pg.recordCheckAt(context.Background(), asset.ID,
+		map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
+			"k8s": k8s}, "", "", now.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("Kubernetes incident did not recover under original ID: %s %v", status, err)
 	}

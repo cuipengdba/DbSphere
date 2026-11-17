@@ -30,6 +30,11 @@ var goDefaultRules = []alertRule{
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"linux_memory_high", "Linux 内存使用率高", "linux.memory_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
 	{"linux_disk_high", "Linux 文件系统使用率高", "linux.disk_used_percent", "node_exporter", "storage", "warning", ">=", 90, 300, 1, true},
+	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
+	{"k8s_pod_unscheduled", "Kubernetes Pod 调度失败", "k8s.pod_unscheduled", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
+	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true},
+	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true},
+	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true},
 }
 
 func seedGoRules(ctx context.Context, tx pgx.Tx) error {
@@ -81,13 +86,15 @@ func numeric(value any) (float64, bool) {
 func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
-		"linux.memory_used_percent", "linux.disk_used_percent":
+		"linux.memory_used_percent", "linux.disk_used_percent",
+		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent",
+		"k8s.oom_recent", "k8s.node_pressure":
 		return true
 	}
 	return false
 }
 
-func readGoSignal(metric string, metrics map[string]any) alertSignal {
+func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSignal {
 	signal := alertSignal{Source: "PostgreSQL", Reason: "signal unavailable"}
 	switch metric {
 	case "pg.connection_utilization":
@@ -130,6 +137,75 @@ func readGoSignal(metric string, metrics map[string]any) alertSignal {
 				return alertSignal{Available: true, Value: best, Source: signal.Source,
 					Detail: map[string]any{"mountpoint": mount}}
 			}
+		}
+	case "k8s.pod_not_ready", "k8s.pod_unscheduled":
+		signal.Source = "Kubernetes API"
+		k8s := object(metrics["k8s"])
+		if stringValue(k8s["status"]) == "ok" {
+			wanted := "Ready"
+			if metric == "k8s.pod_unscheduled" {
+				wanted = "PodScheduled"
+			}
+			for _, raw := range list(object(k8s["pod"])["conditions"]) {
+				condition := object(raw)
+				if stringValue(condition["type"]) != wanted {
+					continue
+				}
+				switch stringValue(condition["status"]) {
+				case "True":
+					return alertSignal{Available: true, Value: 0, Source: signal.Source}
+				case "False":
+					return alertSignal{Available: true, Value: 1, Source: signal.Source,
+						Detail: map[string]any{"pod": object(k8s["pod"])["name"], "reason": condition["reason"]}}
+				}
+			}
+		}
+	case "k8s.scheduling_failure_recent":
+		signal.Source = "Kubernetes Event"
+		k8s := object(metrics["k8s"])
+		if stringValue(k8s["status"]) == "ok" && k8s["eventsError"] == nil {
+			count := 0
+			for _, raw := range list(k8s["events"]) {
+				item := object(raw)
+				reason := stringValue(item["reason"])
+				at, err := time.Parse(time.RFC3339Nano, stringValue(item["at"]))
+				if err == nil && !at.After(now) && now.Sub(at) <= 15*time.Minute &&
+					(reason == "FailedScheduling" || reason == "FailedMount" || reason == "FailedAttachVolume") {
+					count++
+				}
+			}
+			return alertSignal{Available: true, Value: float64(count), Source: signal.Source}
+		}
+	case "k8s.oom_recent":
+		signal.Source = "Kubernetes API"
+		k8s := object(metrics["k8s"])
+		if stringValue(k8s["status"]) == "ok" && stringValue(object(k8s["pod"])["uid"]) != "" && k8s["containers"] != nil {
+			for _, raw := range list(k8s["containers"]) {
+				container := object(raw)
+				at, err := time.Parse(time.RFC3339Nano, stringValue(container["lastTerminatedAt"]))
+				if err == nil && !at.After(now) && now.Sub(at) <= 10*time.Minute &&
+					stringValue(container["terminatedReason"]) == "OOMKilled" {
+					return alertSignal{Available: true, Value: 1, Source: signal.Source,
+						Detail: map[string]any{"pod": object(k8s["pod"])["name"], "container": container["name"], "at": at}}
+				}
+			}
+			return alertSignal{Available: true, Value: 0, Source: signal.Source}
+		}
+	case "k8s.node_pressure":
+		signal.Source = "Kubernetes API"
+		k8s := object(metrics["k8s"])
+		conditions := list(object(k8s["node"])["conditions"])
+		if stringValue(k8s["status"]) == "ok" && len(conditions) > 0 {
+			for _, raw := range conditions {
+				condition := object(raw)
+				typeName := stringValue(condition["type"])
+				if (typeName == "MemoryPressure" || typeName == "DiskPressure" || typeName == "PIDPressure") &&
+					stringValue(condition["status"]) == "True" {
+					return alertSignal{Available: true, Value: 1, Source: signal.Source,
+						Detail: map[string]any{"node": object(k8s["node"])["name"], "condition": typeName}}
+				}
+			}
+			return alertSignal{Available: true, Value: 0, Source: signal.Source}
 		}
 	}
 	return signal
@@ -274,7 +350,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 			}
 			continue
 		}
-		signal := readGoSignal(rule.Metric, metrics)
+		signal := readGoSignal(rule.Metric, metrics, now)
 		next, transition := nextGoAlert(rule, signal, old, now)
 		if next != nil {
 			next.MutedBy = genericSilence
