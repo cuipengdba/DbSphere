@@ -12,7 +12,7 @@ V0.5 为 PostgreSQL 14–18 增加 SQL 性能洞察，继续采用 Linux 服务�
 
 ## 验证范围
 
-- [Linux 发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44052541568)：11 个作业通过，含 49 项自动化测试、PG14–18 五版本真实 `pg_stat_statements`、真实 PG18 SQL 延迟退化、PG18 存储与 SQLite 迁移、一键 Compose、PG14/node_exporter 和 PgBouncer。发布提交还会复验无扩展降级。
+- [Linux 发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44053161066)：11 个作业通过，含 49 项自动化测试、PG14–18 五版本真实 `pg_stat_statements`、真实 PG18 SQL 延迟退化、PG18 存储与 SQLite 迁移、一键 Compose、PG14/node_exporter 和 PgBouncer。五版均验证扩展未安装时的降级。
 - 本地 PG14–18 容器验证只读诊断、扩展采集与计划解析；PG18 五次快查询和五次慢查询呈现约九倍平均耗时差异。
 - 浏览器连接独立 PG18 监控存储和真实 PG18 目标，验证 Top SQL、慢日志 JSON 导入、计划导入和敏感语句不在页面呈现。
 
