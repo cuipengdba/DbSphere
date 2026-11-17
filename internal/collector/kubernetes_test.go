@@ -51,6 +51,8 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 			fmt.Fprint(w, `{"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"memory":"2Gi"}}}`)
 		case "/api/v1/namespaces/db/persistentvolumeclaims/pg-data":
 			fmt.Fprint(w, `{"status":{"phase":"Bound","capacity":{"storage":"5Gi"}},"spec":{"volumeName":"pv-1"}}`)
+		case "/api/v1/persistentvolumes/pv-1":
+			fmt.Fprint(w, `{"status":{"phase":"Bound"},"spec":{"capacity":{"storage":"5Gi"}}}`)
 		case "/api/v1/namespaces/db/events":
 			if r.URL.Query().Get("fieldSelector") != "involvedObject.uid=pod-uid" {
 				t.Errorf("events were not scoped by Pod UID: %s", r.URL.RawQuery)
@@ -73,7 +75,10 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	if container["terminatedReason"] != "OOMKilled" {
 		t.Fatalf("OOM evidence missing: %+v", container)
 	}
-	if len(paths) != 4 {
+	if kubeObject(kubeList(value["pvcs"])[0])["volume"] == nil {
+		t.Fatal("bound PersistentVolume was not linked to its PVC")
+	}
+	if len(paths) != 5 {
 		t.Fatalf("unexpected Kubernetes API calls: %v", paths)
 	}
 }

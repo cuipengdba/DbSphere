@@ -32,13 +32,15 @@ Go 告警迁移已加入 PG 连接使用率、锁等待、长事务和 Linux 内
 
 Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMKilled、Pod 条件与事件、Node 条件及 PVC 绑定信息；TLS 模拟 API 验证了 bearer token、Pod UID 事件过滤和只读请求。PG18 实库合成样本验证了 PG 连接失败 + 10 分钟内同 Pod OOM 的一个事件 ID、带来源的中等置信度候选和恢复闭环。Go Compose/离线包增加可选的只读 kubeconfig 挂载。真实 kind ServiceAccount 的旧 token 已过期，重新签发临时 token 的命令被自动审批拒绝，因此本轮没有真实 kind 验收；Service、Pod/Node 指标、PVC 实际用量及 K8S 告警规则仍待迁移。
 
+Go K8S PVC 详情现继续以只读请求读取绑定的 PV 名称、阶段和容量；权限缺失时保留 `volumeError`。B/S 资产页按既有 PVC/PV 结构显示，不再把 PV 名称字符串当作对象。metrics.k8s.io 未接入时在样本中明确标记缺口。
+
 Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力五条规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量、容器重启增量与通知投递仍是缺口。
 
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
 
 PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。
 
-[PgBouncer 新增作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)通过，但同一轮 Go foundation 因不同 Go 测试包并行共用 PG18 库、重复启动执行建表语句而遇到一次死锁，故该轮整体 CI **失败**。已将 Go schema 迁移改为版本 13 已应用时跳过建表和已存在分区的 DDL，并在共享库的 CI 测试中串行执行包；本地连续五次并发启动/事件读取与完整 Go 测试通过，等待新 CI 复核。
+[PgBouncer 新增作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)通过，但同一轮 Go foundation 因不同 Go 测试包并行共用 PG18 库、重复启动执行建表语句而遇到一次死锁，故该轮整体 CI **失败**。Go schema 迁移现于版本 13 已应用时跳过建表和已存在分区的 DDL，共享库的 CI 测试包改为串行执行；本地连续五次并发启动/事件读取与完整 Go 测试通过，[修复后的 21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44107307127)全部通过。
 
 Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 `.run`；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 `--no-build --pull never` 启动 B/S 和独立 PG18。[13 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672)验证删除本机镜像后的纯本地安装与重复执行。另有 Node.js 24 + 外部 PG18 的轻量离线包，CI 验证解压后不运行包管理器即可启动。两种产物均由[独立工作流](https://github.com/cuipengdba/DbSphere/actions/runs/44056371453)构建并校验；单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
 

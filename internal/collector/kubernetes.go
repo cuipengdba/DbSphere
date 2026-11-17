@@ -273,7 +273,8 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"],
 			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName,
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
-		"node": nil, "resourceMetrics": nil}
+		"node": nil, "resourceMetrics": nil,
+		"resourceMetricsError": "metrics.k8s.io adapter is not available in Go"}
 	if nodeName != "" && kubeName.MatchString(nodeName) {
 		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
 			info := kubeObject(node["status"])
@@ -296,11 +297,23 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			pvcs = append(pvcs, map[string]any{"name": name, "error": err.Error()})
 			continue
 		}
-		pvcs = append(pvcs, map[string]any{"name": name, "namespace": target.Namespace,
-			"phase":    kubeObject(pvc["status"])["phase"],
-			"capacity": kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
-			"volume":   kubeObject(pvc["spec"])["volumeName"],
-			"usage":    map[string]any{"status": "not_configured", "reason": "Prometheus PVC usage adapter is not available in Go"}})
+		pvcSpec := kubeObject(pvc["spec"])
+		entry := map[string]any{"name": name, "namespace": target.Namespace,
+			"phase":     kubeObject(pvc["status"])["phase"],
+			"capacity":  kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
+			"requested": kubeObject(kubeObject(pvcSpec["resources"])["requests"])["storage"],
+			"usage":     map[string]any{"status": "not_configured", "reason": "Prometheus PVC usage adapter is not available in Go"}}
+		if volumeName := kubeString(pvcSpec["volumeName"]); volumeName != "" && kubeName.MatchString(volumeName) {
+			volume, err := k.get(ctx, "/api/v1/persistentvolumes/"+url.PathEscape(volumeName), nil)
+			if err != nil {
+				entry["volumeError"] = err.Error()
+			} else {
+				entry["volume"] = map[string]any{"name": volumeName,
+					"phase":    kubeObject(volume["status"])["phase"],
+					"capacity": kubeObject(kubeObject(volume["spec"])["capacity"])["storage"]}
+			}
+		}
+		pvcs = append(pvcs, entry)
 	}
 	result["pvcs"] = pvcs
 	if uid != "" {
