@@ -186,7 +186,12 @@ function renderAssets(assets) {
     const view = cell('button', '查看', 'ghost small-button'); view.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     const edit = cell('button', '编辑', 'ghost small-button'); edit.addEventListener('click', () => editAsset(asset));
     const check = cell('button', '采集', 'ghost small-button'); check.addEventListener('click', async () => {
-      try { await api(`/api/assets/${asset.id}/check`, 'POST'); notice(`${asset.name} 采集完成`); await refresh(); }
+      try {
+        const { result } = await api(`/api/assets/${asset.id}/check`, 'POST');
+        const failed = result?.status === 'error';
+        notice(failed ? `${asset.name} 采集失败，已记录问题事件。` : `${asset.name} 采集正常。`, failed);
+        await refresh();
+      }
       catch (e) { notice(e.message, true); }
     });
     const remove = cell('button', '删除', 'danger small-button'); remove.addEventListener('click', async () => {
