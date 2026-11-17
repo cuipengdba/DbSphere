@@ -13,6 +13,7 @@ import (
 
 	"github.com/cuipengdba/dbsphere/internal/config"
 	"github.com/cuipengdba/dbsphere/internal/httpapi"
+	"github.com/cuipengdba/dbsphere/internal/notify"
 	"github.com/cuipengdba/dbsphere/internal/store"
 )
 
@@ -65,6 +66,10 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pg.Close()
+	notifyConfig, err := notify.Load()
+	if err != nil {
+		return err
+	}
 	passwordHash, err := pg.AdminPasswordHash(ctx, cfg.AdminPass)
 	if err != nil {
 		return err
@@ -81,6 +86,11 @@ func run(log *slog.Logger) error {
 		_ = server.Shutdown(shutdown)
 	}()
 	var collectorDone <-chan struct{}
+	notifierDone := make(chan struct{})
+	go func() {
+		defer close(notifierDone)
+		runNotifier(ctx, pg, notifyConfig, log)
+	}()
 	if cfg.AutoCollect {
 		done := make(chan struct{})
 		collectorDone = done
@@ -96,10 +106,29 @@ func run(log *slog.Logger) error {
 	if collectorDone != nil {
 		<-collectorDone
 	}
+	<-notifierDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log *slog.Logger) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := pg.DispatchDueNotifications(ctx, 20, cfg.Send); err != nil && ctx.Err() == nil {
+			log.Error("Go notification dispatch failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval time.Duration, log *slog.Logger) {

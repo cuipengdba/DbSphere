@@ -12,6 +12,8 @@ Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发�
 
 如已有 Prometheus 抓取 kubelet 的 `kubelet_volume_stats_used_bytes`，可在同一配置文件设置 `DBSPHERE_PROMETHEUS_URL=https://prometheus.example.internal`，需要 Bearer 令牌时再设置 `DBSPHERE_PROMETHEUS_TOKEN`，并重新运行一键脚本。此项可选；未配置或指标缺失时 PVC 使用率保持未知，不会误判为健康。Go 适配器按资产映射的 Namespace/PVC 查询，不接收浏览器指定的 Prometheus 地址。生产 Prometheus 仍待验收。
 
+Go 告警通知也是可选配置。在同一配置文件设置 `DBSPHERE_WEBHOOK_URL=https://...`，可加 `DBSPHERE_WEBHOOK_SECRET` 启用 HMAC-SHA256 签名；邮件需同时设置 `DBSPHERE_SMTP_HOST`、`DBSPHERE_SMTP_FROM`、`DBSPHERE_SMTP_TO`，可选端口及用户/密码。默认邮件端口 587 并要求 STARTTLS，465 使用 TLS；仅环回 SMTP 可设置 `DBSPHERE_SMTP_ALLOW_PLAIN=true`。`DBSPHERE_NOTIFY_MIN_SEVERITY` 默认 `warning`，可按 `DBSPHERE_WEBHOOK_MIN_SEVERITY`、`DBSPHERE_EMAIL_MIN_SEVERITY` 分通道覆盖。未配置通道的投递记录标记为跳过；失败投递最多自动重试五次，之后可在 B/S 页面手动重试。生产通知通道仍待验收。
+
 当前可从 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev) 下载两种 Linux x86_64 安装包及各自的 SHA-256 文件。V0.6 的跨层根因分析仍在开发中。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。

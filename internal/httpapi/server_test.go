@@ -25,6 +25,10 @@ type silenceStub struct {
 	created, revoked int
 }
 
+func (stub *silenceStub) RetryNotification(_ context.Context, id string) (bool, error) {
+	return id == "11111111-1111-1111-1111-111111111111", nil
+}
+
 func (stub *silenceStub) CreateSilence(_ context.Context, input store.SilenceInput) (json.RawMessage, error) {
 	stub.created++
 	if input.Reason == "invalid" {
@@ -85,6 +89,12 @@ func TestGoSilenceAPIRequiresLoginAndCSRF(t *testing.T) {
 	}
 	if got := call(http.MethodDelete, "/api/silences/22222222-2222-2222-2222-222222222222", "", cookie, csrf); got.Code != http.StatusNotFound {
 		t.Fatal("missing silence not reported")
+	}
+	if got := call(http.MethodPost, "/api/notifications/11111111-1111-1111-1111-111111111111/retry", "", cookie, csrf); got.Code != http.StatusOK {
+		t.Fatalf("notification retry failed: %d", got.Code)
+	}
+	if got := call(http.MethodPost, "/api/notifications/22222222-2222-2222-2222-222222222222/retry", "", cookie, csrf); got.Code != http.StatusNotFound {
+		t.Fatal("missing failed notification not reported")
 	}
 	if stub.created != 2 || stub.revoked != 2 {
 		t.Fatalf("wrong calls: %d %d", stub.created, stub.revoked)

@@ -43,6 +43,7 @@ var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
 var silencePath = regexp.MustCompile(`^/api/silences/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var notificationRetryPath = regexp.MustCompile(`^/api/notifications/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/retry$`)
 
 type AssetChecker interface {
 	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
@@ -64,6 +65,9 @@ type AlertRuleStore interface {
 type SilenceStore interface {
 	CreateSilence(context.Context, storepkg.SilenceInput) (json.RawMessage, error)
 	RevokeSilence(context.Context, string) (json.RawMessage, error)
+}
+type NotificationRetryStore interface {
+	RetryNotification(context.Context, string) (bool, error)
 }
 
 type AuthConfig struct {
@@ -250,6 +254,24 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					}
 					return
 				}
+			}
+		}
+		if r.Method == http.MethodPost {
+			if match := notificationRetryPath.FindStringSubmatch(r.URL.Path); match != nil {
+				retryDB, ok := store.(NotificationRetryStore)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Notification retry unavailable"})
+					return
+				}
+				retried, err := retryDB.RetryNotification(r.Context(), match[1])
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Notification storage unavailable"})
+				} else if !retried {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Failed notification not found"})
+				} else {
+					respond(w, http.StatusOK, map[string]bool{"ok": true})
+				}
+				return
 			}
 		}
 		if assetsDB, ok := store.(AssetStore); ok {

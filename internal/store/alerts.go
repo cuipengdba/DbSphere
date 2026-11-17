@@ -442,9 +442,16 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 				"value": signal.Value, "threshold": rule.Threshold, "operator": rule.Operator,
 				"sampleId": sampleID, "detail": signal.Detail, "reason": signal.Reason,
 				"silenceId": next.MutedBy})
-			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-				VALUES(gen_random_uuid(),$1,$2,$3,$4)`, next.EventID, "alert_"+transition, now, payload); err != nil {
+			var evidenceID string
+			if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,$2,$3,$4) RETURNING id::text`, next.EventID,
+				"alert_"+transition, now, payload).Scan(&evidenceID); err != nil {
 				return err
+			}
+			if transition == "firing" || transition == "unsuppressed" {
+				if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -483,10 +490,18 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 		return nil
 	}
 	payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,
-		"metric": rule.Metric, "sampleId": sampleID})
-	if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,$2,$3,$4)`, old.EventID, "alert_"+transition, now, payload); err != nil {
+		"metric": rule.Metric, "sampleId": sampleID, "severity": rule.Severity,
+		"source": rule.Source, "value": old.LastValue})
+	var evidenceID string
+	if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4) RETURNING id::text`, old.EventID,
+		"alert_"+transition, now, payload).Scan(&evidenceID); err != nil {
 		return err
+	}
+	if transition == "recovered" && old.MutedBy == nil {
+		if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
+			return err
+		}
 	}
 	var firing int
 	if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM alert_states
