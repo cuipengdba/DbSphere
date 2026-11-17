@@ -50,8 +50,23 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(1742026)"); err != nil {
 		return fmt.Errorf("lock DbSphere schema migration: %w", err)
 	}
-	if _, err = tx.Exec(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("apply DbSphere schema: %w", err)
+	var migrationTable *string
+	if err = tx.QueryRow(ctx, "SELECT to_regclass('public.dbsphere_schema_migrations')::text").Scan(&migrationTable); err != nil {
+		return fmt.Errorf("check DbSphere migration table: %w", err)
+	}
+	current := false
+	if migrationTable != nil {
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=13)").Scan(&current); err != nil {
+			return fmt.Errorf("check DbSphere schema version: %w", err)
+		}
+	}
+	if !current {
+		if _, err = tx.Exec(ctx, schemaSQL); err != nil {
+			return fmt.Errorf("apply DbSphere schema: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(13) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record DbSphere Go schema migration: %w", err)
+		}
 	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
@@ -63,15 +78,19 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			start := thisMonth.AddDate(0, offset, 0)
 			end := start.AddDate(0, 1, 0)
 			name := fmt.Sprintf("%s_%04d%02d", table, start.Year(), int(start.Month()))
+			var present *string
+			if err = tx.QueryRow(ctx, "SELECT to_regclass($1)::text", "public."+name).Scan(&present); err != nil {
+				return fmt.Errorf("check %s partition: %w", name, err)
+			}
+			if present != nil {
+				continue
+			}
 			query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
 				name, table, start.Format(time.RFC3339), end.Format(time.RFC3339))
 			if _, err = tx.Exec(ctx, query); err != nil {
 				return fmt.Errorf("create %s partition: %w", name, err)
 			}
 		}
-	}
-	if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(13) ON CONFLICT DO NOTHING"); err != nil {
-		return fmt.Errorf("record DbSphere Go schema migration: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit DbSphere schema migration: %w", err)

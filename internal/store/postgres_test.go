@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -343,6 +344,67 @@ func TestGoPgBouncerCombinedSampleInPG18(t *testing.T) {
 	if !strings.Contains(string(encoded), `"pgbouncer"`) || !strings.Contains(string(encoded), `"clientWaiting"`) ||
 		strings.Contains(string(encoded), "dbsphere-monitor-test") {
 		t.Fatalf("PgBouncer sample missing or credential leaked: %s", encoded)
+	}
+}
+
+func TestConcurrentGoOpenDoesNotBlockEventReads(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	created, err := pg.CreateAsset(context.Background(), assets.Input{Name: "Go migration concurrency test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	if _, err := pg.recordCheck(context.Background(), asset.ID, nil, "availability", "PostgreSQL connection refused"); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT id::text FROM events WHERE asset_id=$1`, asset.ID).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	problems := make(chan error, 10)
+	var group sync.WaitGroup
+	for range 5 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			other, err := Open(ctx, url)
+			if err != nil {
+				problems <- err
+				return
+			}
+			other.Close()
+		}()
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if _, err := pg.EventByID(ctx, eventID); err != nil {
+				problems <- err
+			}
+		}()
+	}
+	group.Wait()
+	close(problems)
+	for problem := range problems {
+		t.Errorf("concurrent migration/read failed: %v", problem)
 	}
 }
 

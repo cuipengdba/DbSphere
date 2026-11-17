@@ -38,6 +38,8 @@ Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读�
 
 PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。
 
+[PgBouncer 新增作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)通过，但同一轮 Go foundation 因不同 Go 测试包并行共用 PG18 库、重复启动执行建表语句而遇到一次死锁，故该轮整体 CI **失败**。已将 Go schema 迁移改为版本 13 已应用时跳过建表和已存在分区的 DDL，并在共享库的 CI 测试中串行执行包；本地连续五次并发启动/事件读取与完整 Go 测试通过，等待新 CI 复核。
+
 Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 `.run`；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 `--no-build --pull never` 启动 B/S 和独立 PG18。[13 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672)验证删除本机镜像后的纯本地安装与重复执行。另有 Node.js 24 + 外部 PG18 的轻量离线包，CI 验证解压后不运行包管理器即可启动。两种产物均由[独立工作流](https://github.com/cuipengdba/DbSphere/actions/runs/44056371453)构建并校验；单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
 
 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)已附上 `.run`、Node 轻量包及各自 SHA-256 文件；该预览不代表 V0.6 正式版验收。事件详情现从已存证据和原始样本派生同一事件 ID 的证据关系与首批无模型根因候选；证据不足显示“未定位”。本地 51 项测试和 PG18 实库事件读取通过。范围及未完成项见[根因分析开发记录](RCA_V0.6_PROGRESS.md)。
