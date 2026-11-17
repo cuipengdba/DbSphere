@@ -59,6 +59,14 @@ if [[ -n "$backup_info_host_path" ]]; then
   fi
   compose_files+=(-f "$repo_dir/deploy/compose/compose.backup.yaml")
 fi
+store_backup_host_path="$(sed -n 's/^DBSPHERE_STORE_BACKUP_HOST_PATH=//p' "$env_file" | tail -n 1)"
+if [[ -n "$store_backup_host_path" ]]; then
+  if [[ "$store_backup_host_path" != /* || ! -f "$store_backup_host_path" ]]; then
+    echo 'DBSPHERE_STORE_BACKUP_HOST_PATH must be an existing absolute file path.' >&2
+    exit 1
+  fi
+  compose_files+=(-f "$repo_dir/deploy/compose/compose.store-backup.yaml")
+fi
 
 docker compose --env-file "$env_file" "${compose_files[@]}" config -q
 if [[ -n "$migrate_from" ]]; then

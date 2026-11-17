@@ -15,7 +15,7 @@ export function inspectionReportMarkdown(run, asset, forecast = null) {
     `- 执行状态：${run.status === 'failed' ? '失败' : '完成'}`,
     `- 原始采样 ID：${md(run.sampleId ?? '无')}`,
     `- 同期开放事件 ID：${run.eventIds?.length ? run.eventIds.map(md).join('、') : '无'}`,
-    `- 结果：风险 ${run.summary.risk}、通过 ${run.summary.pass}、未知 ${run.summary.unknown}、相对上次变化 ${run.summary.changed}`,
+    `- 结果：风险 ${run.summary.risk}、通过 ${run.summary.pass}、未知 ${run.summary.unknown}、不适用 ${run.summary.notApplicable ?? 0}、相对上次变化 ${run.summary.changed}`,
     ''
   ];
   if (run.error) lines.push(`执行错误：${md(run.error)}`, '');

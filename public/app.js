@@ -106,7 +106,7 @@ function renderInspections(assets, templates, schedules, runs) {
   for (const run of runs) {
     const details = document.createElement('details'); details.className = 'rule-card';
     const asset = assets.find(item => item.id === run.assetId);
-    details.append(cell('summary', `${asset?.name ?? '资产'} · ${run.templateId} v${run.templateVersion} · ${run.status === 'failed' ? '执行失败' : `风险 ${run.summary.risk} / 未知 ${run.summary.unknown}`} · ${formatTime(run.completedAt)}`));
+    details.append(cell('summary', `${asset?.name ?? '资产'} · ${run.templateId} v${run.templateVersion} · ${run.status === 'failed' ? '执行失败' : `风险 ${run.summary.risk} / 未知 ${run.summary.unknown} / 不适用 ${run.summary.notApplicable ?? 0}`} · ${formatTime(run.completedAt)}`));
     details.append(cell('small', `巡检 ID ${run.id} · 样本 ${run.sampleId}${run.retryOf ? ' · 重试自 ' + run.retryOf : ''}`));
     if (run.error) details.append(cell('p', run.error, 'warning'));
     for (const finding of run.findings) {
@@ -395,11 +395,15 @@ function renderStorage(storage) {
     ['预计每日采样增长', `${mib(storage.estimatedSampleBytesPerDay)}（粗估）`],
     ['采样保留期', storage.retentionDays ? `${storage.retentionDays} 天` : '未启用自动清理'],
     ['已结事件保留期', storage.eventRetentionDays ? `${storage.eventRetentionDays} 天` : '永久保留'],
-    ['最早采样', formatTime(storage.oldestSampleAt)]
+    ['最早采样', formatTime(storage.oldestSampleAt)],
+    ['PG18 监控存储备份', storage.backup?.status === 'ok'
+      ? `${storage.backup.ageHours} 小时前 · ${storage.backup.backupId}` : '未知 / 未配置'],
+    ['备份上报恢复点', storage.backup?.status === 'ok' ? formatTime(storage.backup.restorePointAt) : '未知']
   ]) {
     const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
   }
   target.append(grid);
+  if (storage.backup?.status !== 'ok') target.append(cell('p', storage.backup?.reason ?? '监控存储备份状态未知', 'warning'));
 }
 
 function renderRules(rules) {

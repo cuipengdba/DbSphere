@@ -16,6 +16,7 @@ import { evaluateInspection } from './inspections.js';
 import { collectBackup } from './backup.js';
 import { forecastDatabaseGrowth } from './capacity.js';
 import { inspectionReportHtml, inspectionReportMarkdown } from './reports.js';
+import { readStoreBackupManifest } from './store-backup.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -188,7 +189,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       return store.saveInspectionRun({ id: randomUUID(), assetId, templateId,
         templateVersion: template.version, sampleId: null, retryOf,
         startedAt, completedAt: new Date().toISOString(), status: 'failed', error: reason,
-        summary: { risk: 0, pass: 0, unknown: template.checks.length, changed: 0 },
+        summary: { risk: 0, pass: 0, unknown: template.checks.length,
+          notApplicable: 0, changed: 0 },
         findings: [], eventIds: [] });
     } finally { activeInspections.delete(key); }
   }
@@ -303,7 +305,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         if (req.method === 'GET' && path === '/api/notifications') return send(res, 200, { notifications: await store.listNotificationHistory() });
         if (req.method === 'GET' && path === '/api/storage') {
           return send(res, 200, { storage: store.kind === 'postgresql18'
-            ? { ...await store.storageStats(retentionDays), eventRetentionDays }
+            ? { ...await store.storageStats(retentionDays), eventRetentionDays,
+              backup: await readStoreBackupManifest() }
             : { mode: 'sqlite-preview' } });
         }
         const notificationRetry = path.match(/^\/api\/notifications\/([0-9a-f-]{36})\/retry$/);

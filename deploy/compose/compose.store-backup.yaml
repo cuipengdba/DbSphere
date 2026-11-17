@@ -1,0 +1,6 @@
+services:
+  app:
+    environment:
+      DBSPHERE_STORE_BACKUP_MANIFEST: /etc/dbsphere/store-backup.json
+    volumes:
+      - '${DBSPHERE_STORE_BACKUP_HOST_PATH:?Set an absolute monitoring store backup manifest path}:/etc/dbsphere/store-backup.json:ro'

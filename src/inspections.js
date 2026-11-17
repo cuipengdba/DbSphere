@@ -5,7 +5,7 @@ const check = (id, title, metric, threshold, severity = 'warning') =>
 
 export const DEFAULT_INSPECTION_TEMPLATES = Object.freeze([
   {
-    id: 'pg_daily', title: 'PostgreSQL 每日基础巡检', scope: 'all', version: 1, catalogVersion: 2,
+    id: 'pg_daily', title: 'PostgreSQL 每日基础巡检', scope: 'all', version: 1, catalogVersion: 3,
     checks: [
       check('unavailable', '数据库无法连接', 'pg.unavailable', 1, 'critical'),
       check('monitor_permission', '监控账号缺少 pg_monitor', 'pg.monitor_role_missing', 1),
@@ -17,26 +17,34 @@ export const DEFAULT_INSPECTION_TEMPLATES = Object.freeze([
       check('freeze_age', '事务冻结年龄达到阈值的 80%', 'pg.freeze_age_percent', 80, 'critical'),
       check('inactive_slots', '存在未活跃复制槽', 'pg.inactive_slots', 1),
       check('slot_retention', '复制槽保留 WAL 超过 10 GiB', 'pg.slot_retained_bytes', 10 * 1024 ** 3),
-      check('lost_slots', '存在失效复制槽', 'pg.lost_slots', 1, 'critical')
+      check('lost_slots', '存在失效复制槽', 'pg.lost_slots', 1, 'critical'),
+      check('privileged_monitor', '监控账号具有高权限', 'pg.monitor_privileged', 1),
+      check('autovacuum_disabled', 'autovacuum 已关闭', 'pg.autovacuum_disabled', 1, 'critical'),
+      check('replication_lag', '主库复制延迟超过 64 MiB', 'pg.replication_lag_bytes', 64 * 1024 ** 2),
+      check('wal_receiver', '备库 WAL 接收中断', 'pg.wal_receiver_down', 1, 'critical')
     ]
   },
   {
-    id: 'linux_daily', title: 'Linux 主机每日巡检', scope: 'linux', version: 1,
+    id: 'linux_daily', title: 'Linux 主机每日巡检', scope: 'linux', version: 1, catalogVersion: 2,
     checks: [
       check('collector', 'Linux 主机采集失败', 'collector.linux_failed', 1),
       check('cpu', 'CPU 使用率超过 90%', 'linux.cpu_used_percent', 90),
       check('memory', '内存使用率超过 90%', 'linux.memory_used_percent', 90),
-      check('disk', '文件系统使用率超过 85%', 'linux.disk_used_percent', 85)
+      check('disk', '文件系统使用率超过 85%', 'linux.disk_used_percent', 85),
+      check('permissions', 'node_exporter 读取权限异常', 'linux.permission_error', 1)
     ]
   },
   {
-    id: 'k8s_daily', title: 'Kubernetes 工作负载每日巡检', scope: 'k8s', version: 1,
+    id: 'k8s_daily', title: 'Kubernetes 工作负载每日巡检', scope: 'k8s', version: 1, catalogVersion: 2,
     checks: [
       check('collector', 'Kubernetes API 采集失败', 'collector.k8s_failed', 1),
       check('pod', 'Pod 未就绪', 'k8s.pod_not_ready', 1, 'critical'),
       check('oom', '容器近期 OOMKilled', 'k8s.oom_recent', 1, 'critical'),
       check('node', 'Node 存在资源压力', 'k8s.node_pressure', 1),
-      check('pvc', 'PVC 使用率超过 85%', 'k8s.pvc_used_percent', 85)
+      check('pvc', 'PVC 使用率超过 85%', 'k8s.pvc_used_percent', 85),
+      check('probe_events', '近期探针失败事件', 'k8s.probe_failure_recent', 1),
+      check('scheduling_events', '近期调度或挂载失败事件', 'k8s.scheduling_failure_recent', 1),
+      check('unbound_pvc', '存在未绑定 PVC', 'k8s.unbound_pvc', 1)
     ]
   },
   {
@@ -51,6 +59,49 @@ export const DEFAULT_INSPECTION_TEMPLATES = Object.freeze([
 
 function signal(check, sample, previous) {
   const metrics = sample?.metrics ?? {};
+  const notApplicable = reason => ({ status: 'not_applicable', source: 'PostgreSQL', reason });
+  if (check.metric === 'pg.monitor_privileged') return sample?.status === 'ok' && typeof metrics.privileged_role === 'boolean'
+    ? { status: 'ok', value: metrics.privileged_role ? 1 : 0, source: 'PostgreSQL pg_roles' }
+    : { status: 'unavailable', reason: '监控账号权限未采集', source: 'PostgreSQL' };
+  if (check.metric === 'pg.autovacuum_disabled') {
+    const setting = metrics.diagnostics?.settings?.status === 'ok'
+      ? metrics.diagnostics.settings.data.find(item => item.name === 'autovacuum') : null;
+    return sample?.status === 'ok' && setting
+      ? { status: 'ok', value: setting.value === 'off' ? 1 : 0, source: 'PostgreSQL pg_settings' }
+      : { status: 'unavailable', reason: 'autovacuum 参数未采集', source: 'PostgreSQL' };
+  }
+  if (check.metric === 'pg.replication_lag_bytes') {
+    if (sample?.status === 'ok' && metrics.role === 'standby') return notApplicable('当前实例为备库');
+    if (sample?.status === 'ok' && metrics.role === 'primary' && metrics.replication_observed && metrics.replicas === 0) {
+      return notApplicable('当前未发现复制连接');
+    }
+  }
+  if (check.metric === 'pg.wal_receiver_down' && sample?.status === 'ok' && metrics.role === 'primary') {
+    return notApplicable('主库不运行 WAL 接收器');
+  }
+  if (check.metric === 'linux.permission_error') {
+    const linux = metrics.linux;
+    if (linux?.status === 'ok') return { status: 'ok', value: 0, source: 'node_exporter' };
+    if (linux?.status === 'error') return /401|403|forbidden|permission|unauthoriz/i.test(linux.reason ?? '')
+      ? { status: 'ok', value: 1, source: 'node_exporter' }
+      : { status: 'unavailable', reason: linux.reason ?? '采集失败，权限状态未知', source: 'node_exporter' };
+    return { status: 'unavailable', reason: 'node_exporter 未配置或未采集', source: 'node_exporter' };
+  }
+  if (['k8s.probe_failure_recent', 'k8s.scheduling_failure_recent', 'k8s.unbound_pvc'].includes(check.metric)) {
+    const k8s = metrics.k8s;
+    if (k8s?.status !== 'ok') return { status: 'unavailable', reason: k8s?.reason ?? 'Kubernetes 未采集', source: 'Kubernetes API' };
+    if (check.metric === 'k8s.unbound_pvc') return Array.isArray(k8s.pvcs) && k8s.pvcs.every(item => item.phase)
+      ? { status: 'ok', value: k8s.pvcs.filter(item => item.phase !== 'Bound').length, source: 'Kubernetes API' }
+      : { status: 'unavailable', reason: 'PVC 状态未完整采集', source: 'Kubernetes API' };
+    if (k8s.eventsError || !Array.isArray(k8s.events)) return { status: 'unavailable',
+      reason: k8s.eventsError ?? 'Kubernetes Event 未采集', source: 'Kubernetes API' };
+    const recent = k8s.events.filter(item => item.at &&
+      Math.abs(new Date(sample.collectedAt).getTime() - new Date(item.at).getTime()) <= 15 * 60000);
+    const matching = check.metric === 'k8s.probe_failure_recent'
+      ? /Unhealthy|ProbeWarning|ProbeError/i : /FailedScheduling|FailedMount|FailedAttachVolume/i;
+    return { status: 'ok', value: recent.filter(item => matching.test(item.reason ?? '')).length,
+      source: 'Kubernetes Event' };
+  }
   if (check.metric.startsWith('backup.')) {
     const backup = metrics.backup;
     const missing = reason => ({ status: 'unavailable', source: 'pgBackRest info', reason });
@@ -104,8 +155,9 @@ export function evaluateInspection(template, asset, sample, previous, priorRun =
   const prior = new Map(priorRun?.findings?.map(item => [item.id, item.status]) ?? []);
   const findings = template.checks.map(item => {
     const observed = signal(item, sample, previous);
-    const status = observed.status !== 'ok' ? 'unknown'
-      : observed.value >= item.threshold ? 'risk' : 'pass';
+    const status = observed.status === 'not_applicable' ? 'not_applicable'
+      : observed.status !== 'ok' ? 'unknown'
+        : observed.value >= item.threshold ? 'risk' : 'pass';
     return { id: item.id, title: item.title, status, severity: item.severity,
       metric: item.metric, observed: observed.status === 'ok' ? observed.value : null,
       threshold: item.threshold, source: observed.source, reason: observed.reason ?? null,
@@ -114,6 +166,7 @@ export function evaluateInspection(template, asset, sample, previous, priorRun =
   return { findings, summary: { risk: findings.filter(f => f.status === 'risk').length,
     pass: findings.filter(f => f.status === 'pass').length,
     unknown: findings.filter(f => f.status === 'unknown').length,
+    notApplicable: findings.filter(f => f.status === 'not_applicable').length,
     changed: findings.filter(f => f.previousStatus && f.previousStatus !== f.status).length } };
 }
 

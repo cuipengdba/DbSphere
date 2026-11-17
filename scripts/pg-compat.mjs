@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { collectPostgres } from '../src/postgres.js';
+import { DEFAULT_INSPECTION_TEMPLATES, evaluateInspection } from '../src/inspections.js';
 
 const major = Number(process.env.DBSPHERE_TEST_PG_MAJOR);
 if (!Number.isInteger(major)) throw new Error('Set DBSPHERE_TEST_PG_MAJOR');
@@ -22,6 +23,9 @@ assert.ok(metrics.replicas !== null);
 for (const name of ['activity', 'transactions', 'locks', 'lockChain', 'database', 'wal', 'archiver', 'checkpoints', 'vacuum', 'tables', 'slots', 'freeze', 'slotDetails', 'settings']) {
   assert.equal(metrics.diagnostics[name].status, 'ok', `${name}: ${metrics.diagnostics[name].reason}`);
 }
+const inspection = evaluateInspection(DEFAULT_INSPECTION_TEMPLATES.find(item => item.id === 'pg_daily'),
+  { runtime: 'linux' }, { status: 'ok', collectedAt: new Date().toISOString(), metrics }, null);
+assert.equal(inspection.findings.find(item => item.id === 'pg14_eol').status, major === 14 ? 'risk' : 'pass');
 console.log(`PG${major} compatible: ${Object.keys(metrics.diagnostics).length} diagnostic sections available`);
 
 const connection = {

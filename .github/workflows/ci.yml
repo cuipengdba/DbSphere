@@ -64,6 +64,10 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: node scripts/pg-inspections-smoke.mjs
+      - name: Detect real PostgreSQL 18 replication slot WAL retention
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-inspection-slot-smoke.mjs
       - name: Drill PostgreSQL 18 monitoring store backup and restore
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
@@ -149,6 +153,17 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
             -f deploy/compose/compose.k8s.yaml -f deploy/compose/compose.backup.yaml \
             exec -T app test -d /etc/dbsphere/backup-info
+      - name: Check monitoring store backup manifest mount
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: |
+          bash scripts/backup-store.sh "$RUNNER_TEMP/dbsphere-monitor-backup"
+          test -s "$RUNNER_TEMP/dbsphere-monitor-backup/monitor-store-backup.json"
+          printf 'DBSPHERE_STORE_BACKUP_HOST_PATH=%s\n' "$RUNNER_TEMP/dbsphere-monitor-backup/monitor-store-backup.json" >> deploy/compose/.env
+          bash scripts/one-click.sh
+          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
+            -f deploy/compose/compose.k8s.yaml -f deploy/compose/compose.backup.yaml \
+            -f deploy/compose/compose.store-backup.yaml exec -T app test -r /etc/dbsphere/store-backup.json
       - name: Reject an invalid kubeconfig path clearly
         run: |
           printf 'DBSPHERE_KUBECONFIG_HOST_PATH=/definitely/missing/kubeconfig\n' >> deploy/compose/.env
