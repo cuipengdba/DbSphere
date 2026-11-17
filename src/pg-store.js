@@ -150,6 +150,14 @@ const schema = `
     shape_hash text NOT NULL, summary_json jsonb NOT NULL, imported_at timestamptz NOT NULL
   );
   CREATE INDEX IF NOT EXISTS sql_plan_asset_time ON sql_plan_snapshots(asset_id,observed_at DESC);
+  CREATE TABLE IF NOT EXISTS trace_spans (
+    asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    trace_id text NOT NULL, span_id text NOT NULL, parent_span_id text,
+    service text NOT NULL, kind text NOT NULL, started_at timestamptz NOT NULL,
+    ended_at timestamptz NOT NULL, status text NOT NULL,
+    PRIMARY KEY(asset_id,trace_id,span_id)
+  );
+  CREATE INDEX IF NOT EXISTS trace_spans_asset_time ON trace_spans(asset_id,started_at DESC);
 `;
 
 export class PgStore {
@@ -889,5 +897,48 @@ export class PgStore {
       startedAt: row.started_at, endedAt: row.ended_at, acknowledgedAt: row.acknowledged_at, evidence };
   }
 
+  async saveTraceSpans(spans) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      let imported = 0;
+      for (const span of spans) {
+        const result = await client.query(`INSERT INTO trace_spans
+          (asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`,
+        [span.assetId, span.traceId, span.spanId, span.parentSpanId, span.service,
+          span.kind, span.start, span.end, span.status]);
+        imported += result.rowCount;
+      }
+      await client.query('COMMIT');
+      return imported;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async listTraceSpans(assetId, from, to, limit = 200) {
+    const rows = (await this.pool.query(`SELECT * FROM trace_spans
+      WHERE asset_id=$1 AND started_at<$3 AND ended_at>=$2
+      ORDER BY started_at DESC LIMIT $4`, [assetId, from, to, limit])).rows;
+    return rows.map(traceSpan);
+  }
+
+  async getTraceSpans(assetId, traceId) {
+    const rows = (await this.pool.query(`SELECT * FROM trace_spans WHERE asset_id=$1 AND trace_id=$2
+      ORDER BY started_at LIMIT 256`, [assetId, traceId])).rows;
+    return rows.map(traceSpan);
+  }
+
+  async pruneTraceSpans(retentionDays) {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) throw new Error('Invalid trace retention');
+    return (await this.pool.query(`DELETE FROM trace_spans WHERE ended_at < now() - $1::interval`,
+      [`${retentionDays} days`])).rowCount;
+  }
+
   async close() { await this.pool.end(); }
 }
+
+const traceSpan = row => ({ assetId: row.asset_id, traceId: row.trace_id,
+  spanId: row.span_id, parentSpanId: row.parent_span_id, service: row.service,
+  kind: row.kind, start: row.started_at, end: row.ended_at, status: row.status });

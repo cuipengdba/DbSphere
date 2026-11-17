@@ -599,6 +599,9 @@ async function showEvent(id) {
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
   diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
+  if (analysis.traceCoverage) diagnosis.append(cell('small', analysis.traceCoverage.spans
+    ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
+    : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
   const graphDetails = document.createElement('details');
   graphDetails.append(cell('summary', '查看证据关系'));
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));

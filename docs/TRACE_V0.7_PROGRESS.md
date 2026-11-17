@@ -1,0 +1,24 @@
+# V0.7 应用 Trace 开发记录
+
+> 2026-11-17。当前是开发能力，尚未达到 V0.7 发布验收。
+
+## 已实现的首段链路
+
+- 可选 `POST /v1/traces` 接收 **OTLP/HTTP JSON** 的 `resourceSpans`。设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN` 后启用；未设置时接口关闭。请求使用 `Authorization: Bearer <token>`，限制 1 MiB 和 256 个 Span。
+- 读取 `service.name` 及 PostgreSQL 客户端 Span 的 `db.system.name=postgresql`、`server.address`、`server.port`、`db.namespace`。只有地址、端口、数据库与唯一纳管资产匹配时才入库；跨多个 PG 资产的同一 Trace 不会把数据库 Span 误连到别的资产。
+- 将 Trace ID、Span ID、父 Span ID、服务、开始/结束时间和状态写入独立监控存储。原始 SQL、参数、URL、Span 名称和任意属性均不保存。正式部署的长期存储为 PostgreSQL 18；SQLite 仅作预览。重复导出按资产与 Trace/Span ID 去重。`DBSPHERE_TRACE_RETENTION_DAYS` 默认为 7 天。
+- 事件详情以**原有事件 ID**读取同资产同时间窗的 Span，展示服务 → 请求父子 Span → PostgreSQL 客户端 Span → PG 资产与既有 PG/Linux/K8S 证据图。原始脱敏 Trace 仅能经管理员登录的资产接口查看。没有 Trace 时，事件页明确显示链路缺口，数据库侧分析继续工作。
+
+标准依据：[PostgreSQL 语义约定](https://opentelemetry.io/docs/specs/semconv/db/postgresql/)、[OTLP/HTTP JSON 与响应](https://opentelemetry.io/docs/specs/otlp/)、[OTLP Exporter 配置](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)。
+
+## 当前边界与后续任务
+
+- 只接收 JSON 编码的 OTLP/HTTP Trace；Protobuf、gRPC、gzip、日志与指标入口未实现。需显式把应用或 Collector 的 Trace 导出协议设置为 `http/json`，并将目标指向 DbSphere 的 `/v1/traces`。不同语言 SDK 是否支持该模式需按各自实现核验。
+- 当前按精确的配置地址、端口、数据库身份匹配，不支持代理地址、动态 Service 发现、Pod/Node/PVC 的应用侧身份映射。链路时间重叠仅表示相关，不能单凭重叠证明根因。
+- 采样率、时钟偏移目前只能标为未知；慢请求的 SQL 指纹到 DB Span 的精确绑定、影响面统计、资产级访问控制、真实应用故障 A/B 演练仍待开发。
+- 默认安装不开启 Trace 接入。接入令牌是独立的写入凭据，生产环境需通过 TLS 终止的入口使用；不要把令牌放进客户端页面。
+
+## 验证
+
+- `test/otel.test.js`：字段脱敏、跨资产 Trace 隔离、令牌校验、重复写入、管理员可见原始数据，以及同一事件 ID 的父子 Span → PG 关系。
+- `scripts/pg18-trace-smoke.mjs`：真实 PostgreSQL 18 中保存、去重、读取 Span，并在故障事件的同一事件 ID 下关联；已在本机 PG18 验证，GitHub CI 作业已加入。

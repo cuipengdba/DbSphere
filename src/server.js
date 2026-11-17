@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,7 @@ import { sqlPerformanceSummary } from './sql-trends.js';
 import { parseSlowLogs } from './slow-logs.js';
 import { sanitizePlan, comparePlans } from './sql-plans.js';
 import { analyzeEvent, eventSampleIds } from './rca.js';
+import { parseOtlpTraces } from './otel.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -37,12 +38,14 @@ function sendReport(res, content, format, id) {
   res.end(content);
 }
 
-async function body(req) {
+async function body(req, maxBytes = 65536) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw Object.assign(new Error('Expected JSON body'), { status: 415 });
   let raw = '';
+  let bytes = 0;
   for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw Object.assign(new Error('Request too large'), { status: 413 });
     raw += chunk;
-    if (raw.length > 65536) throw Object.assign(new Error('Request too large'), { status: 413 });
   }
   try { return JSON.parse(raw); }
   catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
@@ -105,6 +108,14 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     eventRetentionDays < 1 || eventRetentionDays > 3650)) {
     await store.close(); throw new Error('DBSPHERE_EVENT_RETENTION_DAYS must be between 1 and 3650');
   }
+  const traceRetentionDays = Number(process.env.DBSPHERE_TRACE_RETENTION_DAYS || 7);
+  if (!Number.isInteger(traceRetentionDays) || traceRetentionDays < 1 || traceRetentionDays > 3650) {
+    await store.close(); throw new Error('DBSPHERE_TRACE_RETENTION_DAYS must be between 1 and 3650');
+  }
+  const otlpToken = process.env.DBSPHERE_OTLP_TOKEN || '';
+  if (otlpToken && otlpToken.length < 32) {
+    await store.close(); throw new Error('DBSPHERE_OTLP_TOKEN must contain at least 32 characters');
+  }
   const attempts = new Map();
   const activeCollections = new Set();
   const activeInspections = new Set();
@@ -116,16 +127,17 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     const nearTo = new Date(Math.min(Date.now() + 1, start + 5 * 60_000)).toISOString();
     const relatedFrom = new Date(start - 5 * 60_000).toISOString();
     const relatedTo = new Date(Math.min(Date.now() + 1, end + 5 * 60_000)).toISOString();
-    const [referenced, nearbySamples, slowLogs, allPlans] = await Promise.all([
+    const [referenced, nearbySamples, slowLogs, allPlans, traceSpans] = await Promise.all([
       store.getSamplesByIds(event.assetId, eventSampleIds(event)),
       store.listSamplesInWindow(event.assetId, nearFrom, nearTo),
       store.listSlowLogs(event.assetId, relatedFrom, relatedTo),
-      store.listSqlPlans(event.assetId)
+      store.listSqlPlans(event.assetId),
+      store.listTraceSpans(event.assetId, relatedFrom, relatedTo)
     ]);
     const samples = [...new Map([...referenced, ...nearbySamples].map(sample => [sample.id, sample])).values()];
     const plans = allPlans.filter(plan => Date.parse(plan.observedAt) >= Date.parse(relatedFrom) &&
       Date.parse(plan.observedAt) < Date.parse(relatedTo));
-    return analyzeEvent(event, samples, { nearbySamples, slowLogs, plans });
+    return analyzeEvent(event, samples, { nearbySamples, slowLogs, plans, traceSpans });
   }
 
   async function collectAsset(id) {
@@ -226,6 +238,19 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     try {
       const requestUrl = new URL(req.url, 'http://localhost');
       const path = requestUrl.pathname;
+      if (req.method === 'POST' && path === '/v1/traces') {
+        if (!otlpToken) return send(res, 404, { error: 'Trace intake disabled' });
+        const authorization = req.headers.authorization || '';
+        const received = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+        const expectedBytes = Buffer.from(otlpToken);
+        const receivedBytes = Buffer.from(received);
+        if (receivedBytes.length !== expectedBytes.length ||
+          !timingSafeEqual(receivedBytes, expectedBytes)) return send(res, 401, { error: 'Invalid trace token' });
+        const parsed = parseOtlpTraces(await body(req, 1024 * 1024), await store.listAssets());
+        await store.saveTraceSpans(parsed.spans);
+        return send(res, 200, parsed.rejected ? { partialSuccess: { rejectedSpans: parsed.rejected,
+          errorMessage: 'Invalid or unmapped PostgreSQL spans were discarded' } } : {});
+      }
       if (req.method === 'GET' && path === '/healthz') return send(res, 200, { status: 'ok' });
       if (req.method === 'GET' && path === '/readyz') {
         try { await store.health(); return send(res, 200, { status: 'ready', storage: store.kind }); }
@@ -389,6 +414,11 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         return row ? send(res, 200, { [rawSqlMatch[2] === 'slow-logs' ? 'log' : 'plan']: row })
           : send(res, 404, { error: 'SQL evidence not found' });
       }
+      const rawTraceMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})\/traces\/([0-9a-f]{32})$/i);
+      if (req.method === 'GET' && rawTraceMatch) {
+        const spans = await store.getTraceSpans(rawTraceMatch[1], rawTraceMatch[2].toLowerCase());
+        return spans.length ? send(res, 200, { spans }) : send(res, 404, { error: 'Trace not found' });
+      }
       const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|capacity|sql|slow-logs|sql-plans|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
@@ -527,10 +557,13 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     inspectionTimer.unref();
     inspectDue();
     void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
-    if (store.kind === 'postgresql18' && (retentionDays !== null || eventRetentionDays !== null)) {
+    if (store.kind === 'postgresql18' || store.kind === 'sqlite-preview') {
       const prune = () => void (async () => {
-        if (retentionDays !== null) await store.pruneSamples(retentionDays);
-        if (eventRetentionDays !== null) await store.pruneResolvedEvents(eventRetentionDays);
+        if (store.kind === 'postgresql18') {
+          if (retentionDays !== null) await store.pruneSamples(retentionDays);
+          if (eventRetentionDays !== null) await store.pruneResolvedEvents(eventRetentionDays);
+        }
+        await store.pruneTraceSpans(traceRetentionDays);
       })().catch(e => console.error('Retention sweep failed:', e.message));
       prune();
       retentionTimer = setInterval(prune, 24 * 3600 * 1000);

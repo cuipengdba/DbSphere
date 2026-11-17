@@ -109,6 +109,14 @@ export class Store {
         shape_hash TEXT NOT NULL, summary_json TEXT NOT NULL, imported_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS sql_plan_asset_time ON sql_plan_snapshots(asset_id,observed_at DESC);
+      CREATE TABLE IF NOT EXISTS trace_spans (
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        trace_id TEXT NOT NULL, span_id TEXT NOT NULL, parent_span_id TEXT,
+        service TEXT NOT NULL, kind TEXT NOT NULL, started_at TEXT NOT NULL,
+        ended_at TEXT NOT NULL, status TEXT NOT NULL,
+        PRIMARY KEY(asset_id,trace_id,span_id)
+      );
+      CREATE INDEX IF NOT EXISTS trace_spans_asset_time ON trace_spans(asset_id,started_at DESC);
     `);
     if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
@@ -614,6 +622,44 @@ export class Store {
     return { id: r.id, assetId: r.asset_id, assetName: r.asset_name, kind: r.kind,
       eventGroup: r.event_group, title: r.title, status: r.status, startedAt: r.started_at,
       endedAt: r.ended_at, acknowledgedAt: r.acknowledged_at, evidence };
+  }
+
+  saveTraceSpans(spans) {
+    const insert = this.db.prepare(`INSERT INTO trace_spans
+      (asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`);
+    let imported = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const span of spans) imported += insert.run(span.assetId, span.traceId, span.spanId,
+        span.parentSpanId, span.service, span.kind, span.start, span.end, span.status).changes;
+      this.db.exec('COMMIT');
+      return imported;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  listTraceSpans(assetId, from, to, limit = 200) {
+    return this.db.prepare(`SELECT * FROM trace_spans WHERE asset_id=? AND started_at<? AND ended_at>=?
+      ORDER BY started_at DESC LIMIT ?`).all(assetId, to, from, limit).map(row => ({
+      assetId: row.asset_id, traceId: row.trace_id, spanId: row.span_id,
+      parentSpanId: row.parent_span_id, service: row.service, kind: row.kind,
+      start: row.started_at, end: row.ended_at, status: row.status
+    }));
+  }
+
+  getTraceSpans(assetId, traceId) {
+    return this.db.prepare(`SELECT * FROM trace_spans WHERE asset_id=? AND trace_id=?
+      ORDER BY started_at LIMIT 256`).all(assetId, traceId).map(row => ({
+      assetId: row.asset_id, traceId: row.trace_id, spanId: row.span_id,
+      parentSpanId: row.parent_span_id, service: row.service, kind: row.kind,
+      start: row.started_at, end: row.ended_at, status: row.status
+    }));
+  }
+
+  pruneTraceSpans(retentionDays) {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) throw new Error('Invalid trace retention');
+    const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+    return this.db.prepare('DELETE FROM trace_spans WHERE ended_at<?').run(cutoff).changes;
   }
 
   close() { this.db.close(); }

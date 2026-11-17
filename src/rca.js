@@ -141,6 +141,27 @@ export function analyzeEvent(event, samples, context = {}) {
     }
   }
 
+  const traceSpans = context.traceSpans ?? [];
+  const spanIds = new Set(traceSpans.map(span => `${span.traceId}:${span.spanId}`));
+  for (const span of traceSpans) {
+    const spanNode = `trace_span:${span.traceId}:${span.spanId}`;
+    const serviceNode = `service:${span.service}`;
+    const source = `/api/assets/${event.assetId}/traces/${span.traceId}`;
+    addNode(serviceNode, 'service', span.service, span.start, source);
+    addNode(spanNode, span.kind === 'postgresql_client' ? 'db_client_span' : 'service_span',
+      `${span.service} · ${Math.max(0, Date.parse(span.end) - Date.parse(span.start))} ms · ${span.status}`,
+      span.start, source);
+    edges.push({ from: serviceNode, to: spanNode, relation: 'emitted', source });
+    if (span.kind === 'postgresql_client') {
+      edges.push({ from: spanNode, to: assetNode, relation: 'calls', source });
+      edges.push({ from: eventNode, to: spanNode, relation: 'overlaps_db_call', source });
+    }
+    if (span.parentSpanId && spanIds.has(`${span.traceId}:${span.parentSpanId}`)) {
+      edges.push({ from: `trace_span:${span.traceId}:${span.parentSpanId}`,
+        to: spanNode, relation: 'parent_of', source });
+    }
+  }
+
   for (const item of evidence) {
     if (item.kind !== 'root_cause_candidate') continue;
     candidates.push({ code: 'pod_oom_correlated', title: item.payload.hypothesis,
@@ -362,5 +383,10 @@ export function analyzeEvent(event, samples, context = {}) {
   }
   return { eventId: event.id, status: uniqueCandidates.length ? 'candidates' : 'unlocated',
     candidates: uniqueCandidates, missingSignals: [...missingSignals], graph: { nodes, edges },
+    traceCoverage: { spans: traceSpans.length,
+      databaseSpans: traceSpans.filter(span => span.kind === 'postgresql_client').length,
+      services: [...new Set(traceSpans.map(span => span.service))],
+      samplingRate: 'unknown', clockOffset: 'unknown',
+      gaps: traceSpans.length ? [] : ['事件时间窗内无应用 Trace'] },
     timeline: evidence.map(item => ({ evidenceId: item.id, kind: item.kind, at: item.observedAt })) };
 }

@@ -199,6 +199,10 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: node scripts/pg-alert-events-smoke.mjs
+      - name: Link OTLP PostgreSQL client spans to a PG18 event
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg18-trace-smoke.mjs
       - name: Test PostgreSQL 18 alert silences
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres

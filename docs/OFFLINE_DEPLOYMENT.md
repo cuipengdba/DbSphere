@@ -26,6 +26,8 @@ bash DbSphere-offline-<版本>-linux-amd64.run
 
 可设绝对路径 `DBSPHERE_CONFIG_DIR` 将配置文件放在指定目录。使用外部独立 PG18 时，在首次启动前创建该目录下的 `dbsphere.env`，设置 `DBSPHERE_DATABASE_URL`、`DBSPHERE_ADMIN_PASSWORD`、32 字节 base64 `DBSPHERE_MASTER_KEY` 和 Web 端口，然后运行同一 `.run`。已有 K8S kubeconfig、pgBackRest 状态目录或 PG18 备份清单可分别在配置中设置 `DBSPHERE_KUBECONFIG_HOST_PATH`、`DBSPHERE_BACKUP_INFO_HOST_PATH`、`DBSPHERE_STORE_BACKUP_HOST_PATH`，脚本验证绝对路径并只读挂载。
 
+开发版可在 `dbsphere.env` 追加 `DBSPHERE_OTLP_TOKEN`（至少 32 字符）开启可选 OTLP/HTTP JSON Trace 接入，`DBSPHERE_TRACE_RETENTION_DAYS` 默认 7。应用/Collector 指向 B/S 地址的 `/v1/traces`，使用 Bearer 令牌并设置 `http/json` 协议；当前仅适合将 Trace 通过可信 TLS 入口发送。离线部署的 PG/Linux/K8S 监控无需该配置。详见[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
+
 ## 升级、回滚与边界
 
 后续版本的 `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。[Linux CI 演练](https://github.com/cuipengdba/DbSphere/actions/runs/44058038127)已使用真实 V0.5 应用镜像构造旧离线包，建资产后升级到 V0.6 开发版、再回到 V0.5 应用，三阶段均在同一 PG18 存储读到该资产。这只验证了目前两版的应用切换和该数据路径。升级前仍应使用[PG18 存储备份与恢复演练](INSPECTIONS_V0.4.md)备份数据并保存当前安装包；未来 schema 变更的回滚需单独验证兼容或先恢复备份。V1.0 将正式验收断网升级与回滚。
