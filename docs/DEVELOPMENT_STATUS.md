@@ -4,11 +4,13 @@
 
 ## 当前阶段
 
+Go Linux `node_exporter` 适配器现解析 CPU、内存、文件系统、磁盘和网络计数；读取限制为 5 MiB、4 秒且不跟随重定向。本机真实 PG14 + node_exporter + PG18 演练验证：PG 连接失败时主机指标仍写入同一事件 ID 的样本和证据图。Go 调度现可包含已配置 exporter 的 Linux PG 资产，K8S 和 PgBouncer 仍待迁移；Linux CI 联合演练待本轮运行。
+
 Go SQL 性能采集与 Top SQL 接口已接入：检测 `pg_stat_statements` 扩展和列兼容性，只保存 Query ID、指纹与聚合计数，不读取 SQL 正文；无扩展时显式显示 `not_configured`。资产页按 PG18 历史样本计算相邻采样增量和双窗口退化提示。PG18 真扩展与 PG18 三样本退化用例本地通过，PG14–18 扩展矩阵已加入 CI，结果待本轮验证。
 
 Go PG14/PG18 本机实库只读诊断已覆盖 14 个分区：会话/等待、长事务、锁数量与 PID 锁链、数据库 I/O、WAL、归档、检查点、vacuum、表与索引大小、复制槽、冻结年龄、槽明细和关键参数。真实 advisory lock 等待演练确认 Go 采集的等待 PID → 阻塞 PID 关系；每个诊断区独立标记 `ok` 或 `unavailable`，不会把单个权限/版本缺口伪装成健康。PG15–17 及完整 CI 尚待本轮流水线。
 
-Go 自动采集调度已在本机真实 PG18 开发库演练：15 秒间隔自动发现新 Linux PG 资产，连接失败写入样本与同一事件 ID；API 查询看到了 1 条样本和 1 个开放事件。调度仅选用 Go 已具备完整适配器的纯 PostgreSQL 资产，K8S、node_exporter 和 PgBouncer 资产不会被误采。隔离的 Go Compose 新库默认启用调度；连接历史/外部 PG18 时默认关闭，需显式设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true`。尚未通过本轮 CI。
+Go 自动采集调度已在本机真实 PG18 开发库演练：15 秒间隔自动发现新 Linux PG 资产，连接失败写入样本与同一事件 ID；API 查询看到了 1 条样本和 1 个开放事件。调度仅选用 Go 已具备完整适配器的纯 PostgreSQL 资产，K8S 和 PgBouncer 资产不会被误采。隔离的 Go Compose 新库默认启用调度；连接历史/外部 PG18 时默认关闭，需显式设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true`。尚未通过本轮 CI。
 
 Go 独立部署开发路径已通过 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)：`Dockerfile-go` 将后端静态编译并嵌入前端，Compose 默认启用独立 PG18，Go `.run` 包在删除本机镜像后从包内导入应用与 PG18，再次运行复用配置和数据卷。Go 单容器本地测试验证健康检查、页面与首次管理员登录。该路径仍是开发版；功能对等、跨层故障、升级/回滚未验收。
 

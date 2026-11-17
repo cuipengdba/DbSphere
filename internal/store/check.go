@@ -24,13 +24,13 @@ type CheckResult struct {
 }
 
 // DueAssetIDs returns only assets for which the Go collector has all enabled adapters.
-// It intentionally leaves K8S, Linux exporter, and PgBouncer assets to their existing collector.
+// It intentionally leaves K8S and PgBouncer assets to their existing collector.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
 	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime='linux' AND linux_exporter_port IS NULL AND pooler_url_enc IS NULL
+		WHERE runtime='linux' AND pooler_url_enc IS NULL
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -75,18 +75,20 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	var target collector.Target
 	var encrypted string
 	var runtime string
-	var hasExporter, hasPooler bool
+	var linuxHost *string
+	var exporterPort *int
+	var hasPooler bool
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
-		runtime,linux_exporter_port IS NOT NULL,pooler_url_enc IS NOT NULL
+		runtime,linux_host,linux_exporter_port,pooler_url_enc IS NOT NULL
 		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
-		&target.Username, &target.SSLMode, &encrypted, &runtime, &hasExporter, &hasPooler)
+		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort, &hasPooler)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if runtime != "linux" || hasExporter || hasPooler {
+	if runtime != "linux" || hasPooler {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	password, err := security.Decrypt(key, encrypted)
@@ -97,6 +99,23 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	group, reason := "", ""
 	if collectErr != nil {
 		group, reason = collectionError(collectErr)
+	}
+	if metrics == nil {
+		metrics = map[string]any{}
+	}
+	if exporterPort != nil && linuxHost != nil {
+		linux, linuxErr := collector.Linux(ctx, *linuxHost, *exporterPort)
+		if linuxErr != nil {
+			metrics["linux"] = map[string]any{"status": "error", "reason": linuxErr.Error()}
+			if collectErr == nil {
+				group, reason = "telemetry", "Linux node_exporter collection failed"
+			}
+		} else {
+			metrics["linux"] = linux
+		}
+	} else {
+		metrics["linux"] = map[string]any{"status": "not_configured",
+			"reason": "Linux node_exporter host and port are not configured"}
 	}
 	result, err := s.recordCheck(ctx, id, metrics, group, reason)
 	if err != nil {

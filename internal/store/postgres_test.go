@@ -337,3 +337,70 @@ func TestGoSQLIntervalAndRegressionFromPG18(t *testing.T) {
 		t.Fatalf("PG18 SQL samples did not produce interval regression: %s", encoded)
 	}
 }
+
+func TestLinuxEvidenceSurvivesPostgresConnectionFailure(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	targetPortText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
+	exporterPortText := os.Getenv("DBSPHERE_TEST_NODE_EXPORTER_PORT")
+	if storeURL == "" || targetPortText == "" || exporterPortText == "" {
+		t.Skip("PG18 store, PostgreSQL target, and node_exporter are required")
+	}
+	targetPort, err := strconv.Atoi(targetPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exporterPort, err := strconv.Atoi(exporterPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, err := Open(context.Background(), storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	input := assets.Input{Name: "Go Linux evidence test", Host: "127.0.0.1", Port: targetPort,
+		Database: "postgres", Username: "postgres", Password: os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"),
+		SSLMode: "disable", Runtime: "linux", LinuxHost: "127.0.0.1",
+		LinuxExporterPort: assets.OptionalPort(exporterPort)}
+	created, err := pg.CreateAsset(context.Background(), input, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	due, err := pg.DueAssetIDs(context.Background(), time.Minute, 100)
+	if err != nil || !slices.Contains(due, asset.ID) {
+		t.Fatalf("Linux exporter asset was omitted from Go schedule: %v %v", due, err)
+	}
+	first, err := pg.CheckAsset(context.Background(), asset.ID, key)
+	if err != nil || first.Status != "ok" {
+		t.Fatalf("PostgreSQL plus Linux sample failed: %v %v", first, err)
+	}
+	input.Port, input.Password = 1, ""
+	if _, err := pg.UpdateAsset(context.Background(), asset.ID, input, key); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := pg.CheckAsset(context.Background(), asset.ID, key)
+	if err != nil || failed.Status != "error" {
+		t.Fatalf("connection failure did not create cross-layer sample: %v %v", failed, err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT id::text FROM events
+		WHERE asset_id=$1 AND status='open' LIMIT 1`, asset.ID).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	if !strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), failed.SampleID) {
+		t.Fatalf("Linux host evidence was absent from PG failure event %s: %s", eventID, encoded)
+	}
+}

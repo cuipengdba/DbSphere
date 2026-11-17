@@ -466,6 +466,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Install dependencies
         run: |
           corepack enable
@@ -492,6 +496,13 @@ jobs:
           DBSPHERE_TEST_PG_PORT: '15435'
           DBSPHERE_TEST_EXPORTER_PORT: '19100'
         run: node scripts/linux-exporter-smoke.mjs
+      - name: Keep Linux evidence in one Go PostgreSQL failure event
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_PG_TARGET_PORT: '15435'
+          DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
+          DBSPHERE_TEST_NODE_EXPORTER_PORT: '19100'
+        run: go test ./internal/collector ./internal/store -run 'TestRealNodeExporter|TestLinuxEvidenceSurvivesPostgresConnectionFailure' -count=1 -v
 
   pgbouncer:
     runs-on: ubuntu-latest

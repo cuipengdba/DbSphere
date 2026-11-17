@@ -68,7 +68,7 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 			}
 		}
 	}
-	if sample.Status != "ok" {
+	if sample.Status != "ok" && metrics["version_num"] == nil {
 		return
 	}
 	diagnostics := object(metrics["diagnostics"])
