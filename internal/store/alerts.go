@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -35,6 +36,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true},
 	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true},
 	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true},
+	{"k8s_pvc_high", "Kubernetes PVC 使用率高", "k8s.pvc_used_percent", "Prometheus kubelet", "storage", "warning", ">=", 85, 300, 1, true},
 	{"pgbouncer_waiting", "PgBouncer 客户端等待", "pgbouncer.waiting_clients", "PgBouncer", "latency", "warning", ">=", 1, 60, 1, true},
 }
 
@@ -89,7 +91,7 @@ func supportedAlertMetric(metric string) bool {
 	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent",
-		"k8s.oom_recent", "k8s.node_pressure", "pgbouncer.waiting_clients":
+		"k8s.oom_recent", "k8s.node_pressure", "k8s.pvc_used_percent", "pgbouncer.waiting_clients":
 		return true
 	}
 	return false
@@ -207,6 +209,32 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 				}
 			}
 			return alertSignal{Available: true, Value: 0, Source: signal.Source}
+		}
+	case "k8s.pvc_used_percent":
+		signal.Source = "Prometheus kubelet"
+		k8s := object(metrics["k8s"])
+		if stringValue(k8s["status"]) == "ok" && k8s["pvcError"] == nil {
+			best, name := -1.0, ""
+			for _, raw := range list(k8s["pvcs"]) {
+				pvc := object(raw)
+				usage := object(pvc["usage"])
+				if stringValue(usage["status"]) != "ok" {
+					return signal
+				}
+				used, valid := numeric(usage["usedBytes"])
+				capacity, err := collector.KubernetesQuantityBytes(stringValue(pvc["capacity"]))
+				if !valid || err != nil || used < 0 {
+					return signal
+				}
+				percentage := used / capacity * 100
+				if percentage > best {
+					best, name = percentage, stringValue(pvc["name"])
+				}
+			}
+			if best >= 0 {
+				return alertSignal{Available: true, Value: best, Source: signal.Source,
+					Detail: map[string]any{"pvc": name}}
+			}
 		}
 	case "pgbouncer.waiting_clients":
 		signal.Source = "PgBouncer"

@@ -30,7 +30,7 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 
 Go 告警迁移已加入 PG 连接使用率、锁等待、长事务和 Linux 内存/磁盘五条默认规则。采样事务写入规则状态与触发、信号缺失、恢复、静默状态变化证据；同一资产同一问题组的 PG 与 Linux 告警共用事件 ID，全部恢复后关闭。本机 PG18 测试验证规则修改持久化、连接压力根因候选及同 ID 恢复；Go API 的规则编辑受管理员登录和 CSRF 保护。旧版未移植规则在 Go 页面只读，通知投递、K8S/PgBouncer 规则和完整巡检写入仍待迁移。本段是开发进度，尚非正式版验收。
 
-Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMKilled、Pod 条件与事件、Node 条件及 PVC 绑定信息；TLS 模拟 API 验证了 bearer token、Pod UID 事件过滤和只读请求。PG18 实库合成样本验证了 PG 连接失败 + 10 分钟内同 Pod OOM 的一个事件 ID、带来源的中等置信度候选和恢复闭环。Go Compose/离线包增加可选的只读 kubeconfig 挂载。真实 kind ServiceAccount 的旧 token 已过期，重新签发临时 token 的命令被自动审批拒绝，因此本轮没有真实 kind 验收；Service 和 PVC 实际用量仍待迁移。
+Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMKilled、Pod 条件与事件、Node 条件及 PVC 绑定信息；TLS 模拟 API 验证了 bearer token、Pod UID 事件过滤和只读请求。PG18 实库合成样本验证了 PG 连接失败 + 10 分钟内同 Pod OOM 的一个事件 ID、带来源的中等置信度候选和恢复闭环。Go Compose/离线包增加可选的只读 kubeconfig 挂载。真实 kind ServiceAccount 的旧 token 已过期，重新签发临时 token 的命令被自动审批拒绝，因此本轮没有真实 kind 验收；后续的 Service 与 PVC 用量适配虽已有代码和模拟测试，仍无真实集群验收。
 
 Go K8S PVC 详情现继续以只读请求读取绑定的 PV 名称、阶段和容量；权限缺失时保留 `volumeError`。B/S 资产页按既有 PVC/PV 结构显示，不再把 PV 名称字符串当作对象。metrics.k8s.io 暂不可用时在样本中明确标记缺口。
 
@@ -39,6 +39,8 @@ Go K8S 采集现可选读取 `metrics.k8s.io/v1beta1` 的指定 Pod 容器和 No
 Go 只读采集现按 Pod 标签关联同 Namespace 中的 Service，并在 B/S 资产页及同一事件 ID 的证据图添加 Service → Pod 关系；列表限制 100 条，权限缺失或截断显式标记。TLS 模拟 API、PG18 实库事件图和本地 Go 测试通过，真实 kind 仍待重新验收。
 
 Go 每次资产采样现并行读取 PG、Linux/K8S 和 PgBouncer，K8S API 的总时间预算为 12 秒；后台采集和 HTTP 响应上限相应调整为 45 秒，避免多个可选适配器的超时直接累加。PG18/PG14/PgBouncer 本机联合采样和全量 Go 测试通过，生产规模采集调度仍待负载验收。
+
+Go 可选从 Prometheus `kubelet_volume_stats_used_bytes` 按 Namespace/PVC 读取实际使用字节，并与 Kubernetes PVC 容量组合触发使用率规则。查询 URL、Bearer 令牌、响应大小和超时均受限制；模拟 Prometheus API 已验证真实值、空向量与未配置状态，未配置/缺信号不触发“健康”结论。Go Compose 可选传入 Prometheus URL/令牌；生产 Prometheus 与 PVC 高水位事件仍待验收。
 
 Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力五条规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量、容器重启增量与通知投递仍是缺口。
 

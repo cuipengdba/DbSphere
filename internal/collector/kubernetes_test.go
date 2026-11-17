@@ -74,6 +74,14 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	defer server.Close()
 	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
 	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	prometheus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("query") != `kubelet_volume_stats_used_bytes{namespace="db",persistentvolumeclaim="pg-data"}` {
+			t.Errorf("PVC Prometheus query was not scoped: %s", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"value":[1794921600,"4294967296"]}]}}`)
+	}))
+	defer prometheus.Close()
+	t.Setenv("DBSPHERE_PROMETHEUS_URL", prometheus.URL)
 	value := Kubernetes(context.Background(), KubernetesTarget{Cluster: "test-context", Namespace: "db", Pod: "pg-0"})
 	if value["status"] != "ok" || kubeObject(value["pod"])["uid"] != "pod-uid" ||
 		kubeObject(value["node"])["name"] != "worker-1" || len(kubeList(value["pvcs"])) != 1 ||
@@ -86,6 +94,10 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	}
 	if kubeObject(kubeList(value["pvcs"])[0])["volume"] == nil {
 		t.Fatal("bound PersistentVolume was not linked to its PVC")
+	}
+	if usage := kubeObject(kubeObject(kubeList(value["pvcs"])[0])["usage"]); usage["status"] != "ok" ||
+		usage["usedBytes"] != float64(4294967296) {
+		t.Fatalf("Prometheus PVC usage was not attached to its claim: %+v", usage)
 	}
 	if services := kubeList(value["services"]); len(services) != 1 || kubeObject(services[0])["name"] != "pg-service" {
 		t.Fatalf("Pod labels did not select the matching Service: %+v", services)

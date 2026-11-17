@@ -293,6 +293,10 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		if name == "" || seen[name] || !kubeName.MatchString(name) {
 			continue
 		}
+		if len(pvcs) >= 10 {
+			result["pvcError"] = "PVC list truncated at 10 items"
+			break
+		}
 		seen[name] = true
 		pvc, err := k.get(ctx, base+"/persistentvolumeclaims/"+url.PathEscape(name), nil)
 		if err != nil {
@@ -304,7 +308,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			"phase":     kubeObject(pvc["status"])["phase"],
 			"capacity":  kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
 			"requested": kubeObject(kubeObject(pvcSpec["resources"])["requests"])["storage"],
-			"usage":     map[string]any{"status": "not_configured", "reason": "Prometheus PVC usage adapter is not available in Go"}}
+			"usage":     PVCUsage(ctx, target.Namespace, name)}
 		if volumeName := kubeString(pvcSpec["volumeName"]); volumeName != "" && kubeName.MatchString(volumeName) {
 			volume, err := k.get(ctx, "/api/v1/persistentvolumes/"+url.PathEscape(volumeName), nil)
 			if err != nil {
