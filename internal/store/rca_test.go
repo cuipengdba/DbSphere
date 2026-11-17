@@ -46,3 +46,38 @@ func TestGoRCAPreservesCrossLayerCandidatesWhenPGFails(t *testing.T) {
 		t.Fatal("PostgreSQL root cause inferred without a PostgreSQL sample")
 	}
 }
+
+func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	alert := func(id, metric, sampleID string, value float64) eventEvidence {
+		body, _ := json.Marshal(map[string]any{"metric": metric, "sampleId": sampleID,
+			"value": value, "operator": ">=", "threshold": 1})
+		return eventEvidence{ID: id, Kind: "alert_firing", ObservedAt: now, Payload: body}
+	}
+	event := &eventRecord{ID: "event-2", StartedAt: now, Evidence: []eventEvidence{
+		alert("e1", "pg.replication_lag_bytes", "primary", 70*1024*1024),
+		alert("e2", "pg.wal_receiver_down", "standby", 1),
+		alert("e3", "pg.autovacuum_disabled", "primary", 1),
+		alert("e4", "pg.vacuum_backlog_percent", "primary", 25)}}
+	samples := map[string]sampleObservation{
+		"primary": {ID: "primary", At: now, Status: "ok", Metrics: map[string]any{
+			"role": "primary", "replication_lag_bytes": float64(70 * 1024 * 1024),
+			"diagnostics": map[string]any{"vacuum": map[string]any{"status": "ok", "data": []any{
+				map[string]any{"deadRowsEstimate": float64(20000)}}}}}},
+		"standby": {ID: "standby", At: now, Status: "ok", Metrics: map[string]any{
+			"role": "standby", "replication_observed": true, "wal_receiver": "absent"}}}
+	candidates := analyzeCandidates(event, samples, func(string, string, string, string, any) {},
+		&[]map[string]string{})
+	found := map[string]bool{}
+	for _, candidate := range candidates {
+		found[candidate["code"].(string)] = true
+		if len(candidate["supports"].([]string)) != 2 {
+			t.Fatalf("candidate lacks alert and raw sample: %+v", candidate)
+		}
+	}
+	for _, code := range []string{"replication_lag", "wal_receiver_down", "autovacuum_disabled", "vacuum_backlog"} {
+		if !found[code] {
+			t.Fatalf("PostgreSQL candidate %s was not proposed: %+v", code, found)
+		}
+	}
+}

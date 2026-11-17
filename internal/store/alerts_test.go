@@ -97,6 +97,41 @@ func TestGoPVCUsageAlertRequiresRealUsedBytes(t *testing.T) {
 	}
 }
 
+func TestGoReplicationVacuumAndCPUSignals(t *testing.T) {
+	now := time.Now().UTC()
+	metrics := map[string]any{"role": "primary", "replication_observed": true,
+		"replicas": float64(1), "replication_lag_bytes": float64(70 * 1024 * 1024),
+		"diagnostics": map[string]any{
+			"settings": map[string]any{"status": "ok", "data": []any{
+				map[string]any{"name": "autovacuum", "value": "off"}}},
+			"vacuum": map[string]any{"status": "ok", "data": []any{
+				map[string]any{"schema": "public", "table": "orders", "deadRowsEstimate": float64(20000),
+					"liveRowsEstimate": float64(80000)}}}},
+		"linux": map[string]any{"status": "ok", "cpu": map[string]any{"usedPercent": float64(94)}}}
+	for metric, expected := range map[string]float64{
+		"pg.replication_lag_bytes": 70 * 1024 * 1024,
+		"pg.autovacuum_disabled":   1, "pg.vacuum_backlog_percent": 20,
+		"linux.cpu_used_percent": 94} {
+		signal := readGoSignal(metric, metrics, now)
+		if !signal.Available || signal.Value != expected {
+			t.Fatalf("%s not observed: %+v", metric, signal)
+		}
+	}
+	metrics["replicas"] = float64(0)
+	if readGoSignal("pg.replication_lag_bytes", metrics, now).Available {
+		t.Fatal("standalone primary reported healthy replication")
+	}
+	metrics["role"] = "standby"
+	metrics["wal_receiver"] = "absent"
+	if signal := readGoSignal("pg.wal_receiver_down", metrics, now); !signal.Available || signal.Value != 1 {
+		t.Fatalf("standby receiver outage missing: %+v", signal)
+	}
+	object(metrics["diagnostics"])["vacuum"] = map[string]any{"status": "unavailable"}
+	if readGoSignal("pg.vacuum_backlog_percent", metrics, now).Available {
+		t.Fatal("missing table statistics treated as zero backlog")
+	}
+}
+
 func TestGoLockWaitAndPoolerWaitShareIncident(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {

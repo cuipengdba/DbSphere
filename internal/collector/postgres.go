@@ -77,14 +77,21 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	}
 	if recovery {
 		var status string
-		if err := conn.QueryRow(connectCtx, "SELECT status FROM pg_stat_wal_receiver LIMIT 1").Scan(&status); err == nil {
+		if err := conn.QueryRow(connectCtx,
+			"SELECT coalesce((SELECT status FROM pg_stat_wal_receiver LIMIT 1),'absent')").Scan(&status); err == nil {
 			metrics["wal_receiver"] = status
 			metrics["replication_observed"] = true
 		}
 	} else {
 		var replicas int
-		if err := conn.QueryRow(connectCtx, "SELECT count(*)::int FROM pg_stat_replication").Scan(&replicas); err == nil {
+		var lag *float64
+		if err := conn.QueryRow(connectCtx, `SELECT count(*)::int,
+			max(greatest(0,pg_wal_lsn_diff(pg_current_wal_lsn(),replay_lsn)))::float8
+			FROM pg_stat_replication`).Scan(&replicas, &lag); err == nil {
 			metrics["replicas"] = replicas
+			if lag != nil {
+				metrics["replication_lag_bytes"] = *lag
+			}
 			metrics["replication_observed"] = true
 		}
 	}

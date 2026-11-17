@@ -48,6 +48,8 @@ Go 告警静默/维护窗已接入创建与撤销 API，窗口最长 30 天，�
 
 Go RCA 在 PG 连接失败的样本上继续读取 K8S/Linux/PgBouncer 的有效告警证据；新增 Pod 未就绪/OOM/调度、Node/PVC 压力、Linux 内存/磁盘和连接池等待候选。候选仍标为假设，附原始样本、告警证据、时间顺序和未验证条件。PG18 实库验证 PG 连接失败 + K8S OOM 同一事件 ID 下同时保留关联候选和 K8S 告警候选；其余候选经合成证据测试。复制/WAL、SQL 性能根因和真实 K8S 故障矩阵仍待开发验收。
 
+Go 规则包继续增加复制延迟、备库 WAL 接收中断、autovacuum 关闭、表死元组积压和 Linux CPU，共十七条默认规则；对应 RCA 候选附上复制/WAL 与表维护的原始采样证据及不确定性。本机 PG14 只读实库验证复制状态查询，五版矩阵需以本轮 CI 确认；真实复制拓扑和 autovacuum 故障演练仍待完成。
+
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
 
 PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。

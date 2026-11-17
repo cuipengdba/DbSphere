@@ -29,6 +29,11 @@ var goDefaultRules = []alertRule{
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
+	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
+	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true},
+	{"pg_autovacuum_disabled", "PostgreSQL autovacuum 已关闭", "pg.autovacuum_disabled", "PostgreSQL", "maintenance", "critical", ">=", 1, 0, 1, true},
+	{"pg_vacuum_backlog", "PostgreSQL 表死元组积压", "pg.vacuum_backlog_percent", "PostgreSQL", "maintenance", "warning", ">=", 20, 300, 1, true},
+	{"linux_cpu_high", "Linux CPU 使用率高", "linux.cpu_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
 	{"linux_memory_high", "Linux 内存使用率高", "linux.memory_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
 	{"linux_disk_high", "Linux 文件系统使用率高", "linux.disk_used_percent", "node_exporter", "storage", "warning", ">=", 90, 300, 1, true},
 	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
@@ -89,6 +94,8 @@ func numeric(value any) (float64, bool) {
 func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
+		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.autovacuum_disabled",
+		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent",
 		"k8s.oom_recent", "k8s.node_pressure", "k8s.pvc_used_percent", "pgbouncer.waiting_clients":
@@ -115,6 +122,70 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 		if stringValue(item["status"]) == "ok" {
 			if value, ok := numeric(object(item["data"])[field]); ok {
 				return alertSignal{Available: true, Value: value, Source: "PostgreSQL"}
+			}
+		}
+	case "pg.replication_lag_bytes":
+		replicas, hasReplicas := numeric(metrics["replicas"])
+		if stringValue(metrics["role"]) == "primary" && metrics["replication_observed"] == true &&
+			hasReplicas && replicas > 0 {
+			if value, ok := numeric(metrics["replication_lag_bytes"]); ok && value >= 0 {
+				return alertSignal{Available: true, Value: value, Source: signal.Source}
+			}
+		}
+	case "pg.wal_receiver_down":
+		if stringValue(metrics["role"]) == "standby" && metrics["replication_observed"] == true {
+			if status := stringValue(metrics["wal_receiver"]); status != "" {
+				value := 1.0
+				if status == "streaming" {
+					value = 0
+				}
+				return alertSignal{Available: true, Value: value, Source: signal.Source,
+					Detail: map[string]any{"receiver": status}}
+			}
+		}
+	case "pg.autovacuum_disabled":
+		signal.Source = "PostgreSQL pg_settings"
+		settings := object(object(metrics["diagnostics"])["settings"])
+		if stringValue(settings["status"]) == "ok" {
+			for _, raw := range list(settings["data"]) {
+				setting := object(raw)
+				if stringValue(setting["name"]) == "autovacuum" {
+					switch stringValue(setting["value"]) {
+					case "on":
+						return alertSignal{Available: true, Value: 0, Source: signal.Source}
+					case "off":
+						return alertSignal{Available: true, Value: 1, Source: signal.Source}
+					}
+				}
+			}
+		}
+	case "pg.vacuum_backlog_percent":
+		signal.Source = "PostgreSQL pg_stat_user_tables"
+		vacuum := object(object(metrics["diagnostics"])["vacuum"])
+		if stringValue(vacuum["status"]) == "ok" {
+			best, detail := 0.0, any(nil)
+			for _, raw := range list(vacuum["data"]) {
+				table := object(raw)
+				dead, deadOK := numeric(table["deadRowsEstimate"])
+				live, liveOK := numeric(table["liveRowsEstimate"])
+				if !deadOK || !liveOK || dead < 10000 || live+dead <= 0 {
+					continue
+				}
+				percent := dead / (live + dead) * 100
+				if percent > best {
+					best = percent
+					detail = map[string]any{"schema": table["schema"], "table": table["table"],
+						"deadRowsEstimate": dead}
+				}
+			}
+			return alertSignal{Available: true, Value: best, Source: signal.Source, Detail: detail}
+		}
+	case "linux.cpu_used_percent":
+		signal.Source = "node_exporter"
+		linux := object(metrics["linux"])
+		if stringValue(linux["status"]) == "ok" {
+			if value, ok := numeric(object(linux["cpu"])["usedPercent"]); ok {
+				return alertSignal{Available: true, Value: value, Source: signal.Source}
 			}
 		}
 	case "linux.memory_used_percent":

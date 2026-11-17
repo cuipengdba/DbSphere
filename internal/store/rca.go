@@ -228,6 +228,58 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					"锁链解释等待关系，尚不能证明业务慢请求的唯一根因。",
 					map[string]any{"pairs": chain["data"]}, item.ObservedAt, condition)
 			}
+		case "pg.replication_lag_bytes":
+			lag, valid := numeric(sample.Metrics["replication_lag_bytes"])
+			if stringValue(sample.Metrics["role"]) == "primary" && valid && lag >= 64*1024*1024 {
+				addCandidate("replication_lag", "PostgreSQL 复制回放延迟与告警同时出现", "medium", supports,
+					[]string{"复制端资源与 WAL 传输原因未验证"},
+					"延迟现象已确认，造成延迟的上游原因尚未定位。",
+					map[string]any{"lagBytes": lag}, item.ObservedAt, condition)
+			}
+		case "pg.wal_receiver_down":
+			if stringValue(sample.Metrics["role"]) == "standby" &&
+				sample.Metrics["replication_observed"] == true &&
+				stringValue(sample.Metrics["wal_receiver"]) != "streaming" {
+				addCandidate("wal_receiver_down", "备库 WAL 接收器中断", "medium", supports,
+					[]string{"主库发送端和网络状态未关联"},
+					"备库已观测接收中断，不能单凭备库侧信号判断主库或网络根因。",
+					map[string]any{"receiver": sample.Metrics["wal_receiver"]}, item.ObservedAt, condition)
+			}
+		case "pg.autovacuum_disabled":
+			if number(payload["value"]) == 1 {
+				backlog := 0
+				vacuum := object(object(sample.Metrics["diagnostics"])["vacuum"])
+				if stringValue(vacuum["status"]) == "ok" {
+					for _, raw := range list(vacuum["data"]) {
+						if number(object(raw)["deadRowsEstimate"]) >= 10000 {
+							backlog++
+						}
+					}
+				}
+				confidence := "low"
+				if backlog > 0 {
+					confidence = "medium"
+				}
+				addCandidate("autovacuum_disabled", "autovacuum 关闭，表维护可能积压", confidence, supports,
+					[]string{"未验证参数关闭与业务变慢的先后顺序"},
+					"参数关闭是风险因素，只有结合表积压和时间线才能分析业务影响。",
+					map[string]any{"backlogTables": backlog}, item.ObservedAt, condition)
+			}
+		case "pg.vacuum_backlog_percent":
+			if number(payload["value"]) >= 20 {
+				addCandidate("vacuum_backlog", "PostgreSQL 表死元组积压", "medium", supports,
+					[]string{"表膨胀和实际查询计划的直接影响证据缺失"},
+					"pg_stat_user_tables 为估计值，积压不自动证明查询退化。",
+					map[string]any{"percent": payload["value"], "table": object(payload["detail"])["table"],
+						"schema": object(payload["detail"])["schema"]}, item.ObservedAt, condition)
+			}
+		case "linux.cpu_used_percent":
+			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {
+				addCandidate("linux_cpu_pressure", "Linux 主机 CPU 使用率高", "low", supports,
+					[]string{"尚未证明 PostgreSQL 进程是 CPU 压力来源"},
+					"主机 CPU 压力与事件同期出现，不能单独解释数据库慢请求。",
+					map[string]any{"usedPercent": payload["value"]}, item.ObservedAt, condition)
+			}
 		case "linux.memory_used_percent":
 			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {
 				addCandidate("linux_memory_pressure", "Linux 主机内存使用率高", "low", supports,

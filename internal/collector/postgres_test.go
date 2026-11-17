@@ -27,7 +27,7 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	}
 	version := metrics["version_num"].(int)
 	if version/10000 < 14 || version/10000 > 18 || metrics["role"] != "primary" ||
-		metrics["database_bytes"].(int64) <= 0 {
+		metrics["database_bytes"].(int64) <= 0 || metrics["replication_observed"] != true {
 		t.Fatalf("unexpected PostgreSQL read-only metrics: %v", metrics)
 	}
 	if want := os.Getenv("DBSPHERE_TEST_PG_TARGET_MAJOR"); want != "" && strconv.Itoa(version/10000) != want {
