@@ -10,7 +10,7 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 
 ## V0.6 开发中
 
-正在制作 Linux x86_64 自解压一键离线包：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 .run；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 --no-build --pull never 启动 B/S 和独立 PG18。此功能尚待 Linux CI 的真实构建与断网路径验收，单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
+Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 `.run`；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 `--no-build --pull never` 启动 B/S 和独立 PG18。[13 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672)验证删除本机镜像后的纯本地安装与重复执行。另有 Node.js 24 + 外部 PG18 的轻量离线包，CI 验证解压后不运行包管理器即可启动。两种产物均由[独立工作流](https://github.com/cuipengdba/DbSphere/actions/runs/44056371453)构建并校验；单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
 
 ## V0.5 已发布能力
 
@@ -30,6 +30,7 @@ PG14–18 的只读采集新增冻结年龄、复制槽及关键参数；浏览�
 
 | 验证 | 结果 | 范围 |
 | --- | --- | --- |
+| [V0.6 开发 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672) | 通过，13 个作业 | 自解压 `.run` 在删除镜像后导入应用与 PG18 并重复启动；Node 轻量包解压后直接启动；其余 PG14–18、PG18 存储、Compose、Linux 与 PgBouncer 回归 |
 | [V0.5 发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44053161066) | 通过，11 个作业；49 项自动化测试 | PG14–18 `pg_stat_statements` 已配置/未配置矩阵、PG18 真实 SQL 退化、计划解析、慢日志脱敏、PG18 迁移、Compose、Linux、PgBouncer 与依赖审计 |
 | [V0.4 发布验收 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44047383649) | 通过，6 个作业；42 项自动化测试 | PG18 巡检持久化、真实复制槽 WAL 风险、监控存储备份恢复、一键 Compose 清单挂载与接口、PG14/node_exporter、PgBouncer、Linux 启动及依赖审计 |
 | `pnpm test` | 通过，33 项 | 登录、CSRF、资产与凭据、事件归并、告警/静默/通知、Webhook HMAC、本机 SMTP 会话、Linux/K8S/PgBouncer 采集及数据缺口 |
