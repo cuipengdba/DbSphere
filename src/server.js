@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { readFile, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,10 @@ import { collectPgBouncer } from './pgbouncer.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
 import { normalizeSilence } from './silences.js';
 import { createNotifier } from './notifications.js';
+import { evaluateInspection } from './inspections.js';
+import { collectBackup } from './backup.js';
+import { forecastDatabaseGrowth } from './capacity.js';
+import { inspectionReportHtml, inspectionReportMarkdown } from './reports.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -18,6 +23,13 @@ const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], 
 function send(res, status, data, extra = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra });
   res.end(JSON.stringify(data));
+}
+
+function sendReport(res, content, format, id) {
+  res.writeHead(200, { 'Content-Type': format === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
+    'Content-Disposition': `attachment; filename="dbsphere-inspection-${id}.${format === 'html' ? 'html' : 'md'}"`,
+    'Cache-Control': 'no-store' });
+  res.end(content);
 }
 
 async function body(req) {
@@ -63,7 +75,8 @@ function cookie(req) {
 }
 
 export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = collectK8s,
-  discoverK8sFn = discoverK8s, linuxFn = collectLinux, poolerFn = collectPgBouncer } = {}) {
+  discoverK8sFn = discoverK8s, linuxFn = collectLinux, poolerFn = collectPgBouncer,
+  backupFn = collectBackup } = {}) {
   const directory = resolve(dataDir ?? process.env.DBSPHERE_DATA_DIR ?? './data');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = loadMasterKey(directory);
@@ -89,6 +102,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   }
   const attempts = new Map();
   const activeCollections = new Set();
+  const activeInspections = new Set();
 
   async function collectAsset(id) {
     if (activeCollections.has(id)) return { busy: true };
@@ -132,12 +146,51 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
           pgbouncer = { status: 'error', reason: reason.slice(0, 300) };
         }
       }
+      let backup;
+      try { backup = await backupFn(asset); }
+      catch { backup = { status: 'error', source: 'pgBackRest info', reason: '备份状态采集失败' }; }
       if (!await store.getInternalAsset(id)) return null;
       const recorded = await store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}),
-        ...(pgbouncer ? { pgbouncer } : {}) }, error);
+        ...(pgbouncer ? { pgbouncer } : {}), backup }, error);
       void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
       return recorded;
     } finally { activeCollections.delete(id); }
+  }
+
+  async function runInspection(assetId, templateId, retryOf = null) {
+    const key = `${assetId}:${templateId}`;
+    if (activeInspections.has(key)) throw Object.assign(new Error('Inspection already running'), { status: 409 });
+    const asset = await store.getAsset(assetId);
+    const template = await store.getInspectionTemplate(templateId);
+    if (!asset || !template) throw Object.assign(new Error('Inspection asset or template not found'), { status: 404 });
+    if (template.scope !== 'all' && template.scope !== asset.runtime) {
+      throw Object.assign(new Error('Inspection template does not match asset runtime'), { status: 400 });
+    }
+    activeInspections.add(key);
+    const startedAt = new Date().toISOString();
+    try {
+      const collected = await collectAsset(assetId);
+      if (!collected || collected.busy) throw Object.assign(new Error('Asset collection is busy'), { status: 409 });
+      const [sample, previous] = await store.listSamples(assetId, 2);
+      if (!sample || sample.id !== collected.sampleId) throw new Error('Inspection sample was not stored');
+      const priorRun = (await store.listInspectionRuns(assetId, 50))
+        .find(run => run.templateId === templateId && run.status !== 'failed') ?? null;
+      const { findings, summary } = evaluateInspection(template, asset, sample, previous, priorRun);
+      const eventIds = (await store.listEvents()).filter(event => event.assetId === assetId &&
+        event.status === 'open').map(event => event.id);
+      return store.saveInspectionRun({ id: randomUUID(), assetId, templateId,
+        templateVersion: template.version, sampleId: sample.id, retryOf,
+        startedAt, completedAt: new Date().toISOString(), status: 'completed', error: null,
+        summary, findings, eventIds });
+    } catch (error) {
+      const reason = error.status === 409 ? '资产采集正忙，请重试' : '巡检执行失败，请检查服务日志后重试';
+      if (error.status !== 409) console.error('Inspection failed:', error);
+      return store.saveInspectionRun({ id: randomUUID(), assetId, templateId,
+        templateVersion: template.version, sampleId: null, retryOf,
+        startedAt, completedAt: new Date().toISOString(), status: 'failed', error: reason,
+        summary: { risk: 0, pass: 0, unknown: template.checks.length, changed: 0 },
+        findings: [], eventIds: [] });
+    } finally { activeInspections.delete(key); }
   }
 
   const server = createServer(async (req, res) => {
@@ -196,6 +249,57 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
       if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
       if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
+      if (req.method === 'GET' && path === '/api/inspection-templates') {
+        return send(res, 200, { templates: await store.getInspectionTemplates() });
+      }
+      const inspectionTemplateMatch = path.match(/^\/api\/inspection-templates\/([a-z][a-z0-9_]{1,63})$/);
+      if (req.method === 'PATCH' && inspectionTemplateMatch) {
+        const template = await store.updateInspectionTemplate(inspectionTemplateMatch[1], await body(req));
+        return template ? send(res, 200, { template }) : send(res, 400, { error: 'Invalid template or thresholds' });
+      }
+      if (req.method === 'GET' && path === '/api/inspection-schedules') {
+        return send(res, 200, { schedules: await store.listInspectionSchedules() });
+      }
+      if (req.method === 'PUT' && path === '/api/inspection-schedules') {
+        const input = await body(req);
+        if (!/^[0-9a-f-]{36}$/.test(input?.assetId ?? '') || !/^[a-z][a-z0-9_]{1,63}$/.test(input?.templateId ?? '') ||
+          !Number.isInteger(input?.intervalMinutes) || input.intervalMinutes < 15 || input.intervalMinutes > 10080 ||
+          typeof input.enabled !== 'boolean') return send(res, 400, { error: 'Invalid inspection schedule' });
+        const schedule = await store.upsertInspectionSchedule(input.assetId, input.templateId,
+          input.intervalMinutes, input.enabled);
+        return schedule ? send(res, 200, { schedule }) : send(res, 404, { error: 'Asset or template not found' });
+      }
+      if (req.method === 'GET' && path === '/api/inspection-runs') {
+        const assetId = requestUrl.searchParams.get('assetId');
+        if (assetId && !/^[0-9a-f-]{36}$/.test(assetId)) return send(res, 400, { error: 'Invalid asset ID' });
+        return send(res, 200, { runs: await store.listInspectionRuns(assetId, 50) });
+      }
+      if (req.method === 'POST' && path === '/api/inspections/run') {
+        const input = await body(req);
+        if (!/^[0-9a-f-]{36}$/.test(input?.assetId ?? '') || !/^[a-z][a-z0-9_]{1,63}$/.test(input?.templateId ?? '')) {
+          return send(res, 400, { error: 'Invalid inspection request' });
+        }
+        return send(res, 201, { run: await runInspection(input.assetId, input.templateId) });
+      }
+      const inspectionRetryMatch = path.match(/^\/api\/inspection-runs\/([0-9a-f-]{36})\/retry$/);
+      if (req.method === 'POST' && inspectionRetryMatch) {
+        const run = await store.getInspectionRun(inspectionRetryMatch[1]);
+        return run ? send(res, 201, { run: await runInspection(run.assetId, run.templateId, run.id) })
+          : send(res, 404, { error: 'Inspection run not found' });
+      }
+      const inspectionReportMatch = path.match(/^\/api\/inspection-runs\/([0-9a-f-]{36})\/report$/);
+      if (req.method === 'GET' && inspectionReportMatch) {
+        const format = requestUrl.searchParams.get('format') ?? 'md';
+        if (!['md', 'html'].includes(format)) return send(res, 400, { error: 'Invalid report format' });
+        const run = await store.getInspectionRun(inspectionReportMatch[1]);
+        if (!run) return send(res, 404, { error: 'Inspection run not found' });
+        const asset = await store.getAsset(run.assetId);
+        if (!asset) return send(res, 404, { error: 'Inspection asset not found' });
+        const forecast = store.kind === 'postgresql18'
+          ? forecastDatabaseGrowth(await store.databaseCapacityPoints(asset.id)) : null;
+        return sendReport(res, format === 'html' ? inspectionReportHtml(run, asset, forecast)
+          : inspectionReportMarkdown(run, asset, forecast), format, run.id);
+      }
         if (req.method === 'GET' && path === '/api/notifications') return send(res, 200, { notifications: await store.listNotificationHistory() });
         if (req.method === 'GET' && path === '/api/storage') {
           return send(res, 200, { storage: store.kind === 'postgresql18'
@@ -236,7 +340,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         encrypt(key, input.password), input.poolerUrl ? encrypt(key, input.poolerUrl) : null);
         return send(res, 201, { asset });
       }
-      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|check))?$/);
+      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|capacity|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
         if (!await store.getAsset(id)) return send(res, 404, { error: 'Asset not found' });
@@ -252,6 +356,10 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         }
         if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
         if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });
+        if (req.method === 'GET' && action === 'capacity') {
+          if (store.kind !== 'postgresql18') return send(res, 501, { error: 'Capacity forecast requires PostgreSQL 18 store' });
+          return send(res, 200, { forecast: forecastDatabaseGrowth(await store.databaseCapacityPoints(id)) });
+        }
         if (req.method === 'GET' && action === 'series') {
           if (store.kind !== 'postgresql18') return send(res, 501, { error: 'Series requires PostgreSQL 18 store' });
           const fromValue = requestUrl.searchParams.get('from');
@@ -290,6 +398,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
 
   let timer;
   let retentionTimer;
+  let inspectionTimer;
   function startScheduler() {
     const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60) * 1000;
     const escalateAfter = Number(process.env.DBSPHERE_ESCALATE_AFTER_MINUTES || 15);
@@ -305,6 +414,15 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
     })().catch(e => console.error('Scheduler failed:', e)); }, interval);
     timer.unref();
+    const inspectDue = () => void (async () => {
+      for (const due of await store.claimDueInspections()) {
+        try { await runInspection(due.assetId, due.templateId); }
+        catch (error) { console.error('Scheduled inspection failed:', error.message); }
+      }
+    })().catch(error => console.error('Inspection scheduler failed:', error.message));
+    inspectionTimer = setInterval(inspectDue, 60000);
+    inspectionTimer.unref();
+    inspectDue();
     void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
     if (store.kind === 'postgresql18' && (retentionDays !== null || eventRetentionDays !== null)) {
       const prune = () => void (async () => {
@@ -316,8 +434,8 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       retentionTimer.unref();
     }
   }
-  function stop() { clearInterval(timer); clearInterval(retentionTimer); server.close(); return store.close(); }
-  return { server, store, notifier, collectAsset, startScheduler, stop };
+  function stop() { clearInterval(timer); clearInterval(retentionTimer); clearInterval(inspectionTimer); server.close(); return store.close(); }
+  return { server, store, notifier, collectAsset, runInspection, startScheduler, stop };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

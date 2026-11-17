@@ -4,6 +4,7 @@ import { oomCandidate } from './incidents.js';
 import { publicAsset, publicSilence } from './store.js';
 import { DEFAULT_RULES, readSignal, validateRuleUpdate } from './alert-rules.js';
 import { nextAlertState } from './alert-state.js';
+import { DEFAULT_INSPECTION_TEMPLATES, upgradeInspectionTemplate, validateInspectionTemplateUpdate } from './inspections.js';
 
 const { Pool } = pg;
 
@@ -21,6 +22,12 @@ function timeMonth(value, table) {
 
 const sampleMonth = value => timeMonth(value, 'samples');
 const eventMonth = value => timeMonth(value, 'events');
+
+const inspectionRun = row => ({ id: row.id, assetId: row.asset_id, templateId: row.template_id,
+  templateVersion: row.template_version, sampleId: row.sample_id, retryOf: row.retry_of,
+  startedAt: row.started_at, completedAt: row.completed_at, status: row.status, error: row.error,
+  eventIds: row.event_ids_json,
+  summary: row.summary_json, findings: row.findings_json });
 
 export async function ensureSamplePartition(client, timestamp) {
   const month = sampleMonth(timestamp);
@@ -108,6 +115,28 @@ const schema = `
     delivered_at timestamptz, last_error text, UNIQUE(evidence_id,channel)
   );
   CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(status,next_attempt_at);
+  CREATE TABLE IF NOT EXISTS inspection_templates (
+    id text PRIMARY KEY, definition_json jsonb NOT NULL, updated_at timestamptz NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS inspection_schedules (
+    asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    template_id text NOT NULL REFERENCES inspection_templates(id),
+    interval_minutes integer NOT NULL, next_due_at timestamptz NOT NULL,
+    enabled boolean NOT NULL DEFAULT true, PRIMARY KEY(asset_id,template_id)
+  );
+  CREATE INDEX IF NOT EXISTS inspection_schedules_due ON inspection_schedules(enabled,next_due_at);
+  CREATE TABLE IF NOT EXISTS inspection_runs (
+    id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    template_id text NOT NULL REFERENCES inspection_templates(id), template_version integer NOT NULL,
+    sample_id uuid, retry_of uuid, started_at timestamptz NOT NULL,
+    completed_at timestamptz NOT NULL, summary_json jsonb NOT NULL, findings_json jsonb NOT NULL,
+    status text NOT NULL DEFAULT 'completed', error text,
+    event_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb
+  );
+  ALTER TABLE inspection_runs ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'completed';
+  ALTER TABLE inspection_runs ADD COLUMN IF NOT EXISTS error text;
+  ALTER TABLE inspection_runs ADD COLUMN IF NOT EXISTS event_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb;
+  CREATE INDEX IF NOT EXISTS inspection_runs_asset_time ON inspection_runs(asset_id,completed_at DESC);
 `;
 
 export class PgStore {
@@ -184,6 +213,16 @@ export class PgStore {
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(7) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(8) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(9) ON CONFLICT DO NOTHING');
+        for (const template of DEFAULT_INSPECTION_TEMPLATES) {
+          await client.query(`INSERT INTO inspection_templates(id,definition_json,updated_at)
+            VALUES($1,$2,now()) ON CONFLICT(id) DO NOTHING`, [template.id, JSON.stringify(template)]);
+          const current = (await client.query('SELECT definition_json FROM inspection_templates WHERE id=$1',
+            [template.id])).rows[0].definition_json;
+          const upgraded = upgradeInspectionTemplate(current, template);
+          if (upgraded) await client.query('UPDATE inspection_templates SET definition_json=$1,updated_at=now() WHERE id=$2',
+            [JSON.stringify(upgraded), template.id]);
+        }
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(10) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -266,6 +305,16 @@ export class PgStore {
         ? null : Number(row.average_connections) }));
   }
 
+  async databaseCapacityPoints(assetId, days = 30) {
+    const rows = (await this.pool.query(`SELECT DISTINCT ON (day) day, database_bytes, id FROM (
+      SELECT date_trunc('day',collected_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day,
+        (metrics_json->>'database_bytes')::numeric AS database_bytes, id, collected_at
+      FROM samples WHERE asset_id=$1 AND collected_at>=now() - $2::int * interval '1 day'
+        AND status='ok' AND metrics_json->>'database_bytes' ~ '^[0-9]+$'
+    ) AS daily ORDER BY day, collected_at DESC`, [assetId, days])).rows;
+    return rows.map(row => ({ day: row.day, databaseBytes: Number(row.database_bytes), sampleId: row.id }));
+  }
+
   async pruneSamples(retentionDays = 90, maxRows = 10000) {
     if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650 ||
       !Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('Invalid retention policy');
@@ -305,6 +354,75 @@ export class PgStore {
   }
   async setSetting(key, value) {
     await this.pool.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, value]);
+  }
+
+  async getInspectionTemplates() {
+    return (await this.pool.query('SELECT definition_json FROM inspection_templates ORDER BY id')).rows
+      .map(row => row.definition_json);
+  }
+  async getInspectionTemplate(id) {
+    return (await this.pool.query('SELECT definition_json FROM inspection_templates WHERE id=$1', [id])).rows[0]?.definition_json ?? null;
+  }
+  async updateInspectionTemplate(id, input) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = (await client.query('SELECT definition_json FROM inspection_templates WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      const updated = validateInspectionTemplateUpdate(row?.definition_json, input);
+      if (!updated) { await client.query('ROLLBACK'); return null; }
+      await client.query('UPDATE inspection_templates SET definition_json=$1,updated_at=now() WHERE id=$2',
+        [JSON.stringify(updated), id]);
+      await client.query('COMMIT');
+      return updated;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+  async listInspectionSchedules() {
+    return (await this.pool.query('SELECT * FROM inspection_schedules ORDER BY next_due_at')).rows
+      .map(row => ({ assetId: row.asset_id, templateId: row.template_id,
+        intervalMinutes: row.interval_minutes, nextDueAt: row.next_due_at, enabled: row.enabled }));
+  }
+  async upsertInspectionSchedule(assetId, templateId, intervalMinutes, enabled = true) {
+    const nextDueAt = new Date(Date.now() + intervalMinutes * 60000).toISOString();
+    const row = (await this.pool.query(`INSERT INTO inspection_schedules(asset_id,template_id,interval_minutes,next_due_at,enabled)
+      SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM assets WHERE id=$1)
+      AND EXISTS(SELECT 1 FROM inspection_templates WHERE id=$2)
+      ON CONFLICT(asset_id,template_id) DO UPDATE SET interval_minutes=excluded.interval_minutes,
+      next_due_at=excluded.next_due_at,enabled=excluded.enabled RETURNING *`,
+    [assetId, templateId, intervalMinutes, nextDueAt, enabled])).rows[0];
+    return row ? { assetId: row.asset_id, templateId: row.template_id,
+      intervalMinutes: row.interval_minutes, nextDueAt: row.next_due_at, enabled: row.enabled } : null;
+  }
+  async claimDueInspections(now = new Date().toISOString(), limit = 20) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const rows = (await client.query(`SELECT asset_id,template_id,interval_minutes FROM inspection_schedules
+        WHERE enabled=true AND next_due_at<=$1 ORDER BY next_due_at LIMIT $2 FOR UPDATE SKIP LOCKED`, [now, limit])).rows;
+      for (const row of rows) await client.query(`UPDATE inspection_schedules
+        SET next_due_at=$1::timestamptz + interval_minutes * interval '1 minute'
+        WHERE asset_id=$2 AND template_id=$3`, [now, row.asset_id, row.template_id]);
+      await client.query('COMMIT');
+      return rows.map(row => ({ assetId: row.asset_id, templateId: row.template_id }));
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+  async saveInspectionRun(run) {
+    await this.pool.query(`INSERT INTO inspection_runs(id,asset_id,template_id,template_version,sample_id,retry_of,
+      started_at,completed_at,summary_json,findings_json,status,error,event_ids_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [run.id, run.assetId, run.templateId, run.templateVersion, run.sampleId, run.retryOf,
+      run.startedAt, run.completedAt, JSON.stringify(run.summary), JSON.stringify(run.findings),
+      run.status ?? 'completed', run.error ?? null, JSON.stringify(run.eventIds ?? [])]);
+    return run;
+  }
+  async listInspectionRuns(assetId = null, limit = 50) {
+    const rows = (await this.pool.query(`SELECT * FROM inspection_runs WHERE ($1::uuid IS NULL OR asset_id=$1)
+      ORDER BY completed_at DESC LIMIT $2`, [assetId, limit])).rows;
+    return rows.map(inspectionRun);
+  }
+  async getInspectionRun(id) {
+    const row = (await this.pool.query('SELECT * FROM inspection_runs WHERE id=$1', [id])).rows[0];
+    return row ? inspectionRun(row) : null;
   }
 
   async getAlertRules() {

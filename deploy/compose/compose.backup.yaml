@@ -1,0 +1,6 @@
+services:
+  app:
+    environment:
+      DBSPHERE_BACKUP_INFO_DIR: /etc/dbsphere/backup-info
+    volumes:
+      - '${DBSPHERE_BACKUP_INFO_HOST_PATH:?Set an absolute read-only backup info directory}:/etc/dbsphere/backup-info:ro'

@@ -15,7 +15,7 @@
   </header>
   <main>
     <section id="login-panel" class="panel login">
-      <p class="eyebrow">V0.3 开发预览</p>
+      <p class="eyebrow">V0.4 开发预览</p>
       <h1>登录运维控制台</h1>
       <p>使用首次启动时配置的管理员密码。</p>
       <form id="login-form">
@@ -27,7 +27,7 @@
     <div id="workspace" hidden>
       <section class="hero">
         <div><p class="eyebrow">PostgreSQL 14–18 · Linux / Kubernetes</p><h1>数据库运行态势</h1><p>从资产、采样和事件进入同一问题的证据时间线。</p></div>
-        <div class="hero-badge">B/S 架构<br><b>V0.3</b></div>
+        <div class="hero-badge">B/S 架构<br><b>V0.4 DEV</b></div>
       </section>
       <div id="notice" role="status" aria-live="polite"></div>
       <section class="summary" aria-label="总览">
@@ -94,6 +94,23 @@
         <section class="panel"><div class="section-head"><div><p class="eyebrow">WINDOWS</p><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
       </div>
       <section class="panel lower"><div class="section-head"><div><p class="eyebrow">DELIVERY</p><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
+      <div class="grid lower">
+        <section class="panel">
+          <div class="section-head"><div><p class="eyebrow">INSPECT</p><h2>巡检模板与计划</h2></div></div>
+          <form id="inspection-form" class="form-grid">
+            <label>资产<select name="assetId" id="inspection-asset" required></select></label>
+            <label>模板<select name="templateId" id="inspection-template" required></select></label>
+            <label>计划间隔（分钟）<input name="intervalMinutes" type="number" min="15" max="10080" value="1440" required></label>
+            <label><input name="enabled" type="checkbox" checked>启用定时巡检</label>
+            <button id="inspection-run" type="button">立即巡检</button>
+            <button type="submit" class="ghost">保存计划</button>
+          </form>
+          <p class="hint">巡检会重新采样；采集失败和缺失信号记录为未知。模板版本随阈值修改递增。</p>
+          <div id="inspection-schedules" class="list"></div>
+          <div id="inspection-templates" class="list"></div>
+        </section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">HISTORY</p><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
+      </div>
       <section class="panel lower"><div class="section-head"><div><p class="eyebrow">STORAGE</p><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
     </div>
   </main>

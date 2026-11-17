@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { oomCandidate } from './incidents.js';
 import { DEFAULT_RULES, readSignal, validateRuleUpdate } from './alert-rules.js';
 import { nextAlertState } from './alert-state.js';
+import { DEFAULT_INSPECTION_TEMPLATES, upgradeInspectionTemplate, validateInspectionTemplateUpdate } from './inspections.js';
 
 export const publicAsset = (row) => row && ({
   id: row.id, name: row.name, host: row.host, port: row.port,
@@ -76,6 +77,25 @@ export class Store {
         delivered_at TEXT, last_error TEXT, UNIQUE(evidence_id,channel)
       );
       CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(status,next_attempt_at);
+      CREATE TABLE IF NOT EXISTS inspection_templates (
+        id TEXT PRIMARY KEY, definition_json TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS inspection_schedules (
+        asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        template_id TEXT NOT NULL REFERENCES inspection_templates(id),
+        interval_minutes INTEGER NOT NULL, next_due_at TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY(asset_id,template_id)
+      );
+      CREATE TABLE IF NOT EXISTS inspection_runs (
+        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        template_id TEXT NOT NULL REFERENCES inspection_templates(id), template_version INTEGER NOT NULL,
+        sample_id TEXT REFERENCES samples(id) ON DELETE SET NULL, retry_of TEXT,
+        started_at TEXT NOT NULL, completed_at TEXT NOT NULL,
+        summary_json TEXT NOT NULL, findings_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'completed', error TEXT,
+        event_ids_json TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE INDEX IF NOT EXISTS inspection_runs_asset_time ON inspection_runs(asset_id,completed_at DESC);
     `);
     if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
@@ -89,15 +109,97 @@ export class Store {
     if (!this.db.prepare('PRAGMA table_info(events)').all().some(column => column.name === 'acknowledged_at')) {
       this.db.exec('ALTER TABLE events ADD COLUMN acknowledged_at TEXT');
     }
+    if (!this.db.prepare('PRAGMA table_info(inspection_runs)').all().some(column => column.name === 'status')) {
+      this.db.exec("ALTER TABLE inspection_runs ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'");
+    }
+    if (!this.db.prepare('PRAGMA table_info(inspection_runs)').all().some(column => column.name === 'error')) {
+      this.db.exec('ALTER TABLE inspection_runs ADD COLUMN error TEXT');
+    }
+    if (!this.db.prepare('PRAGMA table_info(inspection_runs)').all().some(column => column.name === 'event_ids_json')) {
+      this.db.exec("ALTER TABLE inspection_runs ADD COLUMN event_ids_json TEXT NOT NULL DEFAULT '[]'");
+    }
     this.db.exec("UPDATE events SET event_group='telemetry' WHERE event_group IS NULL");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_one_open_group ON events(asset_id,event_group) WHERE status='open'");
     const insertRule = this.db.prepare('INSERT OR IGNORE INTO alert_rules(id,definition_json,updated_at) VALUES(?,?,?)');
     for (const rule of DEFAULT_RULES) insertRule.run(rule.id, JSON.stringify(rule), new Date().toISOString());
+    const insertTemplate = this.db.prepare('INSERT OR IGNORE INTO inspection_templates(id,definition_json,updated_at) VALUES(?,?,?)');
+    for (const template of DEFAULT_INSPECTION_TEMPLATES) {
+      insertTemplate.run(template.id, JSON.stringify(template), new Date().toISOString());
+      const upgraded = upgradeInspectionTemplate(this.getInspectionTemplate(template.id), template);
+      if (upgraded) this.db.prepare('UPDATE inspection_templates SET definition_json=?,updated_at=? WHERE id=?')
+        .run(JSON.stringify(upgraded), new Date().toISOString(), template.id);
+    }
   }
 
   getSetting(key) { return this.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? null; }
   health() { this.db.prepare('SELECT 1').get(); }
   setSetting(key, value) { this.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value); }
+
+  getInspectionTemplates() {
+    return this.db.prepare('SELECT definition_json FROM inspection_templates ORDER BY id').all()
+      .map(row => JSON.parse(row.definition_json));
+  }
+  getInspectionTemplate(id) {
+    const row = this.db.prepare('SELECT definition_json FROM inspection_templates WHERE id=?').get(id);
+    return row ? JSON.parse(row.definition_json) : null;
+  }
+  updateInspectionTemplate(id, input) {
+    const updated = validateInspectionTemplateUpdate(this.getInspectionTemplate(id), input);
+    if (!updated) return null;
+    this.db.prepare('UPDATE inspection_templates SET definition_json=?,updated_at=? WHERE id=?')
+      .run(JSON.stringify(updated), new Date().toISOString(), id);
+    return updated;
+  }
+  listInspectionSchedules() {
+    return this.db.prepare('SELECT * FROM inspection_schedules ORDER BY next_due_at').all()
+      .map(row => ({ assetId: row.asset_id, templateId: row.template_id,
+        intervalMinutes: row.interval_minutes, nextDueAt: row.next_due_at, enabled: Boolean(row.enabled) }));
+  }
+  upsertInspectionSchedule(assetId, templateId, intervalMinutes, enabled = true) {
+    if (!this.getInternalAsset(assetId) || !this.getInspectionTemplate(templateId)) return null;
+    const nextDueAt = new Date(Date.now() + intervalMinutes * 60000).toISOString();
+    this.db.prepare(`INSERT INTO inspection_schedules(asset_id,template_id,interval_minutes,next_due_at,enabled)
+      VALUES(?,?,?,?,?) ON CONFLICT(asset_id,template_id) DO UPDATE SET interval_minutes=excluded.interval_minutes,
+      next_due_at=excluded.next_due_at,enabled=excluded.enabled`).run(assetId, templateId, intervalMinutes, nextDueAt, enabled ? 1 : 0);
+    return { assetId, templateId, intervalMinutes, nextDueAt, enabled };
+  }
+  claimDueInspections(now = new Date().toISOString(), limit = 20) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.db.prepare(`SELECT * FROM inspection_schedules WHERE enabled=1 AND next_due_at<=?
+        ORDER BY next_due_at LIMIT ?`).all(now, limit);
+      for (const row of rows) this.db.prepare('UPDATE inspection_schedules SET next_due_at=? WHERE asset_id=? AND template_id=?')
+        .run(new Date(new Date(now).getTime() + row.interval_minutes * 60000).toISOString(), row.asset_id, row.template_id);
+      this.db.exec('COMMIT');
+      return rows.map(row => ({ assetId: row.asset_id, templateId: row.template_id }));
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  saveInspectionRun(run) {
+    this.db.prepare(`INSERT INTO inspection_runs(id,asset_id,template_id,template_version,sample_id,retry_of,
+      started_at,completed_at,summary_json,findings_json,status,error,event_ids_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(run.id, run.assetId, run.templateId, run.templateVersion, run.sampleId, run.retryOf,
+        run.startedAt, run.completedAt, JSON.stringify(run.summary), JSON.stringify(run.findings),
+        run.status ?? 'completed', run.error ?? null, JSON.stringify(run.eventIds ?? []));
+    return run;
+  }
+  listInspectionRuns(assetId = null, limit = 50) {
+    const rows = assetId
+      ? this.db.prepare('SELECT * FROM inspection_runs WHERE asset_id=? ORDER BY completed_at DESC LIMIT ?').all(assetId, limit)
+      : this.db.prepare('SELECT * FROM inspection_runs ORDER BY completed_at DESC LIMIT ?').all(limit);
+    return rows.map(row => ({ id: row.id, assetId: row.asset_id, templateId: row.template_id,
+      templateVersion: row.template_version, sampleId: row.sample_id, retryOf: row.retry_of,
+      startedAt: row.started_at, completedAt: row.completed_at, status: row.status, error: row.error,
+      eventIds: JSON.parse(row.event_ids_json),
+      summary: JSON.parse(row.summary_json), findings: JSON.parse(row.findings_json) }));
+  }
+  getInspectionRun(id) {
+    const row = this.db.prepare('SELECT * FROM inspection_runs WHERE id=?').get(id);
+    return row ? { id: row.id, assetId: row.asset_id, templateId: row.template_id,
+      templateVersion: row.template_version, sampleId: row.sample_id, retryOf: row.retry_of,
+      startedAt: row.started_at, completedAt: row.completed_at, status: row.status, error: row.error,
+      eventIds: JSON.parse(row.event_ids_json),
+      summary: JSON.parse(row.summary_json), findings: JSON.parse(row.findings_json) } : null;
+  }
 
   getAlertRules() {
     return this.db.prepare('SELECT definition_json FROM alert_rules ORDER BY id').all().map(row => JSON.parse(row.definition_json));

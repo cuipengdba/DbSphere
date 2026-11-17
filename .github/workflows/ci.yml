@@ -60,6 +60,15 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: node scripts/pg-alert-rules-smoke.mjs
+      - name: Test PostgreSQL 18 versioned inspections
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-inspections-smoke.mjs
+      - name: Drill PostgreSQL 18 monitoring store backup and restore
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_TMP_DIR: ${{ runner.temp }}
+        run: node scripts/pg18-backup-restore-drill.mjs
       - name: Test PostgreSQL 18 alert event correlation
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
@@ -130,6 +139,16 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
             -f deploy/compose/compose.k8s.yaml exec -T app test -r /etc/dbsphere/kubeconfig
           node scripts/compose-upgrade-smoke.mjs
+      - name: Check one-click read-only backup info mount
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/dbsphere-backup-info"
+          printf 'DBSPHERE_BACKUP_INFO_HOST_PATH=%s\n' "$RUNNER_TEMP/dbsphere-backup-info" >> deploy/compose/.env
+          bash scripts/one-click.sh
+          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
+            -f deploy/compose/compose.k8s.yaml -f deploy/compose/compose.backup.yaml \
+            exec -T app test -d /etc/dbsphere/backup-info
       - name: Reject an invalid kubeconfig path clearly
         run: |
           printf 'DBSPHERE_KUBECONFIG_HOST_PATH=/definitely/missing/kubeconfig\n' >> deploy/compose/.env

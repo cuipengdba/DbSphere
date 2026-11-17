@@ -29,9 +29,11 @@ function cell(tag, text, cls) {
 }
 
 async function refresh() {
-  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage }] = await Promise.all([
+  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
+    { templates }, { schedules }, { runs }] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
-    api('/api/silences'), api('/api/notifications'), api('/api/storage')
+    api('/api/silences'), api('/api/notifications'), api('/api/storage'),
+    api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs')
   ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
@@ -44,8 +46,87 @@ async function refresh() {
   renderNotifications(notifications);
   pg18Store = storage.mode !== 'sqlite-preview';
   renderStorage(storage);
+  renderInspections(assets, templates, schedules, runs);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
+}
+
+function renderInspections(assets, templates, schedules, runs) {
+  const assetSelect = $('inspection-asset');
+  const templateSelect = $('inspection-template');
+  const selectedAssetId = assetSelect.value;
+  const selectedTemplateId = templateSelect.value;
+  assetSelect.replaceChildren(...assets.map(asset => {
+    const option = document.createElement('option'); option.value = asset.id; option.textContent = asset.name; return option;
+  }));
+  assetSelect.value = assets.some(asset => asset.id === selectedAssetId) ? selectedAssetId : assets[0]?.id ?? '';
+  const runtime = assets.find(asset => asset.id === assetSelect.value)?.runtime;
+  const available = templates.filter(template => template.scope === 'all' || template.scope === runtime);
+  templateSelect.replaceChildren(...available.map(template => {
+    const option = document.createElement('option'); option.value = template.id;
+    option.textContent = `${template.title} · v${template.version}`; return option;
+  }));
+  templateSelect.value = available.some(template => template.id === selectedTemplateId)
+    ? selectedTemplateId : available[0]?.id ?? '';
+  const scheduleList = $('inspection-schedules'); scheduleList.replaceChildren();
+  if (!schedules.length) scheduleList.append(cell('p', '尚未启用定时巡检。', 'empty'));
+  for (const schedule of schedules) {
+    const asset = assets.find(item => item.id === schedule.assetId);
+    const template = templates.find(item => item.id === schedule.templateId);
+    scheduleList.append(cell('p', `${asset?.name ?? '已删除资产'} · ${template?.title ?? schedule.templateId} · ${schedule.enabled ? '启用' : '停用'} · ${schedule.intervalMinutes} 分钟 · 下次 ${formatTime(schedule.nextDueAt)}`, 'evidence'));
+  }
+  const templateList = $('inspection-templates');
+  if (!document.activeElement || !templateList.contains(document.activeElement)) {
+    templateList.replaceChildren();
+    for (const template of templates) {
+      const details = document.createElement('details'); details.className = 'rule-card';
+      details.append(cell('summary', `${template.title} · v${template.version} · ${template.checks.length} 项`));
+      const form = document.createElement('form'); form.className = 'rule-form';
+      const thresholds = new Map();
+      for (const check of template.checks) {
+        const input = document.createElement('input'); input.type = 'number'; input.min = '0';
+        input.step = 'any'; input.value = check.threshold; input.required = true;
+        const label = document.createElement('label'); label.append(cell('span', check.title), input);
+        thresholds.set(check.id, input); form.append(label);
+      }
+      const save = cell('button', '保存模板阈值', 'small-button'); save.type = 'submit'; form.append(save);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        try {
+          await api(`/api/inspection-templates/${template.id}`, 'PATCH',
+            { thresholds: Object.fromEntries([...thresholds].map(([id, input]) => [id, Number(input.value)])) });
+          notice(`${template.title} 已发布新版本。`); document.activeElement?.blur(); await refresh();
+        } catch (error) { notice(error.message, true); }
+      });
+      details.append(form); templateList.append(details);
+    }
+  }
+  const runList = $('inspection-runs'); runList.replaceChildren();
+  if (!runs.length) runList.append(cell('p', '尚无巡检历史。', 'empty'));
+  for (const run of runs) {
+    const details = document.createElement('details'); details.className = 'rule-card';
+    const asset = assets.find(item => item.id === run.assetId);
+    details.append(cell('summary', `${asset?.name ?? '资产'} · ${run.templateId} v${run.templateVersion} · ${run.status === 'failed' ? '执行失败' : `风险 ${run.summary.risk} / 未知 ${run.summary.unknown}`} · ${formatTime(run.completedAt)}`));
+    details.append(cell('small', `巡检 ID ${run.id} · 样本 ${run.sampleId}${run.retryOf ? ' · 重试自 ' + run.retryOf : ''}`));
+    if (run.error) details.append(cell('p', run.error, 'warning'));
+    for (const finding of run.findings) {
+      const change = finding.previousStatus && finding.previousStatus !== finding.status
+        ? ` · 从 ${finding.previousStatus} 变为 ${finding.status}` : '';
+      details.append(cell('p', `${finding.status} · ${finding.title} · ${finding.observed ?? '未采集'} / ${finding.threshold} · ${finding.source}${finding.reason ? ' · ' + finding.reason : ''}${change}`, 'evidence'));
+    }
+    const retry = cell('button', '重新巡检', 'ghost small-button');
+    retry.addEventListener('click', async () => {
+      try { const { run: repeated } = await api(`/api/inspection-runs/${run.id}/retry`, 'POST');
+        notice(repeated.status === 'failed' ? repeated.error : '重新巡检已完成。', repeated.status === 'failed'); await refresh(); }
+      catch (error) { notice(error.message, true); }
+    });
+    const markdown = cell('button', '下载 Markdown', 'ghost small-button');
+    markdown.addEventListener('click', () => { window.location.href = `/api/inspection-runs/${run.id}/report?format=md`; });
+    const html = cell('button', '下载 HTML', 'ghost small-button');
+    html.addEventListener('click', () => { window.location.href = `/api/inspection-runs/${run.id}/report?format=html`; });
+    const actions = document.createElement('div'); actions.className = 'actions';
+    actions.append(retry, markdown, html); details.append(actions); runList.append(details);
+  }
 }
 
 function renderAssets(assets) {
@@ -118,6 +199,13 @@ async function showAsset(id) {
     detail.append(grid);
     if (metrics.diagnostics) renderDiagnostics(detail, metrics.diagnostics);
   } else detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
+  if (currentSample?.metrics?.backup) {
+    const backup = currentSample.metrics.backup;
+    const label = backup.status === 'ok'
+      ? `pgBackRest ${backup.stanza} · 仓库${backup.repositoryHealthy ? '正常' : '异常'} · 最近成功备份 ${formatTime(backup.lastSuccessAt)} · 最近尝试 ${backup.lastAttemptStatus ?? '未提供'}`
+      : `备份状态未知：${backup.reason ?? backup.status}`;
+    detail.append(cell('p', label, backup.status === 'ok' && backup.repositoryHealthy ? 'evidence' : 'warning'));
+  }
   if (currentSample?.metrics?.k8s) {
     const k8s = currentSample.metrics.k8s;
     const heading = cell('h3', 'Kubernetes 运行状态'); heading.id = 'k8s-detail'; detail.append(heading);
@@ -169,6 +257,15 @@ async function showAsset(id) {
       for (const entry of pooler.stats) detail.append(cell('p', `累计事务 ${entry.transactionsTotal} · 累计查询 ${entry.queriesTotal} · 平均查询 ${entry.avgQueryMicroseconds} μs`));
     } else detail.append(cell('p', `PgBouncer 未采集：${pooler.reason || pooler.status}`, 'warning'));
   }
+  if (pg18Store) {
+    const { forecast } = await api(`/api/assets/${id}/capacity`);
+    detail.append(cell('h3', '数据库容量趋势'));
+    if (forecast.status === 'estimate') {
+      const gib = value => `${(value / 1024 ** 3).toFixed(2)} GiB`;
+      detail.append(cell('p', `最近 ${forecast.observedDays.toFixed(0)} 天、${forecast.points.length} 个每日样本；当前 ${gib(forecast.latestBytes)}，每日增长约 ${gib(forecast.dailyGrowthBytes)}，30 天后约 ${gib(forecast.projected30DayBytes)}。置信度 ${forecast.confidence}；${forecast.method}。`, 'evidence'));
+      detail.append(cell('small', `最新样本 ${forecast.latestSampleId}；估计不代表磁盘剩余空间或备份可恢复性。`));
+    } else detail.append(cell('p', `容量预测暂不可用：${forecast.reason}`, 'empty'));
+  }
 }
 
 function renderDiagnostics(target, diagnostics) {
@@ -183,6 +280,9 @@ function renderDiagnostics(target, diagnostics) {
     ['归档', 'archiver', d => `成功 ${d.archivedCount}，失败 ${d.failedCount}`],
     ['检查点', 'checkpoints', d => `定时 ${d.timed}，请求 ${d.requested}`],
     ['复制槽', 'slots', d => `总数 ${d.total}，活跃 ${d.active}`],
+    ['事务冻结年龄', 'freeze', d => `${d.xidAge} / ${d.maxAge} XID（${d.usedPercent}%）`],
+    ['复制槽 WAL 保留', 'slotDetails', d => d.length ? d.slice(0, 3).map(x => `${x.name}: ${x.active ? '活跃' : '未活跃'} / ${x.walStatus || '未知'} / ${x.retainedBytes == null ? '保留量未采集' : (x.retainedBytes / 1024 / 1024).toFixed(1) + ' MiB'}`).join('；') : '无复制槽'],
+    ['关键参数', 'settings', d => d.map(x => `${x.name}=${x.value}${x.unit || ''}`).join('；')],
     ['autovacuum', 'vacuum', d => d.length ? d.slice(0, 3).map(x => `${x.schema}.${x.table}: 死元组估计 ${x.deadRowsEstimate}`).join('；') : '暂无用户表'],
     ['表与索引', 'tables', d => d.length ? d.slice(0, 3).map(x => `${x.schema}.${x.table}: 总量 ${(x.totalBytes / 1024 / 1024).toFixed(1)} MiB / 索引 ${(x.indexBytes / 1024 / 1024).toFixed(1)} MiB`).join('；') : '暂无用户表']
   ];
@@ -409,6 +509,26 @@ $('login-form').addEventListener('submit', async (event) => {
 
 $('logout').addEventListener('click', async () => { await api('/api/logout', 'POST'); csrf = null; selectedAsset = null; await boot(); });
 $('refresh').addEventListener('click', () => refresh().catch(e => notice(e.message, true)));
+$('inspection-asset').addEventListener('change', () => refresh().catch(error => notice(error.message, true)));
+$('inspection-run').addEventListener('click', async () => {
+  const form = $('inspection-form');
+  if (!form.elements.assetId.value || !form.elements.templateId.value) return notice('请先添加资产。', true);
+  try {
+    const { run } = await api('/api/inspections/run', 'POST', { assetId: form.elements.assetId.value,
+      templateId: form.elements.templateId.value });
+    notice(run.status === 'failed' ? run.error : '巡检已完成，结果已归档。', run.status === 'failed'); await refresh();
+  } catch (error) { notice(error.message, true); }
+});
+$('inspection-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await api('/api/inspection-schedules', 'PUT', { assetId: form.elements.assetId.value,
+      templateId: form.elements.templateId.value, intervalMinutes: Number(form.elements.intervalMinutes.value),
+      enabled: form.elements.enabled.checked });
+    notice('巡检计划已保存。'); await refresh();
+  } catch (error) { notice(error.message, true); }
+});
 $('cancel-edit').addEventListener('click', resetEdit);
 $('silence-form').addEventListener('submit', async event => {
   event.preventDefault();

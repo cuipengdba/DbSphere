@@ -55,7 +55,7 @@ export async function collectPostgres(asset, password) {
         metrics.replication_observed = true;
       }
     } catch { /* Optional replication view is unavailable to this monitoring account. */ }
-    metrics.diagnostics = await collectDiagnostics(client, major);
+    metrics.diagnostics = await collectDiagnostics(client, major, identity.in_recovery);
     return metrics;
   } finally {
     await client.end().catch(() => {});

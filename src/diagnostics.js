@@ -5,7 +5,7 @@ async function optional(client, sql, map) {
   catch (error) { return { status: 'unavailable', reason: String(error.code || error.message).slice(0, 120) }; }
 }
 
-export async function collectDiagnostics(client, major) {
+export async function collectDiagnostics(client, major, inRecovery = false) {
   const activity = await optional(client, `SELECT COALESCE(state,'unknown') AS state,
     COALESCE(wait_event_type,'none') AS wait_type, count(*)::int AS sessions
     FROM pg_stat_activity WHERE datname=current_database() GROUP BY 1,2`, rows => rows.map(r => ({
@@ -75,5 +75,23 @@ export async function collectDiagnostics(client, major) {
     count(*) FILTER (WHERE active)::int AS active FROM pg_replication_slots`, rows => ({
     total: number(rows[0].total), active: number(rows[0].active)
   }));
-  return { activity, transactions, locks, lockChain, database, wal, archiver, checkpoints, vacuum, tables, slots };
+  const freeze = await optional(client, `SELECT age(datfrozenxid)::bigint AS xid_age,
+    current_setting('autovacuum_freeze_max_age')::bigint AS max_age
+    FROM pg_database WHERE datname=current_database()`, rows => ({
+    xidAge: number(rows[0].xid_age), maxAge: number(rows[0].max_age),
+    usedPercent: Number((number(rows[0].xid_age) / number(rows[0].max_age) * 100).toFixed(1))
+  }));
+  const slotDetails = await optional(client, `SELECT slot_name, active, wal_status, safe_wal_size::text,
+    ${inRecovery ? 'NULL::text' : 'CASE WHEN restart_lsn IS NOT NULL THEN pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::text END'} AS retained_bytes
+    FROM pg_replication_slots ORDER BY active ASC, slot_name LIMIT 20`, rows => rows.map(row => ({
+    name: row.slot_name, active: row.active, walStatus: row.wal_status,
+    safeWalBytes: row.safe_wal_size == null ? null : number(row.safe_wal_size),
+    retainedBytes: row.retained_bytes == null ? null : number(row.retained_bytes)
+  })));
+  const settings = await optional(client, `SELECT name, setting, unit, source FROM pg_settings
+    WHERE name IN ('archive_mode','autovacuum','max_connections','max_slot_wal_keep_size','wal_level')
+    ORDER BY name`, rows => rows.map(row => ({ name: row.name, value: row.setting,
+    unit: row.unit, source: row.source })));
+  return { activity, transactions, locks, lockChain, database, wal, archiver,
+    checkpoints, vacuum, tables, slots, freeze, slotDetails, settings };
 }

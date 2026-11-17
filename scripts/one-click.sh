@@ -51,6 +51,14 @@ if [[ -n "$kubeconfig_host_path" ]]; then
   fi
   compose_files+=(-f "$repo_dir/deploy/compose/compose.k8s.yaml")
 fi
+backup_info_host_path="$(sed -n 's/^DBSPHERE_BACKUP_INFO_HOST_PATH=//p' "$env_file" | tail -n 1)"
+if [[ -n "$backup_info_host_path" ]]; then
+  if [[ "$backup_info_host_path" != /* || ! -d "$backup_info_host_path" ]]; then
+    echo 'DBSPHERE_BACKUP_INFO_HOST_PATH must be an existing absolute directory path.' >&2
+    exit 1
+  fi
+  compose_files+=(-f "$repo_dir/deploy/compose/compose.backup.yaml")
+fi
 
 docker compose --env-file "$env_file" "${compose_files[@]}" config -q
 if [[ -n "$migrate_from" ]]; then
