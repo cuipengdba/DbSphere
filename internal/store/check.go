@@ -49,6 +49,44 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 	return ids, rows.Err()
 }
 
+// CheckStaleAsset evaluates scheduler delay without writing a synthetic sample.
+// It can fire before collection and recover on the same event ID after a sample lands.
+func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time.Duration, now time.Time) error {
+	if interval < 15*time.Second || interval > time.Hour {
+		return fmt.Errorf("invalid Go collection schedule")
+	}
+	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var created time.Time
+	var last *time.Time
+	if err := tx.QueryRow(ctx, `SELECT created_at,last_sample_at FROM assets WHERE id=$1 FOR UPDATE`, id).
+		Scan(&created, &last); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAssetNotFound
+		}
+		return err
+	}
+	base := created
+	if last != nil {
+		base = *last
+	}
+	missed := now.Sub(base).Seconds() / interval.Seconds()
+	if missed < 0 {
+		missed = 0
+	}
+	metrics := map[string]any{"collectorMissedIntervals": missed}
+	if err := s.applyGoAlerts(ctx, tx, id, "", metrics, nil, now, "collector_stale"); err != nil {
+		return fmt.Errorf("evaluate Go stale alert: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 func collectionError(err error) (string, string) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -143,6 +181,11 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	if metrics == nil {
 		metrics = map[string]any{}
 	}
+	pgStatus := "ok"
+	if collectErr != nil {
+		pgStatus = group
+	}
+	metrics["collector"] = map[string]any{"pgStatus": pgStatus}
 	if runtime == "k8s" {
 		metrics["k8s"] = kube
 		if kube["status"] != "ok" && collectErr == nil {
@@ -332,13 +375,11 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	if err := json.Unmarshal(encoded, &observed); err != nil {
 		return CheckResult{}, err
 	}
-	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now); err != nil {
+	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now, ""); err != nil {
 		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}
-	if reason == "" {
-		if err := resolveGoCollectionFailures(ctx, tx, id, sampleID, now); err != nil {
-			return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
-		}
+	if err := resolveGoCollectionFailures(ctx, tx, id, sampleID, group, now); err != nil {
+		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CheckResult{}, err
@@ -346,7 +387,7 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	return CheckResult{SampleID: sampleID, Status: status, CollectedAt: now}, nil
 }
 
-func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID string, now time.Time) error {
+func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup string, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT id::text FROM events WHERE asset_id=$1 AND status='open'
 		AND kind='collection_failure' FOR UPDATE`, assetID)
 	if err != nil {
@@ -367,9 +408,18 @@ func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sample
 	}
 	rows.Close()
 	for _, eventID := range ids {
+		var eventGroup string
+		if err := tx.QueryRow(ctx, `SELECT event_group FROM events WHERE id=$1`, eventID).Scan(&eventGroup); err != nil {
+			return err
+		}
+		if eventGroup == currentGroup {
+			continue
+		}
 		var recovered bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence
-			WHERE event_id=$1 AND kind='collection_recovered')`, eventID).Scan(&recovered); err != nil {
+			WHERE event_id=$1 AND kind='collection_recovered' AND observed_at >=
+			coalesce((SELECT max(observed_at) FROM evidence WHERE event_id=$1
+			AND kind='collection_error'),'-infinity'::timestamptz))`, eventID).Scan(&recovered); err != nil {
 			return err
 		}
 		if !recovered {

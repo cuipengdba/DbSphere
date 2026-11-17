@@ -13,7 +13,7 @@ import (
 )
 
 func TestGoAlertPendingFiringMissingAndRecovery(t *testing.T) {
-	rule := goDefaultRules[0]
+	rule := goDefaultRules[5]
 	start := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
 	breach := alertSignal{Available: true, Value: 90}
 	state, transition := nextGoAlert(rule, breach, nil, start)
@@ -32,6 +32,121 @@ func TestGoAlertPendingFiringMissingAndRecovery(t *testing.T) {
 		start.Add(123*time.Second))
 	if state != nil || transition != "recovered" {
 		t.Fatal("normal signal did not recover the alert")
+	}
+}
+
+func TestGoCollectorFailureSignalsDoNotClaimAvailability(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		status           string
+		availability     bool
+		unavailableValue float64
+		collectorValue   float64
+	}{
+		{"ok", true, 0, 0},
+		{"availability", true, 1, 0},
+		{"telemetry", false, 0, 1},
+	}
+	for _, tc := range cases {
+		metrics := map[string]any{"collector": map[string]any{"pgStatus": tc.status}}
+		unavailable := readGoSignal("pg.unavailable", metrics, now)
+		failed := readGoSignal("collector.pg_failed", metrics, now)
+		if unavailable.Available != tc.availability ||
+			(tc.availability && unavailable.Value != tc.unavailableValue) ||
+			!failed.Available || failed.Value != tc.collectorValue {
+			t.Fatalf("collector status %s was misclassified: %+v %+v", tc.status, unavailable, failed)
+		}
+	}
+	metrics := map[string]any{
+		"k8s":                      map[string]any{"status": "error", "reason": "HTTP 403"},
+		"linux":                    map[string]any{"status": "ok"},
+		"collectorMissedIntervals": 2.5,
+	}
+	for metric, want := range map[string]float64{
+		"collector.k8s_failed":       1,
+		"collector.linux_failed":     0,
+		"collector.missed_intervals": 2.5,
+	} {
+		signal := readGoSignal(metric, metrics, now)
+		if !signal.Available || signal.Value != want {
+			t.Fatalf("%s signal mismatch: %+v", metric, signal)
+		}
+	}
+	delete(metrics, "k8s")
+	if readGoSignal("collector.k8s_failed", metrics, now).Available {
+		t.Fatal("unconfigured Kubernetes was treated as healthy")
+	}
+}
+
+func TestGoCollectorFailureAndStaleShareEventLifecycleInPG18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Go collector alert test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+
+	base := time.Now().UTC().Add(-4 * time.Minute)
+	failed, err := pg.recordCheckAt(ctx, asset.ID,
+		map[string]any{"collector": map[string]any{"pgStatus": "availability"}},
+		"availability", "PostgreSQL connection refused", base)
+	if err != nil || failed.Status != "error" {
+		t.Fatalf("failure sample: %+v %v", failed, err)
+	}
+	var eventID string
+	var count int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int,min(id::text) FROM events
+		WHERE asset_id=$1 AND event_group='availability'`, asset.ID).Scan(&count, &eventID); err != nil || count != 1 {
+		t.Fatalf("availability incident split: %d %v", count, err)
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int FROM alert_states WHERE asset_id=$1
+		AND rule_id='pg_unavailable' AND state_json->>'eventId'=$2`, asset.ID, eventID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("availability alert did not join collection event: %d %v", count, err)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, map[string]any{"collector": map[string]any{"pgStatus": "ok"}},
+		"", "", base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := pg.pool.QueryRow(ctx, `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
+		t.Fatalf("availability did not recover under same event ID: %s %v", status, err)
+	}
+
+	if err := pg.CheckStaleAsset(ctx, asset.ID, time.Minute, base.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var staleID string
+	if err := pg.pool.QueryRow(ctx, `SELECT state_json->>'eventId' FROM alert_states
+		WHERE asset_id=$1 AND rule_id='collector_stale'`, asset.ID).Scan(&staleID); err != nil || staleID == "" {
+		t.Fatalf("stale alert missing: %v", err)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, map[string]any{"collector": map[string]any{"pgStatus": "ok"}},
+		"", "", base.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.CheckStaleAsset(ctx, asset.ID, time.Minute, base.Add(3*time.Minute+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT status FROM events WHERE id=$1`, staleID).Scan(&status); err != nil || status != "resolved" {
+		t.Fatalf("stale event did not recover under same ID: %s %v", status, err)
 	}
 }
 
@@ -358,7 +473,7 @@ func TestUpdateGoAlertRulePersistsAndRejectsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.Close()
-	rule := goDefaultRules[0]
+	rule := goDefaultRules[5]
 	rule.ID = "go_rule_update_test"
 	seed, _ := json.Marshal(rule)
 	if _, err := pg.pool.Exec(context.Background(), `INSERT INTO alert_rules(id,definition_json) VALUES($1,$2)

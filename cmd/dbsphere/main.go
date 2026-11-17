@@ -171,9 +171,17 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
 			for _, id := range ids {
+				if err := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); err != nil {
+					log.Error("Go collector could not evaluate stale asset", "assetId", id, "error", err)
+				}
 				checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 				result, err := pg.CheckAsset(checkCtx, id, key)
 				cancel()
+				if err == nil {
+					if staleErr := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); staleErr != nil {
+						log.Error("Go collector could not clear stale asset", "assetId", id, "error", staleErr)
+					}
+				}
 				if err != nil {
 					log.Error("Go collector failed to persist asset sample", "assetId", id, "error", err)
 				} else if result.Status == "error" {

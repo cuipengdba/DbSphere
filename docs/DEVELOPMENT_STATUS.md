@@ -52,6 +52,8 @@ Go 规则包继续增加复制延迟、备库 WAL 接收中断、autovacuum 关�
 
 Go 新增 WAL 归档失败计数和同一 Pod 容器重启的相邻采样增量规则，共十九条。首次样本、计数回退或 Pod UID 变更保持未知；PG18 实库验证第二次采样触发、后续零增量在原事件 ID 关闭。RCA 对应候选只把时间相关性当作线索。真实归档错误与 Pod 重启故障演练仍待完成。
 
+Go 默认规则扩至二十四条，与 Node 历史规则包的指标范围对齐：增加 PG 不可连接、PG 采集失败、K8S/Linux 采集失败和调度周期内采样陈旧。PG 凭据/权限问题不推断为实例不可用；未配置的 K8S/Linux 指标保持未知。陈旧告警在采集前评估，采集写入后在同一事件 ID 恢复。PG18 实库验证 PG 连接故障、陈旧状态及恢复的事件归并；规则范围对齐不代表 Go 全功能或生产验收完成。
+
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
 
 PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。

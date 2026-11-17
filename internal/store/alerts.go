@@ -26,6 +26,11 @@ type alertRule struct {
 }
 
 var goDefaultRules = []alertRule{
+	{"pg_unavailable", "PostgreSQL 无法连接", "pg.unavailable", "PostgreSQL", "availability", "critical", ">=", 1, 0, 1, true},
+	{"pg_collection_failed", "PostgreSQL 采集失败", "collector.pg_failed", "collector", "telemetry", "warning", ">=", 1, 0, 1, true},
+	{"collector_stale", "采样数据陈旧", "collector.missed_intervals", "collector", "telemetry", "warning", ">=", 2, 0, 1, true},
+	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true},
+	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
@@ -95,7 +100,9 @@ func numeric(value any) (float64, bool) {
 
 func supportedAlertMetric(metric string) bool {
 	switch metric {
-	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
+	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
+		"collector.k8s_failed", "collector.linux_failed",
+		"pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
 		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
@@ -113,6 +120,46 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, now time.Time) alertSignal {
 	signal := alertSignal{Source: "PostgreSQL", Reason: "signal unavailable"}
 	switch metric {
+	case "pg.unavailable", "collector.pg_failed":
+		status := stringValue(object(metrics["collector"])["pgStatus"])
+		if metric == "collector.pg_failed" {
+			signal.Source = "collector"
+			if status == "ok" || status == "availability" || status == "telemetry" {
+				value := 0.0
+				if status == "telemetry" {
+					value = 1
+				}
+				return alertSignal{Available: true, Value: value, Source: signal.Source}
+			}
+			return signal
+		}
+		if status == "ok" || status == "availability" {
+			value := 0.0
+			if status == "availability" {
+				value = 1
+			}
+			return alertSignal{Available: true, Value: value, Source: signal.Source}
+		}
+	case "collector.missed_intervals":
+		signal.Source = "collector"
+		if value, ok := numeric(metrics["collectorMissedIntervals"]); ok && value >= 0 {
+			return alertSignal{Available: true, Value: value, Source: signal.Source}
+		}
+	case "collector.k8s_failed", "collector.linux_failed":
+		section, source := "k8s", "Kubernetes API"
+		if metric == "collector.linux_failed" {
+			section, source = "linux", "node_exporter"
+		}
+		signal.Source = source
+		status := stringValue(object(metrics[section])["status"])
+		if status == "ok" || status == "error" {
+			value := 0.0
+			if status == "error" {
+				value = 1
+			}
+			return alertSignal{Available: true, Value: value, Source: source,
+				Detail: map[string]any{"reason": object(metrics[section])["reason"]}}
+		}
 	case "pg.connection_utilization":
 		connections, hasConnections := numeric(metrics["connections"])
 		maximum, hasMaximum := numeric(metrics["max_connections"])
@@ -421,7 +468,7 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 }
 
 func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sampleID string,
-	metrics, previous map[string]any, now time.Time) error {
+	metrics, previous map[string]any, now time.Time, onlyRuleID string) error {
 	rows, err := tx.Query(ctx, `SELECT definition_json FROM alert_rules ORDER BY id`)
 	if err != nil {
 		return err
@@ -494,6 +541,9 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 	}
 	silences.Close()
 	for _, rule := range rules {
+		if onlyRuleID != "" && rule.ID != onlyRuleID {
+			continue
+		}
 		old := states[rule.ID]
 		if !rule.Enabled {
 			if old != nil {
@@ -626,12 +676,19 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 		return err
 	}
 	if firing == 0 {
-		if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1
-			WHERE id=$2 AND kind='alert_incident'`, now, old.EventID); err != nil {
+		var resolved bool
+		if err := tx.QueryRow(ctx, `UPDATE events SET status='resolved',ended_at=$1
+			WHERE id=$2 AND status='open' AND (kind='alert_incident' OR
+			EXISTS(SELECT 1 FROM evidence WHERE event_id=$2 AND kind='collection_recovered'
+			AND observed_at >= coalesce((SELECT max(observed_at) FROM evidence
+			WHERE event_id=$2 AND kind='collection_error'),'-infinity'::timestamptz)))
+			RETURNING true`, now, old.EventID).Scan(&resolved); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, old.EventID); err != nil {
-			return err
+		if resolved {
+			if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, old.EventID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
