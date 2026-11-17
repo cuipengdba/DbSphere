@@ -34,7 +34,9 @@ Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMK
 
 Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力五条规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量、容器重启增量与通知投递仍是缺口。
 
-Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。CI 结果仍待本轮流水线。
+Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。
+
+PG18 实库进一步验证了 PostgreSQL 锁等待与 PgBouncer 客户端等待在同一资产的 `latency` 问题组中只开一个事件 ID，两条规则都恢复后在该 ID 关闭。
 
 Linux x86_64 自解压一键离线包已实现：联网构建机将预构建应用镜像与 PG18 镜像、Compose 文件及校验清单打入 `.run`；目标机在已有 Docker Engine/Compose 前提下，一条命令校验、导入镜像并以 `--no-build --pull never` 启动 B/S 和独立 PG18。[13 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44056141672)验证删除本机镜像后的纯本地安装与重复执行。另有 Node.js 24 + 外部 PG18 的轻量离线包，CI 验证解压后不运行包管理器即可启动。两种产物均由[独立工作流](https://github.com/cuipengdba/DbSphere/actions/runs/44056371453)构建并校验；单文件静态服务端尚未实现。跨层根因分析仍按 V0.6 任务推进。详见[离线部署说明](OFFLINE_DEPLOYMENT.md)。
 

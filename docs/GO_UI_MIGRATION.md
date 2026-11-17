@@ -27,7 +27,7 @@ Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubecon
 
 Go K8S 告警第一段移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled 和 Node 压力五条规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。Pod 重启增量、PVC 实际用量告警与通知投递仍未移植。
 
-Go PgBouncer 适配器采用只读的简单查询协议读取 `SHOW POOLS` 和 `SHOW STATS`，仅保留映射数据库最多 100 条连接池/统计记录，不保存管理员 URL 或密码。本机真实 PgBouncer 1.26.1、PG14 与独立 PG18 联合采样测试已通过；对应客户端等待规则进入同事件告警流程，CI 仍待验收。
+Go PgBouncer 适配器采用只读的简单查询协议读取 `SHOW POOLS` 和 `SHOW STATS`，仅保留映射数据库最多 100 条连接池/统计记录，不保存管理员 URL 或密码。本机真实 PgBouncer 1.26.1、PG14 与独立 PG18 联合采样测试和 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过；对应客户端等待规则进入同事件告警流程。
 
 Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查询失败分别显示状态；只存指纹与统计量。资产页从 PG18 样本计算相邻窗口增量和退化倍数，本地 PG18 真扩展与样本退化测试已通过；五版扩展 CI 正在验收。慢日志和计划导入写入仍需迁移。
 

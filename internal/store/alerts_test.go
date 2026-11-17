@@ -76,6 +76,64 @@ func TestGoPgBouncerWaitingSignal(t *testing.T) {
 	}
 }
 
+func TestGoLockWaitAndPoolerWaitShareIncident(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	created, err := pg.CreateAsset(context.Background(), assets.Input{Name: "Go lock and pooler test",
+		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	metrics := map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
+		"diagnostics": map[string]any{"locks": map[string]any{"status": "ok",
+			"data": map[string]any{"blockedSessions": 1}}},
+		"pgbouncer": map[string]any{"status": "ok", "pools": []any{
+			map[string]any{"clientWaiting": 2}}}}
+	now := time.Now().UTC().Add(-2 * time.Minute)
+	for _, offset := range []time.Duration{0, 61 * time.Second} {
+		if _, err := pg.recordCheckAt(context.Background(), asset.ID, metrics, "", "", now.Add(offset)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var eventID string
+	var eventCount int
+	if err := pg.pool.QueryRow(context.Background(), `SELECT count(*)::int,min(id::text) FROM events
+		WHERE asset_id=$1 AND event_group='latency'`, asset.ID).Scan(&eventCount, &eventID); err != nil || eventCount != 1 {
+		t.Fatalf("lock and pooler waits split into multiple incidents: %d %v", eventCount, err)
+	}
+	if err := pg.pool.QueryRow(context.Background(), `SELECT count(*)::int FROM alert_states WHERE asset_id=$1
+		AND state_json->>'eventId'=$2 AND state_json->>'status'='firing'`, asset.ID, eventID).
+		Scan(&eventCount); err != nil || eventCount != 2 {
+		t.Fatalf("lock and pooler alerts did not share event ID: %d %v", eventCount, err)
+	}
+	metrics["diagnostics"] = map[string]any{"locks": map[string]any{"status": "ok",
+		"data": map[string]any{"blockedSessions": 0}}}
+	metrics["pgbouncer"] = map[string]any{"status": "ok", "pools": []any{map[string]any{"clientWaiting": 0}}}
+	if _, err := pg.recordCheckAt(context.Background(), asset.ID, metrics, "", "", now.Add(62*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
+		t.Fatalf("lock/pooler incident did not resolve under original ID: %s %v", status, err)
+	}
+}
+
 func TestGoAlertOneEventIDAndRCACandidateInPG18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {
