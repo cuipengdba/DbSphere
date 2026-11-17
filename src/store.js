@@ -96,6 +96,19 @@ export class Store {
         event_ids_json TEXT NOT NULL DEFAULT '[]'
       );
       CREATE INDEX IF NOT EXISTS inspection_runs_asset_time ON inspection_runs(asset_id,completed_at DESC);
+      CREATE TABLE IF NOT EXISTS slow_log_entries (
+        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        source_key TEXT NOT NULL, observed_at TEXT NOT NULL, duration_ms REAL NOT NULL,
+        query_id TEXT, source_format TEXT NOT NULL, imported_at TEXT NOT NULL,
+        UNIQUE(asset_id,source_key)
+      );
+      CREATE INDEX IF NOT EXISTS slow_log_asset_time ON slow_log_entries(asset_id,observed_at DESC);
+      CREATE TABLE IF NOT EXISTS sql_plan_snapshots (
+        id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+        query_id TEXT NOT NULL, observed_at TEXT NOT NULL, source TEXT NOT NULL,
+        shape_hash TEXT NOT NULL, summary_json TEXT NOT NULL, imported_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS sql_plan_asset_time ON sql_plan_snapshots(asset_id,observed_at DESC);
     `);
     if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
@@ -492,6 +505,44 @@ export class Store {
   listSamples(assetId, limit = 100) {
     return this.db.prepare('SELECT * FROM samples WHERE asset_id=? ORDER BY collected_at DESC LIMIT ?').all(assetId, limit)
       .map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at, status: r.status, metrics: r.metrics_json ? JSON.parse(r.metrics_json) : null, error: r.error }));
+  }
+
+  importSlowLogs(assetId, entries) {
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO slow_log_entries
+      (id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
+      VALUES(?,?,?,?,?,?,?,?)`);
+    let imported = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of entries) imported += insert.run(row.id, assetId, row.sourceKey,
+        row.observedAt, row.durationMs, row.queryId, row.sourceFormat, new Date().toISOString()).changes;
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return imported;
+  }
+
+  listSlowLogs(assetId, from, to, limit = 100) {
+    return this.db.prepare(`SELECT id,asset_id,observed_at,duration_ms,query_id,source_format
+      FROM slow_log_entries WHERE asset_id=? AND observed_at>=? AND observed_at<?
+      ORDER BY observed_at DESC LIMIT ?`).all(assetId, from, to, limit)
+      .map(row => ({ id: row.id, assetId: row.asset_id, observedAt: row.observed_at,
+        durationMs: row.duration_ms, queryId: row.query_id, sourceFormat: row.source_format }));
+  }
+
+  saveSqlPlan(assetId, plan) {
+    this.db.prepare(`INSERT INTO sql_plan_snapshots
+      (id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(plan.id, assetId, plan.queryId, plan.observedAt,
+      plan.source, plan.shapeHash, JSON.stringify(plan.summary), new Date().toISOString());
+    return plan;
+  }
+
+  listSqlPlans(assetId, limit = 50) {
+    return this.db.prepare(`SELECT * FROM sql_plan_snapshots WHERE asset_id=?
+      ORDER BY observed_at DESC LIMIT ?`).all(assetId, limit)
+      .map(row => ({ id: row.id, assetId: row.asset_id, queryId: row.query_id,
+        observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
+        summary: JSON.parse(row.summary_json) }));
   }
 
   listEvents() {

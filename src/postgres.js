@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { collectDiagnostics } from './diagnostics.js';
+import { collectSqlPerformance } from './sql-performance.js';
 
 const { Client } = pg;
 
@@ -56,6 +57,7 @@ export async function collectPostgres(asset, password) {
       }
     } catch { /* Optional replication view is unavailable to this monitoring account. */ }
     metrics.diagnostics = await collectDiagnostics(client, major, identity.in_recovery);
+    metrics.sqlPerformance = await collectSqlPerformance(client);
     return metrics;
   } finally {
     await client.end().catch(() => {});

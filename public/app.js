@@ -157,7 +157,10 @@ function renderAssets(assets) {
 
 async function showAsset(id) {
   selectedAsset = id;
-  const [{ asset }, { samples }] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`)]);
+  const [{ asset }, { samples }, { performance }, { entries: slowLogs }, { plans }] = await Promise.all([
+    api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
+    api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`),
+    api(`/api/assets/${id}/sql-plans`)]);
   const detail = $('detail'); detail.replaceChildren();
   detail.append(cell('h3', asset.name));
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}` : asset.linuxHost || 'Linux 主机未关联'}`));
@@ -174,6 +177,9 @@ async function showAsset(id) {
   const layerNav = document.createElement('div'); layerNav.className = 'actions layer-nav';
   for (const [label, section] of [
     ['PostgreSQL 诊断', 'pg-diagnostics'],
+    ['Top SQL', 'sql-performance'],
+    ['慢 SQL 日志', 'slow-logs'],
+    ['执行计划', 'sql-plans'],
     [asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机', asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail'],
     ...(asset.poolerConfigured ? [['PgBouncer', 'pooler-detail']] : [])
   ]) {
@@ -199,6 +205,9 @@ async function showAsset(id) {
     detail.append(grid);
     if (metrics.diagnostics) renderDiagnostics(detail, metrics.diagnostics);
   } else detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
+  renderSqlPerformance(detail, performance);
+  renderSlowLogs(detail, asset, slowLogs);
+  renderSqlPlans(detail, asset, plans);
   if (currentSample?.metrics?.backup) {
     const backup = currentSample.metrics.backup;
     const label = backup.status === 'ok'
@@ -296,6 +305,118 @@ function renderDiagnostics(target, diagnostics) {
     list.append(row);
   }
   target.append(list);
+}
+
+function renderSqlPerformance(target, performance) {
+  const heading = cell('h3', 'Top SQL 指纹'); heading.id = 'sql-performance'; target.append(heading);
+  if (performance.status !== 'ok') {
+    target.append(cell('p', `SQL 性能未采集：${performance.reason || performance.status}。启用 pg_stat_statements 后自动出现聚合指标。`, 'warning'));
+    return;
+  }
+  target.append(cell('p', `来源 pg_stat_statements · ${formatTime(performance.collectedAt)} · 样本 ${performance.sampleId} · ${performance.comparison === 'interval' ? '相邻采样增量' : '扩展累计值（无可比样本）'}`, 'evidence'));
+  target.append(cell('p', '默认不采集或保存 SQL 正文；指纹只在当前实例内比较，跨大版本升级不保证稳定。', 'hint'));
+  if (performance.truncated) target.append(cell('p', '只采集累计耗时最高的前 50 个指纹，低排名语句可能没有趋势。', 'hint'));
+  if (performance.hiddenQueryCount) target.append(cell('p', `${performance.hiddenQueryCount} 条语句缺少可见 Query ID，未纳入指纹比较。`, 'warning'));
+  if (!performance.statements.length) target.append(cell('p', '暂无可见 SQL 指纹。', 'empty'));
+  const list = document.createElement('div'); list.className = 'diagnostic-list';
+  for (const [index, row] of performance.statements.entries()) {
+    const entry = document.createElement('div');
+    const delta = row.delta;
+    entry.append(cell('strong', `Query ID ${row.queryId}`));
+    entry.append(cell('span', delta
+      ? `本期调用 ${delta.calls} 次 · 平均 ${delta.averageExecMs.toFixed(1)} ms · 总耗时 ${delta.totalExecMs.toFixed(1)} ms · 共享块读/写 ${delta.sharedBlocksRead}/${delta.sharedBlocksWritten} · 临时块读/写 ${delta.tempBlocksRead}/${delta.tempBlocksWritten}`
+      : `累计调用 ${row.calls} 次 · 总耗时 ${row.totalExecMs.toFixed(1)} ms · 共享块读/写 ${row.sharedBlocksRead}/${row.sharedBlocksWritten} · 临时块读/写 ${row.tempBlocksRead}/${row.tempBlocksWritten}`));
+    if (row.regression) entry.append(cell('span', `平均耗时较上一窗口上升 ${row.regression.ratio.toFixed(1)} 倍；请结合事件和资源证据复核。`, 'warning'));
+    if (index < 5 && row.trend?.length) entry.append(cell('span', row.trend.slice(-3).map(point =>
+      `${formatTime(point.at)}：${point.averageExecMs.toFixed(1)} ms` +
+      (point.linuxCpuPercent == null ? '' : ` / CPU ${point.linuxCpuPercent}%`) +
+      (point.linuxMemoryPercent == null ? '' : ` / 内存 ${point.linuxMemoryPercent}%`) +
+      (point.podPhase ? ` / Pod ${point.podPhase}` : '') +
+      (point.podRestarts == null ? '' : ` / 重启 ${point.podRestarts}`)).join('；'), 'evidence'));
+    list.append(entry);
+  }
+  target.append(list);
+  if (performance.eventIds.length) {
+    const events = document.createElement('div'); events.className = 'actions';
+    for (const id of performance.eventIds) {
+      const link = cell('button', `关联开放事件 ${id.slice(0, 8)}`, 'ghost small-button');
+      link.addEventListener('click', () => showEvent(id)); events.append(link);
+    }
+    target.append(events);
+  }
+}
+
+function renderSlowLogs(target, asset, entries) {
+  const heading = cell('h3', '慢 SQL 日志'); heading.id = 'slow-logs'; target.append(heading);
+  target.append(cell('p', '导入 PostgreSQL csvlog（PG14–18）或 jsonlog（PG15–18）的已轮转片段。每批不超过 60 KiB；仅保存时间、耗时和 Query ID，语句正文与参数在导入时丢弃。', 'hint'));
+  const form = document.createElement('form'); form.className = 'actions';
+  const format = document.createElement('select');
+  for (const value of ['csvlog', 'jsonlog']) {
+    const option = document.createElement('option'); option.value = value; option.textContent = value;
+    format.append(option);
+  }
+  const file = document.createElement('input'); file.type = 'file'; file.required = true;
+  file.accept = '.csv,.json,.log,.txt';
+  const submit = cell('button', '导入片段'); submit.type = 'submit';
+  form.append(format, file, submit);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!file.files?.[0]) return;
+    try {
+      if (file.files[0].size > 60000) throw new Error('文件超过 60 KiB，请按日志记录拆分批次。');
+      const result = await api(`/api/assets/${asset.id}/slow-logs/import`, 'POST', {
+        format: format.value, content: await file.files[0].text()
+      });
+      notice(`扫描 ${result.scanned} 条，导入 ${result.imported} 条，重复 ${result.duplicates} 条。`);
+      await showAsset(asset.id);
+    } catch (error) { notice(error.message, true); }
+  });
+  target.append(form);
+  if (!entries.length) target.append(cell('p', '近 24 小时没有导入的慢 SQL 记录。', 'empty'));
+  for (const row of entries.slice(0, 30)) {
+    const item = document.createElement('div'); item.className = 'evidence';
+    item.append(cell('span', `${formatTime(row.observedAt)} · ${row.durationMs.toFixed(1)} ms · ${row.queryId ? `Query ID ${row.queryId}` : 'Query ID 未提供'} · ${row.sourceFormat}`));
+    for (const id of row.eventIds) {
+      const link = cell('button', `事件 ${id.slice(0, 8)}`, 'ghost small-button');
+      link.addEventListener('click', () => showEvent(id)); item.append(link);
+    }
+    target.append(item);
+  }
+}
+
+function renderSqlPlans(target, asset, plans) {
+  const heading = cell('h3', '执行计划证据'); heading.id = 'sql-plans'; target.append(heading);
+  target.append(cell('p', '手动导入已有的 EXPLAIN (FORMAT JSON) 结果。DbSphere 不向生产数据库自动执行 EXPLAIN ANALYZE；仅保留节点类型和数值，过滤条件、SQL 正文与参数不入库。', 'hint'));
+  const form = document.createElement('form'); form.className = 'actions';
+  const queryId = document.createElement('input'); queryId.placeholder = 'Query ID';
+  queryId.required = true; queryId.pattern = '-?[0-9]{1,20}';
+  const file = document.createElement('input'); file.type = 'file'; file.accept = '.json'; file.required = true;
+  const submit = cell('button', '导入计划'); submit.type = 'submit';
+  form.append(queryId, file, submit);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      if (file.files[0].size > 50000) throw new Error('计划文件超过 50 KiB。');
+      const plan = JSON.parse(await file.files[0].text());
+      await api(`/api/assets/${asset.id}/sql-plans`, 'POST', {
+        queryId: queryId.value, observedAt: new Date().toISOString(), plan
+      });
+      notice('执行计划摘要已导入。'); await showAsset(asset.id);
+    } catch (error) { notice(error.message, true); }
+  });
+  target.append(form);
+  if (!plans.length) target.append(cell('p', '尚无执行计划证据。', 'empty'));
+  for (const plan of plans.slice(0, 20)) {
+    const item = document.createElement('div'); item.className = 'evidence';
+    item.append(cell('span', `Query ID ${plan.queryId} · ${formatTime(plan.observedAt)} · ${plan.summary.nodeCount} 个节点 · ${plan.summary.executionMs == null ? '无实际执行时间' : `${plan.summary.executionMs.toFixed(1)} ms`}`));
+    if (plan.comparison?.shapeChanged) item.append(cell('span', '计划结构较上一份变化', 'warning'));
+    if (plan.comparison?.executionRatio >= 2) item.append(cell('span', `导入计划的执行时间比前次高 ${plan.comparison.executionRatio.toFixed(1)} 倍，请结合采样复核。`, 'warning'));
+    for (const id of plan.eventIds) {
+      const link = cell('button', `事件 ${id.slice(0, 8)}`, 'ghost small-button');
+      link.addEventListener('click', () => showEvent(id)); item.append(link);
+    }
+    target.append(item);
+  }
 }
 
 function renderEvents(events) {

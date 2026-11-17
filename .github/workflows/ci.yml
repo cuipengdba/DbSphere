@@ -5,6 +5,41 @@ on:
   pull_request:
 
 jobs:
+  sql-performance-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 15, 16, 17, 18]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Start PostgreSQL and enable pg_stat_statements
+        run: |
+          docker run -d --rm --name dbsphere-sql-pg -p 15432:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-root-test postgres:${{ matrix.pg }}-bookworm \
+            -c shared_preload_libraries=pg_stat_statements
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-sql-pg pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-sql-pg \
+            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor; CREATE EXTENSION pg_stat_statements;"
+      - name: Collect real Top SQL counters
+        env:
+          DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
+        run: node scripts/pg-sql-performance-smoke.mjs
+      - name: Detect a real SQL latency regression
+        if: matrix.pg == 18
+        run: node scripts/pg-sql-regression-smoke.mjs
+
   test:
     runs-on: ubuntu-latest
     steps:

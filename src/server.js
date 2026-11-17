@@ -17,6 +17,9 @@ import { collectBackup } from './backup.js';
 import { forecastDatabaseGrowth } from './capacity.js';
 import { inspectionReportHtml, inspectionReportMarkdown } from './reports.js';
 import { readStoreBackupManifest } from './store-backup.js';
+import { sqlPerformanceSummary } from './sql-trends.js';
+import { parseSlowLogs } from './slow-logs.js';
+import { sanitizePlan, comparePlans } from './sql-plans.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -343,7 +346,17 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         encrypt(key, input.password), input.poolerUrl ? encrypt(key, input.poolerUrl) : null);
         return send(res, 201, { asset });
       }
-      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|capacity|check))?$/);
+      const slowLogImportMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})\/slow-logs\/import$/);
+      if (req.method === 'POST' && slowLogImportMatch) {
+        const asset = await store.getAsset(slowLogImportMatch[1]);
+        if (!asset) return send(res, 404, { error: 'Asset not found' });
+        const input = await body(req);
+        const parsed = parseSlowLogs(input?.format, input?.content, asset.database);
+        const imported = await store.importSlowLogs(asset.id, parsed.entries);
+        return send(res, 200, { scanned: parsed.scanned, ignored: parsed.ignored,
+          imported, duplicates: parsed.entries.length - imported });
+      }
+      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|capacity|sql|slow-logs|sql-plans|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
         if (!await store.getAsset(id)) return send(res, 404, { error: 'Asset not found' });
@@ -359,6 +372,42 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         }
         if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
         if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });
+        if (req.method === 'GET' && action === 'sql') {
+          const summary = sqlPerformanceSummary(await store.listSamples(id, 12));
+          const eventIds = (await store.listEvents()).filter(event => event.assetId === id &&
+            event.status === 'open').map(event => event.id);
+          return send(res, 200, { performance: { ...summary, eventIds } });
+        }
+        if (req.method === 'GET' && action === 'slow-logs') {
+          const to = requestUrl.searchParams.get('to') ? new Date(requestUrl.searchParams.get('to')) : new Date();
+          const from = requestUrl.searchParams.get('from') ? new Date(requestUrl.searchParams.get('from'))
+            : new Date(to.getTime() - 86400000);
+          if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) ||
+            to <= from || to - from > 31 * 86400000) return send(res, 400, { error: 'Invalid slow log range' });
+          const rows = await store.listSlowLogs(id, from.toISOString(), to.toISOString());
+          const events = (await store.listEvents()).filter(event => event.assetId === id);
+          return send(res, 200, { entries: rows.map(row => ({ ...row,
+            eventIds: events.filter(event => {
+              const at = new Date(row.observedAt).getTime();
+              return new Date(event.startedAt).getTime() <= at + 300000 &&
+                (!event.endedAt || new Date(event.endedAt).getTime() >= at - 300000);
+            }).map(event => event.id) })) });
+        }
+        if (req.method === 'POST' && action === 'sql-plans') {
+          const input = await body(req);
+          const plan = sanitizePlan(input?.plan, input?.queryId, input?.observedAt);
+          return send(res, 201, { plan: await store.saveSqlPlan(id, plan) });
+        }
+        if (req.method === 'GET' && action === 'sql-plans') {
+          const plans = comparePlans(await store.listSqlPlans(id));
+          const events = (await store.listEvents()).filter(event => event.assetId === id);
+          return send(res, 200, { plans: plans.map(plan => ({ ...plan,
+            eventIds: events.filter(event => {
+              const at = new Date(plan.observedAt).getTime();
+              return new Date(event.startedAt).getTime() <= at + 300000 &&
+                (!event.endedAt || new Date(event.endedAt).getTime() >= at - 300000);
+            }).map(event => event.id) })) });
+        }
         if (req.method === 'GET' && action === 'capacity') {
           if (store.kind !== 'postgresql18') return send(res, 501, { error: 'Capacity forecast requires PostgreSQL 18 store' });
           return send(res, 200, { forecast: forecastDatabaseGrowth(await store.databaseCapacityPoints(id)) });

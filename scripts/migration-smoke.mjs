@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -8,6 +8,8 @@ import { Store } from '../src/store.js';
 import { PgStore } from '../src/pg-store.js';
 import { decrypt, encrypt, hashPassword } from '../src/security.js';
 import { normalizeSilence } from '../src/silences.js';
+import { parseSlowLogs } from '../src/slow-logs.js';
+import { sanitizePlan } from '../src/sql-plans.js';
 
 if (!process.env.DBSPHERE_DATABASE_URL || !process.env.DBSPHERE_TEST_DATA_DIR) {
   throw new Error('Set DBSPHERE_DATABASE_URL and DBSPHERE_TEST_DATA_DIR');
@@ -37,6 +39,18 @@ const sourceSilence = source.createSilence(normalizeSilence({ kind: 'maintenance
   endsAt: new Date(Date.now() + 3600 * 1000).toISOString() }));
 source.recordResult(activeAsset.id, {}, 'password authentication failed');
 const sourceQueued = source.listDueNotifications().length;
+source.upsertInspectionSchedule(asset.id, 'pg_daily', 1440, true);
+const sourceRun = source.saveInspectionRun({ id: randomUUID(), assetId: asset.id,
+  templateId: 'pg_daily', templateVersion: 1, sampleId: source.listSamples(asset.id, 1)[0].id,
+  retryOf: null, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+  status: 'completed', summary: { risk: 0, pass: 1, unknown: 0 }, findings: [],
+  eventIds: [sourceEvent.id] });
+const slowLog = parseSlowLogs('jsonlog', JSON.stringify({ timestamp: new Date().toISOString(),
+  dbname: 'postgres', message: 'duration: 300 ms  statement: SELECT secret',
+  statement: 'SELECT secret', query_id: 123 }), 'postgres');
+source.importSlowLogs(asset.id, slowLog.entries);
+const sourcePlan = source.saveSqlPlan(asset.id, sanitizePlan([{ Plan: { 'Node Type': 'Seq Scan',
+  'Total Cost': 10 }, 'Execution Time': 300 }], '123'));
 source.close();
 
 const databaseName = `dbsphere_migration_${process.pid}`;
@@ -77,7 +91,12 @@ try {
   assert.equal((await target.listSilences()).find(silence => silence.id === sourceSilence.id).reason, 'planned maintenance');
   assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).state.mutedBy, sourceSilence.id);
   assert.equal((await target.listDueNotifications()).length, sourceQueued);
-  console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, states, silences and notifications passed');
+  assert.equal((await target.listInspectionSchedules()).find(schedule => schedule.assetId === asset.id).templateId, 'pg_daily');
+  assert.equal((await target.getInspectionRun(sourceRun.id)).sampleId, sourceRun.sampleId);
+  assert.equal((await target.listSlowLogs(asset.id, new Date(Date.now() - 3600000).toISOString(),
+    new Date(Date.now() + 3600000).toISOString())).length, 1);
+  assert.equal((await target.listSqlPlans(asset.id))[0].id, sourcePlan.id);
+  console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, inspections, slow logs and plans passed');
 } finally {
   await target.close();
   const cleanup = new pg.Client({ connectionString: adminUrl });

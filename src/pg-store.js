@@ -137,6 +137,19 @@ const schema = `
   ALTER TABLE inspection_runs ADD COLUMN IF NOT EXISTS error text;
   ALTER TABLE inspection_runs ADD COLUMN IF NOT EXISTS event_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb;
   CREATE INDEX IF NOT EXISTS inspection_runs_asset_time ON inspection_runs(asset_id,completed_at DESC);
+  CREATE TABLE IF NOT EXISTS slow_log_entries (
+    id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    source_key text NOT NULL, observed_at timestamptz NOT NULL, duration_ms double precision NOT NULL,
+    query_id text, source_format text NOT NULL, imported_at timestamptz NOT NULL,
+    UNIQUE(asset_id,source_key)
+  );
+  CREATE INDEX IF NOT EXISTS slow_log_asset_time ON slow_log_entries(asset_id,observed_at DESC);
+  CREATE TABLE IF NOT EXISTS sql_plan_snapshots (
+    id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    query_id text NOT NULL, observed_at timestamptz NOT NULL, source text NOT NULL,
+    shape_hash text NOT NULL, summary_json jsonb NOT NULL, imported_at timestamptz NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS sql_plan_asset_time ON sql_plan_snapshots(asset_id,observed_at DESC);
 `;
 
 export class PgStore {
@@ -223,6 +236,8 @@ export class PgStore {
             [JSON.stringify(upgraded), template.id]);
         }
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(10) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(11) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(12) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -754,6 +769,48 @@ export class PgStore {
       ORDER BY collected_at DESC LIMIT $2`, [assetId, limit])).rows;
     return rows.map(r => ({ id: r.id, assetId: r.asset_id, collectedAt: r.collected_at,
       status: r.status, metrics: r.metrics_json, error: r.error }));
+  }
+
+  async importSlowLogs(assetId, entries) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      let imported = 0;
+      for (const row of entries) {
+        const result = await client.query(`INSERT INTO slow_log_entries
+          (id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(asset_id,source_key) DO NOTHING`,
+        [row.id, assetId, row.sourceKey, row.observedAt, row.durationMs, row.queryId, row.sourceFormat]);
+        imported += result.rowCount;
+      }
+      await client.query('COMMIT');
+      return imported;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async listSlowLogs(assetId, from, to, limit = 100) {
+    const rows = (await this.pool.query(`SELECT id,asset_id,observed_at,duration_ms,query_id,source_format
+      FROM slow_log_entries WHERE asset_id=$1 AND observed_at>=$2 AND observed_at<$3
+      ORDER BY observed_at DESC LIMIT $4`, [assetId, from, to, limit])).rows;
+    return rows.map(row => ({ id: row.id, assetId: row.asset_id, observedAt: row.observed_at,
+      durationMs: Number(row.duration_ms), queryId: row.query_id, sourceFormat: row.source_format }));
+  }
+
+  async saveSqlPlan(assetId, plan) {
+    await this.pool.query(`INSERT INTO sql_plan_snapshots
+      (id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,now())`, [plan.id, assetId, plan.queryId,
+      plan.observedAt, plan.source, plan.shapeHash, JSON.stringify(plan.summary)]);
+    return plan;
+  }
+
+  async listSqlPlans(assetId, limit = 50) {
+    const rows = (await this.pool.query(`SELECT * FROM sql_plan_snapshots WHERE asset_id=$1
+      ORDER BY observed_at DESC LIMIT $2`, [assetId, limit])).rows;
+    return rows.map(row => ({ id: row.id, assetId: row.asset_id, queryId: row.query_id,
+      observedAt: row.observed_at, source: row.source, shapeHash: row.shape_hash,
+      summary: row.summary_json }));
   }
 
   async listEvents() {

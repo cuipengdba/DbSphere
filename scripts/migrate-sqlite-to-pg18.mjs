@@ -21,7 +21,9 @@ if (oldKey.length !== 32 || targetKey.length !== 32) throw new Error('Source and
 
 const source = new DatabaseSync(sourcePath, { readOnly: true });
 const target = await PgStore.create(targetUrl);
-const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states', 'silences', 'notification_outbox'];
+const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states',
+  'silences', 'notification_outbox', 'inspection_templates', 'inspection_schedules',
+  'inspection_runs', 'slow_log_entries', 'sql_plan_snapshots'];
 const available = new Set(source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
 const sourceRows = Object.fromEntries(tables.map(table => [table,
   available.has(table) ? source.prepare(`SELECT * FROM ${table}`).all() : []]));
@@ -29,7 +31,7 @@ const client = await target.pool.connect();
 try {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(1742026)');
-  for (const table of tables.slice(1).filter(table => table !== 'alert_rules')) {
+  for (const table of tables.slice(1).filter(table => !['alert_rules', 'inspection_templates'].includes(table))) {
     const count = Number((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count);
     if (count > 0) throw new Error(`Target ${table} is not empty; migration is append-unsafe`);
   }
@@ -40,6 +42,12 @@ try {
   for (const row of sourceRows.alert_rules) {
     await client.query(`INSERT INTO alert_rules(id,definition_json) VALUES($1,$2)
       ON CONFLICT(id) DO UPDATE SET definition_json=excluded.definition_json`, [row.id, row.definition_json]);
+  }
+  for (const row of sourceRows.inspection_templates) {
+    await client.query(`INSERT INTO inspection_templates(id,definition_json,updated_at)
+      VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET
+      definition_json=excluded.definition_json,updated_at=excluded.updated_at`,
+    [row.id, row.definition_json, row.updated_at]);
   }
   for (const row of sourceRows.assets) {
     const reencrypted = encrypt(targetKey, decrypt(oldKey, row.password_enc));
@@ -68,6 +76,32 @@ try {
       VALUES($1,$2,$3,$4,$5,$6)`, [row.id, row.asset_id, row.collected_at,
       row.status, row.metrics_json, row.error]);
   }
+  for (const row of sourceRows.inspection_schedules) {
+    await client.query(`INSERT INTO inspection_schedules
+      (asset_id,template_id,interval_minutes,next_due_at,enabled) VALUES($1,$2,$3,$4,$5)`,
+    [row.asset_id, row.template_id, row.interval_minutes, row.next_due_at, Boolean(row.enabled)]);
+  }
+  for (const row of sourceRows.inspection_runs) {
+    await client.query(`INSERT INTO inspection_runs
+      (id,asset_id,template_id,template_version,sample_id,retry_of,started_at,completed_at,
+       summary_json,findings_json,status,error,event_ids_json)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [row.id, row.asset_id, row.template_id, row.template_version, row.sample_id,
+      row.retry_of, row.started_at, row.completed_at, row.summary_json,
+      row.findings_json, row.status, row.error, row.event_ids_json]);
+  }
+  for (const row of sourceRows.slow_log_entries) {
+    await client.query(`INSERT INTO slow_log_entries
+      (id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [row.id, row.asset_id, row.source_key,
+      row.observed_at, row.duration_ms, row.query_id, row.source_format, row.imported_at]);
+  }
+  for (const row of sourceRows.sql_plan_snapshots) {
+    await client.query(`INSERT INTO sql_plan_snapshots
+      (id,asset_id,query_id,observed_at,source,shape_hash,summary_json,imported_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [row.id, row.asset_id, row.query_id,
+      row.observed_at, row.source, row.shape_hash, row.summary_json, row.imported_at]);
+  }
   for (const month of new Set(sourceRows.events.map(row => row.started_at.slice(0, 7)))) {
     await ensureEventPartition(client, `${month}-01T00:00:00Z`);
   }
@@ -95,7 +129,7 @@ try {
     await client.query('INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)',
       [row.asset_id, row.rule_id, row.state_json]);
   }
-  for (const table of tables.slice(1).filter(table => table !== 'alert_rules')) {
+  for (const table of tables.slice(1).filter(table => !['alert_rules', 'inspection_templates'].includes(table))) {
     const count = Number((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count);
     if (count !== sourceRows[table].length) throw new Error(`Count mismatch in ${table}`);
   }
@@ -109,6 +143,13 @@ try {
     const imported = (await client.query('SELECT definition_json FROM alert_rules WHERE id=$1', [row.id])).rows[0]?.definition_json;
     if (!isDeepStrictEqual(imported, JSON.parse(row.definition_json))) {
       throw new Error(`Alert rule mismatch: ${row.id}`);
+    }
+  }
+  for (const row of sourceRows.inspection_templates) {
+    const imported = (await client.query('SELECT definition_json FROM inspection_templates WHERE id=$1',
+      [row.id])).rows[0]?.definition_json;
+    if (!isDeepStrictEqual(imported, JSON.parse(row.definition_json))) {
+      throw new Error(`Inspection template mismatch: ${row.id}`);
     }
   }
   await client.query('COMMIT');
