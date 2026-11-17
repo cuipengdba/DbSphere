@@ -5,6 +5,44 @@ on:
   pull_request:
 
 jobs:
+  native-offline-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build native Node.js offline package
+        run: bash scripts/build-node-offline-bundle.sh "$RUNNER_TEMP/dbsphere-node-output"
+      - name: Start B/S from offline package without package manager
+        env:
+          DBSPHERE_CONFIG_DIR: ${{ runner.temp }}/dbsphere-node-config
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_PORT: '8090'
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+        run: |
+          docker run -d --rm --name dbsphere-node-offline-store -p 15434:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-store-test postgres:18-bookworm
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-node-offline-store pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          mkdir -p "$RUNNER_TEMP/dbsphere-node-extracted"
+          archive=("$RUNNER_TEMP"/dbsphere-node-output/DbSphere-node-*.tar.gz)
+          test "${#archive[@]}" -eq 1
+          tar -xzf "${archive[0]}" -C "$RUNNER_TEMP/dbsphere-node-extracted"
+          bash "$RUNNER_TEMP/dbsphere-node-extracted/run.sh" > "$RUNNER_TEMP/dbsphere-node.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          ready=false
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8090/readyz >/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then cat "$RUNNER_TEMP/dbsphere-node.log"; exit 1; fi
+          test -f "$DBSPHERE_CONFIG_DIR/dbsphere.env"
+          curl --fail --silent http://127.0.0.1:8090/readyz
+
   offline-package:
     runs-on: ubuntu-latest
     steps:

@@ -28,4 +28,20 @@ bash DbSphere-offline-<版本>-linux-amd64.run
 
 后续版本的 `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。升级前应使用[PG18 存储备份与恢复演练](INSPECTIONS_V0.4.md)备份数据并保存当前安装包；回滚需实际验证目标 PG18 schema 与旧版本兼容，不能仅重跑旧包就假定数据兼容。V1.0 将正式验收断网升级与回滚。
 
-当前 `.run` 是自解压离线镜像包，**不是静态编译的单文件服务端**。PostgreSQL 18 作为独立容器运行，Docker 是明确的目标机依赖。Node.js 的[单文件应用能力](https://r2.nodejs.org/docs/latest-v24.x/api/single-executable-applications.html)仍处于开发阶段，且本平台依赖静态页面、Kubernetes 客户端与 PG18 存储；只有完整打包、运行和升级演练通过后，才会另行发布单文件执行程序。供现场已有 Node.js 24 和外部 PG18 使用的轻量离线包仍在开发，不能将当前源码包称为已经验收的离线安装包。
+## 可选的 Node.js 轻量离线包
+
+已有独立 PG18、且不希望安装 Docker 的 Linux x86_64 环境，可在联网构建机运行：
+
+```bash
+bash scripts/build-node-offline-bundle.sh /absolute/output/directory
+```
+
+生成 `DbSphere-node-<版本>-linux-amd64.tar.gz` 与 `.sha256`。包中有生产依赖、服务端、静态页面和启动脚本；目标机只需预装 Node.js **24.13 或更高版本**与外部 PostgreSQL 18，不执行 `pnpm install`。解压后第一次以前台方式启动：
+
+```bash
+DBSPHERE_DATABASE_URL='postgres://user:password@pg18-host:5432/dbsphere' bash run.sh
+```
+
+脚本将随机管理员密码和主密钥存于 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-native/dbsphere.env`，再次运行复用配置。进程以前台运行，生产环境应交给 systemd 等服务管理器管理；此模式不附带 PG18，也不宣称为零依赖安装。
+
+当前 `.run` 是自解压离线镜像包，**不是静态编译的单文件服务端**。PostgreSQL 18 作为独立容器运行，Docker 是明确的目标机依赖。Node.js 轻量包则需要现场安装 Node.js 与 PG18。Node.js 的[单文件应用能力](https://r2.nodejs.org/docs/latest-v24.x/api/single-executable-applications.html)仍处于开发阶段；只有完整打包、运行和升级演练通过后，才会另行发布单文件执行程序。
