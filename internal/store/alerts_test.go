@@ -89,6 +89,28 @@ func TestGoCollectorFailureAndStaleShareEventLifecycleInPG18(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.Close()
+	collection, handled, err := pg.ReadCollection(ctx, "/api/alert-rules")
+	if err != nil || !handled {
+		t.Fatalf("Go alert rules API failed: %v", err)
+	}
+	rules := collection.(map[string]any)["rules"].([]json.RawMessage)
+	visible := map[string]bool{}
+	for _, raw := range rules {
+		var item struct {
+			ID       string `json:"id"`
+			Editable bool   `json:"editable"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		visible[item.ID] = item.Editable
+	}
+	for _, id := range []string{"pg_unavailable", "pg_collection_failed", "collector_stale",
+		"k8s_collection_failed", "linux_collection_failed"} {
+		if !visible[id] {
+			t.Fatalf("new Go rule %s was not editable in browser API", id)
+		}
+	}
 	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Go collector alert test",
 		Host: "127.0.0.1", Port: 5432, Database: "postgres", Username: "postgres",
 		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
