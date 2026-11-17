@@ -40,7 +40,7 @@ PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔�
 
 ### Kubernetes 只读发现与指标
 
-浏览器选择 K8S 运行环境，填写 kubeconfig context 和 Namespace 后可查询该 Namespace 的 Pod，并按容器镜像/5432 端口提示可能的 PostgreSQL Pod。选择后会填入 Pod、Workload、Node 与匹配的 Service 地址，仍需人工核对数据库连接和凭据。每类资源最多读取 100 项；结果截断或缺少权限会显示具体原因。Pod 重建后应重新确认映射。
+浏览器选择 K8S 运行环境，填写 kubeconfig context 和 Namespace 后可查询该 Namespace 的 Pod，并按容器镜像/5432 端口提示可能的 PostgreSQL Pod。选择后会填入 Pod、Workload 与 Node，列出匹配的 Service。数据库地址须填写从 DbSphere 运行位置实际可达的地址；集群外的 Compose 容器通常不能直接解析 `.svc` 域名。每类资源最多读取 100 项；结果截断或缺少权限会显示具体原因。Pod 重建后应重新确认映射。
 
 Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `get,list`，`services`、`events` 的 `list`，以及 `deployments`、`replicasets`、`statefulsets` 的 `list`。关联 Node 和 PV 需额外在 ClusterRole 授予 `nodes`、`persistentvolumes` 的 `get`。若集群提供 metrics-server，可在 Namespace 授予 `metrics.k8s.io/pods` 的 `list`，在 ClusterRole 授予 `metrics.k8s.io/nodes` 的 `list`。测试用的具体只读配置见 [`k8s-postgres.yaml`](../test/fixtures/k8s-postgres.yaml)，其中 PostgreSQL 测试密码不得用于生产。
 

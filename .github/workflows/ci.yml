@@ -56,6 +56,17 @@ jobs:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
           DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-migration-smoke
         run: node scripts/migration-smoke.mjs
+      - name: Reject a PostgreSQL 17 long-term store
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15437/postgres
+        run: |
+          docker run -d --rm --name dbsphere-wrong-store -p 15437:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-store-test postgres:17-bookworm
+          for i in $(seq 1 60); do
+            if docker exec dbsphere-wrong-store pg_isready -U postgres >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          node scripts/reject-non18-store.mjs
 
   compose:
     runs-on: ubuntu-latest
@@ -95,6 +106,12 @@ jobs:
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml \
             -f deploy/compose/compose.k8s.yaml exec -T app test -r /etc/dbsphere/kubeconfig
           node scripts/compose-upgrade-smoke.mjs
+      - name: Reject an invalid kubeconfig path clearly
+        run: |
+          printf 'DBSPHERE_KUBECONFIG_HOST_PATH=/definitely/missing/kubeconfig\n' >> deploy/compose/.env
+          if bash scripts/one-click.sh > "$RUNNER_TEMP/dbsphere-invalid-config.log" 2>&1; then exit 1; fi
+          grep -q 'DBSPHERE_KUBECONFIG_HOST_PATH must be an existing absolute file path' \
+            "$RUNNER_TEMP/dbsphere-invalid-config.log"
 
   external-compose:
     runs-on: ubuntu-latest

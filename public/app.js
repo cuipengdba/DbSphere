@@ -72,6 +72,21 @@ async function showAsset(id) {
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
   detail.append(cell('p', `采集状态：${asset.lastStatus} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
+  const layerNav = document.createElement('div'); layerNav.className = 'actions layer-nav';
+  for (const [label, section] of [
+    ['PostgreSQL 诊断', 'pg-diagnostics'],
+    [asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机', asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail'],
+    ...(asset.poolerConfigured ? [['PgBouncer', 'pooler-detail']] : [])
+  ]) {
+    const button = cell('button', label, 'ghost small-button');
+    button.addEventListener('click', () => {
+      const target = $(section);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else notice(`${label} 当前没有可用采样。`, true);
+    });
+    layerNav.append(button);
+  }
+  detail.append(layerNav);
   const sample = samples[0];
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   if (currentSample?.status === 'ok' && currentSample.metrics) {
@@ -87,7 +102,7 @@ async function showAsset(id) {
   } else detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
   if (currentSample?.metrics?.k8s) {
     const k8s = currentSample.metrics.k8s;
-    detail.append(cell('h3', 'Kubernetes 运行状态'));
+    const heading = cell('h3', 'Kubernetes 运行状态'); heading.id = 'k8s-detail'; detail.append(heading);
     if (k8s.status === 'ok') {
       detail.append(cell('p', `Pod ${k8s.pod.name} · ${k8s.pod.phase || '未知'} · Node ${k8s.pod.node || '未映射'}`));
       if (k8s.pod.reason) detail.append(cell('p', `Pod 原因：${k8s.pod.reason}${k8s.pod.message ? ' · ' + k8s.pod.message : ''}`, 'warning'));
@@ -117,7 +132,7 @@ async function showAsset(id) {
   }
   if (currentSample?.metrics?.linux) {
     const linux = currentSample.metrics.linux;
-    detail.append(cell('h3', 'Linux 主机资源'));
+    const heading = cell('h3', 'Linux 主机资源'); heading.id = 'linux-detail'; detail.append(heading);
     if (linux.status === 'ok') {
       detail.append(cell('p', `来源 ${linux.source} · CPU 已用 ${linux.cpu.usedPercent ?? '待下次采样'}% · 内存已用 ${linux.memory.usedPercent ?? '未知'}% · 1 分钟负载 ${linux.cpu.load1 ?? '未知'}`));
       for (const fs of linux.filesystems) detail.append(cell('p', `${fs.mountpoint}: ${fs.usedPercent}% 已用 · ${(fs.sizeBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`));
@@ -130,7 +145,7 @@ async function showAsset(id) {
   }
   if (currentSample?.metrics?.pgbouncer) {
     const pooler = currentSample.metrics.pgbouncer;
-    detail.append(cell('h3', 'PgBouncer 连接池'));
+    const heading = cell('h3', 'PgBouncer 连接池'); heading.id = 'pooler-detail'; detail.append(heading);
     if (pooler.status === 'ok') {
       for (const entry of pooler.pools) detail.append(cell('p', `${entry.user} · 客户端活跃 ${entry.clientActive} / 等待 ${entry.clientWaiting} · 服务端活跃 ${entry.serverActive} / 空闲 ${entry.serverIdle} · 最久等待 ${entry.maxWaitSeconds.toFixed(2)} 秒`));
       for (const entry of pooler.stats) detail.append(cell('p', `累计事务 ${entry.transactionsTotal} · 累计查询 ${entry.queriesTotal} · 平均查询 ${entry.avgQueryMicroseconds} μs`));
@@ -139,7 +154,7 @@ async function showAsset(id) {
 }
 
 function renderDiagnostics(target, diagnostics) {
-  target.append(cell('h3', 'PostgreSQL 深度监控'));
+  const heading = cell('h3', 'PostgreSQL 深度监控'); heading.id = 'pg-diagnostics'; target.append(heading);
   const rows = [
     ['等待与会话', 'activity', d => d.map(x => `${x.state}/${x.waitType}: ${x.sessions}`).join('；') || '无活动会话'],
     ['长事务', 'transactions', d => `${d.longTransactions} 个；idle in transaction ${d.idleInTransaction} 个`],
@@ -263,9 +278,7 @@ $('discover-k8s').addEventListener('click', async () => {
         form.elements.pod.value = pod.name;
         form.elements.workload.value = pod.workload?.name || '';
         form.elements.node.value = pod.node || '';
-        const service = pod.services[0];
-        if (service && !form.elements.host.value) form.elements.host.value = `${service}.${namespace}.svc`;
-        notice(`已填入 ${pod.name} 的 K8S 映射；请核对 PostgreSQL 地址和凭据。`);
+        notice(`已填入 ${pod.name} 的 K8S 映射；请填写从 DbSphere 可达的 PostgreSQL 地址和凭据。`);
       });
       target.append(button);
     }

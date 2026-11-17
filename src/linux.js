@@ -41,7 +41,8 @@ export function parseNodeExporter(text) {
     } else if (name === 'node_network_transmit_bytes_total' && !/^(lo|veth|docker)/.test(tag.device || '')) {
       networkTransmitBytesTotal += value;
     } else if (name === 'node_filesystem_size_bytes' || name === 'node_filesystem_avail_bytes') {
-      if (!tag.mountpoint || excludedFilesystems.has(tag.fstype)) continue;
+      if (!tag.mountpoint || excludedFilesystems.has(tag.fstype) ||
+          ['/etc/hosts', '/etc/hostname', '/etc/resolv.conf'].includes(tag.mountpoint)) continue;
       const entry = filesystems.get(tag.mountpoint) ?? { mountpoint: tag.mountpoint, device: tag.device ?? null };
       if (name === 'node_filesystem_size_bytes') entry.sizeBytes = value;
       else entry.availableBytes = value;
