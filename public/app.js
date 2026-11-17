@@ -1,5 +1,6 @@
 let csrf = null;
 let selectedAsset = null;
+let selectedEvent = null;
 let editingAsset = null;
 let pg18Store = false;
 const $ = (id) => document.getElementById(id);
@@ -471,7 +472,17 @@ function renderEvents(events) {
   const list = $('event-list'); list.replaceChildren();
   if (!events.length) { list.append(cell('p', '暂无问题事件。', 'empty')); return; }
   for (const event of events) {
-    const button = cell('button', `${event.status === 'open' ? '● ' : '✓ '}${event.assetName} · ${event.title} · ${formatTime(event.startedAt)}`, 'event-button');
+    const button = cell('button', '', 'event-button incident-card');
+    button.dataset.eventId = event.id;
+    button.append(cell('strong', event.title, 'incident-card-title'));
+    const meta = cell('span', '', 'incident-card-meta');
+    meta.append(cell('span', event.status === 'open' ? '处理中' : '已恢复',
+      `incident-status ${event.status === 'open' ? 'is-open' : 'is-resolved'}`));
+    meta.append(cell('span', event.assetName || '已删除资产'));
+    button.append(meta);
+    button.append(cell('small', `事件 ${event.id.slice(0, 8)} · ${formatTime(event.startedAt)}`, 'incident-card-time'));
+    button.classList.toggle('selected', event.id === selectedEvent);
+    if (event.id === selectedEvent) button.setAttribute('aria-current', 'true');
     button.addEventListener('click', () => showEvent(event.id)); list.append(button);
   }
 }
@@ -643,6 +654,12 @@ function resetEdit() {
 async function showEvent(id) {
   setView('incidents');
   const { event, analysis } = await api(`/api/events/${id}`);
+  selectedEvent = id;
+  for (const button of $('event-list').querySelectorAll('[data-event-id]')) {
+    button.classList.toggle('selected', button.dataset.eventId === id);
+    if (button.dataset.eventId === id) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  }
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
   target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));

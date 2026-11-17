@@ -48,6 +48,8 @@ Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入�
 
 此取舍参考本地 `E:\DbSphere\DeepLens\使用说明-V26ai1.0.md` 中的左侧菜单和资源/执行分区、[DBdoctor 官方介绍](https://www.dbdoctor.cn/)中的问题到 SQL 根因闭环、[Pigsty 官方仪表盘目录](https://pigsty.io/docs/pgsql/dashboard/)中的总览→集群→实例→数据库/查询分层。只借鉴信息组织与任务路径，不复用其代码、视觉资产或仪表盘。
 
+事件列表现按标题、处理状态/资产、事件 ID/时间三层展示；选中项与右侧证据面板对应。2026-11-18 在 Go + 独立 PG18 试验库中用真实浏览器完成“新增资产 → 故障采集 → 事件 → 同 ID 证据”的桌面及 390px 手机验收，手机无横向溢出；列表刷新后选中状态仍保留。截图保存在 `H:\CodexLS\outputs\dbsphere\incident-card-desktop.png` 和 `incident-card-mobile.png`。
+
 ## 页面验收
 
 - [x] 桌面与窄屏均可直接进入目标任务；总览首屏可见待处理事件，规则表不占据首屏。本机真实浏览器在 1440px 和 390px 宽度检查，窄屏无横向溢出。

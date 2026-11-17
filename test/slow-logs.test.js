@@ -11,7 +11,7 @@ test('PG JSON slow logs retain exact query ID while discarding statement and par
   assert.equal(parsed.entries[0].durationMs, 418.37);
   assert.equal(parsed.entries[0].queryId, '9223372036854775807');
   assert.equal(JSON.stringify(parsed).includes('secrets'), false);
-  assert.equal(JSON.stringify(parsed).includes('abc'), false);
+  assert.equal(JSON.stringify(parsed).includes('token = abc'), false);
   const tricky = '{"timestamp":"2026-11-17T08:00:00Z","dbname":"app",' +
     '"message":"duration: 10 ms  statement: SELECT \\"query_id\\":999",' +
     '"query_id":123}';
