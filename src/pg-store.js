@@ -2,6 +2,8 @@ import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import { oomCandidate } from './incidents.js';
 import { publicAsset } from './store.js';
+import { DEFAULT_RULES, readSignal, validateRuleUpdate } from './alert-rules.js';
+import { nextAlertState } from './alert-state.js';
 
 const { Pool } = pg;
 
@@ -31,15 +33,27 @@ const schema = `
   CREATE TABLE IF NOT EXISTS events (
     id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     kind text NOT NULL, title text NOT NULL, status text NOT NULL,
-    started_at timestamptz NOT NULL, ended_at timestamptz
+    started_at timestamptz NOT NULL, ended_at timestamptz, event_group text, acknowledged_at timestamptz
   );
+  ALTER TABLE events ADD COLUMN IF NOT EXISTS event_group text;
+  ALTER TABLE events ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
+  UPDATE events SET event_group='telemetry' WHERE event_group IS NULL;
   CREATE INDEX IF NOT EXISTS events_asset_status ON events(asset_id, status);
-  CREATE UNIQUE INDEX IF NOT EXISTS events_one_open_kind ON events(asset_id, kind) WHERE status='open';
+  DROP INDEX IF EXISTS events_one_open_kind;
+  CREATE UNIQUE INDEX IF NOT EXISTS events_one_open_group ON events(asset_id,event_group) WHERE status='open';
   CREATE TABLE IF NOT EXISTS evidence (
     id uuid PRIMARY KEY, event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     kind text NOT NULL, observed_at timestamptz NOT NULL, payload_json jsonb NOT NULL
   );
   CREATE INDEX IF NOT EXISTS evidence_event_time ON evidence(event_id, observed_at);
+  CREATE TABLE IF NOT EXISTS alert_rules (
+    id text PRIMARY KEY, definition_json jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE IF NOT EXISTS alert_states (
+    asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    rule_id text NOT NULL REFERENCES alert_rules(id), state_json jsonb NOT NULL,
+    PRIMARY KEY(asset_id,rule_id)
+  );
 `;
 
 export class PgStore {
@@ -57,6 +71,11 @@ export class PgStore {
         await client.query(schema);
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING');
+        for (const rule of DEFAULT_RULES) await client.query(`INSERT INTO alert_rules(id,definition_json)
+          VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, [rule.id, JSON.stringify(rule)]);
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(5) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -73,6 +92,33 @@ export class PgStore {
   }
   async setSetting(key, value) {
     await this.pool.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, value]);
+  }
+
+  async getAlertRules() {
+    return (await this.pool.query('SELECT definition_json FROM alert_rules ORDER BY id')).rows.map(row => row.definition_json);
+  }
+
+  async updateAlertRule(id, update) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = (await client.query('SELECT definition_json FROM alert_rules WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!row) { await client.query('ROLLBACK'); return null; }
+      if (!validateRuleUpdate(row.definition_json, update)) { await client.query('ROLLBACK'); return false; }
+      const changed = { ...row.definition_json, ...update, version: row.definition_json.version + 1 };
+      await client.query('UPDATE alert_rules SET definition_json=$1,updated_at=now() WHERE id=$2', [JSON.stringify(changed), id]);
+      await client.query('COMMIT');
+      return changed;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async listActiveAlerts() {
+    const rows = (await this.pool.query(`SELECT s.asset_id,a.name AS asset_name,s.rule_id,s.state_json,r.definition_json
+      FROM alert_states s JOIN assets a ON a.id=s.asset_id JOIN alert_rules r ON r.id=s.rule_id
+      WHERE s.state_json->>'status'='firing'`)).rows;
+    return rows.map(row => ({ assetId: row.asset_id, assetName: row.asset_name,
+      ruleId: row.rule_id, rule: row.definition_json, state: row.state_json }));
   }
 
   async listAssets() {
@@ -113,6 +159,72 @@ export class PgStore {
     return (await this.pool.query('DELETE FROM assets WHERE id=$1', [id])).rowCount > 0;
   }
 
+  async applyAlerts(client, assetId, result, previous, error, sampleId, now, onlyRuleId = null) {
+    const rules = (await client.query('SELECT definition_json FROM alert_rules ORDER BY id')).rows.map(row => row.definition_json);
+    const states = new Map((await client.query('SELECT rule_id,state_json FROM alert_states WHERE asset_id=$1', [assetId])).rows
+      .map(row => [row.rule_id, row.state_json]));
+    for (const rule of rules) {
+      if (onlyRuleId && rule.id !== onlyRuleId) continue;
+      const old = states.get(rule.id) ?? null;
+      if (!rule.enabled) {
+        if (old?.status === 'firing' && old.eventId) await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+          VALUES($1,$2,'alert_disabled',$3,$4)`, [randomUUID(), old.eventId, now,
+          JSON.stringify({ ruleId: rule.id, ruleVersion: rule.version, sampleId })]);
+        if (old) await client.query('DELETE FROM alert_states WHERE asset_id=$1 AND rule_id=$2', [assetId, rule.id]);
+        continue;
+      }
+      const signal = readSignal(rule.metric, result, previous, error, Date.parse(now));
+      const { next, transition } = nextAlertState(rule, signal, old, now);
+      if (transition === 'firing') {
+        let eventId = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND event_group=$2
+          AND status='open' FOR UPDATE`, [assetId, rule.group])).rows[0]?.id;
+        if (!eventId) {
+          eventId = randomUUID();
+          await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+            VALUES($1,$2,'alert_incident',$3,'open',$4,$5)`, [eventId, assetId, rule.title, now, rule.group]);
+        }
+        next.eventId = eventId;
+      }
+      if (transition && (next?.eventId || old?.eventId)) {
+        await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+          VALUES($1,$2,$3,$4,$5)`, [randomUUID(), next?.eventId ?? old.eventId, `alert_${transition}`, now,
+          JSON.stringify({ ruleId: rule.id, ruleVersion: rule.version, metric: rule.metric,
+            severity: rule.severity, source: signal.source, value: signal.value,
+            threshold: rule.threshold, operator: rule.operator, sampleId,
+            detail: signal.detail, reason: signal.reason })]);
+      }
+      if (next) await client.query(`INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)
+        ON CONFLICT(asset_id,rule_id) DO UPDATE SET state_json=excluded.state_json`, [assetId, rule.id, JSON.stringify(next)]);
+      else if (old) await client.query('DELETE FROM alert_states WHERE asset_id=$1 AND rule_id=$2', [assetId, rule.id]);
+    }
+  }
+
+  async checkStale(assetId, now = new Date().toISOString()) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const asset = (await client.query('SELECT created_at,last_sample_at FROM assets WHERE id=$1 FOR UPDATE', [assetId])).rows[0];
+      if (!asset) { await client.query('ROLLBACK'); return; }
+      const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60);
+      const last = asset.last_sample_at ?? asset.created_at;
+      const missed = Math.max(0, (new Date(now).getTime() - new Date(last).getTime()) / 1000 / interval);
+      await this.applyAlerts(client, assetId, { collectorMissedIntervals: missed }, null, null, null, now, 'collector_stale');
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async resolveInactiveEvents(client, assetId, error, result, now) {
+    const currentGroup = error && readSignal('pg.unavailable', result, null, error).value === 1 ? 'availability' : 'telemetry';
+    const firing = new Set((await client.query(`SELECT state_json->>'eventId' AS event_id FROM alert_states
+      WHERE asset_id=$1 AND state_json->>'status'='firing'`, [assetId])).rows.map(row => row.event_id));
+    const open = (await client.query("SELECT id,event_group FROM events WHERE asset_id=$1 AND status='open' AND kind IN ('collection_failure','alert_incident')", [assetId])).rows;
+    for (const event of open) {
+      if ((error && event.event_group === currentGroup) || firing.has(event.id)) continue;
+      await client.query("UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2", [now, event.id]);
+    }
+  }
+
   async recordResult(assetId, result, error = null) {
     const now = new Date().toISOString();
     const status = error ? 'error' : 'ok';
@@ -120,17 +232,22 @@ export class PgStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      const prior = (await client.query(`SELECT metrics_json,error FROM samples WHERE asset_id=$1
+        ORDER BY collected_at DESC LIMIT 1`, [assetId])).rows[0];
+      const previous = prior?.metrics_json ?? null;
       await client.query(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json,error)
         VALUES($1,$2,$3,$4,$5,$6)`, [sampleId, assetId, now, status, JSON.stringify(result), error]);
       await client.query(`UPDATE assets SET last_sample_at=$1,last_status=$2,last_error=$3,
         version_num=COALESCE($4,version_num),role=COALESCE($5,role) WHERE id=$6`,
       [now, status, error, result?.version_num ?? null, result?.role ?? null, assetId]);
-      const open = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND kind='collection_failure'
-        AND status='open' FOR UPDATE`, [assetId])).rows[0];
       if (error) {
+        const group = readSignal('pg.unavailable', result, previous, error).value === 1 ? 'availability' : 'telemetry';
+        const open = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND event_group=$2
+          AND status='open' FOR UPDATE`, [assetId, group])).rows[0];
         const eventId = open?.id ?? randomUUID();
-        if (!open) await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at)
-          VALUES($1,$2,'collection_failure','PostgreSQL 采集连接失败','open',$3)`, [eventId, assetId, now]);
+        if (!open) await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+          VALUES($1,$2,'collection_failure',$3,'open',$4,$5)`, [eventId, assetId,
+          group === 'availability' ? 'PostgreSQL 无法连接' : 'PostgreSQL 采集失败', now, group]);
         const collectionEvidenceId = randomUUID();
         await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
           VALUES($1,$2,'collection_error',$3,$4)`, [collectionEvidenceId, eventId, now,
@@ -154,11 +271,15 @@ export class PgStore {
           await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
             VALUES($1,$2,'pgbouncer_state',$3,$4)`, [randomUUID(), eventId, now, JSON.stringify(result.pgbouncer)]);
         }
-      } else if (open) {
-        await client.query("UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2", [now, open.id]);
-        await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+      } else if (prior?.error) {
+        const group = readSignal('pg.unavailable', previous, null, prior.error).value === 1 ? 'availability' : 'telemetry';
+        const open = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND event_group=$2
+          AND status='open' FOR UPDATE`, [assetId, group])).rows[0];
+        if (open) await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
           VALUES($1,$2,'collection_recovered',$3,$4)`, [randomUUID(), open.id, now, JSON.stringify({ sampleId })]);
       }
+      await this.applyAlerts(client, assetId, result, previous, error, sampleId, now);
+      await this.resolveInactiveEvents(client, assetId, error, result, now);
       await client.query('COMMIT');
       return { sampleId, status, collectedAt: now };
     } catch (cause) { await client.query('ROLLBACK'); throw cause; }
@@ -176,7 +297,26 @@ export class PgStore {
     const rows = (await this.pool.query(`SELECT e.*, a.name AS asset_name FROM events e
       JOIN assets a ON a.id=e.asset_id ORDER BY e.started_at DESC LIMIT 200`)).rows;
     return rows.map(r => ({ id: r.id, assetId: r.asset_id, assetName: r.asset_name,
-      kind: r.kind, title: r.title, status: r.status, startedAt: r.started_at, endedAt: r.ended_at }));
+      kind: r.kind, eventGroup: r.event_group, title: r.title, status: r.status,
+      startedAt: r.started_at, endedAt: r.ended_at, acknowledgedAt: r.acknowledged_at }));
+  }
+
+  async acknowledgeEvent(id) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const event = (await client.query('SELECT id,status,acknowledged_at FROM events WHERE id=$1 FOR UPDATE', [id])).rows[0];
+      if (!event) { await client.query('ROLLBACK'); return null; }
+      if (event.status === 'open' && !event.acknowledged_at) {
+        const now = new Date().toISOString();
+        await client.query('UPDATE events SET acknowledged_at=$1 WHERE id=$2', [now, id]);
+        await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+          VALUES($1,$2,'event_acknowledged',$3,$4)`, [randomUUID(), id, now, JSON.stringify({ actor: 'admin' })]);
+      }
+      await client.query('COMMIT');
+      return this.getEvent(id);
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
   }
 
   async getEvent(id) {
@@ -186,8 +326,8 @@ export class PgStore {
     const evidence = (await this.pool.query('SELECT * FROM evidence WHERE event_id=$1 ORDER BY observed_at', [id])).rows
       .map(e => ({ id: e.id, kind: e.kind, observedAt: e.observed_at, payload: e.payload_json }));
     return { id: row.id, assetId: row.asset_id, assetName: row.asset_name,
-      kind: row.kind, title: row.title, status: row.status,
-      startedAt: row.started_at, endedAt: row.ended_at, evidence };
+      kind: row.kind, eventGroup: row.event_group, title: row.title, status: row.status,
+      startedAt: row.started_at, endedAt: row.ended_at, acknowledgedAt: row.acknowledged_at, evidence };
   }
 
   async close() { await this.pool.end(); }

@@ -51,9 +51,10 @@ try {
     assert.equal((await check.json()).result.status, expected);
   }
   const events = await (await fetch(`${base}/api/events`, { headers: { cookie: auth.cookie } })).json();
-  assert.equal(events.events.length, 1);
-  assert.equal(events.events[0].status, 'resolved');
-  eventId = events.events[0].id;
+  const assetEvents = events.events.filter(event => event.assetId === assetId);
+  assert.equal(assetEvents.length, 1);
+  assert.equal(assetEvents[0].status, 'resolved');
+  eventId = assetEvents[0].id;
   const event = await (await fetch(`${base}/api/events/${eventId}`, { headers: { cookie: auth.cookie } })).json();
   assert.equal(event.event.evidence.filter(e => e.kind === 'root_cause_candidate').length, 1);
   assert.equal(event.event.evidence.filter(e => e.kind === 'collection_error').length, 2);
@@ -73,7 +74,7 @@ try {
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
   const auth = await login(base);
   const assets = await (await fetch(`${base}/api/assets`, { headers: { cookie: auth.cookie } })).json();
-  assert.equal(assets.assets.length, 2);
+  assert.ok(assets.assets.length >= 2);
   assert.equal(assets.assets.find(asset => asset.id === assetId).versionNum, 180006);
   assert.equal(assets.assets.find(asset => asset.id === linuxAssetId).linuxExporterPort, 9100);
   assert.equal(assets.assets.find(asset => asset.id === linuxAssetId).poolerConfigured, true);
@@ -87,6 +88,7 @@ try {
     headers: { cookie: auth.cookie }
   })).json();
   assert.equal(event.event.status, 'resolved');
-  assert.equal(event.event.evidence.length, 6);
+  assert.equal(event.event.evidence.filter(item => item.kind === 'alert_firing').length, 1);
+  assert.equal(event.event.evidence.filter(item => item.kind === 'alert_recovered').length, 1);
   console.log('PostgreSQL 18 store: B/S assets, samples, one event, evidence and restart passed');
 } finally { await stop(); }

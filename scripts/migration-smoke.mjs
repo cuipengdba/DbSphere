@@ -19,14 +19,19 @@ await writeFile(join(sourceDir, 'master.key'), oldKey, { mode: 0o600, flag: 'wx'
 
 const source = new Store(sourceDir);
 source.setSetting('admin_password_hash', hashPassword('old-admin-password-strong'));
+source.updateAlertRule('pg_connections_high', { threshold: 77 });
 const asset = source.addAsset({ name: 'SQLite source', host: '127.0.0.1', port: 5432,
   database: 'postgres', username: 'monitor', sslMode: 'disable', runtime: 'k8s',
   k8sCluster: 'source', namespace: 'db', pod: 'postgres-0' }, encrypt(oldKey, 'old-monitor-secret'),
 encrypt(oldKey, 'postgres://stats:old-pooler-secret@pooler:6432/pgbouncer'));
 source.recordResult(asset.id, { k8s: { status: 'ok', containers: [{ name: 'postgres',
   terminatedReason: 'OOMKilled', lastTerminatedAt: new Date().toISOString() }] } }, 'connection refused');
+source.acknowledgeEvent(source.listEvents()[0].id);
 source.recordResult(asset.id, { version_num: 180006, role: 'primary' });
 const sourceEvent = source.listEvents()[0];
+const activeAsset = source.addAsset({ name: 'Active alert source', host: '127.0.0.1', port: 5432,
+  database: 'postgres', username: 'monitor', sslMode: 'disable', runtime: 'linux' }, encrypt(oldKey, 'active-secret'));
+source.recordResult(activeAsset.id, {}, 'password authentication failed');
 source.close();
 
 const databaseName = `dbsphere_migration_${process.pid}`;
@@ -55,7 +60,13 @@ try {
   assert.equal((await target.listSamples(asset.id)).length, 2);
   const event = await target.getEvent(sourceEvent.id);
   assert.equal(event.status, 'resolved');
-  assert.equal(event.evidence.length, 4);
+  assert.equal(event.eventGroup, 'availability');
+  assert.ok(event.acknowledgedAt);
+  assert.equal(event.evidence.filter(e => e.kind === 'event_acknowledged').length, 1);
+  assert.equal(event.evidence.filter(e => e.kind === 'alert_firing').length, 1);
+  assert.equal(event.evidence.filter(e => e.kind === 'alert_recovered').length, 1);
   assert.equal(event.evidence.filter(e => e.kind === 'root_cause_candidate').length, 1);
-  console.log('SQLite -> PG18 migration: IDs, credential re-encryption, samples and evidence passed');
+  assert.equal((await target.getAlertRules()).find(rule => rule.id === 'pg_connections_high').threshold, 77);
+  assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).ruleId, 'pg_collection_failed');
+  console.log('SQLite -> PG18 migration: IDs, credentials, samples, event acknowledgement and alert rules/states passed');
 } finally { await target.close(); }

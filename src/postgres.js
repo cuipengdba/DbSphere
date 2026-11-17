@@ -33,17 +33,26 @@ export async function collectPostgres(asset, password) {
       monitor_role: permission.monitor_role,
       privileged_role: permission.rolsuper || permission.rolcreatedb || permission.rolcreaterole || permission.rolreplication,
       connections: Number(stat?.numbackends ?? 0),
+      max_connections: Number((await client.query("SELECT current_setting('max_connections')::int AS value")).rows[0].value),
       xact_commit: Number(stat?.xact_commit ?? 0),
       xact_rollback: Number(stat?.xact_rollback ?? 0),
       database_bytes: Number(size.bytes),
       replicas: null,
-      wal_receiver: null
+      wal_receiver: null,
+      replication_lag_bytes: null,
+      replication_observed: false
     };
     try {
       if (identity.in_recovery) {
         metrics.wal_receiver = (await client.query('SELECT status FROM pg_stat_wal_receiver LIMIT 1')).rows[0]?.status ?? null;
+        metrics.replication_observed = true;
       } else {
-        metrics.replicas = Number((await client.query('SELECT count(*)::int AS count FROM pg_stat_replication')).rows[0].count);
+        const replication = (await client.query(`SELECT count(*)::int AS count,
+          max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))::text AS lag_bytes
+          FROM pg_stat_replication`)).rows[0];
+        metrics.replicas = Number(replication.count);
+        metrics.replication_lag_bytes = replication.lag_bytes == null ? null : Number(replication.lag_bytes);
+        metrics.replication_observed = true;
       }
     } catch { /* Optional replication view is unavailable to this monitoring account. */ }
     metrics.diagnostics = await collectDiagnostics(client, major);

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { PgStore } from '../src/pg-store.js';
 import { decrypt, encrypt } from '../src/security.js';
 
@@ -20,19 +21,25 @@ if (oldKey.length !== 32 || targetKey.length !== 32) throw new Error('Source and
 
 const source = new DatabaseSync(sourcePath, { readOnly: true });
 const target = await PgStore.create(targetUrl);
-const tables = ['settings', 'assets', 'samples', 'events', 'evidence'];
-const sourceRows = Object.fromEntries(tables.map(table => [table, source.prepare(`SELECT * FROM ${table}`).all()]));
+const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states'];
+const available = new Set(source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+const sourceRows = Object.fromEntries(tables.map(table => [table,
+  available.has(table) ? source.prepare(`SELECT * FROM ${table}`).all() : []]));
 const client = await target.pool.connect();
 try {
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(1742026)');
-  for (const table of tables.slice(1)) {
+  for (const table of tables.slice(1).filter(table => table !== 'alert_rules')) {
     const count = Number((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count);
     if (count > 0) throw new Error(`Target ${table} is not empty; migration is append-unsafe`);
   }
   for (const row of sourceRows.settings) {
     await client.query(`INSERT INTO settings(key,value) VALUES($1,$2)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value`, [row.key, row.value]);
+  }
+  for (const row of sourceRows.alert_rules) {
+    await client.query(`INSERT INTO alert_rules(id,definition_json) VALUES($1,$2)
+      ON CONFLICT(id) DO UPDATE SET definition_json=excluded.definition_json`, [row.id, row.definition_json]);
   }
   for (const row of sourceRows.assets) {
     const reencrypted = encrypt(targetKey, decrypt(oldKey, row.password_enc));
@@ -54,18 +61,28 @@ try {
       row.status, row.metrics_json, row.error]);
   }
   for (const row of sourceRows.events) {
-    await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,ended_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7)`, [row.id, row.asset_id, row.kind,
-      row.title, row.status, row.started_at, row.ended_at]);
+    await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,ended_at,event_group,acknowledged_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [row.id, row.asset_id, row.kind,
+      row.title, row.status, row.started_at, row.ended_at, row.event_group ?? 'telemetry', row.acknowledged_at ?? null]);
   }
   for (const row of sourceRows.evidence) {
     await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
       VALUES($1,$2,$3,$4,$5)`, [row.id, row.event_id, row.kind,
       row.observed_at, row.payload_json]);
   }
-  for (const table of tables.slice(1)) {
+  for (const row of sourceRows.alert_states) {
+    await client.query('INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)',
+      [row.asset_id, row.rule_id, row.state_json]);
+  }
+  for (const table of tables.slice(1).filter(table => table !== 'alert_rules')) {
     const count = Number((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count);
     if (count !== sourceRows[table].length) throw new Error(`Count mismatch in ${table}`);
+  }
+  for (const row of sourceRows.alert_rules) {
+    const imported = (await client.query('SELECT definition_json FROM alert_rules WHERE id=$1', [row.id])).rows[0]?.definition_json;
+    if (!isDeepStrictEqual(imported, JSON.parse(row.definition_json))) {
+      throw new Error(`Alert rule mismatch: ${row.id}`);
+    }
   }
   await client.query('COMMIT');
   console.log(`Migrated SQLite to PostgreSQL 18: ${tables.map(table => `${table}=${sourceRows[table].length}`).join(', ')}`);

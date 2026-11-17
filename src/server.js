@@ -177,6 +177,15 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         return send(res, 200, { discovery: await discoverK8sFn({ k8s_cluster: cluster, k8s_namespace: namespace }) });
       }
       if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
+      if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
+      if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
+      const ruleMatch = path.match(/^\/api\/alert-rules\/([a-z][a-z0-9_]{1,63})$/);
+      if (req.method === 'PATCH' && ruleMatch) {
+        const changed = await store.updateAlertRule(ruleMatch[1], await body(req));
+        return changed === null ? send(res, 404, { error: 'Alert rule not found' })
+          : changed === false ? send(res, 400, { error: 'Invalid alert rule update' })
+            : send(res, 200, { rule: changed });
+      }
       if (req.method === 'POST' && path === '/api/assets') {
         const input = await body(req);
         if (!validAsset(input)) return send(res, 400, { error: 'Invalid asset fields' });
@@ -209,6 +218,11 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         const event = await store.getEvent(eventMatch[1]);
         return event ? send(res, 200, { event }) : send(res, 404, { error: 'Event not found' });
       }
+      const ackMatch = path.match(/^\/api\/events\/([0-9a-f-]{36})\/ack$/);
+      if (req.method === 'POST' && ackMatch) {
+        const event = await store.acknowledgeEvent(ackMatch[1]);
+        return event ? send(res, 200, { event }) : send(res, 404, { error: 'Event not found' });
+      }
       return send(res, 404, { error: 'Not found' });
     } catch (e) {
       if (e.status) return send(res, e.status, { error: e.message });
@@ -221,7 +235,10 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   function startScheduler() {
     const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60) * 1000;
     timer = setInterval(() => { void (async () => {
-      for (const asset of await store.listAssets()) void collectAsset(asset.id).catch(e => console.error('Collection failed:', e));
+      for (const asset of await store.listAssets()) {
+        await store.checkStale(asset.id);
+        void collectAsset(asset.id).catch(e => console.error('Collection failed:', e));
+      }
     })().catch(e => console.error('Scheduler failed:', e)); }, interval);
     timer.unref();
   }

@@ -28,12 +28,16 @@ function cell(tag, text, cls) {
 }
 
 async function refresh() {
-  const [{ assets }, { events }] = await Promise.all([api('/api/assets'), api('/api/events')]);
+  const [{ assets }, { events }, { alerts }, { rules }] = await Promise.all([
+    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules')
+  ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
   $('event-count').textContent = events.filter(e => e.status === 'open').length;
   renderAssets(assets);
   renderEvents(events);
+  renderAlerts(alerts);
+  if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
 }
 
@@ -187,6 +191,48 @@ function renderEvents(events) {
   }
 }
 
+function renderAlerts(alerts) {
+  const list = $('alert-list'); list.replaceChildren();
+  if (!alerts.length) { list.append(cell('p', '当前没有触发中的告警。', 'empty')); return; }
+  for (const alert of alerts) {
+    const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${alert.state.lastValue ?? '信号缺失'}${alert.state.missingSince ? ' · 指标已失联' : ''}`, 'event-button');
+    button.addEventListener('click', () => showEvent(alert.state.eventId));
+    list.append(button);
+  }
+}
+
+function renderRules(rules) {
+  const list = $('rule-list'); list.replaceChildren();
+  for (const rule of rules) {
+    const details = document.createElement('details'); details.className = 'rule-card';
+    details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${rule.threshold} · ${rule.durationSeconds}s`));
+    const form = document.createElement('form'); form.className = 'rule-form';
+    const threshold = document.createElement('input'); threshold.type = 'number'; threshold.step = 'any'; threshold.min = '0'; threshold.value = rule.threshold; threshold.required = true;
+    const duration = document.createElement('input'); duration.type = 'number'; duration.step = '1'; duration.min = '0'; duration.max = '86400'; duration.value = rule.durationSeconds; duration.required = true;
+    const severity = document.createElement('select');
+    for (const value of ['info', 'warning', 'critical']) {
+      const option = document.createElement('option'); option.value = value; option.textContent = value;
+      severity.append(option);
+    }
+    severity.value = rule.severity;
+    const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;
+    for (const [label, input] of [['阈值', threshold], ['持续秒数', duration], ['级别', severity], ['启用', enabled]]) {
+      const wrapper = document.createElement('label'); wrapper.append(cell('span', label), input); form.append(wrapper);
+    }
+    const save = cell('button', '保存规则', 'small-button'); save.type = 'submit'; form.append(save);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      try {
+        await api(`/api/alert-rules/${rule.id}`, 'PATCH', { threshold: Number(threshold.value),
+          durationSeconds: Number(duration.value), severity: severity.value, enabled: enabled.checked });
+        notice(`${rule.title} 已更新；新配置将在下次采样时生效。`);
+        document.activeElement?.blur(); await refresh();
+      } catch (error) { notice(error.message, true); }
+    });
+    details.append(form); list.append(details);
+  }
+}
+
 function editAsset(asset) {
   editingAsset = asset.id;
   const form = $('asset-form');
@@ -218,6 +264,15 @@ async function showEvent(id) {
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
   target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));
+  if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
+  else if (event.status === 'open') {
+    const acknowledge = cell('button', '确认事件', 'ghost small-button');
+    acknowledge.addEventListener('click', async () => {
+      try { await api(`/api/events/${event.id}/ack`, 'POST'); await showEvent(event.id); await refresh(); }
+      catch (error) { notice(error.message, true); }
+    });
+    target.append(acknowledge);
+  }
   for (const evidence of event.evidence) {
     let text = evidence.payload.error || evidence.payload.sampleId || '';
     if (evidence.kind === 'k8s_state') text = evidence.payload.status === 'ok'
@@ -230,6 +285,8 @@ async function showEvent(id) {
     if (evidence.kind === 'pgbouncer_state') text = evidence.payload.status === 'ok'
       ? `${evidence.payload.pools?.length || 0} 个连接池；等待客户端 ${(evidence.payload.pools || []).reduce((sum, pool) => sum + pool.clientWaiting, 0)}`
       : evidence.payload.reason || evidence.payload.status;
+    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}`;
+    if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
 }

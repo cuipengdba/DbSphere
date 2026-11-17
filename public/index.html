@@ -15,7 +15,7 @@
   </header>
   <main>
     <section id="login-panel" class="panel login">
-      <p class="eyebrow">V0.2</p>
+      <p class="eyebrow">V0.3 开发预览</p>
       <h1>登录运维控制台</h1>
       <p>使用首次启动时配置的管理员密码。</p>
       <form id="login-form">
@@ -27,7 +27,7 @@
     <div id="workspace" hidden>
       <section class="hero">
         <div><p class="eyebrow">PostgreSQL 14–18 · Linux / Kubernetes</p><h1>数据库运行态势</h1><p>从资产、采样和事件进入同一问题的证据时间线。</p></div>
-        <div class="hero-badge">B/S 架构<br><b>V0.2</b></div>
+        <div class="hero-badge">B/S 架构<br><b>V0.3 DEV</b></div>
       </section>
       <div id="notice" role="status" aria-live="polite"></div>
       <section class="summary" aria-label="总览">
@@ -73,6 +73,10 @@
       <div class="grid lower">
         <section class="panel"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
         <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div><div id="event-list" class="list"></div><div id="event-detail"></div></section>
+      </div>
+      <div class="grid lower">
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">ALERTS</p><h2>当前告警</h2></div></div><div id="alert-list" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">RULES</p><h2>告警规则</h2></div></div><div id="rule-list" class="list"></div></section>
       </div>
     </div>
   </main>

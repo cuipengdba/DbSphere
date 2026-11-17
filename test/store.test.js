@@ -18,6 +18,9 @@ test('incident evidence survives restart and rejects an unrelated OOM hypothesis
   store.close();
   store = new Store(dir);
   assert.equal(store.listSamples(asset.id).length, 1);
-  assert.equal(store.getEvent(eventId).evidence.length, 2);
+  const evidence = store.getEvent(eventId).evidence;
+  assert.equal(evidence.filter(item => item.kind === 'collection_error').length, 1);
+  assert.equal(evidence.filter(item => item.kind === 'k8s_state').length, 1);
+  assert.equal(evidence.filter(item => item.kind === 'alert_firing').length, 1);
   store.close();
 });

@@ -56,6 +56,14 @@ jobs:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
           DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-migration-smoke
         run: node scripts/migration-smoke.mjs
+      - name: Test PostgreSQL 18 alert rule persistence
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-alert-rules-smoke.mjs
+      - name: Test PostgreSQL 18 alert event correlation
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-alert-events-smoke.mjs
       - name: Reject a PostgreSQL 17 long-term store
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15437/postgres
