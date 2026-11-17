@@ -66,6 +66,16 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 				add(pvcID, "pvc", name, source, sample.At)
 				*edges = append(*edges, map[string]string{"from": sampleNode, "to": pvcID, "relation": "collected_with"})
 			}
+			for _, row := range list(k8s["services"]) {
+				service := object(row)
+				name := stringValue(service["name"])
+				if name == "" {
+					continue
+				}
+				serviceID := "service:" + stringValue(k8s["namespace"]) + ":" + name
+				add(serviceID, "k8s_service", name, source, sample.At)
+				*edges = append(*edges, map[string]string{"from": serviceID, "to": podNode, "relation": "routes_to"})
+			}
 		}
 	}
 	if sample.Status != "ok" && metrics["version_num"] == nil {

@@ -273,7 +273,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"],
 			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName,
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
-		"node": nil, "resourceMetrics": nil,
+		"node": nil, "services": []any{}, "resourceMetrics": nil,
 		"resourceMetricsError": "metrics.k8s.io adapter is not available in Go"}
 	if nodeName != "" && kubeName.MatchString(nodeName) {
 		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
@@ -316,6 +316,39 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		pvcs = append(pvcs, entry)
 	}
 	result["pvcs"] = pvcs
+	if serviceList, err := k.get(ctx, base+"/services", url.Values{"limit": {"100"}}); err == nil {
+		labels := kubeObject(metadata["labels"])
+		services := []any{}
+		for _, raw := range kubeList(serviceList["items"]) {
+			service := kubeObject(raw)
+			serviceSpec := kubeObject(service["spec"])
+			selector := kubeObject(serviceSpec["selector"])
+			if len(selector) == 0 {
+				continue
+			}
+			matches := true
+			for key, value := range selector {
+				if labels[key] != value {
+					matches = false
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+			ports := []any{}
+			for _, rawPort := range kubeList(serviceSpec["ports"]) {
+				ports = append(ports, kubeObject(rawPort)["port"])
+			}
+			services = append(services, map[string]any{"name": kubeObject(service["metadata"])["name"], "ports": ports})
+		}
+		result["services"] = services
+		if kubeString(kubeObject(serviceList["metadata"])["continue"]) != "" {
+			result["servicesError"] = "Service list truncated at 100 items"
+		}
+	} else {
+		result["servicesError"] = err.Error()
+	}
 	if uid != "" {
 		query := url.Values{"fieldSelector": {"involvedObject.uid=" + uid}, "limit": {"20"}}
 		if events, err := k.get(ctx, base+"/events", query); err == nil {

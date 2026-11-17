@@ -46,7 +46,7 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/namespaces/db/pods/pg-0":
-			fmt.Fprint(w, `{"metadata":{"name":"pg-0","uid":"pod-uid"},"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"pg-data"}}]},"status":{"phase":"Running","containerStatuses":[{"name":"postgres","restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-17T00:00:00Z"}}}]}}`)
+			fmt.Fprint(w, `{"metadata":{"name":"pg-0","uid":"pod-uid","labels":{"app":"postgres"}},"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"pg-data"}}]},"status":{"phase":"Running","containerStatuses":[{"name":"postgres","restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-17T00:00:00Z"}}}]}}`)
 		case "/api/v1/nodes/worker-1":
 			fmt.Fprint(w, `{"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"memory":"2Gi"}}}`)
 		case "/api/v1/namespaces/db/persistentvolumeclaims/pg-data":
@@ -58,6 +58,11 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 				t.Errorf("events were not scoped by Pod UID: %s", r.URL.RawQuery)
 			}
 			fmt.Fprint(w, `{"items":[{"reason":"Unhealthy","message":"readiness probe failed","lastTimestamp":"2026-11-17T00:01:00Z"}]}`)
+		case "/api/v1/namespaces/db/services":
+			if r.URL.Query().Get("limit") != "100" {
+				t.Errorf("Service list was not bounded: %s", r.URL.RawQuery)
+			}
+			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-service"},"spec":{"selector":{"app":"postgres"},"ports":[{"port":5432}]}},{"metadata":{"name":"other"},"spec":{"selector":{"app":"other"}}}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/namespaces/db/pods/pg-0":
 			fmt.Fprint(w, `{"timestamp":"2026-11-17T00:01:00Z","containers":[{"name":"postgres","usage":{"cpu":"20m","memory":"128Mi"}}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/nodes/worker-1":
@@ -82,12 +87,15 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	if kubeObject(kubeList(value["pvcs"])[0])["volume"] == nil {
 		t.Fatal("bound PersistentVolume was not linked to its PVC")
 	}
+	if services := kubeList(value["services"]); len(services) != 1 || kubeObject(services[0])["name"] != "pg-service" {
+		t.Fatalf("Pod labels did not select the matching Service: %+v", services)
+	}
 	resources := kubeObject(value["resourceMetrics"])
 	if resources["source"] != "metrics.k8s.io" || len(kubeList(resources["containers"])) != 1 ||
 		kubeObject(resources["node"])["memory"] != "512Mi" {
 		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
 	}
-	if len(paths) != 7 {
+	if len(paths) != 8 {
 		t.Fatalf("unexpected Kubernetes API calls: %v", paths)
 	}
 }

@@ -36,6 +36,8 @@ Go K8S PVC 详情现继续以只读请求读取绑定的 PV 名称、阶段和�
 
 Go K8S 采集现可选读取 `metrics.k8s.io/v1beta1` 的指定 Pod 容器和 Node CPU/内存；TLS 模拟 API 验证了有指标时显示来源与时间，以及 403 时保留 Pod 健康状态并标记资源指标缺失。真实 kind metrics-server 仍未重新验收。
 
+Go 只读采集现按 Pod 标签关联同 Namespace 中的 Service，并在 B/S 资产页及同一事件 ID 的证据图添加 Service → Pod 关系；列表限制 100 条，权限缺失或截断显式标记。TLS 模拟 API、PG18 实库事件图和本地 Go 测试通过，真实 kind 仍待重新验收。
+
 Go K8S 告警新增 Pod 未就绪、调度失败、近期 OOM、Node 压力五条规则；Pod UID 事件中近期 FailedScheduling/FailedMount/FailedAttachVolume 也可触发。PG18 实库测试确认数据库恢复时，只要同事件的 OOM 告警仍在触发，事件保持开放；两侧都恢复后才在原事件 ID 关闭。缺失 K8S 信号不当作健康，PVC 用量、容器重启增量与通知投递仍是缺口。
 
 Go PgBouncer 适配器已从加密管理员 URL 用简单查询协议只读读取 `SHOW POOLS/STATS`，真实本机 PgBouncer 1.26.1 与 PG14/独立 PG18 联合采样通过，新增的 [PgBouncer CI 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44106034937)已通过。客户端等待规则可触发事件；未映射池或连接错误不会被视作健康。

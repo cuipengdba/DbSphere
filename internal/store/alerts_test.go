@@ -339,7 +339,8 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	now := time.Now().UTC()
 	k8s := map[string]any{"status": "ok", "namespace": "db", "pod": map[string]any{
 		"name": "pg-0", "uid": "pod-uid", "node": "worker-1"},
-		"node": map[string]any{"name": "worker-1"},
+		"node":     map[string]any{"name": "worker-1"},
+		"services": []any{map[string]any{"name": "pg-service", "ports": []any{5432}}},
 		"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
 			"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}}}
 	if _, err := pg.recordCheckAt(context.Background(), asset.ID, map[string]any{"k8s": k8s},
@@ -358,6 +359,7 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	encoded, _ := json.Marshal(detail)
 	if !strings.Contains(string(encoded), "pod_oom_correlated") ||
 		!strings.Contains(string(encoded), "pod:pod-uid") ||
+		!strings.Contains(string(encoded), "routes_to") ||
 		!strings.Contains(string(encoded), "supported_by") {
 		t.Fatalf("PG/Kubernetes evidence missing from one event: %s", encoded)
 	}
