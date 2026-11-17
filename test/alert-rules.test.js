@@ -62,6 +62,9 @@ test('rule signals use real metric shape and same-Pod restart deltas', () => {
   assert.equal(readSignal('k8s.pod_not_ready', result).value, 1);
   assert.equal(readSignal('k8s.restart_delta', result, previous).value, 1);
   assert.equal(readSignal('k8s.oom_recent', result, previous, null, now).value, 1);
+  assert.equal(readSignal('k8s.oom_recent', { k8s: { status: 'ok', pod: { uid: 'pod-1' },
+    containers: [{ terminatedReason: 'OOMKilled', lastTerminatedAt: new Date(now + 60_000).toISOString() }] } },
+  previous, null, now).value, 0);
   assert.equal(readSignal('k8s.node_pressure', result).value, 1);
   assert.equal(readSignal('k8s.pvc_used_percent', result).value, 90);
   assert.equal(readSignal('pgbouncer.waiting_clients', result).value, 2);

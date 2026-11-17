@@ -135,7 +135,8 @@ export function readSignal(metric, result, previous = null, error = null, now = 
         return unavailable('Kubernetes API', 'Pod UID 或容器状态未采集');
       }
       const recent = k8s.containers.some(item => item.terminatedReason === 'OOMKilled' &&
-        item.lastTerminatedAt && Math.abs(now - new Date(item.lastTerminatedAt).getTime()) <= 10 * 60 * 1000);
+        item.lastTerminatedAt && now - new Date(item.lastTerminatedAt).getTime() >= 0 &&
+        now - new Date(item.lastTerminatedAt).getTime() <= 10 * 60 * 1000);
       return observed(recent ? 1 : 0, 'Kubernetes API', { pod: k8s.pod?.name });
     }
     case 'k8s.node_pressure': {

@@ -5,6 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { analyzeEvent, eventSampleIds } from '../src/rca.js';
 import { createApp } from '../src/server.js';
+import { oomCandidate } from '../src/incidents.js';
 
 const eventId = '11111111-1111-4111-8111-111111111111';
 const sampleId = '22222222-2222-4222-8222-222222222222';
@@ -43,6 +44,23 @@ test('alert without diagnostic proof remains unlocated', () => {
   assert.equal(analysis.status, 'unlocated');
   assert.equal(analysis.candidates.length, 0);
   assert.ok(analysis.missingSignals.some(signal => signal.includes('锁链')));
+});
+
+test('a future OOM timestamp cannot explain an earlier connection failure', () => {
+  const result = { k8s: { containers: [{ name: 'postgres', terminatedReason: 'OOMKilled',
+    lastTerminatedAt: new Date(Date.now() + 60_000).toISOString() }] } };
+  assert.equal(oomCandidate(result, 'connection refused', evidenceId, sampleId), null);
+});
+
+test('OOM candidate reports its observed ordering and linked conditions', () => {
+  const event = { ...base, startedAt: '2026-11-17T00:01:00Z', evidence: [{ id: evidenceId,
+    kind: 'root_cause_candidate', observedAt: '2026-11-17T00:01:00Z', payload: {
+      hypothesis: 'Pod OOM may cause PG connection failure', confidence: 'medium',
+      supports: [], causeObservedAt: '2026-11-17T00:00:00Z', limitation: 'Temporal correlation only'
+    } }] };
+  const candidate = analyzeEvent(event, []).candidates[0];
+  assert.equal(candidate.timeOrder.relation, 'before_event');
+  assert.equal(candidate.matchedConditions[0].metric, 'k8s.OOMKilled_before_pg_failure');
 });
 
 test('event graph connects SQL fingerprint, slow log, plan, waits and blocking session with raw sources', () => {

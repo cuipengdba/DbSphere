@@ -139,6 +139,7 @@ export function analyzeEvent(event, samples, context = {}) {
     candidates.push({ code: 'pod_oom_correlated', title: item.payload.hypothesis,
       confidence: item.payload.confidence, supports: item.payload.supports ?? [],
       against: [], missing: ['容器日志或探针与故障先后顺序未验证'],
+      causeObservedAt: item.payload.causeObservedAt ?? null,
       limitation: item.payload.limitation, state: 'hypothesis' });
   }
 
@@ -281,6 +282,35 @@ export function analyzeEvent(event, samples, context = {}) {
       actor: item.payload.actor, reason: item.payload.reason, at: item.observedAt, evidenceId: item.id }]));
   for (const candidate of uniqueCandidates) {
     candidate.review = reviews.get(candidate.code) ?? null;
+    candidate.matchedConditions = candidate.supports.filter(support => !support.includes(':'))
+      .map(support => evidence.find(item => item.id === support))
+      .filter(item => item?.kind?.startsWith('alert_') && item.payload?.metric)
+      .map(item => ({ metric: item.payload.metric, observed: item.payload.value,
+        operator: item.payload.operator, threshold: item.payload.threshold,
+        at: item.observedAt, evidenceId: item.id }));
+    if (candidate.code === 'pod_oom_correlated' && candidate.causeObservedAt) candidate.matchedConditions.push({
+      metric: 'k8s.OOMKilled_before_pg_failure', observed: candidate.causeObservedAt,
+      operator: '<=', threshold: event.startedAt, at: candidate.causeObservedAt });
+    if (candidate.code === 'sql_regression') candidate.matchedConditions.push({
+      metric: 'sql.average_exec_ms_ratio', observed: candidate.detail.ratio,
+      operator: '>=', threshold: 2, at: nodes.find(node =>
+        node.id === candidate.supports[0])?.at ?? null });
+    if (candidate.code === 'plan_change') candidate.matchedConditions.push({
+      metric: 'sql.plan_shape_changed', observed: true, operator: '=', threshold: true,
+      at: nodes.find(node => node.id === candidate.supports[1])?.at ?? null });
+    const supportTimes = candidate.supports.map(support => {
+      const id = /^(sample|plan|slow_log|sql):/.test(support) ? support : `evidence:${support}`;
+      return Date.parse(nodes.find(node => node.id === id)?.at);
+    }).filter(Number.isFinite);
+    if (candidate.causeObservedAt && Number.isFinite(Date.parse(candidate.causeObservedAt))) {
+      supportTimes.push(Date.parse(candidate.causeObservedAt));
+    }
+    const first = supportTimes.length ? Math.min(...supportTimes) : null;
+    candidate.timeOrder = { firstObservedAt: first === null ? null : new Date(first).toISOString(),
+      eventStartedAt: event.startedAt,
+      relation: first === null ? 'unknown' : first < Date.parse(event.startedAt)
+        ? 'before_event' : first <= Date.parse(event.startedAt) + 5 * 60_000
+          ? 'same_window' : 'after_event' };
     const candidateNode = `candidate:${candidate.code}`;
     addNode(candidateNode, 'candidate', candidate.title, null, `/api/events/${event.id}`);
     edges.push({ from: eventNode, to: candidateNode, relation: 'hypothesizes' });

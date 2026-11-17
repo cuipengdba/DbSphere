@@ -618,6 +618,11 @@ async function showEvent(id) {
   if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));
   for (const candidate of analysis.candidates) {
     diagnosis.append(cell('p', `${candidate.title} · 置信级别 ${candidate.confidence} · 证据 ${candidate.supports.join('、')}。${candidate.limitation}`, 'warning'));
+    if (candidate.matchedConditions?.length) diagnosis.append(cell('small', `匹配条件：${candidate.matchedConditions.map(item =>
+      `${item.metric}：${item.observed ?? '未知'} ${item.operator ?? ''} ${item.threshold ?? ''}`).join('；')}`));
+    if (candidate.against?.length) diagnosis.append(cell('small', `反证：${candidate.against.join('；')}`));
+    if (candidate.timeOrder) diagnosis.append(cell('small', `时间顺序：${candidate.timeOrder.firstObservedAt
+      ? formatTime(candidate.timeOrder.firstObservedAt) : '未知'} · ${candidate.timeOrder.relation} · 事件开始 ${formatTime(candidate.timeOrder.eventStartedAt)}`));
     if (candidate.missing.length) diagnosis.append(cell('small', `缺失：${candidate.missing.join('；')}`));
     if (candidate.review) diagnosis.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));
     for (const [decision, label] of [['confirmed', '确认候选'], ['rejected', '驳回候选']]) {
