@@ -20,7 +20,7 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-      - name: Start PostgreSQL and enable pg_stat_statements
+      - name: Start PostgreSQL and monitoring role
         run: |
           docker run -d --rm --name dbsphere-sql-pg -p 15432:5432 \
             -e POSTGRES_PASSWORD=dbsphere-root-test postgres:${{ matrix.pg }}-bookworm \
@@ -31,7 +31,17 @@ jobs:
           done
           docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-sql-pg \
             psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor; CREATE EXTENSION pg_stat_statements;"
+            -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor;"
+      - name: Degrade gracefully without extension
+        env:
+          DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
+          DBSPHERE_SQL_EXPECTED: not_configured
+        run: node scripts/pg-sql-performance-smoke.mjs
+      - name: Enable pg_stat_statements
+        run: |
+          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-sql-pg \
+            psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION pg_stat_statements;'
       - name: Collect real Top SQL counters
         env:
           DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}

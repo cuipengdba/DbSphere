@@ -20,6 +20,7 @@ assert.equal(metrics.privileged_role, false);
 assert.ok(metrics.connections >= 1);
 assert.ok(metrics.database_bytes > 0);
 assert.ok(metrics.replicas !== null);
+assert.equal(metrics.sqlPerformance.status, 'not_configured');
 for (const name of ['activity', 'transactions', 'locks', 'lockChain', 'database', 'wal', 'archiver', 'checkpoints', 'vacuum', 'tables', 'slots', 'freeze', 'slotDetails', 'settings']) {
   assert.equal(metrics.diagnostics[name].status, 'ok', `${name}: ${metrics.diagnostics[name].reason}`);
 }

@@ -13,16 +13,21 @@ try {
     database_name: 'postgres', username: 'dbsphere_monitor', ssl_mode: 'disable' },
   'dbsphere-monitor-test');
   assert.equal(Math.floor(metrics.version_num / 10000), major);
-  assert.equal(metrics.sqlPerformance.status, 'ok', JSON.stringify(metrics.sqlPerformance));
-  assert.ok(metrics.sqlPerformance.statements.length > 0);
-  assert.ok(metrics.sqlPerformance.statements.every(row => row.queryId &&
-    Number.isFinite(row.totalExecMs) && Number.isFinite(row.calls)));
-  assert.ok(metrics.sqlPerformance.resetAt);
-  assert.equal(JSON.stringify(metrics.sqlPerformance).includes('SELECT'), false,
-    'The persistent SQL snapshot must not contain query text');
-  const explain = (await client.query('EXPLAIN (FORMAT JSON) SELECT 1')).rows[0]['QUERY PLAN'];
-  const plan = sanitizePlan(explain, metrics.sqlPerformance.statements[0].queryId);
-  assert.ok(plan.summary.nodeCount > 0);
-  assert.equal(JSON.stringify(plan).includes('SELECT'), false);
-  console.log(`PG${major} pg_stat_statements collection passed`);
+  if (process.env.DBSPHERE_SQL_EXPECTED === 'not_configured') {
+    assert.equal(metrics.sqlPerformance.status, 'not_configured');
+    console.log(`PG${major} without pg_stat_statements degrades gracefully`);
+  } else {
+    assert.equal(metrics.sqlPerformance.status, 'ok', JSON.stringify(metrics.sqlPerformance));
+    assert.ok(metrics.sqlPerformance.statements.length > 0);
+    assert.ok(metrics.sqlPerformance.statements.every(row => row.queryId &&
+      Number.isFinite(row.totalExecMs) && Number.isFinite(row.calls)));
+    assert.ok(metrics.sqlPerformance.resetAt);
+    assert.equal(JSON.stringify(metrics.sqlPerformance).includes('SELECT'), false,
+      'The persistent SQL snapshot must not contain query text');
+    const explain = (await client.query('EXPLAIN (FORMAT JSON) SELECT 1')).rows[0]['QUERY PLAN'];
+    const plan = sanitizePlan(explain, metrics.sqlPerformance.statements[0].queryId);
+    assert.ok(plan.summary.nodeCount > 0);
+    assert.equal(JSON.stringify(plan).includes('SELECT'), false);
+    console.log(`PG${major} pg_stat_statements collection passed`);
+  }
 } finally { await client.end(); }

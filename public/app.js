@@ -311,6 +311,7 @@ function renderSqlPerformance(target, performance) {
   const heading = cell('h3', 'Top SQL 指纹'); heading.id = 'sql-performance'; target.append(heading);
   if (performance.status !== 'ok') {
     target.append(cell('p', `SQL 性能未采集：${performance.reason || performance.status}。启用 pg_stat_statements 后自动出现聚合指标。`, 'warning'));
+    renderRelatedEventButtons(target, performance.eventIds);
     return;
   }
   target.append(cell('p', `来源 pg_stat_statements · ${formatTime(performance.collectedAt)} · 样本 ${performance.sampleId} · ${performance.comparison === 'interval' ? '相邻采样增量' : '扩展累计值（无可比样本）'}`, 'evidence'));
@@ -336,14 +337,17 @@ function renderSqlPerformance(target, performance) {
     list.append(entry);
   }
   target.append(list);
-  if (performance.eventIds.length) {
-    const events = document.createElement('div'); events.className = 'actions';
-    for (const id of performance.eventIds) {
-      const link = cell('button', `关联开放事件 ${id.slice(0, 8)}`, 'ghost small-button');
-      link.addEventListener('click', () => showEvent(id)); events.append(link);
-    }
-    target.append(events);
+  renderRelatedEventButtons(target, performance.eventIds);
+}
+
+function renderRelatedEventButtons(target, eventIds = []) {
+  if (!eventIds.length) return;
+  const events = document.createElement('div'); events.className = 'actions';
+  for (const id of eventIds) {
+    const link = cell('button', `关联开放事件 ${id.slice(0, 8)}`, 'ghost small-button');
+    link.addEventListener('click', () => showEvent(id)); events.append(link);
   }
+  target.append(events);
 }
 
 function renderSlowLogs(target, asset, entries) {
