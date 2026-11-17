@@ -77,6 +77,16 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   let notifier;
   try { notifier = createNotifier(store); }
   catch (error) { await store.close(); throw error; }
+  const retentionDays = process.env.DBSPHERE_RETENTION_DAYS ? Number(process.env.DBSPHERE_RETENTION_DAYS) : null;
+  if (retentionDays !== null && (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650)) {
+    await store.close(); throw new Error('DBSPHERE_RETENTION_DAYS must be between 1 and 3650');
+  }
+  const eventRetentionDays = process.env.DBSPHERE_EVENT_RETENTION_DAYS
+    ? Number(process.env.DBSPHERE_EVENT_RETENTION_DAYS) : null;
+  if (eventRetentionDays !== null && (!Number.isInteger(eventRetentionDays) ||
+    eventRetentionDays < 1 || eventRetentionDays > 3650)) {
+    await store.close(); throw new Error('DBSPHERE_EVENT_RETENTION_DAYS must be between 1 and 3650');
+  }
   const attempts = new Map();
   const activeCollections = new Set();
 
@@ -187,6 +197,11 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
       if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
         if (req.method === 'GET' && path === '/api/notifications') return send(res, 200, { notifications: await store.listNotificationHistory() });
+        if (req.method === 'GET' && path === '/api/storage') {
+          return send(res, 200, { storage: store.kind === 'postgresql18'
+            ? { ...await store.storageStats(retentionDays), eventRetentionDays }
+            : { mode: 'sqlite-preview' } });
+        }
         const notificationRetry = path.match(/^\/api\/notifications\/([0-9a-f-]{36})\/retry$/);
         if (req.method === 'POST' && notificationRetry) {
           const retried = await store.retryNotification(notificationRetry[1]);
@@ -221,7 +236,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         encrypt(key, input.password), input.poolerUrl ? encrypt(key, input.poolerUrl) : null);
         return send(res, 201, { asset });
       }
-      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|check))?$/);
+      const assetMatch = path.match(/^\/api\/assets\/([0-9a-f-]{36})(?:\/(samples|series|check))?$/);
       if (assetMatch) {
         const [, id, action] = assetMatch;
         if (!await store.getAsset(id)) return send(res, 404, { error: 'Asset not found' });
@@ -237,6 +252,21 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         }
         if (req.method === 'DELETE' && !action) { await store.deleteAsset(id); return send(res, 200, { ok: true }); }
         if (req.method === 'GET' && action === 'samples') return send(res, 200, { samples: await store.listSamples(id) });
+        if (req.method === 'GET' && action === 'series') {
+          if (store.kind !== 'postgresql18') return send(res, 501, { error: 'Series requires PostgreSQL 18 store' });
+          const fromValue = requestUrl.searchParams.get('from');
+          const toValue = requestUrl.searchParams.get('to');
+          const from = new Date(fromValue);
+          const to = new Date(toValue);
+          const bucketHours = Number(requestUrl.searchParams.get('bucketHours') || 1);
+          if (!fromValue || !toValue || !Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) ||
+            to <= from || to - from > 90 * 86400000 ||
+            !Number.isInteger(bucketHours) || bucketHours < 1 || bucketHours > 24) {
+            return send(res, 400, { error: 'Invalid series range or bucket' });
+          }
+          return send(res, 200, { series: await store.aggregateSamples(id, from.toISOString(),
+            to.toISOString(), bucketHours) });
+        }
         if (req.method === 'POST' && action === 'check') return send(res, 200, { result: await collectAsset(id) });
       }
       if (req.method === 'GET' && path === '/api/events') return send(res, 200, { events: await store.listEvents() });
@@ -259,6 +289,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   });
 
   let timer;
+  let retentionTimer;
   function startScheduler() {
     const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60) * 1000;
     const escalateAfter = Number(process.env.DBSPHERE_ESCALATE_AFTER_MINUTES || 15);
@@ -275,8 +306,17 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     })().catch(e => console.error('Scheduler failed:', e)); }, interval);
     timer.unref();
     void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
+    if (store.kind === 'postgresql18' && (retentionDays !== null || eventRetentionDays !== null)) {
+      const prune = () => void (async () => {
+        if (retentionDays !== null) await store.pruneSamples(retentionDays);
+        if (eventRetentionDays !== null) await store.pruneResolvedEvents(eventRetentionDays);
+      })().catch(e => console.error('Retention sweep failed:', e.message));
+      prune();
+      retentionTimer = setInterval(prune, 24 * 3600 * 1000);
+      retentionTimer.unref();
+    }
   }
-  function stop() { clearInterval(timer); server.close(); return store.close(); }
+  function stop() { clearInterval(timer); clearInterval(retentionTimer); server.close(); return store.close(); }
   return { server, store, notifier, collectAsset, startScheduler, stop };
 }
 

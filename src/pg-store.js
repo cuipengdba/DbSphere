@@ -7,6 +7,35 @@ import { nextAlertState } from './alert-state.js';
 
 const { Pool } = pg;
 
+function timeMonth(value, table) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error('Invalid sample partition timestamp');
+  if (date.getUTCFullYear() < 1 || date.getUTCFullYear() > 9999) {
+    throw new Error('Sample partition timestamp is outside supported years');
+  }
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+  const name = `${table}_${start.getUTCFullYear()}${String(start.getUTCMonth() + 1).padStart(2, '0')}`;
+  return { name, start: start.toISOString(), end: end.toISOString() };
+}
+
+const sampleMonth = value => timeMonth(value, 'samples');
+const eventMonth = value => timeMonth(value, 'events');
+
+export async function ensureSamplePartition(client, timestamp) {
+  const month = sampleMonth(timestamp);
+  await client.query(`CREATE TABLE IF NOT EXISTS ${month.name} PARTITION OF samples
+    FOR VALUES FROM ('${month.start}') TO ('${month.end}')`);
+  return month.name;
+}
+
+export async function ensureEventPartition(client, timestamp) {
+  const month = eventMonth(timestamp);
+  await client.query(`CREATE TABLE IF NOT EXISTS ${month.name} PARTITION OF events
+    FOR VALUES FROM ('${month.start}') TO ('${month.end}')`);
+  return month.name;
+}
+
 const schema = `
   CREATE TABLE IF NOT EXISTS dbsphere_schema_migrations (
     version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()
@@ -25,24 +54,35 @@ const schema = `
   ALTER TABLE assets ADD COLUMN IF NOT EXISTS linux_exporter_port integer;
   ALTER TABLE assets ADD COLUMN IF NOT EXISTS pooler_url_enc text;
   CREATE TABLE IF NOT EXISTS samples (
-    id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    id uuid NOT NULL, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     collected_at timestamptz NOT NULL, status text NOT NULL,
-    metrics_json jsonb, error text
-  );
+    metrics_json jsonb, error text, PRIMARY KEY(id,collected_at)
+  ) PARTITION BY RANGE (collected_at);
   CREATE INDEX IF NOT EXISTS samples_asset_time ON samples(asset_id, collected_at DESC);
-  CREATE TABLE IF NOT EXISTS events (
+  CREATE TABLE IF NOT EXISTS event_keys (
     id uuid PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    kind text NOT NULL, title text NOT NULL, status text NOT NULL,
-    started_at timestamptz NOT NULL, ended_at timestamptz, event_group text, acknowledged_at timestamptz
+    started_at timestamptz NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS events (
+    id uuid NOT NULL REFERENCES event_keys(id) ON DELETE CASCADE,
+    asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    kind text NOT NULL, title text NOT NULL, status text NOT NULL,
+    started_at timestamptz NOT NULL, ended_at timestamptz, event_group text, acknowledged_at timestamptz,
+    PRIMARY KEY(id,started_at)
+  ) PARTITION BY RANGE (started_at);
   ALTER TABLE events ADD COLUMN IF NOT EXISTS event_group text;
   ALTER TABLE events ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
   UPDATE events SET event_group='telemetry' WHERE event_group IS NULL;
   CREATE INDEX IF NOT EXISTS events_asset_status ON events(asset_id, status);
   DROP INDEX IF EXISTS events_one_open_kind;
-  CREATE UNIQUE INDEX IF NOT EXISTS events_one_open_group ON events(asset_id,event_group) WHERE status='open';
+  DROP INDEX IF EXISTS events_one_open_group;
+  CREATE TABLE IF NOT EXISTS open_event_groups (
+    asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    event_group text NOT NULL, event_id uuid NOT NULL REFERENCES event_keys(id) ON DELETE CASCADE,
+    PRIMARY KEY(asset_id,event_group)
+  );
   CREATE TABLE IF NOT EXISTS evidence (
-    id uuid PRIMARY KEY, event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    id uuid PRIMARY KEY, event_id uuid NOT NULL REFERENCES event_keys(id) ON DELETE CASCADE,
     kind text NOT NULL, observed_at timestamptz NOT NULL, payload_json jsonb NOT NULL
   );
   CREATE INDEX IF NOT EXISTS evidence_event_time ON evidence(event_id, observed_at);
@@ -83,6 +123,56 @@ export class PgStore {
         await client.query('BEGIN');
         await client.query('SELECT pg_advisory_xact_lock(1742026)');
         await client.query(schema);
+        const sampleKind = (await client.query(`SELECT c.relkind FROM pg_class c
+          WHERE c.oid='samples'::regclass`)).rows[0].relkind;
+        if (sampleKind === 'r') {
+          await client.query('ALTER TABLE samples RENAME TO samples_legacy');
+          await client.query('DROP INDEX IF EXISTS samples_asset_time');
+          await client.query(`CREATE TABLE samples (
+            id uuid NOT NULL, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+            collected_at timestamptz NOT NULL, status text NOT NULL,
+            metrics_json jsonb, error text, PRIMARY KEY(id,collected_at)
+          ) PARTITION BY RANGE (collected_at)`);
+          await client.query('CREATE INDEX samples_asset_time ON samples(asset_id,collected_at DESC)');
+          const months = (await client.query(`SELECT DISTINCT
+            date_trunc('month',collected_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS month
+            FROM samples_legacy`)).rows;
+          for (const row of months) await ensureSamplePartition(client, row.month);
+          await client.query('INSERT INTO samples SELECT * FROM samples_legacy');
+          await client.query('DROP TABLE samples_legacy');
+        }
+        const eventKind = (await client.query(`SELECT c.relkind FROM pg_class c
+          WHERE c.oid='events'::regclass`)).rows[0].relkind;
+        if (eventKind === 'r') {
+          await client.query(`INSERT INTO event_keys(id,asset_id,started_at)
+            SELECT id,asset_id,started_at FROM events ON CONFLICT(id) DO NOTHING`);
+          await client.query('ALTER TABLE evidence DROP CONSTRAINT IF EXISTS evidence_event_id_fkey');
+          await client.query('ALTER TABLE events RENAME TO events_legacy');
+          await client.query('DROP INDEX IF EXISTS events_asset_status');
+          await client.query(`CREATE TABLE events (
+            id uuid NOT NULL REFERENCES event_keys(id) ON DELETE CASCADE,
+            asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+            kind text NOT NULL, title text NOT NULL, status text NOT NULL,
+            started_at timestamptz NOT NULL, ended_at timestamptz,
+            event_group text, acknowledged_at timestamptz,
+            PRIMARY KEY(id,started_at)
+          ) PARTITION BY RANGE (started_at)`);
+          await client.query('CREATE INDEX events_asset_status ON events(asset_id,status)');
+          const months = (await client.query(`SELECT DISTINCT
+            date_trunc('month',started_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS month
+            FROM events_legacy`)).rows;
+          for (const row of months) await ensureEventPartition(client, row.month);
+          await client.query('INSERT INTO events SELECT * FROM events_legacy');
+          await client.query(`INSERT INTO open_event_groups(asset_id,event_group,event_id)
+            SELECT asset_id,event_group,id FROM events WHERE status='open'`);
+          await client.query(`ALTER TABLE evidence ADD CONSTRAINT evidence_event_id_fkey
+            FOREIGN KEY(event_id) REFERENCES event_keys(id) ON DELETE CASCADE`);
+          await client.query('DROP TABLE events_legacy');
+        }
+        await ensureSamplePartition(client, new Date());
+        await ensureSamplePartition(client, new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)));
+        await ensureEventPartition(client, new Date());
+        await ensureEventPartition(client, new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)));
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING');
         for (const rule of DEFAULT_RULES) await client.query(`INSERT INTO alert_rules(id,definition_json)
@@ -92,6 +182,8 @@ export class PgStore {
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(5) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(6) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(7) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(8) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(9) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -99,7 +191,112 @@ export class PgStore {
     } catch (error) { await pool.end(); throw error; }
   }
 
-  constructor(pool) { this.pool = pool; this.kind = 'postgresql18'; }
+  constructor(pool) {
+    this.pool = pool; this.kind = 'postgresql18';
+    this.samplePartitions = new Set([sampleMonth(new Date()).name,
+      sampleMonth(new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1))).name]);
+    this.eventPartitions = new Set([eventMonth(new Date()).name,
+      eventMonth(new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1))).name]);
+  }
+
+  async ensureSampleMonth(timestamp) {
+    const month = sampleMonth(timestamp);
+    if (this.samplePartitions.has(month.name)) return;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(1742026)');
+      await ensureSamplePartition(client, timestamp);
+      await client.query('COMMIT');
+      this.samplePartitions.add(month.name);
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async ensureEventMonth(timestamp) {
+    const month = eventMonth(timestamp);
+    if (this.eventPartitions.has(month.name)) return;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(1742026)');
+      await ensureEventPartition(client, timestamp);
+      await client.query('COMMIT');
+      this.eventPartitions.add(month.name);
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+
+  async storageStats(retentionDays = 90) {
+    const summary = (await this.pool.query(`SELECT count(*)::bigint AS sample_count,
+      min(collected_at) AS oldest_sample_at,max(collected_at) AS newest_sample_at,
+      count(*) FILTER (WHERE collected_at>=now()-interval '7 days')::bigint AS recent_samples
+      FROM samples`)).rows[0];
+    const sizes = (await this.pool.query(`SELECT pg_database_size(current_database()) AS database_bytes,
+      (SELECT coalesce(sum(pg_total_relation_size(inhrelid)),0) FROM pg_inherits
+        WHERE inhparent='samples'::regclass) AS sample_partition_bytes,
+      (SELECT coalesce(sum(pg_total_relation_size(inhrelid)),0) FROM pg_inherits
+        WHERE inhparent='events'::regclass) AS event_partition_bytes`)).rows[0];
+    const eventSummary = (await this.pool.query(`SELECT count(*)::bigint AS event_count,
+      count(*) FILTER (WHERE status='open')::bigint AS open_event_count FROM events`)).rows[0];
+    const sampleCount = Number(summary.sample_count);
+    const samplePartitionBytes = Number(sizes.sample_partition_bytes);
+    const estimatedSamplesPerDay = Math.round(Number(summary.recent_samples) / 7);
+    return { retentionDays, sampleCount,
+      oldestSampleAt: summary.oldest_sample_at, newestSampleAt: summary.newest_sample_at,
+      databaseBytes: Number(sizes.database_bytes),
+      samplePartitionBytes,
+      eventPartitionBytes: Number(sizes.event_partition_bytes),
+      eventCount: Number(eventSummary.event_count), openEventCount: Number(eventSummary.open_event_count),
+      estimatedSamplesPerDay,
+      estimatedSampleBytesPerDay: sampleCount ? Math.round(samplePartitionBytes / sampleCount * estimatedSamplesPerDay) : 0 };
+  }
+
+  async aggregateSamples(assetId, from, to, bucketHours = 1) {
+    if (!Number.isInteger(bucketHours) || bucketHours < 1 || bucketHours > 24) throw new Error('Invalid aggregation bucket');
+    const rows = (await this.pool.query(`SELECT date_bin(make_interval(hours=>$4),collected_at,
+      '2000-01-01T00:00:00Z'::timestamptz) AS bucket,
+      count(*)::int AS samples,count(*) FILTER (WHERE status='error')::int AS errors,
+      round(avg(CASE WHEN jsonb_typeof(metrics_json->'connections')='number'
+        THEN (metrics_json->>'connections')::numeric END),1) AS average_connections
+      FROM samples WHERE asset_id=$1 AND collected_at >= $2 AND collected_at < $3
+      GROUP BY 1 ORDER BY 1`, [assetId, from, to, bucketHours])).rows;
+    return rows.map(row => ({ bucket: row.bucket, samples: row.samples,
+      errors: row.errors, averageConnections: row.average_connections == null
+        ? null : Number(row.average_connections) }));
+  }
+
+  async pruneSamples(retentionDays = 90, maxRows = 10000) {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650 ||
+      !Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('Invalid retention policy');
+    const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+    const removed = await this.pool.query(`WITH protected AS (
+      SELECT DISTINCT e.payload_json->>'sampleId' AS sample_id FROM evidence e
+      JOIN events v ON v.id=e.event_id
+      WHERE v.status='open' AND e.payload_json ? 'sampleId'
+    ), doomed AS (
+      SELECT id,collected_at FROM samples candidate
+      WHERE collected_at<$1 AND NOT EXISTS (SELECT 1 FROM protected
+        WHERE protected.sample_id=candidate.id::text)
+      ORDER BY collected_at LIMIT $2
+    ) DELETE FROM samples s USING doomed d
+      WHERE s.id=d.id AND s.collected_at=d.collected_at`, [cutoff, maxRows]);
+    return { cutoff, removed: removed.rowCount, moreMayRemain: removed.rowCount === maxRows };
+  }
+
+  async pruneResolvedEvents(retentionDays, maxRows = 1000) {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650 ||
+      !Number.isInteger(maxRows) || maxRows < 1 || maxRows > 10000) throw new Error('Invalid event retention policy');
+    const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+    const removed = await this.pool.query(`WITH doomed AS (
+      SELECT e.id FROM events e WHERE e.status='resolved' AND e.ended_at<$1
+        AND NOT EXISTS (SELECT 1 FROM notification_outbox n
+          JOIN evidence ev ON ev.id=n.evidence_id
+          WHERE ev.event_id=e.id AND n.status IN ('pending','failed'))
+      ORDER BY e.ended_at LIMIT $2
+    ) DELETE FROM event_keys k USING doomed d WHERE k.id=d.id`, [cutoff, maxRows]);
+    return { cutoff, removed: removed.rowCount, moreMayRemain: removed.rowCount === maxRows };
+  }
 
   async health() { await this.pool.query('SELECT 1'); }
 
@@ -303,8 +500,11 @@ export class PgStore {
           AND status='open' FOR UPDATE`, [assetId, rule.group])).rows[0]?.id;
         if (!eventId) {
           eventId = randomUUID();
+          await client.query('INSERT INTO event_keys(id,asset_id,started_at) VALUES($1,$2,$3)', [eventId, assetId, now]);
           await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
             VALUES($1,$2,'alert_incident',$3,'open',$4,$5)`, [eventId, assetId, rule.title, now, rule.group]);
+          await client.query(`INSERT INTO open_event_groups(asset_id,event_group,event_id)
+            VALUES($1,$2,$3)`, [assetId, rule.group, eventId]);
         }
         next.eventId = eventId;
       }
@@ -336,6 +536,7 @@ export class PgStore {
   }
 
   async checkStale(assetId, now = new Date().toISOString()) {
+    await this.ensureEventMonth(now);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -358,11 +559,14 @@ export class PgStore {
     for (const event of open) {
       if ((error && event.event_group === currentGroup) || firing.has(event.id)) continue;
       await client.query("UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2", [now, event.id]);
+      await client.query('DELETE FROM open_event_groups WHERE event_id=$1', [event.id]);
     }
   }
 
   async recordResult(assetId, result, error = null) {
     const now = new Date().toISOString();
+    await this.ensureSampleMonth(now);
+    await this.ensureEventMonth(now);
     const status = error ? 'error' : 'ok';
     const sampleId = randomUUID();
     const client = await this.pool.connect();
@@ -381,9 +585,14 @@ export class PgStore {
         const open = (await client.query(`SELECT id FROM events WHERE asset_id=$1 AND event_group=$2
           AND status='open' FOR UPDATE`, [assetId, group])).rows[0];
         const eventId = open?.id ?? randomUUID();
-        if (!open) await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
-          VALUES($1,$2,'collection_failure',$3,'open',$4,$5)`, [eventId, assetId,
-          group === 'availability' ? 'PostgreSQL 无法连接' : 'PostgreSQL 采集失败', now, group]);
+        if (!open) {
+          await client.query('INSERT INTO event_keys(id,asset_id,started_at) VALUES($1,$2,$3)', [eventId, assetId, now]);
+          await client.query(`INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+            VALUES($1,$2,'collection_failure',$3,'open',$4,$5)`, [eventId, assetId,
+            group === 'availability' ? 'PostgreSQL 无法连接' : 'PostgreSQL 采集失败', now, group]);
+          await client.query(`INSERT INTO open_event_groups(asset_id,event_group,event_id)
+            VALUES($1,$2,$3)`, [assetId, group, eventId]);
+        }
         const collectionEvidenceId = randomUUID();
         await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
           VALUES($1,$2,'collection_error',$3,$4)`, [collectionEvidenceId, eventId, now,

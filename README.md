@@ -27,11 +27,12 @@ DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维�
 - [V0.2.0 发行说明](docs/RELEASE_NOTES_V0.2.md)
 - [V0.2 一键部署与 PG18 存储](docs/DEPLOYMENT_V0.2.md)
 - [V0.3 告警通知配置（开发中）](docs/NOTIFICATIONS_V0.3.md)
+- [V0.3 PG18 分区与保留策略（开发中）](docs/STORAGE_V0.3.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
 ## 当前可用范围
 
-已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。主分支的 V0.3 **开发代码**已加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗及持久化 Webhook/邮件通知；V0.3 尚未发布。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
+已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。主分支的 V0.3 **开发代码**已加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗、持久化 Webhook/邮件通知和 PG18 月度采样/事件分区；V0.3 尚未发布。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
 
 ### 本机开发启动
 

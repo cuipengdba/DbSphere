@@ -1,6 +1,7 @@
 let csrf = null;
 let selectedAsset = null;
 let editingAsset = null;
+let pg18Store = false;
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
 
@@ -28,9 +29,9 @@ function cell(tag, text, cls) {
 }
 
 async function refresh() {
-  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }] = await Promise.all([
+  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage }] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
-    api('/api/silences'), api('/api/notifications')
+    api('/api/silences'), api('/api/notifications'), api('/api/storage')
   ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
@@ -41,6 +42,8 @@ async function refresh() {
   renderSilenceOptions(assets, rules);
   renderSilences(silences, assets, rules);
   renderNotifications(notifications);
+  pg18Store = storage.mode !== 'sqlite-preview';
+  renderStorage(storage);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
 }
@@ -80,6 +83,13 @@ async function showAsset(id) {
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
   detail.append(cell('p', `采集状态：${asset.lastStatus} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
+  if (pg18Store) {
+    const to = new Date(); const from = new Date(to.getTime() - 24 * 3600 * 1000);
+    const { series } = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=1`);
+    detail.append(cell('h3', '近 24 小时采样趋势'));
+    if (!series.length) detail.append(cell('p', '暂无趋势数据。', 'empty'));
+    for (const point of series) detail.append(cell('p', `${formatTime(point.bucket)} · ${point.samples} 次采样 · ${point.errors} 次失败 · 平均连接 ${point.averageConnections ?? '未采集'}`, 'evidence'));
+  }
   const layerNav = document.createElement('div'); layerNav.className = 'actions layer-nav';
   for (const [label, section] of [
     ['PostgreSQL 诊断', 'pg-diagnostics'],
@@ -265,6 +275,31 @@ function renderNotifications(notifications) {
     }
     list.append(row);
   }
+}
+
+function renderStorage(storage) {
+  const target = $('storage-detail'); target.replaceChildren();
+  if (storage.mode === 'sqlite-preview') {
+    target.append(cell('p', '当前是 SQLite 预览模式；正式长期存储需独立 PostgreSQL 18。', 'warning'));
+    return;
+  }
+  const mib = value => `${(value / 1024 / 1024).toFixed(1)} MiB`;
+  const grid = document.createElement('div'); grid.className = 'metric-grid';
+  for (const [label, value] of [
+    ['PG18 数据库占用', mib(storage.databaseBytes)],
+    ['采样分区占用', mib(storage.samplePartitionBytes)],
+    ['事件分区占用', mib(storage.eventPartitionBytes)],
+    ['采样总数', storage.sampleCount],
+    ['事件数 / 未结', `${storage.eventCount} / ${storage.openEventCount}`],
+    ['预计每日采样', storage.estimatedSamplesPerDay],
+    ['预计每日采样增长', `${mib(storage.estimatedSampleBytesPerDay)}（粗估）`],
+    ['采样保留期', storage.retentionDays ? `${storage.retentionDays} 天` : '未启用自动清理'],
+    ['已结事件保留期', storage.eventRetentionDays ? `${storage.eventRetentionDays} 天` : '永久保留'],
+    ['最早采样', formatTime(storage.oldestSampleAt)]
+  ]) {
+    const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
+  }
+  target.append(grid);
 }
 
 function renderRules(rules) {

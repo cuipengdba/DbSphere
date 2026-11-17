@@ -41,6 +41,7 @@ source.close();
 
 const databaseName = `dbsphere_migration_${process.pid}`;
 const rootUrl = new URL(process.env.DBSPHERE_DATABASE_URL);
+const adminUrl = rootUrl.toString();
 const admin = new pg.Client({ connectionString: rootUrl.toString() });
 await admin.connect();
 try { await admin.query(`CREATE DATABASE ${databaseName}`); }
@@ -77,4 +78,10 @@ try {
   assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).state.mutedBy, sourceSilence.id);
   assert.equal((await target.listDueNotifications()).length, sourceQueued);
   console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, states, silences and notifications passed');
-} finally { await target.close(); }
+} finally {
+  await target.close();
+  const cleanup = new pg.Client({ connectionString: adminUrl });
+  await cleanup.connect();
+  try { await cleanup.query(`DROP DATABASE ${databaseName}`); }
+  finally { await cleanup.end(); }
+}

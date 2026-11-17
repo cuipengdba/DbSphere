@@ -72,6 +72,14 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: node scripts/pg-alert-notifications-smoke.mjs
+      - name: Test PostgreSQL 18 sample partitions and retention
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-storage-retention-smoke.mjs
+      - name: Upgrade a pre-partition PostgreSQL 18 sample table
+        env:
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+        run: node scripts/pg-sample-upgrade-smoke.mjs
       - name: Reject a PostgreSQL 17 long-term store
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15437/postgres
