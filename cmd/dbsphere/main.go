@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,10 +18,39 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := probeReady(ctx); err != nil {
+			log.Error("DbSphere readiness probe failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(log); err != nil {
 		log.Error("DbSphere Go startup failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func probeReady(ctx context.Context) error {
+	port := os.Getenv("DBSPHERE_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/readyz", nil)
+	if err != nil {
+		return err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("readiness HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 func run(log *slog.Logger) error {

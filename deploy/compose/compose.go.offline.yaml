@@ -1,0 +1,3 @@
+services:
+  app:
+    image: ${DBSPHERE_GO_OFFLINE_APP_IMAGE:?Go offline application image is required}

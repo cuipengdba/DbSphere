@@ -167,6 +167,31 @@ jobs:
           bash "${archive[0]}"
           curl --fail --silent http://127.0.0.1:8080/readyz
 
+  go-offline-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Go deployment scripts
+        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh
+      - name: Build Go static container and PostgreSQL 18 offline bundle
+        run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
+      - name: Install Go container twice from local images
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+          DBSPHERE_GO_CONFIG_DIR: ${{ runner.temp }}/dbsphere-go-offline-config
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+          docker image rm "dbsphere/offline-go-app:$version" postgres:18-bookworm
+          if docker image inspect "dbsphere/offline-go-app:$version" >/dev/null 2>&1; then exit 1; fi
+          bash "${archive[0]}"
+          curl --fail --silent http://127.0.0.1:8081/readyz
+          curl --fail --silent http://127.0.0.1:8081/ | grep 'DbSphere'
+          docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm >/dev/null
+          bash "${archive[0]}"
+          curl --fail --silent http://127.0.0.1:8081/readyz
+
   sql-performance-matrix:
     runs-on: ubuntu-latest
     strategy:

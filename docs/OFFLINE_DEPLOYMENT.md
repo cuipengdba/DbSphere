@@ -2,6 +2,12 @@
 
 > 当前页面描述迁移前 Node.js 开发预览包。2026-11-17 起正式版后端要求改为 Go；Go 版离线包验收前，这份预览不代表新架构的正式交付。详见[迁移清单](GO_UI_MIGRATION.md)。
 
+## Go 架构开发版部署
+
+源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18，连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。
+
+Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。脚本和容器本地验证正在进行，GitHub CI 离线安装与重装结果以对应流水线为准。Go 后端功能对等、故障演练及升级回滚尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
+
 当前可从 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev) 下载两种 Linux x86_64 安装包及各自的 SHA-256 文件。V0.6 的跨层根因分析仍在开发中。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。

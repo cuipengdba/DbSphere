@@ -1,0 +1,40 @@
+name: dbsphere-go-dev
+
+services:
+  store:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dbsphere
+      POSTGRES_DB: dbsphere
+      POSTGRES_PASSWORD: ${DBSPHERE_STORE_PASSWORD:?Run scripts/one-click-go.sh first}
+    volumes:
+      - pg18-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U dbsphere -d dbsphere']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile-go
+    restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      store:
+        condition: service_healthy
+    environment:
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_STORE_PASSWORD}@store:5432/dbsphere
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click-go.sh first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_MASTER_KEY:?Run scripts/one-click-go.sh first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_COOKIE_SECURE: ${DBSPHERE_COOKIE_SECURE:-false}
+    ports:
+      - '127.0.0.1:${DBSPHERE_WEB_PORT:-8080}:8080'
+
+volumes:
+  pg18-data: {}
