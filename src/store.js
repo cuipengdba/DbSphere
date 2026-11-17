@@ -184,6 +184,11 @@ export class Store {
       attempts, next, String(outcome).slice(0, 300), id).changes > 0;
   }
 
+  retryNotification(id, now = new Date().toISOString()) {
+    return this.db.prepare(`UPDATE notification_outbox SET status='pending',attempts=0,
+      next_attempt_at=?,last_error=NULL WHERE id=? AND status='failed'`).run(now, id).changes > 0;
+  }
+
   queueEscalations(now = new Date().toISOString(), afterMinutes = 15) {
     const cutoff = new Date(Date.parse(now) - afterMinutes * 60000).toISOString();
     let queued = 0;

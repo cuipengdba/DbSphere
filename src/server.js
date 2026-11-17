@@ -187,6 +187,13 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
       if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
         if (req.method === 'GET' && path === '/api/notifications') return send(res, 200, { notifications: await store.listNotificationHistory() });
+        const notificationRetry = path.match(/^\/api\/notifications\/([0-9a-f-]{36})\/retry$/);
+        if (req.method === 'POST' && notificationRetry) {
+          const retried = await store.retryNotification(notificationRetry[1]);
+          if (!retried) return send(res, 404, { error: 'Failed notification not found' });
+          void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
+          return send(res, 200, { ok: true });
+        }
       if (req.method === 'GET' && path === '/api/silences') return send(res, 200, { silences: await store.listSilences() });
       if (req.method === 'POST' && path === '/api/silences') {
         const input = normalizeSilence(await body(req));

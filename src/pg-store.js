@@ -197,6 +197,11 @@ export class PgStore {
     [attempts >= 5 ? 'failed' : 'pending', attempts, next, String(outcome).slice(0, 300), id])).rowCount > 0;
   }
 
+  async retryNotification(id, now = new Date().toISOString()) {
+    return (await this.pool.query(`UPDATE notification_outbox SET status='pending',attempts=0,
+      next_attempt_at=$1,last_error=NULL WHERE id=$2 AND status='failed'`, [now, id])).rowCount > 0;
+  }
+
   async queueEscalations(now = new Date().toISOString(), afterMinutes = 15) {
     const cutoff = new Date(Date.parse(now) - afterMinutes * 60000).toISOString();
     const client = await this.pool.connect();

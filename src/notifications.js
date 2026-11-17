@@ -31,13 +31,18 @@ export function notificationConfig(env = process.env) {
   }
   const smtpPort = Number(env.DBSPHERE_SMTP_PORT || 587);
   if (!Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535) throw new Error('Invalid DBSPHERE_SMTP_PORT');
+  const plainLoopback = env.DBSPHERE_SMTP_ALLOW_PLAIN === 'true' &&
+    ['localhost', '127.0.0.1', '::1'].includes(smtpHost);
+  if (env.DBSPHERE_SMTP_ALLOW_PLAIN === 'true' && smtpHost && !plainLoopback) {
+    throw new Error('Plain SMTP is permitted only on loopback');
+  }
   if (Boolean(env.DBSPHERE_SMTP_USER) !== Boolean(env.DBSPHERE_SMTP_PASSWORD)) {
     throw new Error('Set DBSPHERE_SMTP_USER and DBSPHERE_SMTP_PASSWORD together');
   }
   return { minimumSeverity, webhookMinimumSeverity, emailMinimumSeverity,
     webhookUrl, webhookSecret: env.DBSPHERE_WEBHOOK_SECRET || null,
     smtp: smtpHost ? { host: smtpHost, port: smtpPort, secure: smtpPort === 465,
-      requireTLS: smtpPort !== 465, from: smtpFrom, to: smtpTo,
+      requireTLS: smtpPort !== 465 && !plainLoopback, from: smtpFrom, to: smtpTo,
       auth: env.DBSPHERE_SMTP_USER ? { user: env.DBSPHERE_SMTP_USER,
         pass: env.DBSPHERE_SMTP_PASSWORD } : undefined } : null };
 }

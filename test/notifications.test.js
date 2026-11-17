@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import { Store } from '../src/store.js';
 import { createNotifier, notificationConfig } from '../src/notifications.js';
 import { normalizeSilence } from '../src/silences.js';
@@ -29,6 +30,52 @@ test('notification config requires a safe webhook and complete SMTP settings', (
   assert.equal(notificationConfig({ DBSPHERE_WEBHOOK_URL: 'https://example.com/hook' }).webhookUrl,
     'https://example.com/hook');
   assert.equal(notificationConfig({ DBSPHERE_WEBHOOK_MIN_SEVERITY: 'critical' }).webhookMinimumSeverity, 'critical');
+  assert.throws(() => notificationConfig({ DBSPHERE_SMTP_ALLOW_PLAIN: 'true',
+    DBSPHERE_SMTP_HOST: 'smtp.example.com', DBSPHERE_SMTP_FROM: 'a@example.com',
+    DBSPHERE_SMTP_TO: 'b@example.com' }), /loopback/);
+});
+
+test('Nodemailer sends an incident email through a real local SMTP conversation', async t => {
+  const { store, asset } = fixture(t);
+  let mail = '';
+  const smtp = createServer(socket => {
+    socket.write('220 localhost DbSphere test SMTP\r\n');
+    let buffer = '';
+    let data = false;
+    socket.on('data', chunk => {
+      buffer += chunk.toString('utf8');
+      for (;;) {
+        if (data) {
+          const end = buffer.indexOf('\r\n.\r\n');
+          if (end < 0) break;
+          mail += buffer.slice(0, end);
+          buffer = buffer.slice(end + 5);
+          data = false;
+          socket.write('250 2.0.0 queued\r\n');
+          continue;
+        }
+        const end = buffer.indexOf('\r\n');
+        if (end < 0) break;
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (/^EHLO|^HELO/i.test(line)) socket.write('250 localhost\r\n');
+        else if (/^DATA$/i.test(line)) { data = true; socket.write('354 End data with <CR><LF>.<CR><LF>\r\n'); }
+        else if (/^QUIT$/i.test(line)) { socket.end('221 bye\r\n'); break; }
+        else socket.write('250 ok\r\n');
+      }
+    });
+  });
+  await new Promise(resolve => smtp.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => smtp.close(resolve)));
+  store.recordResult(asset.id, {}, 'connection refused');
+  const eventId = store.listEvents()[0].id;
+  const notifier = createNotifier(store, notificationConfig({ DBSPHERE_SMTP_ALLOW_PLAIN: 'true',
+    DBSPHERE_SMTP_HOST: '127.0.0.1', DBSPHERE_SMTP_PORT: String(smtp.address().port),
+    DBSPHERE_SMTP_FROM: 'dbsphere@example.com', DBSPHERE_SMTP_TO: 'oncall@example.com' }));
+  assert.deepEqual(await notifier.run(), { delivered: 1, failed: 0 });
+  assert.match(mail, new RegExp(eventId));
+  assert.match(mail, /oncall@example.com/);
+  assert.equal(store.listNotificationHistory().find(item => item.channel === 'email').status, 'delivered');
 });
 
 test('webhook and email deliver independently with event ID and retry only failed channel', async t => {
@@ -103,4 +150,16 @@ test('acknowledgement and active silence prevent escalation', t => {
   store.revokeSilence(silence.id);
   store.acknowledgeEvent(eventId);
   assert.equal(store.queueEscalations(), 0);
+});
+
+test('a failed delivery can be explicitly retried without creating another event', t => {
+  const { store, asset } = fixture(t);
+  store.recordResult(asset.id, {}, 'connection refused');
+  const item = store.listDueNotifications().find(notification => notification.channel === 'webhook');
+  for (let attempt = 0; attempt < 5; attempt++) store.completeNotification(item.id, 'Webhook HTTP 503');
+  assert.equal(store.listNotificationHistory().find(notification => notification.id === item.id).status, 'failed');
+  assert.equal(store.retryNotification(item.id), true);
+  assert.equal(store.retryNotification(item.id), false);
+  assert.ok(store.listDueNotifications().some(notification => notification.id === item.id));
+  assert.equal(store.listEvents().length, 1);
 });

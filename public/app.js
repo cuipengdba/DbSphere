@@ -251,9 +251,19 @@ function renderNotifications(notifications) {
   if (!notifications.length) { list.append(cell('p', '暂无通知记录。配置通道后，新的告警事件会投递。', 'empty')); return; }
   const labels = { pending: '待投递', delivered: '已送达', skipped: '未配置或未达到路由级别', failed: '投递失败' };
   for (const item of notifications.slice(0, 30)) {
+    const row = document.createElement('div'); row.className = 'list-item';
     const button = cell('button', `${item.assetName} · ${item.channel === 'email' ? '邮件' : 'Webhook'} · ${labels[item.status] || item.status} · ${item.kind} · ${formatTime(item.observedAt)}${item.lastError ? ' · ' + item.lastError : ''}`, 'event-button');
     button.addEventListener('click', () => showEvent(item.eventId));
-    list.append(button);
+    row.append(button);
+    if (item.status === 'failed') {
+      const retry = cell('button', '重试', 'ghost small-button');
+      retry.addEventListener('click', async () => {
+        try { await api(`/api/notifications/${item.id}/retry`, 'POST'); notice('通知已重新加入投递队列。'); await refresh(); }
+        catch (error) { notice(error.message, true); }
+      });
+      row.append(retry);
+    }
+    list.append(row);
   }
 }
 
