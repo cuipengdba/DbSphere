@@ -23,14 +23,14 @@ type CheckResult struct {
 	CollectedAt time.Time `json:"collectedAt"`
 }
 
-// DueAssetIDs schedules Linux and Kubernetes PostgreSQL assets. PgBouncer assets
-// remain outside this scheduler until their Go adapter is available.
+// DueAssetIDs schedules Linux and Kubernetes PostgreSQL assets, including
+// configured PgBouncer endpoints.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
 	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s') AND pooler_url_enc IS NULL
+		WHERE runtime IN ('linux','k8s')
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -77,21 +77,21 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	var runtime string
 	var linuxHost *string
 	var exporterPort *int
-	var hasPooler bool
+	var poolerEncrypted *string
 	var k8sCluster, k8sNamespace, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
-		runtime,linux_host,linux_exporter_port,pooler_url_enc IS NOT NULL,
+		runtime,linux_host,linux_exporter_port,pooler_url_enc,
 		k8s_cluster,k8s_namespace,k8s_pod
 		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
 		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
-		&hasPooler, &k8sCluster, &k8sNamespace, &k8sPod)
+		&poolerEncrypted, &k8sCluster, &k8sNamespace, &k8sPod)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if (runtime != "linux" && runtime != "k8s") || hasPooler {
+	if runtime != "linux" && runtime != "k8s" {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	password, err := security.Decrypt(key, encrypted)
@@ -126,6 +126,25 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	} else if runtime == "linux" {
 		metrics["linux"] = map[string]any{"status": "not_configured",
 			"reason": "Linux node_exporter host and port are not configured"}
+	}
+	if poolerEncrypted != nil {
+		poolerURL, err := security.Decrypt(key, *poolerEncrypted)
+		if err != nil {
+			return CheckResult{}, fmt.Errorf("decrypt PgBouncer credential: %w", err)
+		}
+		pooler, poolerErr := collector.PgBouncer(ctx, poolerURL, target.Database)
+		if poolerErr != nil {
+			metrics["pgbouncer"] = map[string]any{"status": "error",
+				"reason": "PgBouncer admin connection or query failed"}
+			if collectErr == nil && reason == "" {
+				group, reason = "telemetry", "PgBouncer collection failed"
+			}
+		} else {
+			metrics["pgbouncer"] = pooler
+			if pooler["status"] != "ok" && collectErr == nil && reason == "" {
+				group, reason = "telemetry", "PgBouncer pool mapping is unavailable"
+			}
+		}
 	}
 	result, err := s.recordCheck(ctx, id, metrics, group, reason)
 	if err != nil {
@@ -261,6 +280,13 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			linuxPayload, _ := json.Marshal(linux)
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'linux_state',$2,$3)`, eventID, now, linuxPayload); err != nil {
+				return CheckResult{}, err
+			}
+		}
+		if pooler := object(metrics["pgbouncer"]); len(pooler) != 0 {
+			poolerPayload, _ := json.Marshal(pooler)
+			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'pgbouncer_state',$2,$3)`, eventID, now, poolerPayload); err != nil {
 				return CheckResult{}, err
 			}
 		}

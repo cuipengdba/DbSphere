@@ -37,7 +37,7 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			definition_json->>'metric' IN ('pg.connection_utilization','pg.blocked_sessions',
 			'pg.long_transactions','linux.memory_used_percent','linux.disk_used_percent',
 			'k8s.pod_not_ready','k8s.pod_unscheduled','k8s.scheduling_failure_recent',
-			'k8s.oom_recent','k8s.node_pressure'))
+			'k8s.oom_recent','k8s.node_pressure','pgbouncer.waiting_clients'))
 			FROM alert_rules ORDER BY id`},
 		"/api/silences": {"silences", `SELECT jsonb_build_object(
 			'id',id,'kind',kind,'assetId',asset_id,'ruleId',rule_id,

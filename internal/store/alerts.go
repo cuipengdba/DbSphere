@@ -35,6 +35,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true},
 	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true},
 	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true},
+	{"pgbouncer_waiting", "PgBouncer 客户端等待", "pgbouncer.waiting_clients", "PgBouncer", "latency", "warning", ">=", 1, 60, 1, true},
 }
 
 func seedGoRules(ctx context.Context, tx pgx.Tx) error {
@@ -88,7 +89,7 @@ func supportedAlertMetric(metric string) bool {
 	case "pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent",
-		"k8s.oom_recent", "k8s.node_pressure":
+		"k8s.oom_recent", "k8s.node_pressure", "pgbouncer.waiting_clients":
 		return true
 	}
 	return false
@@ -206,6 +207,18 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 				}
 			}
 			return alertSignal{Available: true, Value: 0, Source: signal.Source}
+		}
+	case "pgbouncer.waiting_clients":
+		signal.Source = "PgBouncer"
+		pooler := object(metrics["pgbouncer"])
+		if stringValue(pooler["status"]) == "ok" {
+			total := 0.0
+			for _, raw := range list(pooler["pools"]) {
+				if value, ok := numeric(object(raw)["clientWaiting"]); ok {
+					total += value
+				}
+			}
+			return alertSignal{Available: true, Value: total, Source: signal.Source}
 		}
 	}
 	return signal

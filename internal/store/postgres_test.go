@@ -293,6 +293,59 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	}
 }
 
+func TestGoPgBouncerCombinedSampleInPG18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
+	poolerURL := os.Getenv("DBSPHERE_TEST_POOLER_URL")
+	if url == "" || portText == "" || poolerURL == "" {
+		t.Skip("PG18, PostgreSQL target and PgBouncer are required")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(context.Background(), assets.Input{Name: "Go PgBouncer test",
+		Host: "127.0.0.1", Port: port, Database: "postgres", Username: "postgres",
+		Password: os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"), SSLMode: "disable", Runtime: "linux",
+		PoolerURL: poolerURL}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	if strings.Contains(string(created), "dbsphere-monitor-test") {
+		t.Fatal("PgBouncer credential leaked in asset response")
+	}
+	due, err := pg.DueAssetIDs(context.Background(), time.Minute, 100)
+	if err != nil || !slices.Contains(due, asset.ID) {
+		t.Fatal("PgBouncer asset was not scheduled", err)
+	}
+	checked, err := pg.CheckAsset(context.Background(), asset.ID, key)
+	if err != nil || checked.Status != "ok" {
+		t.Fatalf("combined PostgreSQL/PgBouncer collection failed: %+v %v", checked, err)
+	}
+	sample, err := pg.RawSample(context.Background(), asset.ID, checked.SampleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(sample)
+	if !strings.Contains(string(encoded), `"pgbouncer"`) || !strings.Contains(string(encoded), `"clientWaiting"`) ||
+		strings.Contains(string(encoded), "dbsphere-monitor-test") {
+		t.Fatalf("PgBouncer sample missing or credential leaked: %s", encoded)
+	}
+}
+
 func TestGoSQLIntervalAndRegressionFromPG18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {

@@ -17,7 +17,7 @@
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
 
-当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod、Node、PVC 和 Pod UID 事件的只读采集；十条 PG/Linux/K8S 默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。其余 Node 历史规则只读显示。K8S 的 Service、metrics.k8s.io、PVC 用量、PgBouncer 与其余规则仍未迁移；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、告警投递和巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/Pod 事件和 PgBouncer SHOW POOLS/STATS 的只读采集；十一条 PG/Linux/K8S/PgBouncer 默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。其余 Node 历史规则只读显示。K8S 的 Service、metrics.k8s.io、PVC 用量与其余规则仍未迁移；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、告警投递和巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
 
 ## 页面信息架构
 
@@ -26,6 +26,8 @@ Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指�
 Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubeconfig，拒绝执行式凭据插件与关闭 TLS 校验。已用 TLS 测试 API 验证只读请求、按 Pod UID 限定事件、容器 OOM、Node/PVC 信息及错误状态；PG18 实库测试验证 PG 连接失败与近期同 Pod OOM 证据归入一个事件 ID，并在恢复时关闭。现有本地 kind 测试 token 过期，真实集群只读验收尚未通过；临时 token 签发被自动审批策略阻止，不能将模拟 API 测试记作 kind 验收。Go Compose 与离线包已支持可选的只读 kubeconfig 挂载。
 
 Go K8S 告警第一段移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled 和 Node 压力五条规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。Pod 重启增量、PVC 实际用量告警与通知投递仍未移植。
+
+Go PgBouncer 适配器采用只读的简单查询协议读取 `SHOW POOLS` 和 `SHOW STATS`，仅保留映射数据库最多 100 条连接池/统计记录，不保存管理员 URL 或密码。本机真实 PgBouncer 1.26.1、PG14 与独立 PG18 联合采样测试已通过；对应客户端等待规则进入同事件告警流程，CI 仍待验收。
 
 Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查询失败分别显示状态；只存指纹与统计量。资产页从 PG18 样本计算相邻窗口增量和退化倍数，本地 PG18 真扩展与样本退化测试已通过；五版扩展 CI 正在验收。慢日志和计划导入写入仍需迁移。
 

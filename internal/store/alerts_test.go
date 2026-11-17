@@ -62,6 +62,20 @@ func TestGoKubernetesAlertSignalsAndMissingData(t *testing.T) {
 	}
 }
 
+func TestGoPgBouncerWaitingSignal(t *testing.T) {
+	now := time.Now().UTC()
+	metrics := map[string]any{"pgbouncer": map[string]any{"status": "ok", "pools": []any{
+		map[string]any{"clientWaiting": 2.0}, map[string]any{"clientWaiting": 1.0}}}}
+	signal := readGoSignal("pgbouncer.waiting_clients", metrics, now)
+	if !signal.Available || signal.Value != 3 || signal.Source != "PgBouncer" {
+		t.Fatalf("PgBouncer waiting clients not aggregated: %+v", signal)
+	}
+	metrics["pgbouncer"] = map[string]any{"status": "error"}
+	if readGoSignal("pgbouncer.waiting_clients", metrics, now).Available {
+		t.Fatal("PgBouncer collection error treated as a healthy zero wait")
+	}
+}
+
 func TestGoAlertOneEventIDAndRCACandidateInPG18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {
