@@ -104,3 +104,19 @@ test('maintenance silences notifications while keeping an inspectable event and 
   store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100, k8s: k8s(false) });
   assert.equal(store.getEvent(eventId).status, 'resolved');
 });
+
+test('Kubernetes permission failure forms a telemetry alert and recovers only on a successful read', t => {
+  const { store, asset } = withStore(t);
+  store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100,
+    k8s: { status: 'error', reason: '403 Forbidden' } });
+  const alert = store.listActiveAlerts().find(item => item.ruleId === 'k8s_collection_failed');
+  assert.ok(alert);
+  assert.equal(store.getEvent(alert.state.eventId).eventGroup, 'telemetry');
+  store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100,
+    k8s: { status: 'not_configured' } });
+  assert.equal(store.getEvent(alert.state.eventId).status, 'open');
+  assert.equal(store.getEvent(alert.state.eventId).evidence.filter(item => item.kind === 'alert_signal_missing').length, 1);
+  store.recordResult(asset.id, { version_num: 180006, connections: 1, max_connections: 100,
+    k8s: { status: 'ok', pod: { name: 'pg-0', uid: 'pod-1', conditions: [{ type: 'Ready', status: 'True' }] }, containers: [] } });
+  assert.equal(store.getEvent(alert.state.eventId).status, 'resolved');
+});

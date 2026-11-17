@@ -36,6 +36,7 @@ const sourceSilence = source.createSilence(normalizeSilence({ kind: 'maintenance
   ruleId: 'pg_collection_failed', reason: 'planned maintenance',
   endsAt: new Date(Date.now() + 3600 * 1000).toISOString() }));
 source.recordResult(activeAsset.id, {}, 'password authentication failed');
+const sourceQueued = source.listDueNotifications().length;
 source.close();
 
 const databaseName = `dbsphere_migration_${process.pid}`;
@@ -74,5 +75,6 @@ try {
   assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).ruleId, 'pg_collection_failed');
   assert.equal((await target.listSilences()).find(silence => silence.id === sourceSilence.id).reason, 'planned maintenance');
   assert.equal((await target.listActiveAlerts()).find(alert => alert.assetId === activeAsset.id).state.mutedBy, sourceSilence.id);
-  console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, alert states and silences passed');
+  assert.equal((await target.listDueNotifications()).length, sourceQueued);
+  console.log('SQLite -> PG18 migration: IDs, credentials, samples, events, rules, states, silences and notifications passed');
 } finally { await target.close(); }

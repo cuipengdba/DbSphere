@@ -28,8 +28,9 @@ function cell(tag, text, cls) {
 }
 
 async function refresh() {
-  const [{ assets }, { events }, { alerts }, { rules }, { silences }] = await Promise.all([
-    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'), api('/api/silences')
+  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }] = await Promise.all([
+    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
+    api('/api/silences'), api('/api/notifications')
   ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
@@ -39,6 +40,7 @@ async function refresh() {
   renderAlerts(alerts);
   renderSilenceOptions(assets, rules);
   renderSilences(silences, assets, rules);
+  renderNotifications(notifications);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
 }
@@ -241,6 +243,17 @@ function renderSilences(silences, assets, rules) {
       item.append(revoke);
     }
     list.append(item);
+  }
+}
+
+function renderNotifications(notifications) {
+  const list = $('notification-list'); list.replaceChildren();
+  if (!notifications.length) { list.append(cell('p', '暂无通知记录。配置通道后，新的告警事件会投递。', 'empty')); return; }
+  const labels = { pending: '待投递', delivered: '已送达', skipped: '未配置或未达到路由级别', failed: '投递失败' };
+  for (const item of notifications.slice(0, 30)) {
+    const button = cell('button', `${item.assetName} · ${item.channel === 'email' ? '邮件' : 'Webhook'} · ${labels[item.status] || item.status} · ${item.kind} · ${formatTime(item.observedAt)}${item.lastError ? ' · ' + item.lastError : ''}`, 'event-button');
+    button.addEventListener('click', () => showEvent(item.eventId));
+    list.append(button);
   }
 }
 

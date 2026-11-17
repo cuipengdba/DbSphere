@@ -26,6 +26,14 @@ test('missing cross-layer signals stay unknown and cannot clear an alert', () =>
   assert.equal(readSignal('pg.blocked_sessions', { diagnostics: { locks: { status: 'unavailable' } } }).status, 'unavailable');
 });
 
+test('configured Linux and Kubernetes collection failures alert without declaring targets healthy', () => {
+  assert.equal(readSignal('collector.k8s_failed', { k8s: { status: 'error', reason: '403 Forbidden' } }).value, 1);
+  assert.equal(readSignal('collector.linux_failed', { linux: { status: 'error', reason: 'connection refused' } }).value, 1);
+  assert.equal(readSignal('collector.k8s_failed', { k8s: { status: 'not_configured' } }).status, 'unavailable');
+  assert.equal(readSignal('collector.linux_failed', { linux: { status: 'not_configured' } }).status, 'unavailable');
+  assert.equal(readSignal('collector.k8s_failed', { k8s: { status: 'ok' } }).value, 0);
+});
+
 test('rule signals use real metric shape and same-Pod restart deltas', () => {
   const now = Date.parse('2026-11-17T00:00:00Z');
   const previous = { k8s: { status: 'ok', pod: { uid: 'pod-1' }, containers: [{ name: 'postgres', restartCount: 1 }] } };

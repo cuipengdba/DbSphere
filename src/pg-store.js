@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
 import { oomCandidate } from './incidents.js';
-import { publicAsset } from './store.js';
+import { publicAsset, publicSilence } from './store.js';
 import { DEFAULT_RULES, readSignal, validateRuleUpdate } from './alert-rules.js';
 import { nextAlertState } from './alert-state.js';
 
@@ -61,6 +61,13 @@ const schema = `
     created_at timestamptz NOT NULL, revoked_at timestamptz
   );
   CREATE INDEX IF NOT EXISTS silences_active ON silences(starts_at,ends_at);
+  CREATE TABLE IF NOT EXISTS notification_outbox (
+    id uuid PRIMARY KEY, evidence_id uuid NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+    channel text NOT NULL, status text NOT NULL DEFAULT 'pending',
+    attempts integer NOT NULL DEFAULT 0, next_attempt_at timestamptz NOT NULL,
+    delivered_at timestamptz, last_error text, UNIQUE(evidence_id,channel)
+  );
+  CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(status,next_attempt_at);
 `;
 
 export class PgStore {
@@ -84,6 +91,7 @@ export class PgStore {
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(5) ON CONFLICT DO NOTHING');
         await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(6) ON CONFLICT DO NOTHING');
+        await client.query('INSERT INTO dbsphere_schema_migrations(version) VALUES(7) ON CONFLICT DO NOTHING');
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -131,9 +139,7 @@ export class PgStore {
 
   async listSilences() {
     const rows = (await this.pool.query('SELECT * FROM silences ORDER BY created_at DESC LIMIT 200')).rows;
-    return rows.map(row => ({ id: row.id, kind: row.kind, assetId: row.asset_id,
-      ruleId: row.rule_id, startsAt: row.starts_at, endsAt: row.ends_at,
-      reason: row.reason, createdAt: row.created_at, revokedAt: row.revoked_at }));
+    return rows.map(publicSilence);
   }
 
   async createSilence(input) {
@@ -144,12 +150,89 @@ export class PgStore {
     await this.pool.query(`INSERT INTO silences(id,kind,asset_id,rule_id,starts_at,ends_at,reason,created_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [id, input.kind, input.assetId,
       input.ruleId, input.startsAt, input.endsAt, input.reason, createdAt]);
-    return (await this.listSilences()).find(item => item.id === id);
+    return publicSilence((await this.pool.query('SELECT * FROM silences WHERE id=$1', [id])).rows[0]);
   }
 
   async revokeSilence(id) {
     const changed = await this.pool.query('UPDATE silences SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL', [id]);
-    return changed.rowCount ? (await this.listSilences()).find(item => item.id === id) : null;
+    return changed.rowCount ? publicSilence((await this.pool.query('SELECT * FROM silences WHERE id=$1', [id])).rows[0]) : null;
+  }
+
+  async listDueNotifications(now = new Date().toISOString(), limit = 50) {
+    const rows = (await this.pool.query(`SELECT n.id,n.channel,n.attempts,e.id AS evidence_id,e.kind,e.observed_at,
+      e.payload_json,v.id AS event_id,v.title,v.status AS event_status,a.id AS asset_id,a.name AS asset_name
+      FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
+      JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
+      WHERE n.status='pending' AND n.next_attempt_at<=$1
+      ORDER BY n.next_attempt_at,n.id LIMIT $2`, [now, limit])).rows;
+    return rows.map(row => ({ id: row.id, channel: row.channel, attempts: row.attempts,
+      evidenceId: row.evidence_id, kind: row.kind, observedAt: row.observed_at,
+      payload: row.payload_json, eventId: row.event_id, eventTitle: row.title,
+      eventStatus: row.event_status, assetId: row.asset_id, assetName: row.asset_name }));
+  }
+
+  async listNotificationHistory(limit = 100) {
+    const rows = (await this.pool.query(`SELECT n.id,n.channel,n.status,n.attempts,n.next_attempt_at,
+      n.delivered_at,n.last_error,e.kind,e.observed_at,v.id AS event_id,a.name AS asset_name
+      FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
+      JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
+      ORDER BY e.observed_at DESC,n.id DESC LIMIT $1`, [limit])).rows;
+    return rows.map(row => ({ id: row.id, channel: row.channel, status: row.status,
+      attempts: row.attempts, nextAttemptAt: row.next_attempt_at,
+      deliveredAt: row.delivered_at, lastError: row.last_error, kind: row.kind,
+      observedAt: row.observed_at, eventId: row.event_id, assetName: row.asset_name }));
+  }
+
+  async completeNotification(id, outcome, now = new Date().toISOString()) {
+    if (outcome === 'delivered' || outcome === 'skipped') {
+      return (await this.pool.query(`UPDATE notification_outbox SET status=$1,delivered_at=$2
+        WHERE id=$3 AND status='pending'`, [outcome, now, id])).rowCount > 0;
+    }
+    const row = (await this.pool.query('SELECT attempts FROM notification_outbox WHERE id=$1 AND status=$2', [id, 'pending'])).rows[0];
+    if (!row) return false;
+    const attempts = row.attempts + 1;
+    const next = new Date(Date.parse(now) + Math.min(3600, 30 * 2 ** (attempts - 1)) * 1000).toISOString();
+    return (await this.pool.query(`UPDATE notification_outbox SET status=$1,attempts=$2,
+      next_attempt_at=$3,last_error=$4 WHERE id=$5 AND status='pending'`,
+    [attempts >= 5 ? 'failed' : 'pending', attempts, next, String(outcome).slice(0, 300), id])).rowCount > 0;
+  }
+
+  async queueEscalations(now = new Date().toISOString(), afterMinutes = 15) {
+    const cutoff = new Date(Date.parse(now) - afterMinutes * 60000).toISOString();
+    const client = await this.pool.connect();
+    let queued = 0;
+    try {
+      await client.query('BEGIN');
+      const alerts = (await client.query(`SELECT s.asset_id,s.rule_id,s.state_json,r.definition_json
+        FROM alert_states s JOIN alert_rules r ON r.id=s.rule_id
+        WHERE s.state_json->>'status'='firing'`)).rows;
+      for (const alert of alerts) {
+        const rule = alert.definition_json;
+        const state = alert.state_json;
+        if (rule.severity !== 'critical' || state.mutedBy) continue;
+        const event = (await client.query(`SELECT id FROM events WHERE id=$1 AND status='open'
+          AND acknowledged_at IS NULL AND started_at<=$2 FOR UPDATE`, [state.eventId, cutoff])).rows[0];
+        if (!event) continue;
+        const silenced = (await client.query(`SELECT 1 FROM silences WHERE revoked_at IS NULL
+          AND starts_at<=$1 AND ends_at>$1 AND (asset_id IS NULL OR asset_id=$2)
+          AND (rule_id IS NULL OR rule_id=$3) LIMIT 1`, [now, alert.asset_id, alert.rule_id])).rowCount;
+        if (silenced) continue;
+        const existing = (await client.query(`SELECT 1 FROM evidence WHERE event_id=$1
+          AND kind='alert_escalation' AND payload_json->>'ruleId'=$2 LIMIT 1`, [event.id, alert.rule_id])).rowCount;
+        if (existing) continue;
+        const evidenceId = randomUUID();
+        await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+          VALUES($1,$2,'alert_escalation',$3,$4)`, [evidenceId, event.id, now,
+          JSON.stringify({ ruleId: alert.rule_id, severity: rule.severity, source: rule.source,
+            value: state.lastValue, afterMinutes })]);
+        for (const channel of ['webhook', 'email']) await client.query(`INSERT INTO notification_outbox
+          (id,evidence_id,channel,next_attempt_at) VALUES($1,$2,$3,$4)`, [randomUUID(), evidenceId, channel, now]);
+        queued++;
+      }
+      await client.query('COMMIT');
+      return queued;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
   }
 
   async listAssets() {
@@ -227,13 +310,19 @@ export class PgStore {
         transitions.push(next.mutedBy ? 'suppressed' : 'unsuppressed');
       }
       for (const change of transitions) if (next?.eventId || old?.eventId) {
+        const evidenceId = randomUUID();
         await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-          VALUES($1,$2,$3,$4,$5)`, [randomUUID(), next?.eventId ?? old.eventId, `alert_${change}`, now,
+          VALUES($1,$2,$3,$4,$5)`, [evidenceId, next?.eventId ?? old.eventId, `alert_${change}`, now,
           JSON.stringify({ ruleId: rule.id, ruleVersion: rule.version, metric: rule.metric,
             severity: rule.severity, source: signal.source, value: signal.value,
             threshold: rule.threshold, operator: rule.operator, sampleId,
             detail: signal.detail, reason: signal.reason,
             silenceId: next?.mutedBy ?? old?.mutedBy ?? null })]);
+        if (['firing', 'unsuppressed', 'recovered'].includes(change) &&
+          !(change === 'recovered' && old?.mutedBy)) {
+          for (const channel of ['webhook', 'email']) await client.query(`INSERT INTO notification_outbox
+            (id,evidence_id,channel,next_attempt_at) VALUES($1,$2,$3,$4)`, [randomUUID(), evidenceId, channel, now]);
+        }
       }
       if (next) await client.query(`INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)
         ON CONFLICT(asset_id,rule_id) DO UPDATE SET state_json=excluded.state_json`, [assetId, rule.id, JSON.stringify(next)]);

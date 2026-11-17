@@ -4,6 +4,8 @@ export const DEFAULT_RULES = Object.freeze([
   { id: 'pg_unavailable', title: 'PostgreSQL 无法连接', metric: 'pg.unavailable', source: 'PostgreSQL', group: 'availability', severity: 'critical', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'pg_collection_failed', title: 'PostgreSQL 采集失败', metric: 'collector.pg_failed', source: 'collector', group: 'telemetry', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'collector_stale', title: '采样数据陈旧', metric: 'collector.missed_intervals', source: 'collector', group: 'telemetry', severity: 'warning', operator: '>=', threshold: 2, durationSeconds: 0 },
+  { id: 'k8s_collection_failed', title: 'Kubernetes 采集失败', metric: 'collector.k8s_failed', source: 'Kubernetes API', group: 'telemetry', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
+  { id: 'linux_collection_failed', title: 'Linux 主机采集失败', metric: 'collector.linux_failed', source: 'node_exporter', group: 'telemetry', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 0 },
   { id: 'pg_connections_high', title: 'PostgreSQL 连接使用率高', metric: 'pg.connection_utilization', source: 'PostgreSQL', group: 'capacity', severity: 'warning', operator: '>=', threshold: 85, durationSeconds: 120 },
   { id: 'pg_lock_wait', title: 'PostgreSQL 会话被锁阻塞', metric: 'pg.blocked_sessions', source: 'PostgreSQL', group: 'latency', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 60 },
   { id: 'pg_long_transaction', title: 'PostgreSQL 长事务', metric: 'pg.long_transactions', source: 'PostgreSQL', group: 'latency', severity: 'warning', operator: '>=', threshold: 1, durationSeconds: 300 },
@@ -44,6 +46,12 @@ export function readSignal(metric, result, previous = null, error = null, now = 
   switch (metric) {
     case 'collector.pg_failed': return observed(error && !connectionFailure(error) ? 1 : 0, 'collector');
     case 'collector.missed_intervals': return observed(finite(pg.collectorMissedIntervals) ? pg.collectorMissedIntervals : 0, 'collector');
+    case 'collector.k8s_failed': return k8s?.status === 'ok' || k8s?.status === 'error'
+      ? observed(k8s.status === 'error' ? 1 : 0, 'Kubernetes API', { reason: k8s.reason ?? null })
+      : unavailable('Kubernetes API', 'Kubernetes 未配置或尚未采集');
+    case 'collector.linux_failed': return linux?.status === 'ok' || linux?.status === 'error'
+      ? observed(linux.status === 'error' ? 1 : 0, 'node_exporter', { reason: linux.reason ?? null })
+      : unavailable('node_exporter', 'Linux 主机指标未配置或尚未采集');
     case 'pg.unavailable': {
       if (!error) return observed(0, 'PostgreSQL');
       if (/authentication|password|permission denied|unsupported|outside the supported/i.test(error)) {

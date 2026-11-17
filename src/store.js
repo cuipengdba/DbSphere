@@ -19,6 +19,10 @@ export const publicAsset = (row) => row && ({
   pg14Eol: row.version_num !== null && Math.floor(row.version_num / 10000) === 14
 });
 
+export const publicSilence = row => row && ({ id: row.id, kind: row.kind, assetId: row.asset_id,
+  ruleId: row.rule_id, startsAt: row.starts_at, endsAt: row.ends_at,
+  reason: row.reason, createdAt: row.created_at, revokedAt: row.revoked_at });
+
 export class Store {
   constructor(dataDir) {
     this.kind = 'sqlite-preview';
@@ -65,6 +69,13 @@ export class Store {
         reason TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT
       );
       CREATE INDEX IF NOT EXISTS silences_active ON silences(starts_at,ends_at);
+      CREATE TABLE IF NOT EXISTS notification_outbox (
+        id TEXT PRIMARY KEY, evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
+        delivered_at TEXT, last_error TEXT, UNIQUE(evidence_id,channel)
+      );
+      CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(status,next_attempt_at);
     `);
     if (!this.db.prepare('PRAGMA table_info(assets)').all().some(column => column.name === 'linux_exporter_port')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN linux_exporter_port INTEGER');
@@ -112,11 +123,7 @@ export class Store {
   }
 
   listSilences() {
-    return this.db.prepare('SELECT * FROM silences ORDER BY created_at DESC LIMIT 200').all().map(row => ({
-      id: row.id, kind: row.kind, assetId: row.asset_id, ruleId: row.rule_id,
-      startsAt: row.starts_at, endsAt: row.ends_at, reason: row.reason,
-      createdAt: row.created_at, revokedAt: row.revoked_at
-    }));
+    return this.db.prepare('SELECT * FROM silences ORDER BY created_at DESC LIMIT 200').all().map(publicSilence);
   }
 
   createSilence(input) {
@@ -127,13 +134,85 @@ export class Store {
     this.db.prepare(`INSERT INTO silences(id,kind,asset_id,rule_id,starts_at,ends_at,reason,created_at)
       VALUES(?,?,?,?,?,?,?,?)`).run(id, input.kind, input.assetId, input.ruleId,
       input.startsAt, input.endsAt, input.reason, createdAt);
-    return this.listSilences().find(item => item.id === id);
+    return publicSilence(this.db.prepare('SELECT * FROM silences WHERE id=?').get(id));
   }
 
   revokeSilence(id) {
     const now = new Date().toISOString();
     const changed = this.db.prepare('UPDATE silences SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(now, id).changes;
-    return changed ? this.listSilences().find(item => item.id === id) : null;
+    return changed ? publicSilence(this.db.prepare('SELECT * FROM silences WHERE id=?').get(id)) : null;
+  }
+
+  listDueNotifications(now = new Date().toISOString(), limit = 50) {
+    return this.db.prepare(`SELECT n.id,n.channel,n.attempts,e.id AS evidence_id,e.kind,e.observed_at,
+      e.payload_json,v.id AS event_id,v.title,v.status AS event_status,a.id AS asset_id,a.name AS asset_name
+      FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
+      JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
+      WHERE n.status='pending' AND n.next_attempt_at<=?
+      ORDER BY n.next_attempt_at,n.id LIMIT ?`).all(now, limit).map(row => ({
+      id: row.id, channel: row.channel, attempts: row.attempts, evidenceId: row.evidence_id,
+      kind: row.kind, observedAt: row.observed_at, payload: JSON.parse(row.payload_json),
+      eventId: row.event_id, eventTitle: row.title, eventStatus: row.event_status,
+      assetId: row.asset_id, assetName: row.asset_name
+    }));
+  }
+
+  listNotificationHistory(limit = 100) {
+    return this.db.prepare(`SELECT n.id,n.channel,n.status,n.attempts,n.next_attempt_at,n.delivered_at,
+      n.last_error,e.kind,e.observed_at,v.id AS event_id,a.name AS asset_name
+      FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
+      JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
+      ORDER BY e.observed_at DESC,n.id DESC LIMIT ?`).all(limit).map(row => ({
+      id: row.id, channel: row.channel, status: row.status, attempts: row.attempts,
+      nextAttemptAt: row.next_attempt_at, deliveredAt: row.delivered_at,
+      lastError: row.last_error, kind: row.kind, observedAt: row.observed_at,
+      eventId: row.event_id, assetName: row.asset_name
+    }));
+  }
+
+  completeNotification(id, outcome, now = new Date().toISOString()) {
+    if (outcome === 'delivered' || outcome === 'skipped') {
+      return this.db.prepare(`UPDATE notification_outbox SET status=?,delivered_at=?
+        WHERE id=? AND status='pending'`).run(outcome, now, id).changes > 0;
+    }
+    const row = this.db.prepare('SELECT attempts FROM notification_outbox WHERE id=? AND status=?').get(id, 'pending');
+    if (!row) return false;
+    const attempts = row.attempts + 1;
+    const next = new Date(Date.parse(now) + Math.min(3600, 30 * 2 ** (attempts - 1)) * 1000).toISOString();
+    return this.db.prepare(`UPDATE notification_outbox SET status=?,attempts=?,next_attempt_at=?,last_error=?
+      WHERE id=? AND status='pending'`).run(attempts >= 5 ? 'failed' : 'pending',
+      attempts, next, String(outcome).slice(0, 300), id).changes > 0;
+  }
+
+  queueEscalations(now = new Date().toISOString(), afterMinutes = 15) {
+    const cutoff = new Date(Date.parse(now) - afterMinutes * 60000).toISOString();
+    let queued = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const alert of this.listActiveAlerts()) {
+        if (alert.rule.severity !== 'critical' || alert.state.mutedBy) continue;
+        const event = this.db.prepare(`SELECT id FROM events WHERE id=? AND status='open'
+          AND acknowledged_at IS NULL AND started_at<=?`).get(alert.state.eventId, cutoff);
+        if (!event) continue;
+        const silenced = this.db.prepare(`SELECT 1 FROM silences WHERE revoked_at IS NULL
+          AND starts_at<=? AND ends_at>? AND (asset_id IS NULL OR asset_id=?)
+          AND (rule_id IS NULL OR rule_id=?) LIMIT 1`).get(now, now, alert.assetId, alert.ruleId);
+        if (silenced) continue;
+        const existing = this.db.prepare(`SELECT 1 FROM evidence WHERE event_id=? AND kind='alert_escalation'
+          AND json_extract(payload_json,'$.ruleId')=? LIMIT 1`).get(event.id, alert.ruleId);
+        if (existing) continue;
+        const evidenceId = randomUUID();
+        this.db.prepare('INSERT INTO evidence(id,event_id,kind,observed_at,payload_json) VALUES(?,?,?,?,?)')
+          .run(evidenceId, event.id, 'alert_escalation', now, JSON.stringify({ ruleId: alert.ruleId,
+            severity: alert.rule.severity, source: alert.rule.source, value: alert.state.lastValue,
+            afterMinutes }));
+        for (const channel of ['webhook', 'email']) this.db.prepare(`INSERT INTO notification_outbox
+          (id,evidence_id,channel,next_attempt_at) VALUES(?,?,?,?)`).run(randomUUID(), evidenceId, channel, now);
+        queued++;
+      }
+      this.db.exec('COMMIT');
+      return queued;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   listAssets() { return this.db.prepare('SELECT * FROM assets ORDER BY created_at DESC').all().map(publicAsset); }
@@ -175,6 +254,8 @@ export class Store {
     const saveState = this.db.prepare(`INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES(?,?,?)
       ON CONFLICT(asset_id,rule_id) DO UPDATE SET state_json=excluded.state_json`);
     const deleteState = this.db.prepare('DELETE FROM alert_states WHERE asset_id=? AND rule_id=?');
+    const queueNotification = this.db.prepare(`INSERT INTO notification_outbox(id,evidence_id,channel,next_attempt_at)
+      VALUES(?,?,?,?)`);
     const silences = this.db.prepare(`SELECT id,rule_id FROM silences WHERE revoked_at IS NULL
       AND starts_at<=? AND ends_at>? AND (asset_id IS NULL OR asset_id=?)
       ORDER BY created_at DESC`).all(now, now, assetId);
@@ -208,12 +289,17 @@ export class Store {
       }
       for (const change of transitions) if (next?.eventId || old?.eventId) {
         const eventId = next?.eventId ?? old.eventId;
-        addEvidence.run(randomUUID(), eventId, `alert_${change}`, now, JSON.stringify({
+        const evidenceId = randomUUID();
+        addEvidence.run(evidenceId, eventId, `alert_${change}`, now, JSON.stringify({
           ruleId: rule.id, ruleVersion: rule.version, metric: rule.metric, severity: rule.severity,
           source: signal.source, value: signal.value, threshold: rule.threshold,
           operator: rule.operator, sampleId, detail: signal.detail, reason: signal.reason,
           silenceId: next?.mutedBy ?? old?.mutedBy ?? null
         }));
+        if (['firing', 'unsuppressed', 'recovered'].includes(change) &&
+          !(change === 'recovered' && old?.mutedBy)) {
+          for (const channel of ['webhook', 'email']) queueNotification.run(randomUUID(), evidenceId, channel, now);
+        }
       }
       if (next) saveState.run(assetId, rule.id, JSON.stringify(next));
       else if (old) deleteState.run(assetId, rule.id);

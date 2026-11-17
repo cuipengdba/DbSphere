@@ -10,6 +10,7 @@ import { collectLinux, deriveLinuxRates } from './linux.js';
 import { collectPgBouncer } from './pgbouncer.js';
 import { createSession, csrfToken, decrypt, encrypt, hashPassword, loadMasterKey, verifyPassword, verifySession } from './security.js';
 import { normalizeSilence } from './silences.js';
+import { createNotifier } from './notifications.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
 const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -73,6 +74,9 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
     if (!password || password.length < 12) { await store.close(); throw new Error('Set DBSPHERE_ADMIN_PASSWORD (at least 12 characters) for first start'); }
     await store.setSetting('admin_password_hash', hashPassword(password));
   }
+  let notifier;
+  try { notifier = createNotifier(store); }
+  catch (error) { await store.close(); throw error; }
   const attempts = new Map();
   const activeCollections = new Set();
 
@@ -119,8 +123,10 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
         }
       }
       if (!await store.getInternalAsset(id)) return null;
-      return store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}),
+      const recorded = await store.recordResult(id, { ...(metrics ?? {}), ...(k8s ? { k8s } : {}), ...(linux ? { linux } : {}),
         ...(pgbouncer ? { pgbouncer } : {}) }, error);
+      void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
+      return recorded;
     } finally { activeCollections.delete(id); }
   }
 
@@ -180,6 +186,7 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
       if (req.method === 'GET' && path === '/api/assets') return send(res, 200, { assets: await store.listAssets() });
       if (req.method === 'GET' && path === '/api/alert-rules') return send(res, 200, { rules: await store.getAlertRules() });
       if (req.method === 'GET' && path === '/api/alerts') return send(res, 200, { alerts: await store.listActiveAlerts() });
+        if (req.method === 'GET' && path === '/api/notifications') return send(res, 200, { notifications: await store.listNotificationHistory() });
       if (req.method === 'GET' && path === '/api/silences') return send(res, 200, { silences: await store.listSilences() });
       if (req.method === 'POST' && path === '/api/silences') {
         const input = normalizeSilence(await body(req));
@@ -247,16 +254,23 @@ export async function createApp({ dataDir, collectFn = collectPostgres, k8sFn = 
   let timer;
   function startScheduler() {
     const interval = Math.max(15, Number(process.env.DBSPHERE_COLLECT_INTERVAL_SECONDS) || 60) * 1000;
+    const escalateAfter = Number(process.env.DBSPHERE_ESCALATE_AFTER_MINUTES || 15);
+    if (!Number.isInteger(escalateAfter) || escalateAfter < 1 || escalateAfter > 1440) {
+      throw new Error('DBSPHERE_ESCALATE_AFTER_MINUTES must be between 1 and 1440');
+    }
     timer = setInterval(() => { void (async () => {
       for (const asset of await store.listAssets()) {
         await store.checkStale(asset.id);
         void collectAsset(asset.id).catch(e => console.error('Collection failed:', e));
       }
+      await store.queueEscalations(new Date().toISOString(), escalateAfter);
+      void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
     })().catch(e => console.error('Scheduler failed:', e)); }, interval);
     timer.unref();
+    void notifier.run().catch(e => console.error('Notification dispatch failed:', e.message));
   }
   function stop() { clearInterval(timer); server.close(); return store.close(); }
-  return { server, store, collectAsset, startScheduler, stop };
+  return { server, store, notifier, collectAsset, startScheduler, stop };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

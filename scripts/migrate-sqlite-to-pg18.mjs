@@ -21,7 +21,7 @@ if (oldKey.length !== 32 || targetKey.length !== 32) throw new Error('Source and
 
 const source = new DatabaseSync(sourcePath, { readOnly: true });
 const target = await PgStore.create(targetUrl);
-const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states', 'silences'];
+const tables = ['settings', 'assets', 'samples', 'events', 'evidence', 'alert_rules', 'alert_states', 'silences', 'notification_outbox'];
 const available = new Set(source.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
 const sourceRows = Object.fromEntries(tables.map(table => [table,
   available.has(table) ? source.prepare(`SELECT * FROM ${table}`).all() : []]));
@@ -74,6 +74,12 @@ try {
     await client.query(`INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
       VALUES($1,$2,$3,$4,$5)`, [row.id, row.event_id, row.kind,
       row.observed_at, row.payload_json]);
+  }
+  for (const row of sourceRows.notification_outbox) {
+    await client.query(`INSERT INTO notification_outbox
+      (id,evidence_id,channel,status,attempts,next_attempt_at,delivered_at,last_error)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [row.id, row.evidence_id, row.channel,
+      row.status, row.attempts, row.next_attempt_at, row.delivered_at, row.last_error]);
   }
   for (const row of sourceRows.alert_states) {
     await client.query('INSERT INTO alert_states(asset_id,rule_id,state_json) VALUES($1,$2,$3)',
