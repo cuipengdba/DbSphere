@@ -6,7 +6,7 @@
 
 将提交 `f7f58fe` 的 Go Linux 镜像 `dbsphere/kind-acceptance:trace-gaps` 加载到本机单节点 kind，并滚动更新 `dbsphere-go` Deployment。新 Pod `dbsphere-go-8b4d8559f-kjzrp` 为 `1/1 Ready`、零重启，`/readyz` 返回 `ready/postgresql18`。本次新 Pod 曾因既有 kind `kube-scheduler` 的 API leader lease 超时而 Pending；调度器恢复后自动完成调度和滚动更新，未用手工 Binding 完成验收。
 
-Playwright Chromium 登录实际 Go B/S 页面，读取真实 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`：页面按应用服务、数据库调用、PostgreSQL、会话与 SQL、Linux/K8S 显示五段。服务父 Span 与 PostgreSQL 客户端子 Span 分段出现，事件仍显示 24 个证据节点、47 条关系、8 条时间线记录和带证据的 OOM 根因候选；报告下载按钮可见。同一事件 API 的 `traceCoverage.unresolvedParentSpans=0`，这只说明当前事件窗口已读到的 Span 没有缺父链，不代表采样完整或覆盖全部请求。再读取没有应用 Trace 的 PG14 Patroni 事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b`，前两段明确显示“未接入 Trace”，数据库与 K8S 诊断仍可用。两条事件检查均无浏览器脚本或控制台错误；截图存于本机 `H:\CodexLS\outputs\DbSphere-kind-trace-flow.png`。该提交的 [31 项 GitHub CI](https://github.com/cuipengdba/DbSphere/actions/runs/44382369126)已通过，包含 PG14–18、离线包和安全扫描作业。
+Playwright Chromium 登录实际 Go B/S 页面，读取真实 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`：页面按应用服务、数据库调用、PostgreSQL、会话与 SQL、Linux/K8S 显示五段。服务父 Span 与 PostgreSQL 客户端子 Span 分段出现，事件仍显示 24 个证据节点、47 条关系、8 条时间线记录和带证据的 OOM 根因候选；报告下载按钮可见。同一事件 API 的 `traceCoverage.unresolvedParentSpans=0`，这只说明当前事件窗口已读到的 Span 没有缺父链，不代表采样完整或覆盖全部请求。再读取没有应用 Trace 的 PG14 Patroni 事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b`，前两段明确显示“未接入 Trace”，数据库与 K8S 诊断仍可用。两条事件检查均无浏览器脚本或控制台错误；桌面和 390px 窄屏截图存于本机 `H:\CodexLS\outputs\DbSphere-kind-trace-flow.png` 与 `H:\CodexLS\outputs\DbSphere-kind-trace-flow-mobile.png`。窄屏无横向溢出；未接入 AI 模型时，事件的五段链路、规则候选和 Markdown 报告仍可读取，报告注明采样率和时钟偏移尚未验证。该提交的 [31 项 GitHub CI](https://github.com/cuipengdba/DbSphere/actions/runs/44382369126)已通过，包含 PG14–18、离线包和安全扫描作业。
 
 本轮只验证单节点 kind 的实际页面与已有故障事件。控制面在滚动更新时再次波动，因此不能据此认定生产 Kubernetes 稳定性、持续负载、跨服务 Trace 传播或 V1.0 整体验收通过。
 
