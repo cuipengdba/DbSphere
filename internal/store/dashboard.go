@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -11,6 +13,28 @@ import (
 // ReadCollection exposes only fields already present in the historical browser API.
 // Credentials and raw SQL are deliberately absent from these projections.
 func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, error) {
+	return s.readCollection(ctx, path, nil)
+}
+
+var scopedCollectionPredicates = map[string]string{
+	"/api/assets":               "WHERE id = ANY($1::uuid[])",
+	"/api/events":               "WHERE e.asset_id = ANY($1::uuid[])",
+	"/api/alerts":               "AND s.asset_id = ANY($1::uuid[])",
+	"/api/silences":             "WHERE asset_id = ANY($1::uuid[])",
+	"/api/notifications":        "WHERE v.asset_id = ANY($1::uuid[])",
+	"/api/inspection-schedules": "WHERE asset_id = ANY($1::uuid[])",
+	"/api/inspection-runs":      "WHERE asset_id = ANY($1::uuid[])",
+}
+
+// ReadScopedCollection applies the asset filter before list limits.
+func (s *Postgres) ReadScopedCollection(ctx context.Context, path string, assetIDs []string) (any, bool, error) {
+	if len(assetIDs) == 0 || scopedCollectionPredicates[path] == "" {
+		return nil, true, errors.New("collection has no scoped asset query")
+	}
+	return s.readCollection(ctx, path, assetIDs)
+}
+
+func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []string) (any, bool, error) {
 	queries := map[string]struct{ key, sql string }{
 		"/api/assets": {"assets", `SELECT jsonb_build_object(
 			'id',id,'name',name,'host',host,'port',port,'database',database_name,
@@ -22,17 +46,17 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			'lastSampleAt',last_sample_at,'lastStatus',last_status,
 			'lastError',last_error,'versionNum',version_num,'role',role,
 			'pg14Eol',coalesce(version_num/10000=14,false))
-			FROM assets ORDER BY created_at DESC`},
+			FROM assets /*asset_scope*/ ORDER BY created_at DESC`},
 		"/api/events": {"events", `SELECT jsonb_build_object(
 			'id',e.id,'assetId',e.asset_id,'assetName',a.name,'kind',e.kind,
 			'eventGroup',e.event_group,'title',e.title,'status',e.status,
 			'startedAt',e.started_at,'endedAt',e.ended_at,'acknowledgedAt',e.acknowledged_at)
-			FROM events e JOIN assets a ON a.id=e.asset_id ORDER BY e.started_at DESC LIMIT 200`},
+			FROM events e JOIN assets a ON a.id=e.asset_id /*asset_scope*/ ORDER BY e.started_at DESC LIMIT 200`},
 		"/api/alerts": {"alerts", `SELECT jsonb_build_object(
 			'assetId',s.asset_id,'assetName',a.name,'ruleId',s.rule_id,
 			'rule',r.definition_json,'state',s.state_json)
 			FROM alert_states s JOIN assets a ON a.id=s.asset_id
-			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing'`},
+			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing' /*asset_scope*/`},
 		"/api/alert-rules": {"rules", `SELECT definition_json || jsonb_build_object('editable',
 			definition_json->>'metric' IN ('pg.unavailable','collector.pg_failed',
 			'collector.missed_intervals','collector.k8s_failed','collector.linux_failed',
@@ -50,7 +74,7 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			'id',id,'kind',kind,'assetId',asset_id,'ruleId',rule_id,
 			'startsAt',starts_at,'endsAt',ends_at,'reason',reason,
 			'createdAt',created_at,'revokedAt',revoked_at)
-			FROM silences ORDER BY created_at DESC LIMIT 200`},
+			FROM silences /*asset_scope*/ ORDER BY created_at DESC LIMIT 200`},
 		"/api/notifications": {"notifications", `SELECT jsonb_build_object(
 			'id',n.id,'channel',n.channel,'status',n.status,'attempts',n.attempts,
 			'nextAttemptAt',n.next_attempt_at,'deliveredAt',n.delivered_at,
@@ -58,19 +82,19 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			'eventId',v.id,'assetId',v.asset_id,'assetName',a.name)
 			FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
 			JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
-			ORDER BY e.observed_at DESC,n.id DESC LIMIT 100`},
+			/*asset_scope*/ ORDER BY e.observed_at DESC,n.id DESC LIMIT 100`},
 		"/api/inspection-templates": {"templates", `SELECT definition_json FROM inspection_templates ORDER BY id`},
 		"/api/inspection-schedules": {"schedules", `SELECT jsonb_build_object(
 			'assetId',asset_id,'templateId',template_id,'intervalMinutes',interval_minutes,
 			'nextDueAt',next_due_at,'enabled',enabled)
-			FROM inspection_schedules ORDER BY next_due_at`},
+			FROM inspection_schedules /*asset_scope*/ ORDER BY next_due_at`},
 		"/api/inspection-runs": {"runs", `SELECT jsonb_build_object(
 			'id',id,'assetId',asset_id,'templateId',template_id,
 			'templateVersion',template_version,'sampleId',sample_id,'retryOf',retry_of,
 			'startedAt',started_at,'completedAt',completed_at,'status',status,
 			'error',error,'eventIds',event_ids_json,
 			'summary',summary_json,'findings',findings_json)
-			FROM inspection_runs ORDER BY completed_at DESC LIMIT 50`},
+			FROM inspection_runs /*asset_scope*/ ORDER BY completed_at DESC LIMIT 50`},
 	}
 	if path == "/api/storage" {
 		value, err := s.storageSnapshot(ctx)
@@ -80,7 +104,21 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 	if !ok {
 		return nil, false, nil
 	}
-	rows, err := s.pool.Query(ctx, query.sql)
+	if assetIDs == nil {
+		query.sql = strings.ReplaceAll(query.sql, "/*asset_scope*/", "")
+	} else {
+		if !strings.Contains(query.sql, "/*asset_scope*/") {
+			return nil, true, errors.New("collection query has no asset scope marker")
+		}
+		query.sql = strings.ReplaceAll(query.sql, "/*asset_scope*/", scopedCollectionPredicates[path])
+	}
+	var rows pgx.Rows
+	var err error
+	if assetIDs == nil {
+		rows, err = s.pool.Query(ctx, query.sql)
+	} else {
+		rows, err = s.pool.Query(ctx, query.sql, assetIDs)
+	}
 	if err != nil {
 		return nil, true, fmt.Errorf("read %s: %w", path, err)
 	}

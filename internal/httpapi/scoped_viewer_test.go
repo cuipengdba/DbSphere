@@ -25,6 +25,10 @@ func (s *scopedViewerStub) ReadCollection(_ context.Context, path string) (any, 
 	return value, found, nil
 }
 
+func (s *scopedViewerStub) ReadScopedCollection(ctx context.Context, path string, _ []string) (any, bool, error) {
+	return s.ReadCollection(ctx, path)
+}
+
 func (*scopedViewerStub) AssetIDForResource(_ context.Context, kind, id string) (string, error) {
 	if kind == "event" {
 		switch id {

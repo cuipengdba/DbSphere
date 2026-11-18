@@ -29,6 +29,9 @@ type HealthStore interface{ Health(context.Context) error }
 type CollectionReader interface {
 	ReadCollection(context.Context, string) (any, bool, error)
 }
+type ScopedCollectionReader interface {
+	ReadScopedCollection(context.Context, string, []string) (any, bool, error)
+}
 type AssetStore interface {
 	AssetByID(context.Context, string) (json.RawMessage, error)
 	CreateAsset(context.Context, assets.Input, []byte) (json.RawMessage, error)
@@ -335,7 +338,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
 				"viewerScoped": loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"csrf": security.CSRFToken(credentials.MasterKey, session)})
+				"csrf":         security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/session" {
@@ -349,7 +352,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole,
 				"viewerScoped": loggedIn && role == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"csrf": csrf})
+				"csrf":         csrf})
 			return
 		}
 		if !loggedIn {
@@ -1049,7 +1052,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if r.Method == http.MethodGet {
 			if reader, ok := store.(CollectionReader); ok {
-				value, found, err := reader.ReadCollection(r.Context(), r.URL.Path)
+				var value any
+				var found bool
+				var err error
+				if viewerScope != nil && scopedCollectionKeys[r.URL.Path] != "" {
+					scopedReader, supported := store.(ScopedCollectionReader)
+					if !supported {
+						respond(w, http.StatusForbidden, map[string]string{"error": "Scoped collection unavailable"})
+						return
+					}
+					value, found, err = scopedReader.ReadScopedCollection(r.Context(), r.URL.Path, credentials.ViewerAssetIDs)
+				} else {
+					value, found, err = reader.ReadCollection(r.Context(), r.URL.Path)
+				}
 				if found {
 					if err != nil {
 						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Monitoring data unavailable"})
