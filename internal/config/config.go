@@ -5,19 +5,24 @@ import (
 	"errors"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 )
 
+var assetIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 type Config struct {
-	ListenAddr   string
-	DatabaseURL  string
-	MasterKey    []byte
-	AdminPass    string
-	ViewerPass   string
-	AutoCollect  bool
-	CollectEvery int
-	OTLPToken    string
-	TraceDays    int
+	ListenAddr     string
+	DatabaseURL    string
+	MasterKey      []byte
+	AdminPass      string
+	ViewerPass     string
+	ViewerAssetIDs []string
+	AutoCollect    bool
+	CollectEvery   int
+	OTLPToken      string
+	TraceDays      int
 }
 
 func Load() (Config, error) {
@@ -32,6 +37,23 @@ func Load() (Config, error) {
 	viewer := os.Getenv("DBSPHERE_VIEWER_PASSWORD")
 	if viewer != "" && (len(viewer) < 12 || viewer == password) {
 		return Config{}, errors.New("DBSPHERE_VIEWER_PASSWORD must be distinct and contain at least 12 characters")
+	}
+	var viewerAssetIDs []string
+	if raw := os.Getenv("DBSPHERE_VIEWER_ASSET_IDS"); raw != "" {
+		if viewer == "" {
+			return Config{}, errors.New("DBSPHERE_VIEWER_ASSET_IDS requires DBSPHERE_VIEWER_PASSWORD")
+		}
+		seen := map[string]bool{}
+		for _, part := range strings.Split(raw, ",") {
+			id := strings.ToLower(strings.TrimSpace(part))
+			if !assetIDPattern.MatchString(id) {
+				return Config{}, errors.New("DBSPHERE_VIEWER_ASSET_IDS must contain comma-separated UUIDs")
+			}
+			if !seen[id] {
+				viewerAssetIDs = append(viewerAssetIDs, id)
+				seen[id] = true
+			}
+		}
 	}
 	key, err := base64.StdEncoding.DecodeString(os.Getenv("DBSPHERE_MASTER_KEY"))
 	if err != nil || len(key) != 32 {
@@ -73,6 +95,7 @@ func Load() (Config, error) {
 	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
 		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer,
-		AutoCollect: autoCollect, CollectEvery: interval,
+		ViewerAssetIDs: viewerAssetIDs,
+		AutoCollect:    autoCollect, CollectEvery: interval,
 		OTLPToken: otlpToken, TraceDays: traceDays}, nil
 }

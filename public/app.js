@@ -1,5 +1,6 @@
 let csrf = null;
 let currentRole = null;
+let viewerScoped = false;
 let selectedAsset = null;
 let selectedEvent = null;
 let editingAsset = null;
@@ -77,7 +78,7 @@ async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
     { templates }, { schedules }, { runs }, audit] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
-    api('/api/silences'), api('/api/notifications'), api('/api/storage'),
+    api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
     api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
     currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null)
   ]);
@@ -596,6 +597,10 @@ function renderNotifications(notifications) {
 
 function renderStorage(storage) {
   const target = $('storage-detail'); target.replaceChildren();
+  if (storage.mode === 'scoped') {
+    target.append(cell('p', '资产范围只读账号不显示全平台 PG18 存储统计。', 'empty'));
+    return;
+  }
   if (storage.mode === 'sqlite-preview') {
     target.append(cell('p', '当前是 SQLite 预览模式；正式长期存储需独立 PostgreSQL 18。', 'warning'));
     return;
@@ -870,6 +875,7 @@ async function boot() {
   const session = await api('/api/session');
   csrf = session.csrf;
   currentRole = session.authenticated ? (session.role || 'admin') : null;
+  viewerScoped = session.authenticated && session.viewerScoped === true;
   document.body.dataset.role = currentRole || '';
   $('role-label').textContent = currentRole === 'viewer' ? '只读查看' : '管理员';
   $('role-label').hidden = !session.authenticated;

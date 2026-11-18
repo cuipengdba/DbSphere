@@ -107,6 +107,7 @@ func run(log *slog.Logger) error {
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash: viewerHash,
+			ViewerAssetIDs:     cfg.ViewerAssetIDs,
 			SecureCookie:       os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:          cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

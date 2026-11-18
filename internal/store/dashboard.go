@@ -55,7 +55,7 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 			'id',n.id,'channel',n.channel,'status',n.status,'attempts',n.attempts,
 			'nextAttemptAt',n.next_attempt_at,'deliveredAt',n.delivered_at,
 			'lastError',n.last_error,'kind',e.kind,'observedAt',e.observed_at,
-			'eventId',v.id,'assetName',a.name)
+			'eventId',v.id,'assetId',v.asset_id,'assetName',a.name)
 			FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
 			JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
 			ORDER BY e.observed_at DESC,n.id DESC LIMIT 100`},

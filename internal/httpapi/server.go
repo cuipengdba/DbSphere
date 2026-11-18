@@ -149,6 +149,7 @@ type AuthConfig struct {
 	MasterKey          []byte
 	PasswordHash       string
 	ViewerPasswordHash string
+	ViewerAssetIDs     []string
 	SecureCookie       bool
 	OTLPToken          string
 	AI                 *ai.Client
@@ -333,6 +334,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
+				"viewerScoped": loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
 				"csrf": security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
@@ -345,7 +347,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if loggedIn {
 				sessionRole = role
 			}
-			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole, "csrf": csrf})
+			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole,
+				"viewerScoped": loggedIn && role == "viewer" && len(credentials.ViewerAssetIDs) > 0,
+				"csrf": csrf})
 			return
 		}
 		if !loggedIn {
@@ -366,6 +370,16 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if role == "viewer" && r.Method != http.MethodGet {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
 			return
+		}
+		viewerScope := map[string]bool(nil)
+		if role == "viewer" && len(credentials.ViewerAssetIDs) > 0 {
+			viewerScope = make(map[string]bool, len(credentials.ViewerAssetIDs))
+			for _, id := range credentials.ViewerAssetIDs {
+				viewerScope[id] = true
+			}
+			if !authorizeScopedViewerRead(w, r, store, viewerScope) {
+				return
+			}
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/audit" {
 			if role != "admin" {
@@ -1040,6 +1054,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					if err != nil {
 						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Monitoring data unavailable"})
 						return
+					}
+					if viewerScope != nil && scopedCollectionKeys[r.URL.Path] != "" {
+						value, err = filterScopedCollection(r.URL.Path, value, viewerScope)
+						if err != nil {
+							respond(w, http.StatusForbidden, map[string]string{"error": "Scoped collection unavailable"})
+							return
+						}
 					}
 					respond(w, http.StatusOK, value)
 					return

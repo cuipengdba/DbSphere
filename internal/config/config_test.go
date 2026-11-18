@@ -60,3 +60,23 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 		t.Fatalf("OTLP configuration was not loaded: %+v %v", cfg, err)
 	}
 }
+
+func TestViewerAssetScopeRequiresValidIDsAndPassword(t *testing.T) {
+	t.Setenv("DBSPHERE_DATABASE_URL", "postgres://example.invalid/dbsphere")
+	t.Setenv("DBSPHERE_ADMIN_PASSWORD", "admin-test-password")
+	t.Setenv("DBSPHERE_MASTER_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("DBSPHERE_VIEWER_ASSET_IDS", "11111111-1111-1111-1111-111111111111")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VIEWER_ASSET_IDS") {
+		t.Fatalf("scope without viewer password was accepted: %v", err)
+	}
+	t.Setenv("DBSPHERE_VIEWER_PASSWORD", "viewer-test-password")
+	t.Setenv("DBSPHERE_VIEWER_ASSET_IDS", "not-a-uuid")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VIEWER_ASSET_IDS") {
+		t.Fatalf("invalid scope was accepted: %v", err)
+	}
+	t.Setenv("DBSPHERE_VIEWER_ASSET_IDS", "11111111-1111-1111-1111-111111111111, 11111111-1111-1111-1111-111111111111")
+	cfg, err := Load()
+	if err != nil || len(cfg.ViewerAssetIDs) != 1 {
+		t.Fatalf("asset scope was not normalized: %+v %v", cfg.ViewerAssetIDs, err)
+	}
+}
