@@ -72,6 +72,19 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 	if cfg, err := Load(); err != nil || cfg.TraceDays != 14 || len(cfg.OTLPToken) != 32 {
 		t.Fatalf("OTLP configuration was not loaded: %+v %v", cfg, err)
 	}
+	t.Setenv("DBSPHERE_RETENTION_DAYS", "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DBSPHERE_RETENTION_DAYS") {
+		t.Fatalf("invalid sample retention was accepted: %v", err)
+	}
+	t.Setenv("DBSPHERE_RETENTION_DAYS", "90")
+	t.Setenv("DBSPHERE_EVENT_RETENTION_DAYS", "3651")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DBSPHERE_EVENT_RETENTION_DAYS") {
+		t.Fatalf("invalid event retention was accepted: %v", err)
+	}
+	t.Setenv("DBSPHERE_EVENT_RETENTION_DAYS", "180")
+	if cfg, err := Load(); err != nil || cfg.SampleDays != 90 || cfg.EventDays != 180 {
+		t.Fatalf("retention policy was not loaded: %+v %v", cfg, err)
+	}
 }
 
 func TestViewerAssetScopeRequiresValidIDsAndPassword(t *testing.T) {

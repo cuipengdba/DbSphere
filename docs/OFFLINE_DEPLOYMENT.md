@@ -10,6 +10,8 @@ Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-
 
 Go 原生进程设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true` 后启动自动采集，一键 Compose 模式默认开启；`DBSPHERE_COLLECT_INTERVAL_SECONDS` 可设为 15–3600 秒，`DBSPHERE_COLLECT_WORKERS` 可设为 1–16（默认 4）。每轮最多选取 100 个到期资产，按工作数并行，每个资产有独立 45 秒上限。请按目标实例及 PG18 监控库的负载调整工作数。多服务副本的跨实例采集租约尚未实现，当前仅在一个 DbSphere 副本启用自动采集。
 
+Go 版 PG18 历史数据清理默认关闭。按需在 `deploy/compose/.env.go` 或离线包的 `dbsphere-go.env` 中配置 `DBSPHERE_RETENTION_DAYS=90`（样本）及 `DBSPHERE_EVENT_RETENTION_DAYS=180`（已结事件），可只启用其中一项；取值 1–3650。重新运行一键脚本后生效。每轮限量清理，保留仍被事件证据或巡检引用的样本，以及未结事件、未完成通知和巡检关联事件；实际保留时间可能超过设置值。开启前请备份 PG18，详见[存储记录](STORAGE_V0.3.md)。
+
 Go 版额外使用 `scripts/go-offline-upgrade-rollback-smoke.sh` 在 Linux CI 演练旧 Go 包 → 当前包 → 旧 Go 包，复用独立 PG18 数据卷，并逐段读取同一资产、样本和事件 ID。[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44232205949) 已通过该演练；后续 schema 变更必须另做前向迁移和可回滚性验证。
 
 Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版本>-linux-amd64.run --backup /absolute/backup/directory`。命令校验离线包和唯一运行的 Go PG18 容器，以 PG18 `pg_dump -Fc` 生成归档，`pg_restore --list` 验证可读性，并输出带 SHA-256 的 JSON 清单。源码一键部署可运行 `bash scripts/backup-go-store.sh /absolute/backup/directory`。外部 PG18 不由此命令备份，应使用其自身的 PG18 备份体系。此能力仅备份数据库；离线恢复到新 PG18 与升级/回滚联动仍须通过 CI 和生产演练，不应只凭清单认定备份可恢复。

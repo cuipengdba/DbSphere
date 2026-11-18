@@ -24,6 +24,8 @@ type Config struct {
 	CollectWorkers int
 	OTLPToken      string
 	TraceDays      int
+	SampleDays     int
+	EventDays      int
 }
 
 func Load() (Config, error) {
@@ -111,9 +113,24 @@ func Load() (Config, error) {
 			return Config{}, errors.New("DBSPHERE_TRACE_RETENTION_DAYS must be between 1 and 3650")
 		}
 	}
+	sampleDays := 0
+	if value := os.Getenv("DBSPHERE_RETENTION_DAYS"); value != "" {
+		sampleDays, err = strconv.Atoi(value)
+		if err != nil || sampleDays < 1 || sampleDays > 3650 {
+			return Config{}, errors.New("DBSPHERE_RETENTION_DAYS must be between 1 and 3650")
+		}
+	}
+	eventDays := 0
+	if value := os.Getenv("DBSPHERE_EVENT_RETENTION_DAYS"); value != "" {
+		eventDays, err = strconv.Atoi(value)
+		if err != nil || eventDays < 1 || eventDays > 3650 {
+			return Config{}, errors.New("DBSPHERE_EVENT_RETENTION_DAYS must be between 1 and 3650")
+		}
+	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
 		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer,
 		ViewerAssetIDs: viewerAssetIDs,
 		AutoCollect:    autoCollect, CollectEvery: interval, CollectWorkers: workers,
-		OTLPToken: otlpToken, TraceDays: traceDays}, nil
+		OTLPToken: otlpToken, TraceDays: traceDays,
+		SampleDays: sampleDays, EventDays: eventDays}, nil
 }

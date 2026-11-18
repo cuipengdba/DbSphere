@@ -92,6 +92,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pg.Close()
+	pg.ConfigureRetention(cfg.SampleDays, cfg.EventDays)
 	notifyConfig, err := notify.Load()
 	if err != nil {
 		return err
@@ -160,6 +161,15 @@ func run(log *slog.Logger) error {
 		defer close(partitionDone)
 		runPartitionMaintainer(ctx, pg, log)
 	}()
+	var retentionDone <-chan struct{}
+	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
+		done := make(chan struct{})
+		retentionDone = done
+		go func() {
+			defer close(done)
+			runDataRetention(ctx, pg, cfg.SampleDays, cfg.EventDays, log)
+		}()
+	}
 	inspectionDone := make(chan struct{})
 	go func() {
 		defer close(inspectionDone)
@@ -194,6 +204,9 @@ func run(log *slog.Logger) error {
 	<-notifierDone
 	<-tracePrunerDone
 	<-partitionDone
+	if retentionDone != nil {
+		<-retentionDone
+	}
 	<-inspectionDone
 	if autoAIDone != nil {
 		<-autoAIDone
@@ -334,6 +347,42 @@ func runPartitionMaintainer(ctx context.Context, pg *store.Postgres, log *slog.L
 			if err != nil && ctx.Err() == nil {
 				log.Error("Go storage partition maintenance failed", "error", err)
 			}
+		}
+	}
+}
+
+func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, eventDays int, log *slog.Logger) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		now := time.Now().UTC()
+		if eventDays > 0 {
+			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			removed, err := pg.PruneResolvedEvents(sweepCtx, now.AddDate(0, 0, -eventDays), 1000)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Error("Go event retention sweep failed", "error", err)
+			} else if removed > 0 {
+				log.Info("Go event retention sweep", "removed", removed)
+			}
+		}
+		if sampleDays > 0 {
+			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			removed, err := pg.PruneSamples(sweepCtx, now.AddDate(0, 0, -sampleDays), 10000)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Error("Go sample retention sweep failed", "error", err)
+			} else if removed > 0 {
+				log.Info("Go sample retention sweep", "removed", removed)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

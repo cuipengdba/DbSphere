@@ -171,9 +171,9 @@ func (s *Postgres) storageSnapshot(ctx context.Context) (json.RawMessage, error)
 			'estimatedSampleBytesPerDay',CASE WHEN sample_stats.sample_count=0 THEN 0 ELSE
 				round(sizes.sample_partition_bytes::numeric/sample_stats.sample_count *
 				round(sample_stats.recent_samples::numeric/7)) END,
-			'retentionDays',null,'eventRetentionDays',null,
+			'retentionDays',nullif($1::int,0),'eventRetentionDays',nullif($2::int,0),
 			'backup',jsonb_build_object('status','unknown','reason','尚未接入 PG18 备份清单'))
-		FROM sample_stats,event_stats,sizes`).Scan(&raw)
+		FROM sample_stats,event_stats,sizes`, s.sampleRetentionDays, s.eventRetentionDays).Scan(&raw)
 	if err != nil {
 		return nil, fmt.Errorf("read PostgreSQL 18 storage status: %w", err)
 	}

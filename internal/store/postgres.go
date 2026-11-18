@@ -12,7 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Postgres struct{ pool *pgxpool.Pool }
+type Postgres struct {
+	pool                *pgxpool.Pool
+	sampleRetentionDays int
+	eventRetentionDays  int
+}
+
+// ConfigureRetention is called once before the HTTP server starts. Zero means
+// that historical samples or events are kept indefinitely.
+func (s *Postgres) ConfigureRetention(sampleDays, eventDays int) {
+	s.sampleRetentionDays = sampleDays
+	s.eventRetentionDays = eventDays
+}
 
 //go:embed schema.sql
 var schemaSQL string
