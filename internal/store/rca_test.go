@@ -74,6 +74,46 @@ func TestGoRCAProducesOOMCandidateWithoutRestartAlert(t *testing.T) {
 	}
 }
 
+func TestGoRCAMergesCorrelatedOOMAndAlertEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	alert, _ := json.Marshal(map[string]any{"metric": "k8s.oom_recent", "sampleId": "sample-oom",
+		"value": 1, "operator": ">=", "threshold": 1})
+	correlation, _ := json.Marshal(map[string]any{"hypothesis": "Pod OOMKilled 与 PG 连接失败同期",
+		"confidence": "medium", "supports": []string{"collection-error", "k8s-state"},
+		"causeObservedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)})
+	decision, _ := json.Marshal(map[string]any{"code": "pod_oom_correlated", "decision": "confirmed"})
+	// The alert is deliberately ordered before the stored correlation evidence.
+	event := &eventRecord{ID: "event-oom", StartedAt: now, Evidence: []eventEvidence{
+		{ID: "oom-alert", Kind: "alert_firing", ObservedAt: now, Payload: alert},
+		{ID: "oom-correlation", Kind: "root_cause_candidate", ObservedAt: now, Payload: correlation},
+		{ID: "oom-decision", Kind: "rca_decision", ObservedAt: now, Payload: decision}}}
+	sample := sampleObservation{ID: "sample-oom", At: now, Status: "error", Metrics: map[string]any{
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0"},
+			"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
+				"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}}}}}
+	edges := []map[string]string{}
+	candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-oom": sample},
+		func(string, string, string, string, any) {}, &edges)
+	if len(candidates) != 1 || candidates[0]["code"] != "pod_oom_correlated" ||
+		len(candidates[0]["supports"].([]string)) != 5 ||
+		len(candidates[0]["matchedConditions"].([]any)) != 1 ||
+		object(candidates[0]["review"])["decision"] != "confirmed" {
+		t.Fatalf("OOM evidence or existing review was lost: %+v", candidates)
+	}
+	for _, support := range []string{"oom-correlation", "collection-error", "k8s-state", "oom-alert", "sample:sample-oom"} {
+		found := false
+		for _, edge := range edges {
+			if edge["from"] == "candidate:pod_oom_correlated" &&
+				(edge["to"] == "evidence:"+support || edge["to"] == support) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("support %q was not linked to merged OOM candidate", support)
+		}
+	}
+}
+
 func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 	now := time.Now().UTC()
 	alert := func(id, metric, sampleID string, value float64) eventEvidence {

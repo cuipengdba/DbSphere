@@ -4,6 +4,8 @@
 
 ## 当前阶段
 
+Go 事件页把同一次 OOM 故障的历史 `pod_oom_correlated` 证据与新 `k8s.oom_recent` 告警合并成一条候选，保留已有人工确认/驳回所用的候选代码，并把采集失败、K8S 状态、告警和原始样本全部连到候选；单独出现 OOM 告警时仍生成 `k8s_oom_killed` 候选。乱序证据单元测试、PG18 实库测试和 Go 全量测试通过。本机 kind 在更新验证镜像后出现 Kubernetes API/containerd 超时，真实旧事件的合并显示尚待集群恢复后复核。
+
 Go K8S 资产现在可只填单 Pod 的 Deployment/StatefulSet Workload；若已配置 Pod 被重建并返回 404，也会按 Workload 标签及 owner UID 只读寻找唯一就绪的新 Pod。多候选、权限缺口和超过 100 项的列表不猜测实例，样本标出原 Pod 和解析 Pod。本机真实 kind 将资产故意改回已删除的旧 Pod 名，再次采样仍正确解析到新 Pod、取得 PG18 和资源指标；Pod 留空的 Workload-only 路径也通过。TLS 模拟 API 验证多就绪 Pod 必须报告歧义。多副本主备映射和大集群分页仍是 V1.0 缺口。
 
 本机 kind 第三类真实故障演练：测试 PG18 Deployment 指定不存在的 Node 标签后，Pod 一直 `Pending`，真实 `PodScheduled=False/Unschedulable` 与 `FailedScheduling` Event 被 Go 只读采集；Service 无端点导致 PG18 连接失败。三层证据进入事件 `109fcab1-f7c1-456b-aa13-9899a5b23c2f`，并生成有来源的低置信度调度候选。移除错误 Node 选择器后，新 Pod 就绪，采样 `3b396529-04b1-4f3b-aa42-de4955391dd9` 成功连接 PG18；已删除的旧 Pod 映射自动跟随新 Pod，原事件恢复为 `resolved`。本机三类故障演练的环境、证据和局限见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。

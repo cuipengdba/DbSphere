@@ -115,6 +115,7 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation, add graphAdder, edges *[]map[string]string) []map[string]any {
 	candidates := []map[string]any{}
 	seen := map[string]bool{}
+	candidateIndex := map[string]int{}
 	reviews := map[string]map[string]any{}
 	for _, item := range event.Evidence {
 		if item.Kind != "rca_decision" {
@@ -150,6 +151,7 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			"timeOrder": map[string]any{"firstObservedAt": at, "eventStartedAt": event.StartedAt, "relation": relation},
 		}
 		candidates = append(candidates, candidate)
+		candidateIndex[code] = len(candidates) - 1
 		candidateNode := "candidate:" + code
 		add(candidateNode, "candidate", title, "/api/events/"+event.ID, at)
 		*edges = append(*edges, map[string]string{"from": "event:" + event.ID, "to": candidateNode, "relation": "hypothesizes"})
@@ -165,33 +167,70 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 				"to": "evidence:" + stringValue(review["evidenceId"]), "relation": "reviewed_by"})
 		}
 	}
+	appendCandidateEvidence := func(code string, supports []string, condition any) {
+		index, ok := candidateIndex[code]
+		if !ok {
+			return
+		}
+		candidate := candidates[index]
+		existing := candidate["supports"].([]string)
+		for _, support := range supports {
+			found := false
+			for _, current := range existing {
+				if current == support {
+					found = true
+					break
+				}
+			}
+			if found {
+				continue
+			}
+			existing = append(existing, support)
+			supportNode := support
+			if !strings.HasPrefix(support, "sample:") {
+				supportNode = "evidence:" + support
+			}
+			*edges = append(*edges, map[string]string{"from": "candidate:" + code,
+				"to": supportNode, "relation": "supported_by"})
+		}
+		candidate["supports"] = existing
+		if condition != nil {
+			candidate["matchedConditions"] = append(candidate["matchedConditions"].([]any), condition)
+		}
+	}
 	for _, item := range event.Evidence {
+		if item.Kind != "root_cause_candidate" {
+			continue
+		}
 		var payload map[string]any
 		if json.Unmarshal(item.Payload, &payload) != nil {
 			continue
 		}
-		if item.Kind == "root_cause_candidate" {
-			title := stringValue(payload["hypothesis"])
-			if title == "" {
-				continue
+		title := stringValue(payload["hypothesis"])
+		if title == "" {
+			continue
+		}
+		confidence := stringValue(payload["confidence"])
+		if confidence == "" {
+			confidence = "low"
+		}
+		supports := []string{item.ID}
+		for _, raw := range list(payload["supports"]) {
+			if id := stringValue(raw); id != "" {
+				supports = append(supports, id)
 			}
-			confidence := stringValue(payload["confidence"])
-			if confidence == "" {
-				confidence = "low"
-			}
-			supports := []string{item.ID}
-			for _, raw := range list(payload["supports"]) {
-				if id := stringValue(raw); id != "" {
-					supports = append(supports, id)
-				}
-			}
-			causeAt := item.ObservedAt
-			if observed, err := time.Parse(time.RFC3339Nano, stringValue(payload["causeObservedAt"])); err == nil {
-				causeAt = observed
-			}
-			addCandidate("pod_oom_correlated", title, confidence, supports,
-				[]string{"容器日志和探针与数据库故障的先后顺序未完全验证"},
-				stringValue(payload["limitation"]), nil, causeAt, nil)
+		}
+		causeAt := item.ObservedAt
+		if observed, err := time.Parse(time.RFC3339Nano, stringValue(payload["causeObservedAt"])); err == nil {
+			causeAt = observed
+		}
+		addCandidate("pod_oom_correlated", title, confidence, supports,
+			[]string{"容器日志和探针与数据库故障的先后顺序未完全验证"},
+			stringValue(payload["limitation"]), nil, causeAt, nil)
+	}
+	for _, item := range event.Evidence {
+		var payload map[string]any
+		if json.Unmarshal(item.Payload, &payload) != nil {
 			continue
 		}
 		if item.Kind != "alert_firing" && item.Kind != "alert_unsuppressed" {
@@ -377,11 +416,15 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 				at, err := time.Parse(time.RFC3339Nano, stringValue(container["lastTerminatedAt"]))
 				if err == nil && stringValue(container["terminatedReason"]) == "OOMKilled" &&
 					!at.After(item.ObservedAt) && item.ObservedAt.Sub(at) <= 10*time.Minute {
-					addCandidate("k8s_oom_killed", "PostgreSQL Pod 容器近期 OOMKilled", "medium", supports,
-						[]string{"容器内存限制与数据库内存负载未核对"},
-						"OOM 发生在事件时间窗内，仍需排除同时发生的其他故障。",
-						map[string]any{"pod": object(k8s["pod"])["name"], "container": container["name"], "at": at},
-						at, condition)
+					if seen["pod_oom_correlated"] {
+						appendCandidateEvidence("pod_oom_correlated", supports, condition)
+					} else {
+						addCandidate("k8s_oom_killed", "PostgreSQL Pod 容器近期 OOMKilled", "medium", supports,
+							[]string{"容器内存限制与数据库内存负载未核对"},
+							"OOM 发生在事件时间窗内，仍需排除同时发生的其他故障。",
+							map[string]any{"pod": object(k8s["pod"])["name"], "container": container["name"], "at": at},
+							at, condition)
+					}
 					break
 				}
 			}

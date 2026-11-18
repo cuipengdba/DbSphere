@@ -639,11 +639,20 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(detail)
 	if !strings.Contains(string(encoded), "pod_oom_correlated") ||
-		!strings.Contains(string(encoded), "k8s_oom_killed") ||
 		!strings.Contains(string(encoded), "pod:pod-uid") ||
 		!strings.Contains(string(encoded), "routes_to") ||
 		!strings.Contains(string(encoded), "supported_by") {
 		t.Fatalf("PG/Kubernetes evidence missing from one event: %s", encoded)
+	}
+	candidates := object(object(detail)["analysis"])["candidates"].([]map[string]any)
+	var oomCount int
+	for _, candidate := range candidates {
+		if candidate["code"] == "pod_oom_correlated" || candidate["code"] == "k8s_oom_killed" {
+			oomCount++
+		}
+	}
+	if oomCount != 1 {
+		t.Fatalf("same OOM fault produced duplicate candidates: %+v", candidates)
 	}
 	if _, err := pg.recordCheckAt(context.Background(), asset.ID,
 		map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
