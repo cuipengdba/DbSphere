@@ -20,3 +20,5 @@ go run ./examples/trace-lock-app
 导出的字段只有服务名、Trace/Span 标识、时间、状态、PG 主机/端口/数据库和 `dbsphere.pg.backend_pid`。不发送 SQL 文本、参数、数据库密码或请求 URL。PID 可复用，匹配仍须满足同资产和紧邻时间窗，并由操作人员复核。
 
 `go test ./examples/trace-lock-app` 在设置 `DBSPHERE_TEST_PG_TARGET_PORT`、`DBSPHERE_TEST_PG_TARGET_PASSWORD` 时，启动真实 HTTP 服务和临时 OTLP 接收器，对实际 PG 锁等待、请求完成、父子 Span、等待 PID 与脱敏作集成验证；未配置测试 PG 时跳过。
+
+同时设置 `DBSPHERE_TEST_PG18_URL` 会运行更完整的验收：测试在 PG18 新建并最终删除独立监控库，启动真实 Go DbSphere OTLP 接口，按真实锁告警创建事件，验证同一 ID 下服务→数据库 Span→等待 PID→阻塞 PID 的图与根因候选，解除锁后检查原事件恢复。此测试临时将隔离库中的锁告警持续时间设为 0，不改现有监控库规则。
