@@ -6,6 +6,8 @@
 
 新增独立的托管 PostgreSQL 资产类型：Go 调度器对其只采数据库与可选的 PgBouncer/Patroni 端点，B/S 页面不再把它显示为 Linux 主机或要求 K8S 映射。本机以 PG18 监控库和 PG14 目标验证了自动调度、成功诊断样本和不存在虚构主机/Pod 指标；浏览器完成表单隐藏、创建、手动采集及详情缺口提示验收，无控制台错误，截图为 `H:\CodexLS\outputs\DbSphere-managed-ui.png`。厂商实际云数据库及 TLS 路径尚未验收，具体能力与限制见[托管模式能力矩阵](MANAGED_PG.md)。
 
+资产详情进一步加入按最近样本生成的“采集能力与缺口”折叠面板，区分数据库基础/深度/Top SQL、基础设施以及可选组件的已采集、缺失、未接入和不适用，标题沿用数据新鲜度状态。本机 PG14 目标浏览器复验显示 14/14 项数据库诊断、缺少 `pg_stat_statements` 的 Top SQL 提示、托管主机信号不适用与可选组件未接入，无控制台错误；截图为 `H:\CodexLS\outputs\DbSphere-managed-coverage.png`。此面板只展示已有证据，不推断厂商侧指标已开放；更大规模性能门槛仍需完成。
+
 隔离 PG18 主备夹具新增真实 WAL 归档失败故障：测试命令使 `pg_stat_archiver.failed_count` 从 0 增加，Go 以 `pg_monitor` 只读账号采集后在事件 `8dad5aff-608f-4d86-9cab-3e94bd826cff` 关联 `pg_archive_failures` 告警、`wal_archive_failures` 候选、原始样本与报告；恢复归档命令后新失败数归零，恢复样本关闭原事件。第一次尝试因 PostgreSQL 命令行参数覆盖 `ALTER SYSTEM` 而未注入故障，调整夹具后本机通过。真实仓库、备份恢复和生产告警仍待验收，见[WAL 归档故障演练](WAL_ARCHIVE_DRILL.md)。
 
 独立 PG18 维护夹具又通过 autovacuum 参数故障：真实 `autovacuum=off` 采样在事件 `ffd4e827-8719-45b5-b8a4-2f5d2657cc3f` 产生告警、低置信度候选与报告；参数恢复为 `on` 后同一事件关闭。初次在主备容器上尝试遇到本机数据库进程重启，已恢复主库参数并改用隔离容器，不能将初次失败写成产品通过。候选不声称已证明业务查询变慢，见[autovacuum 演练](AUTOVACUUM_DRILL.md)。

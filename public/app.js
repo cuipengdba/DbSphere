@@ -284,6 +284,9 @@ async function showAsset(id) {
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
   detail.append(cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
+  const sample = samples[0];
+  const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
+  renderSignalCoverage(detail, asset, currentSample, performance);
   if (pg18Store) {
     const to = new Date(); const from = new Date(to.getTime() - 24 * 3600 * 1000);
     const { series } = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=1`);
@@ -291,8 +294,6 @@ async function showAsset(id) {
     if (!series.length) detail.append(cell('p', '暂无趋势数据。', 'empty'));
     for (const point of series) detail.append(cell('p', `${formatTime(point.bucket)} · ${point.samples} 次采样 · ${point.errors} 次失败 · 平均连接 ${point.averageConnections ?? '未采集'}`, 'evidence'));
   }
-  const sample = samples[0];
-  const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   if (currentSample?.status === 'ok' && currentSample.metrics) {
     const metrics = currentSample.metrics;
     if (metrics.privileged_role) detail.append(cell('p', '当前监控账号具有高权限。建议改用专用 pg_monitor 账号。', 'warning'));
@@ -391,6 +392,32 @@ async function showAsset(id) {
     } else detail.append(cell('p', `容量预测暂不可用：${forecast.reason}`, 'empty'));
   }
   organizeAssetLayers(detail, asset, preferredLayer, restoreLayerFocus);
+}
+
+function renderSignalCoverage(target, asset, sample, performance) {
+  const metrics = sample?.metrics || {};
+  const diagnostics = Object.values(metrics.diagnostics || {});
+  const available = diagnostics.filter(item => item?.status === 'ok').length;
+  const rows = [
+    ['数据库连接与基础指标', metrics.collector?.pgStatus === 'ok' ? '已采集' : sample ? '采集失败' : '待首采'],
+    ['数据库深度诊断', diagnostics.length ? `${available}/${diagnostics.length} 项已采集${available < diagnostics.length ? '；其余信号缺失' : ''}` : '未采集'],
+    ['Top SQL', performance?.status === 'ok'
+      ? (performance.sampleId === sample?.id ? '已采集' : '仅有历史样本；本次未采集')
+      : `未采集：${performance?.reason || '未启用或无权限'}`],
+    [asset.runtime === 'k8s' ? 'K8S Pod / Node / PVC' : 'Linux 主机资源',
+      asset.runtime === 'managed' ? '不适用：托管模式无主机或 K8S API 信号'
+        : asset.runtime === 'k8s' ? (metrics.k8s?.status === 'ok' ? '已采集' : `未采集：${metrics.k8s?.reason || '待检查映射与权限'}`)
+          : metrics.linux?.status === 'ok' ? '已采集' : `未采集：${metrics.linux?.reason || '未配置 node_exporter'}`],
+    ['PgBouncer', asset.poolerConfigured ? (metrics.pgbouncer?.status === 'ok' ? '已采集' : `未采集：${metrics.pgbouncer?.reason || '连接或权限待检查'}`) : '未接入'],
+    ['Patroni', asset.patroniConfigured ? (metrics.patroni?.status === 'ok' ? '已采集' : `未采集：${metrics.patroni?.reason || '端点待检查'}`) : '未接入']
+  ];
+  const panel = document.createElement('details'); panel.className = 'settings-details';
+  panel.append(cell('summary', `采集能力与缺口 · ${assetHealth(asset).label}`));
+  const list = document.createElement('div'); list.className = 'diagnostic-list';
+  for (const [label, status] of rows) {
+    const row = document.createElement('div'); row.append(cell('strong', label), cell('span', status)); list.append(row);
+  }
+  panel.append(list); target.append(panel);
 }
 
 function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false) {
