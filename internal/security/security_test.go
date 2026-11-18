@@ -46,6 +46,34 @@ func TestSessionExpirySignatureAndCSRF(t *testing.T) {
 	}
 }
 
+func TestViewerSessionCannotBeInterpretedAsAdmin(t *testing.T) {
+	key := bytes.Repeat([]byte{5}, 32)
+	now := time.Now().UTC()
+	viewerKey := ViewerSessionKey(key, "viewer-hash-one")
+	viewer, err := CreateViewerSession(viewerKey, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, valid := SessionRole(viewerKey, viewer, now)
+	if !valid || role != "viewer" || VerifySession(key, viewer, now) {
+		t.Fatal("viewer session has wrong role or accepted administrator key")
+	}
+	if _, valid := SessionRole(ViewerSessionKey(key, "viewer-hash-two"), viewer, now); valid {
+		t.Fatal("old viewer session survived password rotation")
+	}
+	legacy, err := CreateSession(key, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, valid = SessionRole(key, legacy, now)
+	if !valid || role != "admin" {
+		t.Fatal("administrator session lost compatibility")
+	}
+	if role, valid := SessionRole(viewerKey, viewer+"x", now); valid || role != "" {
+		t.Fatal("tampered viewer session accepted")
+	}
+}
+
 func TestNodeSessionCompatibility(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	token := "eyJleHAiOjk5OTk5OTk5OTk5OTksIm5vbmNlIjoiMDAwMTAyMDMwNDA1MDYwNzA4MDkwYTBiMGMwZDBlMGYifQ.Y2xRmFlsu57CkZsdF4CpJrytLZT-KR3qDiPFGN4hzBA"

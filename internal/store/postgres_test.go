@@ -107,6 +107,39 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	}
 }
 
+func TestViewerPasswordRotationAndDisableOnPostgreSQL18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("DBSPHERE_TEST_PG18_URL is not set")
+	}
+	store, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	defer store.ViewerPasswordHash(ctx, "")
+	first, err := store.ViewerPasswordHash(ctx, "first-viewer-password")
+	if err != nil || !security.VerifyPassword("first-viewer-password", first) {
+		t.Fatal("viewer bootstrap failed", err)
+	}
+	kept, err := store.ViewerPasswordHash(ctx, "first-viewer-password")
+	if err != nil || kept != first {
+		t.Fatal("unchanged viewer password was rehashed", err)
+	}
+	rotated, err := store.ViewerPasswordHash(ctx, "rotated-viewer-password")
+	if err != nil || rotated == first || !security.VerifyPassword("rotated-viewer-password", rotated) {
+		t.Fatal("viewer password rotation failed", err)
+	}
+	if disabled, err := store.ViewerPasswordHash(ctx, ""); err != nil || disabled != "" {
+		t.Fatal("viewer account disable failed", err)
+	}
+	var count int
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM settings WHERE key='viewer_password_hash'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("viewer credential remained in PG18 after disable", err)
+	}
+}
+
 func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")

@@ -139,4 +139,48 @@ func (s *Postgres) AdminPasswordHash(ctx context.Context, bootstrapPassword stri
 	return stored, nil
 }
 
+// ViewerPasswordHash reconciles the optional global read-only account with
+// startup configuration. Removing the password disables the account.
+func (s *Postgres) ViewerPasswordHash(ctx context.Context, bootstrapPassword string) (string, error) {
+	var stored string
+	err := s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='viewer_password_hash'").Scan(&stored)
+	if err == nil {
+		if bootstrapPassword == "" {
+			_, err := s.pool.Exec(ctx, "DELETE FROM settings WHERE key='viewer_password_hash'")
+			return "", err
+		}
+		if security.VerifyPassword(bootstrapPassword, stored) {
+			return stored, nil
+		}
+		hash, err := security.HashPassword(bootstrapPassword)
+		if err != nil {
+			return "", err
+		}
+		if _, err = s.pool.Exec(ctx, "UPDATE settings SET value=$1 WHERE key='viewer_password_hash'", hash); err != nil {
+			return "", err
+		}
+		return hash, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if bootstrapPassword == "" {
+		return "", nil
+	}
+	if len(bootstrapPassword) < 12 {
+		return "", errors.New("DBSPHERE_VIEWER_PASSWORD must contain at least 12 characters")
+	}
+	hash, err := security.HashPassword(bootstrapPassword)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.pool.Exec(ctx, "INSERT INTO settings(key,value) VALUES('viewer_password_hash',$1) ON CONFLICT(key) DO NOTHING", hash); err != nil {
+		return "", err
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='viewer_password_hash'").Scan(&stored); err != nil {
+		return "", err
+	}
+	return stored, nil
+}
+
 func (s *Postgres) Close() { s.pool.Close() }

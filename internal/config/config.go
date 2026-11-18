@@ -13,6 +13,7 @@ type Config struct {
 	DatabaseURL  string
 	MasterKey    []byte
 	AdminPass    string
+	ViewerPass   string
 	AutoCollect  bool
 	CollectEvery int
 	OTLPToken    string
@@ -27,6 +28,10 @@ func Load() (Config, error) {
 	password := os.Getenv("DBSPHERE_ADMIN_PASSWORD")
 	if len(password) < 12 {
 		return Config{}, errors.New("DBSPHERE_ADMIN_PASSWORD must contain at least 12 characters")
+	}
+	viewer := os.Getenv("DBSPHERE_VIEWER_PASSWORD")
+	if viewer != "" && (len(viewer) < 12 || viewer == password) {
+		return Config{}, errors.New("DBSPHERE_VIEWER_PASSWORD must be distinct and contain at least 12 characters")
 	}
 	key, err := base64.StdEncoding.DecodeString(os.Getenv("DBSPHERE_MASTER_KEY"))
 	if err != nil || len(key) != 32 {
@@ -67,7 +72,7 @@ func Load() (Config, error) {
 		}
 	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
-		DatabaseURL: url, MasterKey: key, AdminPass: password,
+		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer,
 		AutoCollect: autoCollect, CollectEvery: interval,
 		OTLPToken: otlpToken, TraceDays: traceDays}, nil
 }

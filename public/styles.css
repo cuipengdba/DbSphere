@@ -75,3 +75,7 @@ button{background:#245ea7}
 @media(max-width:650px){.flow-strip{grid-template-columns:1fr 1fr}}
 
 .response-form{display:grid;gap:10px;margin:18px 0;padding:16px;border:1px solid #dce7ed;border-radius:12px;background:#f8fbfc}.response-form h4{margin:0}.response-form label{display:grid;gap:5px;font-size:13px;color:#405b68}.response-form select,.response-form input,.response-form textarea{width:100%;border:1px solid #cbdbe2;border-radius:8px;padding:9px 10px;background:#fff;color:#183340;font:inherit}.response-form textarea{resize:vertical}.response-form button{justify-self:start}.response-form [hidden]{display:none}
+
+.header-session{display:flex;align-items:center;gap:10px}.header-session span{font-size:12px;color:#446b78;background:#eaf3f5;border-radius:14px;padding:5px 9px}body[data-role=viewer] #workspace form,body[data-role=viewer] #workspace .write-action{display:none!important}
+
+body[data-role=viewer] section.panel:has(> #asset-form),body[data-role=viewer] section.panel:has(> #silence-form){display:none}body[data-role=viewer] div.grid[data-view=assets],body[data-role=viewer] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}

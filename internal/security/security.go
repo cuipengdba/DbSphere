@@ -99,6 +99,23 @@ func signature(key []byte, payload string) string {
 }
 
 func CreateSession(key []byte, now time.Time) (string, error) {
+	return createSession(key, now, "")
+}
+
+func CreateViewerSession(key []byte, now time.Time) (string, error) {
+	return createSession(key, now, "viewer")
+}
+
+// ViewerSessionKey binds viewer sessions to the configured password hash so
+// rotating or disabling the account invalidates its existing sessions.
+func ViewerSessionKey(master []byte, passwordHash string) []byte {
+	mac := hmac.New(sha256.New, master)
+	mac.Write([]byte("dbsphere-viewer-session-v1:"))
+	mac.Write([]byte(passwordHash))
+	return mac.Sum(nil)
+}
+
+func createSession(key []byte, now time.Time, role string) (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
@@ -106,7 +123,8 @@ func CreateSession(key []byte, now time.Time) (string, error) {
 	payload, err := json.Marshal(struct {
 		Expires int64  `json:"exp"`
 		Nonce   string `json:"nonce"`
-	}{Expires: now.Add(12 * time.Hour).UnixMilli(), Nonce: hex.EncodeToString(nonce)})
+		Role    string `json:"role,omitempty"`
+	}{Expires: now.Add(12 * time.Hour).UnixMilli(), Nonce: hex.EncodeToString(nonce), Role: role})
 	if err != nil {
 		return "", err
 	}
@@ -115,22 +133,37 @@ func CreateSession(key []byte, now time.Time) (string, error) {
 }
 
 func VerifySession(key []byte, token string, now time.Time) bool {
+	_, ok := SessionRole(key, token, now)
+	return ok
+}
+
+func SessionRole(key []byte, token string, now time.Time) (string, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 || len(parts[0]) == 0 || len(parts[1]) != 43 || len(token) > 1024 {
-		return false
+		return "", false
 	}
 	want := signature(key, parts[0])
 	if subtle.ConstantTimeCompare([]byte(want), []byte(parts[1])) != 1 {
-		return false
+		return "", false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return false
+		return "", false
 	}
 	var session struct {
-		Expires int64 `json:"exp"`
+		Expires int64  `json:"exp"`
+		Role    string `json:"role"`
 	}
-	return json.Unmarshal(payload, &session) == nil && session.Expires > now.UnixMilli()
+	if json.Unmarshal(payload, &session) != nil || session.Expires <= now.UnixMilli() {
+		return "", false
+	}
+	if session.Role == "" {
+		session.Role = "admin"
+	}
+	if session.Role != "admin" && session.Role != "viewer" {
+		return "", false
+	}
+	return session.Role, true
 }
 
 func CSRFToken(key []byte, session string) string {

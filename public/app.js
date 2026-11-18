@@ -1,4 +1,5 @@
 let csrf = null;
+let currentRole = null;
 let selectedAsset = null;
 let selectedEvent = null;
 let editingAsset = null;
@@ -47,6 +48,8 @@ function renderOverview(assets, events) {
 }
 
 async function api(path, method = 'GET', payload) {
+  if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout')
+    throw new Error('只读账号不能修改监控数据。');
   const response = await fetch(path, {
     method, credentials: 'same-origin',
     headers: { ...(payload ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
@@ -158,7 +161,7 @@ function renderInspections(assets, templates, schedules, runs) {
         ? ` · 从 ${finding.previousStatus} 变为 ${finding.status}` : '';
       details.append(cell('p', `${finding.status} · ${finding.title} · ${finding.observed ?? '未采集'} / ${finding.threshold} · ${finding.source}${finding.reason ? ' · ' + finding.reason : ''}${change}`, 'evidence'));
     }
-    const retry = cell('button', '重新巡检', 'ghost small-button');
+    const retry = cell('button', '重新巡检', 'ghost small-button write-action');
     retry.addEventListener('click', async () => {
       try { const { run: repeated } = await api(`/api/inspection-runs/${run.id}/retry`, 'POST');
         notice(repeated.status === 'failed' ? repeated.error : '重新巡检已完成。', repeated.status === 'failed'); await refresh(); }
@@ -185,8 +188,8 @@ function renderAssets(assets) {
     const actions = document.createElement('div'); actions.className = 'actions';
     actions.append(cell('span', asset.lastStatus === 'ok' ? '正常' : asset.lastStatus === 'error' ? '采集失败' : '待采集', `pill ${asset.lastStatus}`));
     const view = cell('button', '查看', 'ghost small-button'); view.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
-    const edit = cell('button', '编辑', 'ghost small-button'); edit.addEventListener('click', () => editAsset(asset));
-    const check = cell('button', '采集', 'ghost small-button'); check.addEventListener('click', async () => {
+    const edit = cell('button', '编辑', 'ghost small-button write-action'); edit.addEventListener('click', () => editAsset(asset));
+    const check = cell('button', '采集', 'ghost small-button write-action'); check.addEventListener('click', async () => {
       try {
         const { result } = await api(`/api/assets/${asset.id}/check`, 'POST');
         const failed = result?.status === 'error';
@@ -195,7 +198,7 @@ function renderAssets(assets) {
       }
       catch (e) { notice(e.message, true); }
     });
-    const remove = cell('button', '删除', 'danger small-button'); remove.addEventListener('click', async () => {
+    const remove = cell('button', '删除', 'danger small-button write-action'); remove.addEventListener('click', async () => {
       if (!confirm(`删除资产“${asset.name}”及其采样和事件？`)) return;
       try { await api(`/api/assets/${asset.id}`, 'DELETE'); if (selectedAsset === asset.id) { selectedAsset = null; $('detail').textContent = '选择资产查看最新采样。'; } await refresh(); }
       catch (e) { notice(e.message, true); }
@@ -533,7 +536,7 @@ function renderSilences(silences, assets, rules) {
     info.append(cell('small', `${formatTime(silence.startsAt)} 至 ${formatTime(silence.endsAt)} · ${silence.reason}`));
     item.append(info);
     if (!silence.revokedAt && !expired) {
-      const revoke = cell('button', '撤销', 'danger small-button');
+      const revoke = cell('button', '撤销', 'danger small-button write-action');
       revoke.addEventListener('click', async () => {
         try { await api(`/api/silences/${silence.id}`, 'DELETE'); notice('时间窗已撤销；下次采样将恢复通知。'); await refresh(); }
         catch (error) { notice(error.message, true); }
@@ -554,7 +557,7 @@ function renderNotifications(notifications) {
     button.addEventListener('click', () => showEvent(item.eventId));
     row.append(button);
     if (item.status === 'failed') {
-      const retry = cell('button', '重试', 'ghost small-button');
+      const retry = cell('button', '重试', 'ghost small-button write-action');
       retry.addEventListener('click', async () => {
         try { await api(`/api/notifications/${item.id}/retry`, 'POST'); notice('通知已重新加入投递队列。'); await refresh(); }
         catch (error) { notice(error.message, true); }
@@ -717,7 +720,7 @@ async function showEvent(id) {
     if (candidate.missing.length) diagnosis.append(cell('small', `缺失：${candidate.missing.join('；')}`));
     if (candidate.review) diagnosis.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));
     for (const [decision, label] of [['confirmed', '确认候选'], ['rejected', '驳回候选']]) {
-      const button = cell('button', label, 'ghost small-button');
+      const button = cell('button', label, 'ghost small-button write-action');
       button.addEventListener('click', async () => {
         const reason = window.prompt(`${label}：请填写依据（至少 5 个字符）`);
         if (reason === null) return;
@@ -742,7 +745,7 @@ async function showEvent(id) {
   const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
   if (aiStatus.enabled) {
     const aiResult = document.createElement('div'); aiResult.className = 'evidence';
-    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model}`, 'ghost small-button');
+    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model}`, 'ghost small-button write-action');
     analyze.addEventListener('click', async () => {
       analyze.disabled = true;
       aiResult.replaceChildren(cell('p', '正在分析当前事件的脱敏证据…'));
@@ -760,7 +763,7 @@ async function showEvent(id) {
   }
   if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
-    const acknowledge = cell('button', '确认事件', 'ghost small-button');
+    const acknowledge = cell('button', '确认事件', 'ghost small-button write-action');
     acknowledge.addEventListener('click', async () => {
       try { await api(`/api/events/${event.id}/ack`, 'POST'); await showEvent(event.id); await refresh(); }
       catch (error) { notice(error.message, true); }
@@ -826,6 +829,10 @@ async function showEvent(id) {
 async function boot() {
   const session = await api('/api/session');
   csrf = session.csrf;
+  currentRole = session.authenticated ? (session.role || 'admin') : null;
+  document.body.dataset.role = currentRole || '';
+  $('role-label').textContent = currentRole === 'viewer' ? '只读查看' : '管理员';
+  $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
   $('logout').hidden = !session.authenticated;
@@ -842,7 +849,7 @@ $('login-form').addEventListener('submit', async (event) => {
   catch (e) { alert(e.message); }
 });
 
-$('logout').addEventListener('click', async () => { await api('/api/logout', 'POST'); csrf = null; selectedAsset = null; await boot(); });
+$('logout').addEventListener('click', async () => { await api('/api/logout', 'POST'); csrf = null; currentRole = null; selectedAsset = null; await boot(); });
 $('refresh').addEventListener('click', () => refresh().catch(e => notice(e.message, true)));
 $('inspection-asset').addEventListener('change', () => refresh().catch(error => notice(error.message, true)));
 $('inspection-run').addEventListener('click', async () => {

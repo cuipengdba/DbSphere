@@ -112,11 +112,12 @@ type TraceStore interface {
 }
 
 type AuthConfig struct {
-	MasterKey    []byte
-	PasswordHash string
-	SecureCookie bool
-	OTLPToken    string
-	AI           *ai.Client
+	MasterKey          []byte
+	PasswordHash       string
+	ViewerPasswordHash string
+	SecureCookie       bool
+	OTLPToken          string
+	AI                 *ai.Client
 }
 
 type loginAttempt struct {
@@ -223,7 +224,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if cookie != nil {
 			token = cookie.Value
 		}
-		loggedIn := security.VerifySession(credentials.MasterKey, token, time.Now())
+		role, loggedIn := security.SessionRole(credentials.MasterKey, token, time.Now())
+		if !loggedIn && credentials.ViewerPasswordHash != "" {
+			viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
+			role, loggedIn = security.SessionRole(viewerKey, token, time.Now())
+			loggedIn = loggedIn && role == "viewer"
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/login" {
 			ip := r.RemoteAddr
 			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
@@ -244,7 +250,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid login request"})
 				return
 			}
+			loginRole := "admin"
 			if !security.VerifyPassword(input.Password, credentials.PasswordHash) {
+				loginRole = ""
+				if credentials.ViewerPasswordHash != "" && security.VerifyPassword(input.Password, credentials.ViewerPasswordHash) {
+					loginRole = "viewer"
+				}
+			}
+			if loginRole == "" {
 				attemptsMu.Lock()
 				attempt = attempts[ip]
 				attempt.count++
@@ -260,14 +273,22 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			attemptsMu.Lock()
 			delete(attempts, ip)
 			attemptsMu.Unlock()
-			session, err := security.CreateSession(credentials.MasterKey, time.Now())
+			var session string
+			var err error
+			if loginRole == "viewer" {
+				viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
+				session, err = security.CreateViewerSession(viewerKey, time.Now())
+			} else {
+				session, err = security.CreateSession(credentials.MasterKey, time.Now())
+			}
 			if err != nil {
 				respond(w, http.StatusInternalServerError, map[string]string{"error": "Session unavailable"})
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
-			respond(w, http.StatusOK, map[string]any{"authenticated": true, "csrf": security.CSRFToken(credentials.MasterKey, session)})
+			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
+				"csrf": security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/session" {
@@ -275,7 +296,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if loggedIn {
 				csrf = security.CSRFToken(credentials.MasterKey, token)
 			}
-			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "csrf": csrf})
+			var sessionRole any
+			if loggedIn {
+				sessionRole = role
+			}
+			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole, "csrf": csrf})
 			return
 		}
 		if !loggedIn {
@@ -291,6 +316,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Path: "/", MaxAge: -1,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		if role == "viewer" && r.Method != http.MethodGet {
+			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
 			return
 		}
 		if r.Method == http.MethodPost {

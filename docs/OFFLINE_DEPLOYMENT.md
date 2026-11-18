@@ -10,6 +10,8 @@ Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-
 
 Go 版额外使用 `scripts/go-offline-upgrade-rollback-smoke.sh` 在 Linux CI 演练旧 Go 包 → 当前包 → 旧 Go 包，复用独立 PG18 数据卷，并逐段读取同一资产、样本和事件 ID。[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44232205949) 已通过该演练；后续 schema 变更必须另做前向迁移和可回滚性验证。
 
+如需 Go 控制台的全局只读查看账号，在 Go 配置文件 `dbsphere-go.env` 中增加 `DBSPHERE_VIEWER_PASSWORD`（至少 12 字符，且不同于管理员密码），然后重新运行同一安装包。更改该值并重启会轮换密码；移除该行并重启会停用账号，旧查看会话失效。该账号可读取全部资产，暂不支持按资产授权。
+
 Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发部署）或 `${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}/dbsphere-go.env`（离线包）追加 `DBSPHERE_KUBECONFIG_HOST_PATH=/absolute/path/to/read-only-kubeconfig` 后重新执行一键脚本。脚本校验文件存在并只读挂载；配置需使用静态 ServiceAccount token 和受信 CA，不执行 kubeconfig 中的 `exec` 凭据插件。Go K8S 适配器支持已映射 Pod 的状态、Node、Service、PVC/PV、Pod 事件与可用的 metrics.k8s.io，真实集群验收尚未完成。
 
 如已有 Prometheus 抓取 kubelet 的 `kubelet_volume_stats_used_bytes`，可在同一配置文件设置 `DBSPHERE_PROMETHEUS_URL=https://prometheus.example.internal`，需要 Bearer 令牌时再设置 `DBSPHERE_PROMETHEUS_TOKEN`，并重新运行一键脚本。此项可选；未配置或指标缺失时 PVC 使用率保持未知，不会误判为健康。Go 适配器按资产映射的 Namespace/PVC 查询，不接收浏览器指定的 Prometheus 地址。生产 Prometheus 仍待验收。

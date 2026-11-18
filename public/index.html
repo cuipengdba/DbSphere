@@ -11,15 +11,15 @@
 <body>
   <header class="topbar">
     <div><strong class="brand">DbSphere</strong><span class="subtitle">全域数据库智能运维管理平台</span></div>
-    <button id="logout" class="ghost" hidden>退出</button>
+    <div class="header-session"><span id="role-label" hidden></span><button id="logout" class="ghost" hidden>退出</button></div>
   </header>
   <main>
     <section id="login-panel" class="panel login">
       <p class="eyebrow">V0.6 跨层根因分析开发预览</p>
       <h1>登录运维控制台</h1>
-      <p>使用首次启动时配置的管理员密码。</p>
+      <p>使用管理员密码或已配置的只读查看密码。</p>
       <form id="login-form">
-        <label>管理员密码<input name="password" type="password" required autocomplete="current-password"></label>
+        <label>登录密码<input name="password" type="password" required autocomplete="current-password"></label>
         <button type="submit">登录</button>
       </form>
     </section>
