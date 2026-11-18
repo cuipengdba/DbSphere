@@ -4,7 +4,9 @@
 
 ## 当前阶段
 
-Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HTTP JSON 导出。本机 PG14 整链路测试使用真实应用请求、Go DbSphere OTLP 接口和独立 PG18 监控库：请求被 advisory lock 阻塞，数据库采样与锁告警创建一个事件 ID，释放后应用 Span 带实际等待 PID；同一事件图出现服务→PG Span、`same_backend_pid`、等待→阻塞会话，恢复采样关闭原事件。[PG14–18 五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)也通过该测试；第三方 SDK/Collector 和场景 B 仍待验收，详见[示例应用](../examples/trace-lock-app/README.md)与[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
+Go 应用场景 B 已在本机 kind 实测：真实 HTTP 请求在测试 PG18 Pod `OOMKilled` 后返回 502，错误服务/PG Span 经 Go OTLP 接口存入独立 PG18；PG 连接失败、K8S OOM 和中置信度根因候选汇入事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`。恢复内存限制后，自动跟随新 Pod 的成功样本 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 关闭该事件；应用再次请求成功。该演练仅证明单节点 kind 的一条应用故障链，故障前健康 Trace 也落入事件时间窗，影响面需按错误 Span 核对。完整证据及局限见[本机 kind 验收](KIND_ACCEPTANCE.md)。
+
+Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HTTP JSON 导出。本机 PG14 整链路测试使用真实应用请求、Go DbSphere OTLP 接口和独立 PG18 监控库：请求被 advisory lock 阻塞，数据库采样与锁告警创建一个事件 ID，释放后应用 Span 带实际等待 PID；同一事件图出现服务→PG Span、`same_backend_pid`、等待→阻塞会话，恢复采样关闭原事件。[PG14–18 五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)也通过该测试；第三方 SDK/Collector 与生产级场景仍待验收，详见[示例应用](../examples/trace-lock-app/README.md)与[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
 
 Go 事件页把同一次 OOM 故障的历史 `pod_oom_correlated` 证据与新 `k8s.oom_recent` 告警合并成一条候选，保留已有人工确认/驳回所用的候选代码，并把采集失败、K8S 状态、告警和原始样本全部连到候选；单独出现 OOM 告警时仍生成 `k8s_oom_killed` 候选。乱序证据单元测试、PG18 实库测试和 Go 全量测试通过。本机 kind 更新镜像后短暂发生 API/etcd 超时，恢复后直接复核旧 OOM 事件 `58d989b1-ecaa-4e65-acb6-ff50447fd791`：同一已恢复事件只显示一条 `pod_oom_correlated` 候选，包含 5 条支撑证据和告警匹配条件；见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
 
@@ -66,7 +68,7 @@ Go 事件分析继续迁移：基于 PG18 既有事件和采样，证据图现�
 
 2026-11-17 新增 Go 后端与静态前端强制架构，以及分层后台页面。仓库已建立 Go 入口、嵌入静态资源、配置校验、PG18 schema 迁移、健康接口和管理员登录；Node 格式的密码哈希、凭据密文及 Session/CSRF 已用兼容向量验证。十个工作台只读接口已从 PG18 返回真实数据。Go 资产增删改与基础只读 PG 采集已通过实库测试，连接失败与恢复使用同一事件 ID；事件详情可读该 ID 的证据、原始样本和同窗 Trace，资产详情可读真实历史数据。Go 浏览器已完成登录、总览进入事件及资产详情的冒烟检查，控制台无错误；跨层适配器尚未迁移的资产不会被 Go 误判为健康。空 PG18 实库建表和月分区、Linux amd64 静态编译及 Go 测试通过。**Go 深度采集、完整根因候选与 SQL/容量分析仍在迁移，现有完整监控功能仍由 Node 历史实现提供**。界面从超长单页拆成六视图，总览和事件双栏在桌面与 390px 窄屏真实浏览器可见，未接入信号明确显示缺口。完整清单见[Go 与工作台迁移](GO_UI_MIGRATION.md)。
 
-V0.7 Trace 首段能力正在开发：可选令牌保护的 OTLP/HTTP JSON 接口接收 PostgreSQL 客户端 Span，将服务及父子 Span 与唯一匹配的 PG 资产关联，并在原事件 ID 的证据图展示；敏感 SQL/参数/URL 不入库。真实 PG18 持久化冒烟及[14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44067441805)已通过。协议、映射、采样率、时钟偏移、影响面和真实应用故障演练仍待完成，详见[开发记录](TRACE_V0.7_PROGRESS.md)。V0.6 正式版也尚未通过全部故障演练，因此目前不可宣称 V0.7 已发布。
+V0.7 Trace 首段能力正在开发：可选令牌保护的 OTLP/HTTP JSON 接口接收 PostgreSQL 客户端 Span，将服务及父子 Span 与唯一匹配的 PG 资产关联，并在原事件 ID 的证据图展示；敏感 SQL/参数/URL 不入库。真实 PG18 持久化冒烟及[14 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44067441805)已通过。PG14–18 的应用锁场景 A 已通过 CI，本机 kind 的应用 OOM 场景 B 已实测；标准 SDK 协议兼容、精确映射、采样率、时钟偏移及生产影响面仍待完成，详见[开发记录](TRACE_V0.7_PROGRESS.md)。V0.6 正式版也尚未通过全部故障演练，因此目前不可宣称 V0.7 已发布。
 
 **[V0.1.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0)、[V0.5.0 已发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)，V0.6 开发中**。已实现 B/S 服务端与浏览器页面、管理员登录和 CSRF 校验、PostgreSQL 资产增删改查、凭据加密、基础采集、采集失败与恢复共用一个事件 ID 的证据记录。PG14–18 已能读取会话/等待、长事务、锁链、WAL/归档、检查点、autovacuum、表/索引容量和复制槽 11 个诊断分区，并显示不可用原因。V0.2 新增独立 PG18 后端、SQLite 数据迁移、Docker Compose 一键部署、Linux node_exporter 资源采集；K8S 适配器支持按 Namespace 发现并关联 Pod/Workload/Service/Node/PVC/PV，读取容器重启/OOMKilled、事件与可用的 metrics.k8s.io 数据。当 PG 连接失败与近期 Pod OOMKilled 同时出现时，在**同一个事件 ID** 中给出中等置信度、可查看原始证据的根因候选。
 

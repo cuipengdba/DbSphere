@@ -4,7 +4,7 @@
 
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。真实 OpenTelemetry SDK/Collector 导出兼容和完整应用故障矩阵仍待验收。
 
-新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14–18 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机 PG14 与[五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)均通过。第三方 SDK/Collector 兼容与 K8S OOM 应用场景 B 仍待验收。
+新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14–18 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机 PG14 与[五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)均通过。场景 B 在本机 kind 用真实 Go 应用请求连接实际 OOMKilled 的 PG18 Pod，错误 Span、PG 连接失败和 K8S OOM 候选进入同一事件 ID，恢复后原事件关闭；详见[本机 kind 验收](KIND_ACCEPTANCE.md)。第三方 SDK/Collector、生产 K8S 与独立环境复核仍待验收。
 
 Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存该 PG 资产对应的父链；同一 Trace 中的旁支服务 Span 和不相关请求不再进入该资产的事件图。重复 Span ID 视为歧义，跨其他 PG 资产的数据库父链在边界处停止。单元测试覆盖共享父链、旁支和不相关 Span；真实示例应用仍待验收。
 
@@ -27,7 +27,7 @@ Go 同一事件页现在按服务展示**已观测** Span 数、数据库客户�
 
 - 只接收 JSON 编码的 OTLP/HTTP Trace；Protobuf、gRPC、gzip、日志与指标入口未实现。需显式把应用或 Collector 的 Trace 导出协议设置为 `http/json`，并将目标指向 DbSphere 的 `/v1/traces`。不同语言 SDK 是否支持该模式需按各自实现核验。
 - 当前按精确的配置地址、端口、数据库身份匹配，不支持代理地址、动态 Service 发现、Pod/Node/PVC 的应用侧身份映射。链路时间重叠仅表示相关，不能单凭重叠证明根因。
-- 采样率、时钟偏移目前只能标为未知；慢请求的 SQL 指纹到 DB Span 的精确绑定、资产级访问控制和 K8S OOM 应用场景 B 仍待开发。应用锁等待场景 A 已有本机真实 Go 应用与 DbSphere 端到端测试，尚需 CI 矩阵结果与独立环境复核。
+- 采样率、时钟偏移目前只能标为未知；慢请求的 SQL 指纹到 DB Span 的精确绑定和资产级访问控制仍待开发。应用锁等待场景 A 已有本机与五版 CI 端到端测试；K8S OOM 场景 B 已有单节点 kind 实测，两者仍需独立环境及生产级复核。
 - 默认安装不开启 Trace 接入。接入令牌是独立的写入凭据，生产环境需通过 TLS 终止的入口使用；不要把令牌放进客户端页面。
 
 ## 验证

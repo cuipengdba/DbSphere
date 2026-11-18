@@ -2,6 +2,8 @@
 
 此独立测试服务用于 V0.7/V1.0 的“HTTP 请求 → PostgreSQL 等待会话 → 阻塞会话 → 同一事件 ID”验收。它只有两个入口：`GET /healthz` 和 `GET /checkout`。`/checkout` 在目标 PG14–18 上执行一次 advisory lock 查询，并把真实请求和数据库调用的父子 Span 发送到 DbSphere 的 `/v1/traces`。应用用 Go 标准库直接编码 OTLP/HTTP JSON；这验证了 OTLP JSON 契约，**不代表第三方 OpenTelemetry SDK/Collector 的兼容性已验收**。
 
+同一程序也用于受控的 Kubernetes OOM 演练：当 PG Service 因 Pod OOMKilled 而无就绪端点时，`/checkout` 返回 502，并导出 `error` 服务/数据库 Span。`Dockerfile` 从项目根目录构建静态 Linux 容器，例如 `docker build -f examples/trace-lock-app/Dockerfile -t dbsphere/trace-lock-app:local .`。测试详情见[本机 kind 验收记录](../../docs/KIND_ACCEPTANCE.md)。
+
 ## 运行
 
 先在 DbSphere 纳管目标 PostgreSQL，启用独立的 `DBSPHERE_OTLP_TOKEN`（至少 32 字符）。资产地址、端口、数据库必须与下方连接串解析出的值一致，才能唯一映射客户端 Span。DbSphere 与应用之间应使用可信 TLS 入口；本地隔离测试可用 loopback HTTP。
