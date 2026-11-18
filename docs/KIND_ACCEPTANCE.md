@@ -119,3 +119,5 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 [`kind-live-acceptance.mjs`](../scripts/kind-live-acceptance.mjs)在真实 Go B/S API 中再采到 PG18.6、运行中的 Pod、Node 和 Service；另一 PG18 资产的新样本确认 `postgres-data` PVC/PV 均 Bound、Pod/Node CPU/内存指标来自 `metrics.k8s.io`，Event 读取无错误。长期 PG18 存储报告样本保留 90 天、已结事件保留 180 天；AI 状态为 `enabled=false`。原 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍为 `resolved`，同一事件有 8 条证据、24 个图节点、47 条关系、6 条 Span（3 条数据库客户端 Span）以及 `pod_oom_correlated` 候选，Markdown 报告包含同一事件 ID 与候选。脱敏 JSON 结果在本机 `H:\CodexLS\outputs\DbSphere-kind-live-acceptance.json`。
 
 Playwright Chromium 实际打开 Go 静态页面和该 OOM 事件：桌面与 390px 窄屏均显示应用服务、数据库调用、PostgreSQL、会话与 SQL、Linux/K8S 五段；无会话证据的段落明确显示缺口，候选注明证据与因果限制。窄屏 `scrollWidth=390`、视口宽 `390`，控制台 0 错误。截图留在本机 `H:\CodexLS\outputs\DbSphere-kind-live-incident.png` 与 `DbSphere-kind-live-incident-mobile.png`。本机集群控制面在验收前已有数百次重启，长期 PG18 测试存储使用 `emptyDir`；本次没有重新注入 OOM，也没有完成生产可靠性、持久卷恢复或 V1.0 正式验收。
+
+同一集群随后新增**隔离的 PVC 恢复实例**，完成 PG18 归档恢复、存储 Pod 两次替换及 Go 服务读取同一事件后的继续采样，详见[本机 PG18 恢复验收](KIND_PG18_RESTORE_ACCEPTANCE.md)。原 `emptyDir` 存储仍在，没有将原 Service 切换到恢复实例。

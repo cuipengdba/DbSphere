@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const [baseURL, passwordPath, kubeconfigPath, namespace, eventId, resultPath] = process.argv.slice(2);
+const [baseURL, passwordPath, kubeconfigPath, namespace, eventId, resultPath,
+  goDeployment = 'dbsphere-go', storeDeployment = 'dbsphere-go-store'] = process.argv.slice(2);
 if (!baseURL || !passwordPath || !kubeconfigPath || !namespace || !eventId || !resultPath) {
-  console.error('usage: node scripts/kind-live-acceptance.mjs BASE_URL PASSWORD_FILE KUBECONFIG NAMESPACE EVENT_ID RESULT_FILE');
+  console.error('usage: node scripts/kind-live-acceptance.mjs BASE_URL PASSWORD_FILE KUBECONFIG NAMESPACE EVENT_ID RESULT_FILE [GO_DEPLOYMENT STORE_DEPLOYMENT]');
   process.exit(2);
 }
 const base = baseURL.replace(/\/$/, '');
@@ -47,7 +48,7 @@ assert.equal(kubectl(['get', '--raw', '/readyz']), 'ok');
 const nodes = JSON.parse(kubectl(['get', 'nodes', '-o', 'json'])).items;
 assert.ok(nodes.some(node => node.status.conditions.some(c => c.type === 'Ready' && c.status === 'True')));
 const deployments = JSON.parse(kubectl(['-n', namespace, 'get', 'deploy', '-o', 'json'])).items;
-for (const name of ['dbsphere-go', 'dbsphere-go-store']) {
+for (const name of [goDeployment, storeDeployment]) {
   const deployment = deployments.find(row => row.metadata.name === name);
   assert.ok(deployment?.status.readyReplicas >= 1, `${name} is not ready`);
 }
@@ -122,7 +123,8 @@ assert.ok(report.includes(eventId) && report.includes(oom.code));
 const result = {
   clusterNodesReady: nodes.filter(node => node.status.conditions.some(c =>
     c.type === 'Ready' && c.status === 'True')).length,
-  namespace, storage: ready.storage, sampleRetentionDays: storage.retentionDays,
+  namespace, goDeployment, storeDeployment, storage: ready.storage,
+  sampleRetentionDays: storage.retentionDays,
   eventRetentionDays: storage.eventRetentionDays, aiEnabled: ai.enabled,
   eventId, eventStatus: incident.event.status, assetId, sampleId: checked.sampleId,
   pgMajor: 18, k8sPod: sample.metrics.k8s.pod.name,
