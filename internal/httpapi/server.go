@@ -39,6 +39,7 @@ var assetCheckPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[
 var rawSamplePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/samples/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var rawTracePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/traces/([0-9a-f]{32})$`)
 var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
@@ -59,6 +60,9 @@ type EventStore interface {
 	RawSample(context.Context, string, string) (any, error)
 	RawTrace(context.Context, string, string) (any, error)
 	RecordRCADecision(context.Context, string, string, string, string) error
+}
+type EventReportReader interface {
+	EventReport(context.Context, string, string) (string, error)
 }
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
@@ -565,6 +569,39 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if eventsDB, ok := store.(EventStore); ok {
 			if r.Method == http.MethodGet {
+				if match := eventReportPath.FindStringSubmatch(r.URL.Path); match != nil {
+					format := r.URL.Query().Get("format")
+					if format == "" {
+						format = "md"
+					}
+					if format != "md" && format != "html" {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid report format"})
+						return
+					}
+					reports, ok := store.(EventReportReader)
+					if !ok {
+						respond(w, http.StatusNotImplemented, map[string]string{"error": "Event reports unavailable"})
+						return
+					}
+					body, err := reports.EventReport(r.Context(), match[1], format)
+					if errors.Is(err, storepkg.ErrEventNotFound) {
+						respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+						return
+					}
+					if err != nil {
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event report unavailable"})
+						return
+					}
+					contentType := "text/markdown; charset=utf-8"
+					if format == "html" {
+						contentType = "text/html; charset=utf-8"
+					}
+					w.Header().Set("Content-Type", contentType)
+					w.Header().Set("Content-Disposition", "attachment; filename=\"dbsphere-event-"+match[1]+"."+format+"\"")
+					w.Header().Set("Cache-Control", "no-store")
+					_, _ = w.Write([]byte(body))
+					return
+				}
 				if match := eventPath.FindStringSubmatch(r.URL.Path); match != nil {
 					value, err := eventsDB.EventByID(r.Context(), match[1])
 					if err != nil {

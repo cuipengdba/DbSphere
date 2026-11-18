@@ -393,6 +393,22 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if eventDetail.Code != http.StatusOK || !strings.Contains(eventDetail.Body.String(), "observed_in") {
 		t.Fatalf("one-event evidence graph unavailable: %d %s", eventDetail.Code, eventDetail.Body.String())
 	}
+	reportPath := "/api/events/" + eventID + "/report"
+	unauthenticatedReport := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedReport, httptest.NewRequest(http.MethodGet, reportPath, nil))
+	if unauthenticatedReport.Code != http.StatusUnauthorized {
+		t.Fatalf("event report was exposed without login: %d", unauthenticatedReport.Code)
+	}
+	reportRequest := httptest.NewRequest(http.MethodGet, reportPath+"?format=md", nil)
+	reportRequest.AddCookie(login.Result().Cookies()[0])
+	report := httptest.NewRecorder()
+	handler.ServeHTTP(report, reportRequest)
+	if report.Code != http.StatusOK || !strings.Contains(report.Body.String(), eventID) ||
+		!strings.Contains(report.Body.String(), checkResult.Result.SampleID) ||
+		strings.Contains(report.Body.String(), "test-secret") ||
+		!strings.Contains(report.Header().Get("Content-Disposition"), "attachment") {
+		t.Fatalf("event report did not retain safe evidence: %d %s", report.Code, report.Body.String())
+	}
 	decisionPath := "/api/events/" + eventID + "/rca-decision"
 	decisionRequest := httptest.NewRequest(http.MethodPost, decisionPath,
 		strings.NewReader(`{"code":"unknown","decision":"confirmed","reason":"no supporting evidence"}`))

@@ -732,6 +732,13 @@ async function showEvent(id) {
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
   target.append(diagnosis);
+  const reports = document.createElement('div'); reports.className = 'actions';
+  for (const [format, label] of [['md', '下载事件报告 · Markdown'], ['html', '下载事件报告 · HTML']]) {
+    const button = cell('button', label, 'ghost small-button');
+    button.addEventListener('click', () => { window.location.href = `/api/events/${event.id}/report?format=${format}`; });
+    reports.append(button);
+  }
+  target.append(reports);
   if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
     const acknowledge = cell('button', '确认事件', 'ghost small-button');
