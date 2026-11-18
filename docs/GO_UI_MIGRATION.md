@@ -17,7 +17,7 @@
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
 
-当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；二十四条 PG/Linux/K8S/PgBouncer/采集器默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。Go OTLP/HTTP JSON 已用独立 Bearer 令牌接入，仅白名单 Span 字段按唯一 PG 资产身份入库，并与既有事件 ID 的证据图关联。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、生产通知通道、巡检写入、完整根因候选、AI、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；二十四条 PG/Linux/K8S/PgBouncer/采集器默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。Go OTLP/HTTP JSON 已用独立 Bearer 令牌接入，仅白名单 Span 字段按唯一 PG 资产身份入库，并与既有事件 ID 的证据图关联。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、生产通知通道、完整根因候选、自动 AI 预警、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
 
 ## 页面信息架构
 
@@ -34,7 +34,7 @@ Go 已按 Pod 标签选择同 Namespace 的匹配 Service，并将 Service → P
 
 Go PgBouncer 适配器采用只读的简单查询协议读取 `SHOW POOLS` 和 `SHOW STATS`，仅保留映射数据库最多 100 条连接池/统计记录，不保存管理员 URL 或密码。本机真实 PgBouncer 1.26.1、PG14 与独立 PG18 联合采样测试和 [修复后的 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44107307127)已通过；对应客户端等待规则进入同事件告警流程。
 
-Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查询失败分别显示状态；只存指纹与统计量。资产页从 PG18 样本计算相邻窗口增量和退化倍数，本地 PG18 真扩展与样本退化测试已通过。Go 容量预测读取最近 30 天的每日末次成功样本，以非负增长速率中位数估计 30 天容量；不足三天时显示未知，本机 PG18 实库测试通过。慢日志和计划导入写入仍需迁移。
+Go Top SQL 采集已对齐历史数据格式，扩展缺失、列不兼容或查询失败分别显示状态；只存指纹与统计量。资产页从 PG18 样本计算相邻窗口增量和退化倍数，本地 PG18 真扩展与样本退化测试已通过。Go 容量预测读取最近 30 天的每日末次成功样本，以非负增长速率中位数估计 30 天容量；不足三天时显示未知，本机 PG18 实库测试通过。Go 慢日志与执行计划写入已迁移：csvlog/jsonlog 限量导入、按资产和原始记录哈希去重、只保留时间/耗时/Query ID；执行计划只保留节点类型和数值，按 Query ID 比较结构与执行时间。PG18 实库验证了去重和脱敏，HTTP 测试覆盖登录、CSRF 与请求大小；真实浏览器已上传 jsonlog 和计划，并在同一资产页显示脱敏记录和原有事件链接；仍需五版真实日志样例矩阵。
 
 Go 只读 PostgreSQL 诊断现覆盖 14 个分区，PG14 与 PG18 实库及真实 advisory lock 阻塞关系通过本机测试；PG15–17 交由五版 CI 确认。采集指标写入 PG18 原始样本，事件图可显示等待 PID 与阻塞 PID；独立诊断失败显示不可用原因，仍需规则告警和完整故障演练。
 

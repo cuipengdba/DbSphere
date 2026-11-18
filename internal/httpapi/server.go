@@ -45,6 +45,7 @@ var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
+var slowLogImportPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/slow-logs/import$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
 var inspectionTemplatePath = regexp.MustCompile(`^/api/inspection-templates/([a-z][a-z0-9_]{1,63})$`)
@@ -73,6 +74,12 @@ type EventAIStore interface {
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
 	RawSQLEvidence(context.Context, string, string, string) (any, error)
+}
+type SlowLogImporter interface {
+	ImportSlowLogs(context.Context, string, string, string) (any, error)
+}
+type PlanImporter interface {
+	ImportSQLPlan(context.Context, string, string, string, json.RawMessage) (any, error)
 }
 type AlertRuleStore interface {
 	UpdateAlertRule(context.Context, string, storepkg.AlertRulePatch) (any, error)
@@ -281,6 +288,63 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
+		}
+		if r.Method == http.MethodPost {
+			if match := slowLogImportPath.FindStringSubmatch(r.URL.Path); match != nil {
+				importer, ok := store.(SlowLogImporter)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Slow log import unavailable"})
+					return
+				}
+				var input struct {
+					Format  string `json:"format"`
+					Content string `json:"content"`
+				}
+				if readJSONLimit(w, r, &input, 128<<10) != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid slow log payload"})
+					return
+				}
+				value, err := importer.ImportSlowLogs(r.Context(), match[1], input.Format, input.Content)
+				switch {
+				case errors.Is(err, storepkg.ErrAssetNotFound):
+					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+				case errors.Is(err, storepkg.ErrInvalidSlowLog):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid slow log import"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Slow log storage unavailable"})
+				default:
+					respond(w, http.StatusOK, value)
+				}
+				return
+			}
+			if match := assetSectionPath.FindStringSubmatch(r.URL.Path); match != nil && match[2] == "sql-plans" {
+				importer, ok := store.(PlanImporter)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "SQL plan import unavailable"})
+					return
+				}
+				var input struct {
+					QueryID    string          `json:"queryId"`
+					ObservedAt string          `json:"observedAt"`
+					Plan       json.RawMessage `json:"plan"`
+				}
+				if readJSONLimit(w, r, &input, 128<<10) != nil {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid SQL plan payload"})
+					return
+				}
+				value, err := importer.ImportSQLPlan(r.Context(), match[1], input.QueryID, input.ObservedAt, input.Plan)
+				switch {
+				case errors.Is(err, storepkg.ErrAssetNotFound):
+					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+				case errors.Is(err, storepkg.ErrInvalidSQLPlan):
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid SQL plan"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "SQL plan storage unavailable"})
+				default:
+					respond(w, http.StatusCreated, map[string]any{"plan": value})
+				}
+				return
+			}
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/ai/status" {
 			if credentials.AI == nil {
@@ -825,10 +889,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, value any) error {
+	return readJSONLimit(w, r, value, 65536)
+}
+
+func readJSONLimit(w http.ResponseWriter, r *http.Request, value any, limit int64) error {
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		return io.ErrUnexpectedEOF
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 65536))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		return err

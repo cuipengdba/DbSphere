@@ -47,7 +47,36 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 				WHERE e.asset_id=p.asset_id AND e.started_at<=p.observed_at+interval '5 minutes'
 				AND (e.ended_at IS NULL OR e.ended_at>=p.observed_at-interval '5 minutes')),'[]'::jsonb))
 			FROM sql_plan_snapshots p WHERE p.asset_id=$1 ORDER BY p.observed_at DESC LIMIT 50`, id)
-		return map[string]any{"plans": values}, err
+		if err != nil {
+			return nil, err
+		}
+		plans := make([]map[string]any, len(values))
+		for i, raw := range values {
+			if err := json.Unmarshal(raw, &plans[i]); err != nil {
+				return nil, err
+			}
+		}
+		prior := map[string]map[string]any{}
+		for i := len(plans) - 1; i >= 0; i-- {
+			current := plans[i]
+			queryID, _ := current["queryId"].(string)
+			if old := prior[queryID]; old != nil {
+				comparison := map[string]any{"priorId": old["id"],
+					"shapeChanged": old["shapeHash"] != current["shapeHash"], "executionRatio": nil}
+				currentSummary, _ := current["summary"].(map[string]any)
+				priorSummary, _ := old["summary"].(map[string]any)
+				currentMs, _ := currentSummary["executionMs"].(float64)
+				priorMs, _ := priorSummary["executionMs"].(float64)
+				if currentMs > 0 && priorMs > 0 {
+					comparison["executionRatio"] = currentMs / priorMs
+				}
+				current["comparison"] = comparison
+			} else {
+				current["comparison"] = nil
+			}
+			prior[queryID] = current
+		}
+		return map[string]any{"plans": plans}, nil
 	case "series":
 		if params.Get("from") == "" || params.Get("to") == "" {
 			return nil, ErrInvalidRange
