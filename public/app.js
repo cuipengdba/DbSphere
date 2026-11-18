@@ -2,6 +2,7 @@ let csrf = null;
 let currentRole = null;
 let viewerScoped = false;
 let selectedAsset = null;
+let selectedAssetLayer = null;
 let selectedEvent = null;
 let editingAsset = null;
 let pg18Store = false;
@@ -261,6 +262,8 @@ function renderAssets(assets) {
 }
 
 async function showAsset(id) {
+  const preferredLayer = selectedAsset === id ? selectedAssetLayer : null;
+  const restoreLayerFocus = selectedAsset === id && document.activeElement?.getAttribute('role') === 'tab';
   selectedAsset = id;
   const [{ asset }, { samples }, { performance }, { entries: slowLogs }, { plans }] = await Promise.all([
     api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
@@ -280,25 +283,6 @@ async function showAsset(id) {
     if (!series.length) detail.append(cell('p', '暂无趋势数据。', 'empty'));
     for (const point of series) detail.append(cell('p', `${formatTime(point.bucket)} · ${point.samples} 次采样 · ${point.errors} 次失败 · 平均连接 ${point.averageConnections ?? '未采集'}`, 'evidence'));
   }
-  const layerNav = document.createElement('div'); layerNav.className = 'actions layer-nav';
-  for (const [label, section] of [
-    ['PostgreSQL 诊断', 'pg-diagnostics'],
-    ['Top SQL', 'sql-performance'],
-    ['慢 SQL 日志', 'slow-logs'],
-    ['执行计划', 'sql-plans'],
-    [asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机', asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail'],
-    ...(asset.poolerConfigured ? [['PgBouncer', 'pooler-detail']] : []),
-    ...(asset.patroniConfigured ? [['Patroni', 'patroni-detail']] : [])
-  ]) {
-    const button = cell('button', label, 'ghost small-button');
-    button.addEventListener('click', () => {
-      const target = $(section);
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      else notice(`${label} 当前没有可用采样。`, true);
-    });
-    layerNav.append(button);
-  }
-  detail.append(layerNav);
   const sample = samples[0];
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   if (currentSample?.status === 'ok' && currentSample.metrics) {
@@ -312,9 +296,6 @@ async function showAsset(id) {
     detail.append(grid);
     if (metrics.diagnostics) renderDiagnostics(detail, metrics.diagnostics);
   } else detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
-  renderSqlPerformance(detail, performance);
-  renderSlowLogs(detail, asset, slowLogs);
-  renderSqlPlans(detail, asset, plans);
   if (currentSample?.metrics?.backup) {
     const backup = currentSample.metrics.backup;
     const label = backup.status === 'ok'
@@ -324,6 +305,9 @@ async function showAsset(id) {
     detail.append(cell('p', label, backup.status === 'ok' && backup.repositoryHealthy &&
       backup.lastAttemptStatus !== 'failed' && fresh ? 'evidence' : 'warning'));
   }
+  renderSqlPerformance(detail, performance);
+  renderSlowLogs(detail, asset, slowLogs);
+  renderSqlPlans(detail, asset, plans);
   if (currentSample?.metrics?.k8s) {
     const k8s = currentSample.metrics.k8s;
     const heading = cell('h3', 'Kubernetes 运行状态'); heading.id = 'k8s-detail'; detail.append(heading);
@@ -391,13 +375,84 @@ async function showAsset(id) {
   }
   if (pg18Store) {
     const { forecast } = await api(`/api/assets/${id}/capacity`);
-    detail.append(cell('h3', '数据库容量趋势'));
+    const heading = cell('h3', '数据库容量趋势'); heading.id = 'capacity-detail'; detail.append(heading);
     if (forecast.status === 'estimate') {
       const gib = value => `${(value / 1024 ** 3).toFixed(2)} GiB`;
       detail.append(cell('p', `最近 ${forecast.observedDays.toFixed(0)} 天、${forecast.points.length} 个每日样本；当前 ${gib(forecast.latestBytes)}，每日增长约 ${gib(forecast.dailyGrowthBytes)}，30 天后约 ${gib(forecast.projected30DayBytes)}。置信度 ${forecast.confidence}；${forecast.method}。`, 'evidence'));
       detail.append(cell('small', `最新样本 ${forecast.latestSampleId}；估计不代表磁盘剩余空间或备份可恢复性。`));
     } else detail.append(cell('p', `容量预测暂不可用：${forecast.reason}`, 'empty'));
   }
+  organizeAssetLayers(detail, asset, preferredLayer, restoreLayerFocus);
+}
+
+function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false) {
+  const definitions = [
+    ['pg-diagnostics', 'PostgreSQL'], ['sql-performance', 'Top SQL'],
+    ['slow-logs', '慢 SQL 日志'], ['sql-plans', '执行计划'],
+    [asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail', asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机'],
+    ['pooler-detail', 'PgBouncer'], ['patroni-detail', 'Patroni'], ['capacity-detail', '容量趋势']
+  ];
+  const labels = new Map(definitions);
+  const headings = [...detail.querySelectorAll('h3[id]')].filter(heading => labels.has(heading.id));
+  if (!headings.length) return;
+  const panels = new Map();
+  for (let index = 0; index < headings.length; index++) {
+    const heading = headings[index];
+    const next = headings[index + 1];
+    const panel = document.createElement('section');
+    panel.className = 'asset-layer';
+    panel.id = `asset-layer-${heading.id}`;
+    panel.setAttribute('role', 'tabpanel');
+    detail.insertBefore(panel, heading);
+    for (let node = heading; node && node !== next;) {
+      const following = node.nextSibling;
+      panel.append(node);
+      node = following;
+    }
+    panels.set(heading.id, panel);
+  }
+  const nav = document.createElement('div');
+  nav.className = 'actions layer-nav';
+  nav.setAttribute('role', 'tablist');
+  nav.setAttribute('aria-label', '实例监控层级');
+  const buttons = new Map();
+  const activate = id => {
+    selectedAssetLayer = id;
+    for (const [key, panel] of panels) {
+      const active = key === id;
+      panel.hidden = !active;
+      const button = buttons.get(key);
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+    }
+  };
+  for (const [id, panel] of panels) {
+    const button = cell('button', labels.get(id), 'ghost small-button');
+    button.type = 'button';
+    button.id = `asset-tab-${id}`;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-controls', panel.id);
+    panel.setAttribute('aria-labelledby', button.id);
+    button.addEventListener('click', () => activate(id));
+    buttons.set(id, button);
+    nav.append(button);
+  }
+  nav.addEventListener('keydown', event => {
+    const keys = [...buttons.keys()];
+    const current = keys.indexOf(selectedAssetLayer);
+    const next = event.key === 'ArrowRight' ? (current + 1) % keys.length
+      : event.key === 'ArrowLeft' ? (current - 1 + keys.length) % keys.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? keys.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    buttons.get(keys[next]).focus();
+    activate(keys[next]);
+  });
+  detail.insertBefore(nav, panels.get(headings[0].id));
+  const initial = panels.has(preferredLayer) ? preferredLayer : headings[0].id;
+  activate(initial);
+  if (restoreFocus) buttons.get(initial).focus();
 }
 
 function renderDiagnostics(target, diagnostics) {
