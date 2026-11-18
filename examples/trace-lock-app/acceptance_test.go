@@ -184,15 +184,29 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 			t.Fatalf("real application lock evidence missing %s in one incident: %s", marker, encoded)
 		}
 	}
-	if recovered, err := pg.CheckAsset(ctx, asset.ID, key); err != nil || recovered.Status != "ok" {
-		t.Fatalf("recovery sample failed: %+v %v", recovered, err)
+	lastStatus := ""
+	for range 20 {
+		if recovered, err := pg.CheckAsset(ctx, asset.ID, key); err != nil || recovered.Status != "ok" {
+			t.Fatalf("recovery sample failed: %+v %v", recovered, err)
+		}
+		resolved, err := pg.EventByID(ctx, eventID)
+		if err != nil || resolved == nil {
+			t.Fatal("original event disappeared during recovery", err)
+		}
+		var incident struct {
+			Event struct {
+				Status string `json:"status"`
+			} `json:"event"`
+		}
+		body, _ := json.Marshal(resolved)
+		if err := json.Unmarshal(body, &incident); err != nil {
+			t.Fatal(err)
+		}
+		lastStatus = incident.Event.Status
+		if lastStatus == "resolved" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	resolved, err := pg.EventByID(ctx, eventID)
-	if err != nil || resolved.(map[string]any)["event"] == nil {
-		t.Fatal("original event disappeared during recovery", err)
-	}
-	resolvedJSON, _ := json.Marshal(resolved)
-	if !strings.Contains(string(resolvedJSON), `"status":"resolved"`) {
-		t.Fatalf("recovery did not close the same incident ID: %s", resolvedJSON)
-	}
+	t.Fatalf("recovery did not close the same incident ID; last status %s", lastStatus)
 }
