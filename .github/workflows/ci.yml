@@ -86,7 +86,8 @@ jobs:
           jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
             "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" >/dev/null
       - name: Scan reachable Go vulnerabilities
-        run: "$RUNNER_TEMP/dbsphere-tools/govulncheck" ./...
+        run: |
+          "$RUNNER_TEMP/dbsphere-tools/govulncheck" ./...
       - name: Preserve Go SBOM
         if: always()
         uses: actions/upload-artifact@v4
