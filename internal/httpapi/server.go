@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -76,6 +77,32 @@ type EventAIStore interface {
 	ReserveAIInvocation(context.Context, string, string, int) (string, error)
 	CompleteAIInvocation(context.Context, string, string, string, []string) error
 }
+type AdminAuditStore interface {
+	StartAdminAudit(context.Context, string, string) (string, error)
+	FinishAdminAudit(context.Context, string, int) error
+	RecentAdminAudit(context.Context) (any, error)
+}
+
+type auditResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *auditResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *auditResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(body)
+}
+
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
 	RawSQLEvidence(context.Context, string, string, string) (any, error)
@@ -326,6 +353,47 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if role == "viewer" && r.Method != http.MethodGet {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
 			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/audit" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Administrator access required"})
+				return
+			}
+			auditor, ok := store.(AdminAuditStore)
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Audit unavailable"})
+				return
+			}
+			entries, err := auditor.RecentAdminAudit(r.Context())
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable"})
+				return
+			}
+			respond(w, http.StatusOK, entries)
+			return
+		}
+		if role == "admin" && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
+			r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
+			if auditor, ok := store.(AdminAuditStore); ok {
+				id, err := auditor.StartAdminAudit(r.Context(), r.Method, r.URL.Path)
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable; operation was not run"})
+					return
+				}
+				tracked := &auditResponseWriter{ResponseWriter: w}
+				w = tracked
+				defer func() {
+					status := tracked.status
+					if status == 0 {
+						status = http.StatusOK
+					}
+					auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := auditor.FinishAdminAudit(auditCtx, id, status); err != nil {
+						slog.Error("administrator audit completion failed", "auditId", id, "error", err)
+					}
+				}()
+			}
 		}
 		if r.Method == http.MethodPost {
 			if match := slowLogImportPath.FindStringSubmatch(r.URL.Path); match != nil {

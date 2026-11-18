@@ -17,7 +17,8 @@ const views = {
 
 function setView(view, updateHash = true) {
   const selected = views[view] ? view : 'overview';
-  for (const section of document.querySelectorAll('[data-view]')) section.hidden = section.dataset.view !== selected;
+  for (const section of document.querySelectorAll('[data-view]'))
+    section.hidden = section.dataset.view !== selected || (section.id === 'admin-audit-panel' && currentRole !== 'admin');
   for (const button of document.querySelectorAll('[data-nav]')) {
     const active = button.dataset.nav === selected;
     button.classList.toggle('active', active);
@@ -74,10 +75,11 @@ function cell(tag, text, cls) {
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
-    { templates }, { schedules }, { runs }] = await Promise.all([
+    { templates }, { schedules }, { runs }, audit] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
     api('/api/silences'), api('/api/notifications'), api('/api/storage'),
-    api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs')
+    api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
+    currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null)
   ]);
   $('asset-count').textContent = assets.length;
   $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
@@ -92,9 +94,19 @@ async function refresh() {
   renderNotifications(notifications);
   pg18Store = storage.mode !== 'sqlite-preview';
   renderStorage(storage);
+  $('admin-audit-panel').hidden = currentRole !== 'admin' || location.hash.slice(1) !== 'settings';
+  if (currentRole === 'admin') renderAdminAudit(audit?.entries);
   renderInspections(assets, templates, schedules, runs);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
+}
+
+function renderAdminAudit(entries) {
+  const target = $('admin-audit-list'); target.replaceChildren();
+  if (!entries) { target.append(cell('p', '操作记录暂时不可用。', 'empty')); return; }
+  if (!entries.length) { target.append(cell('p', '尚无管理员写入操作。', 'empty')); return; }
+  for (const item of entries) target.append(cell('p',
+    `${formatTime(item.observedAt)} · ${item.actor} · ${item.method} ${item.path} · ${item.statusCode || '进行中'} · ${item.outcome}`, 'evidence'));
 }
 
 function renderInspections(assets, templates, schedules, runs) {

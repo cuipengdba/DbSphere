@@ -5,6 +5,12 @@
   CREATE TABLE IF NOT EXISTS settings (
     key text PRIMARY KEY, value text NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS admin_audit (
+    id uuid PRIMARY KEY, observed_at timestamptz NOT NULL DEFAULT now(),
+    actor text NOT NULL, method text NOT NULL, path text NOT NULL,
+    outcome text NOT NULL, status_code integer
+  );
+  CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(observed_at DESC);
   CREATE TABLE IF NOT EXISTS assets (
     id uuid PRIMARY KEY, name text NOT NULL, host text NOT NULL, port integer NOT NULL,
     database_name text NOT NULL, username text NOT NULL, password_enc text NOT NULL,

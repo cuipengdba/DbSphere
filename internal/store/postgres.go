@@ -92,6 +92,24 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record AI budget migration: %w", err)
 		}
 	}
+	var auditMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=16)").Scan(&auditMigrated); err != nil {
+		return fmt.Errorf("check admin audit migration: %w", err)
+	}
+	if !auditMigrated {
+		if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS admin_audit (
+			id uuid PRIMARY KEY, observed_at timestamptz NOT NULL DEFAULT now(),
+			actor text NOT NULL, method text NOT NULL, path text NOT NULL,
+			outcome text NOT NULL, status_code integer)`); err != nil {
+			return fmt.Errorf("create admin audit: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(observed_at DESC)"); err != nil {
+			return fmt.Errorf("index admin audit: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(16) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record admin audit migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
