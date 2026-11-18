@@ -41,6 +41,35 @@ docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.ya
 
 其他 PG 大版本可在 `patroni.env` 中加入 `DBSPHERE_DRILL_PG_MAJOR=14`（或 15–17），构建时增加 `--build-arg PG_MAJOR=14`，运行验收脚本时追加 `14` 参数。长期监控库始终为 PostgreSQL 18。
 
+## Kubernetes 本机故障演练
+
+2026-11-19 在本机单节点 `kind-dbsphere-test` 的 `dbsphere-smoke` Namespace 中部署 PG14 双节点 Patroni、单节点 etcd 测试夹具，复用已有 Go 服务 Pod 与独立 PG18 监控库。测试夹具由 [`test/patroni-drill/k8s.yaml`](../test/patroni-drill/k8s.yaml) 定义；只在测试集群创建资源。Go 服务使用现有只读 ServiceAccount 观察 PostgreSQL、Patroni REST 和 Kubernetes；测试脚本使用本机测试集群管理员身份暂停选主和缩容 Deployment，故障操作不经过 DbSphere API。
+
+首次运行取得 PG14、K8S 与 Patroni 的成功基线。缩容主节点后，真实样本分别记录 PG 不可用和 `leaderCount=0`，原节点重建并以 `streaming` 备库重入。验收脚本最初要求资产只生成一个事件，实际还产生独立的 `k8s_collection_failed` 遥测事件：主节点 Pod 被缩容时映射暂时无法读取，系统按数据缺口报警。这是需要显示的采集缺口；同一个**可用性事件**已包含 `k8s_state` 缺口证据。因此脚本改为要求一个可用性事件，并允许另有明确标记的遥测事件。
+
+修正断言后再次演练通过：PG14 基线样本 `29a7b368-c65d-432e-8ccb-3404f37fc8dc`，无 leader 样本 `4e5936c2-d5eb-4406-adc3-bf28f77804be`，PG 不可用样本 `eb12d2dc-3283-4846-bd9c-1a9013738bc4`，恢复样本 `b2822229-4802-45df-8a3f-c4e196179eb1`；可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b` 在同一 ID 下关联 Patroni/K8S 状态、`patroni_leader_invalid` 告警、`patroni_leader_anomaly` 候选与恢复，状态为 `resolved`。单独的遥测事件为 `536500d4-a2da-4e3a-9504-bb47d5c2d0bf`。脱敏结果保存在本机 `H:\CodexLS\outputs\DbSphere-patroni-kind-pg14.json`。测试期间 Patroni leader 告警持续时间设为 0 秒以捕获选主窗口，结束后恢复默认 30 秒。
+
+复现前需有 `dbsphere-smoke` 测试 Namespace、已运行的 Go 服务与独立 PG18、镜像 `dbsphere/patroni-drill:local` 已导入 kind，以及只包含 `DBSPHERE_DRILL_PG_PASSWORD`、`DBSPHERE_DRILL_REPL_PASSWORD` 的 `dbsphere-patroni-drill` Secret。管理员 kubeconfig 只供测试脚本故障注入；Go 服务继续使用 Namespace 内只读 ServiceAccount。对 Go 服务做本机端口转发后运行：
+
+```powershell
+$env:KUBECONFIG = 'H:\CodexLS\tmp\dbsphere-local-admin.kubeconfig'
+kubectl apply -f test/patroni-drill/k8s.yaml
+kubectl port-forward -n dbsphere-smoke svc/dbsphere-go 18090:8080
+```
+
+在另一终端设置同一 `KUBECONFIG`，将路径换成各自的隔离测试凭据文件，再运行：
+
+```powershell
+$env:KUBECONFIG = 'H:\CodexLS\tmp\dbsphere-local-admin.kubeconfig'
+$credentials = 'H:\CodexLS\tmp\dbsphere-patroni-pg14-credentials.json'
+$adminPasswordFile = 'H:\CodexLS\outputs\DbSphere-kind-admin-password.txt'
+$resultFile = 'H:\CodexLS\outputs\DbSphere-patroni-kind-pg14.json'
+node scripts/patroni-kind-acceptance.mjs http://127.0.0.1:18090 `
+  $credentials $adminPasswordFile $resultFile 14
+```
+
+本机 kind 只有一个 control-plane 节点，Patroni 使用单节点 etcd 和临时 Pod 数据层，不能证明多节点 DCS、持久卷、网络分区或生产 Operator 的可靠性。故障时独立遥测事件也提醒值班员 K8S Pod 映射缺口；可用性事件仍是本次问题从故障到恢复的主要追踪入口。
+
 ## 尚待验收
 
-本机覆盖 PG14 和 PG18 双节点、单节点 DCS 和人工故障注入；PG15–17 双节点已由独立 Linux CI 验证。三节点 DCS、Kubernetes Operator/StatefulSet、TLS/Basic Auth 生产证书、跨节点网络分区、长期负载、自动发现与真实业务 Trace 尚未测试。生产稳定性仍待验收。DbSphere 仍是只读监控，不承担 Patroni 的自动选主或故障切换。V1.0 任务保持未完成，见[开发任务](DEVELOPMENT_TASKS.md)。
+本机覆盖 PG14 和 PG18 双节点 Linux 容器、PG14 单节点 kind、单节点 DCS 和人工故障注入；PG15–17 双节点已由独立 Linux CI 验证。三节点 DCS、Kubernetes Operator/StatefulSet、TLS/Basic Auth 生产证书、跨节点网络分区、长期负载、自动发现与真实业务 Trace 尚未测试。生产稳定性仍待验收。DbSphere 仍是只读监控，不承担 Patroni 的自动选主或故障切换。V1.0 任务保持未完成，见[开发任务](DEVELOPMENT_TASKS.md)。

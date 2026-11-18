@@ -1,0 +1,132 @@
+# Isolated acceptance fixture for the existing dbsphere-smoke kind namespace.
+# Create dbsphere-patroni-drill Secret with DBSPHERE_DRILL_PG_PASSWORD and
+# DBSPHERE_DRILL_REPL_PASSWORD before applying this manifest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbsphere-patroni-etcd
+  namespace: dbsphere-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dbsphere-patroni-etcd}
+  template:
+    metadata:
+      labels: {app: dbsphere-patroni-etcd}
+    spec:
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.25
+          command:
+            - /usr/local/bin/etcd
+            - --name=etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://etcd:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://etcd:2380
+            - --initial-cluster=etcd=http://etcd:2380
+            - --initial-cluster-state=new
+            - --data-dir=/etcd-data
+          ports:
+            - {name: client, containerPort: 2379}
+          volumeMounts:
+            - {name: data, mountPath: /etcd-data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: dbsphere-smoke
+spec:
+  selector: {app: dbsphere-patroni-etcd}
+  ports:
+    - {name: client, port: 2379, targetPort: 2379}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patroni1
+  namespace: dbsphere-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: patroni1}
+  template:
+    metadata:
+      labels: {app: patroni1}
+    spec:
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      containers:
+        - name: patroni
+          image: dbsphere/patroni-drill:local
+          imagePullPolicy: Never
+          env:
+            - {name: PATRONI_NAME, value: patroni1}
+            - name: DBSPHERE_DRILL_PG_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: dbsphere-patroni-drill, key: DBSPHERE_DRILL_PG_PASSWORD}
+            - name: DBSPHERE_DRILL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: dbsphere-patroni-drill, key: DBSPHERE_DRILL_REPL_PASSWORD}
+          ports:
+            - {name: postgres, containerPort: 5432}
+            - {name: rest, containerPort: 8008}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni1
+  namespace: dbsphere-smoke
+spec:
+  selector: {app: patroni1}
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}
+    - {name: rest, port: 8008, targetPort: 8008}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patroni2
+  namespace: dbsphere-smoke
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: patroni2}
+  template:
+    metadata:
+      labels: {app: patroni2}
+    spec:
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      containers:
+        - name: patroni
+          image: dbsphere/patroni-drill:local
+          imagePullPolicy: Never
+          env:
+            - {name: PATRONI_NAME, value: patroni2}
+            - name: DBSPHERE_DRILL_PG_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: dbsphere-patroni-drill, key: DBSPHERE_DRILL_PG_PASSWORD}
+            - name: DBSPHERE_DRILL_REPL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: dbsphere-patroni-drill, key: DBSPHERE_DRILL_REPL_PASSWORD}
+          ports:
+            - {name: postgres, containerPort: 5432}
+            - {name: rest, containerPort: 8008}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni2
+  namespace: dbsphere-smoke
+spec:
+  selector: {app: patroni2}
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}
+    - {name: rest, port: 8008, targetPort: 8008}

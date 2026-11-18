@@ -8,6 +8,8 @@ Patroni 可选只读采集现已接入 Go 资产、PG18 加密配置、采样、
 
 可重复的 Patroni 故障演练已加入独立 Docker Compose 测试夹具：本机 PG18 自动切换演练形成一个已恢复的可用性事件 `520f45e8-48ea-4599-8176-bf8eeba79fa6`。首次 GitHub CI 自动选主太快而未采到短暂的无 leader 窗口，因此该作业失败；测试夹具现通过先暂停再恢复自动选主，使无 leader 样本可重复采集。本机 PG14 双节点使用新流程通过，形成单事件 `17df8d8a-31b6-4a88-a4fc-67a24724aa4b`，目标库版本 14，监控库仍为 PG18。[修正后的独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 中 PG14–18 五版 Patroni 作业和整套流水线全部通过，详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
 
+本机单节点 kind 的 PG14 双节点 Patroni 故障演练也已通过：可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b` 在同一 ID 下关联真实 PG 不可用、无 leader、K8S 状态缺口、Patroni 告警/候选和恢复样本；Pod 缩容期间的 K8S 映射失败另有一个已恢复的遥测事件，不能把它隐藏成已知健康。测试镜像使用单节点 etcd 和临时 Pod 数据，不代表生产 K8S/Patroni 组合通过，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
+
 隔离 Docker Compose 的 PG18 主备演练新增真实复制延迟故障：备库暂停回放、主库产生 WAL 后，DbSphere 用只读账号取得 128 MiB 级延迟；默认规则持续 120 秒触发告警和 `replication_lag` 候选，原始样本、证据图和 Markdown 报告共用事件 `10b01d66-5969-476d-b1b8-f4112a4e7685`。恢复后主库仍有 1 个流复制备库且延迟为 0，告警引用成功样本关闭原事件；当前源码的 Go 镜像替换后数据仍在独立 PG18。收紧恢复样本断言后，最终脚本和当前镜像再次通过同事件闭环（事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc`）。浏览器复验确认时间线已正确显示恢复证据及其样本 ID，根因候选的证据和局限已分行呈现。[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315) 重新执行真实主备故障并在 app 替换后读回同一事件，见[复制故障演练](REPLICATION_DRILL.md)。此结果不覆盖 Patroni、云 PG、生产可靠性或完整八类故障门槛。
 
 本机四节点 kind 隔离 Namespace 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 已完成 PostgreSQL 14–18 × Kubernetes 实际纳管和只读采样：五版样本关联 Pod、Service 与跨两个 worker 的 Node；独立 PG18 存储 PVC 在 Go Pod 与存储 Pod 替换后保留资产及五版旧样本，同时新采样成功。本机旧集群控制面已有长期重启/超时；独立 CI 补上了全新集群复验，但仍不计入生产可靠性或 V1.0 正式发布验收。复现脚本及边界见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
