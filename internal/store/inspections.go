@@ -48,6 +48,11 @@ type InspectionScheduleInput struct {
 	Enabled         *bool  `json:"enabled"`
 }
 
+type DueInspection struct {
+	AssetID    string
+	TemplateID string
+}
+
 func (s *Postgres) UpdateInspectionTemplate(ctx context.Context, id string, patch InspectionTemplatePatch) (any, error) {
 	if len(patch.Thresholds) == 0 {
 		return nil, ErrInvalidInspection
@@ -122,6 +127,149 @@ func (s *Postgres) UpsertInspectionSchedule(ctx context.Context, input Inspectio
 	return map[string]any{"schedule": map[string]any{"assetId": input.AssetID,
 		"templateId": input.TemplateID, "intervalMinutes": input.IntervalMinutes,
 		"nextDueAt": next, "enabled": *input.Enabled}}, nil
+}
+
+func (s *Postgres) RunInspection(ctx context.Context, assetID, templateID string, key []byte, retryOf string) (any, error) {
+	var runtime string
+	var raw []byte
+	if err := s.pool.QueryRow(ctx, `SELECT a.runtime,t.definition_json FROM assets a
+		JOIN inspection_templates t ON t.id=$2 WHERE a.id=$1`, assetID, templateID).Scan(&runtime, &raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInspectionScheduleReference
+		}
+		return nil, err
+	}
+	var template inspectionTemplate
+	if err := json.Unmarshal(raw, &template); err != nil {
+		return nil, err
+	}
+	if template.Scope != "all" && template.Scope != runtime {
+		return nil, ErrInvalidInspection
+	}
+	started := time.Now().UTC()
+	result, err := s.CheckAsset(ctx, assetID, key)
+	if err != nil {
+		return nil, err
+	}
+	var metricsJSON []byte
+	if err := s.pool.QueryRow(ctx, `SELECT metrics_json FROM samples WHERE id=$1 AND asset_id=$2
+		AND collected_at=$3`, result.SampleID, assetID, result.CollectedAt).Scan(&metricsJSON); err != nil {
+		return nil, err
+	}
+	var metrics map[string]any
+	if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
+		return nil, err
+	}
+	var previous map[string]any
+	var previousJSON []byte
+	if err := s.pool.QueryRow(ctx, `SELECT metrics_json FROM samples WHERE asset_id=$1 AND collected_at<$2
+		ORDER BY collected_at DESC LIMIT 1`, assetID, result.CollectedAt).Scan(&previousJSON); err == nil {
+		_ = json.Unmarshal(previousJSON, &previous)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	prior := map[string]string{}
+	var priorJSON []byte
+	if err := s.pool.QueryRow(ctx, `SELECT findings_json FROM inspection_runs WHERE asset_id=$1
+		AND template_id=$2 AND status='completed' ORDER BY completed_at DESC LIMIT 1`, assetID, templateID).
+		Scan(&priorJSON); err == nil {
+		var earlier []inspectionFinding
+		if json.Unmarshal(priorJSON, &earlier) == nil {
+			for _, finding := range earlier {
+				prior[finding.ID] = finding.Status
+			}
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	findings, summary := evaluateGoInspection(template, metrics, previous, result.CollectedAt, prior)
+	var eventIDsJSON []byte
+	if err := s.pool.QueryRow(ctx, `SELECT coalesce(jsonb_agg(id::text),'[]'::jsonb) FROM events
+		WHERE asset_id=$1 AND status='open'`, assetID).Scan(&eventIDsJSON); err != nil {
+		return nil, err
+	}
+	var eventIDs []string
+	if err := json.Unmarshal(eventIDsJSON, &eventIDs); err != nil {
+		return nil, err
+	}
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return nil, err
+	}
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		return nil, err
+	}
+	var retry any
+	if retryOf != "" {
+		retry = retryOf
+	}
+	completed := time.Now().UTC()
+	var id string
+	if err := s.pool.QueryRow(ctx, `INSERT INTO inspection_runs(id,asset_id,template_id,template_version,
+		sample_id,retry_of,started_at,completed_at,summary_json,findings_json,status,error,event_ids_json)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,'completed',NULL,$10)
+		RETURNING id::text`, assetID, templateID, template.Version, result.SampleID,
+		retry, started, completed, summaryJSON, findingsJSON, eventIDsJSON).Scan(&id); err != nil {
+		return nil, err
+	}
+	return map[string]any{"run": map[string]any{"id": id, "assetId": assetID, "templateId": templateID,
+		"templateVersion": template.Version, "sampleId": result.SampleID, "retryOf": retry,
+		"startedAt": started, "completedAt": completed, "status": "completed",
+		"error": nil, "summary": summary, "findings": findings, "eventIds": eventIDs}}, nil
+}
+
+func (s *Postgres) RetryInspection(ctx context.Context, id string, key []byte) (any, error) {
+	var assetID, templateID string
+	if err := s.pool.QueryRow(ctx, `SELECT asset_id::text,template_id FROM inspection_runs WHERE id=$1`, id).
+		Scan(&assetID, &templateID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInspectionTemplateNotFound
+		}
+		return nil, err
+	}
+	return s.RunInspection(ctx, assetID, templateID, key, id)
+}
+
+func (s *Postgres) ClaimDueInspections(ctx context.Context, now time.Time, limit int) ([]DueInspection, error) {
+	if limit < 1 || limit > 100 {
+		return nil, ErrInvalidInspection
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT asset_id::text,template_id FROM inspection_schedules
+		WHERE enabled=true AND next_due_at<=$1 ORDER BY next_due_at LIMIT $2 FOR UPDATE SKIP LOCKED`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	due := []DueInspection{}
+	for rows.Next() {
+		var item DueInspection
+		if err := rows.Scan(&item.AssetID, &item.TemplateID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		due = append(due, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for _, item := range due {
+		if _, err := tx.Exec(ctx, `UPDATE inspection_schedules SET
+			next_due_at=$1::timestamptz + interval_minutes * interval '1 minute'
+			WHERE asset_id=$2 AND template_id=$3`, now, item.AssetID, item.TemplateID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return due, nil
 }
 
 // seedGoInspections adds built-in templates without overwriting operator thresholds.

@@ -97,6 +97,11 @@ func run(log *slog.Logger) error {
 		defer close(tracePrunerDone)
 		runTracePruner(ctx, pg, cfg.TraceDays, log)
 	}()
+	inspectionDone := make(chan struct{})
+	go func() {
+		defer close(inspectionDone)
+		runInspectionScheduler(ctx, pg, cfg.MasterKey, log)
+	}()
 	if cfg.AutoCollect {
 		done := make(chan struct{})
 		collectorDone = done
@@ -114,10 +119,39 @@ func run(log *slog.Logger) error {
 	}
 	<-notifierDone
 	<-tracePrunerDone
+	<-inspectionDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func runInspectionScheduler(ctx context.Context, pg *store.Postgres, key []byte, log *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		due, err := pg.ClaimDueInspections(ctx, time.Now().UTC(), 20)
+		if err != nil && ctx.Err() == nil {
+			log.Error("Go inspection schedule scan failed", "error", err)
+		}
+		for _, item := range due {
+			checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			_, err := pg.RunInspection(checkCtx, item.AssetID, item.TemplateID, key, "")
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Error("Go scheduled inspection failed", "assetId", item.AssetID,
+					"templateId", item.TemplateID, "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func runTracePruner(ctx context.Context, pg *store.Postgres, days int, log *slog.Logger) {

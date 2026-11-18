@@ -45,6 +45,8 @@ var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
 var inspectionTemplatePath = regexp.MustCompile(`^/api/inspection-templates/([a-z][a-z0-9_]{1,63})$`)
+var inspectionRetryPath = regexp.MustCompile(`^/api/inspection-runs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/retry$`)
+var inspectionReportPath = regexp.MustCompile(`^/api/inspection-runs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
 var silencePath = regexp.MustCompile(`^/api/silences/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var notificationRetryPath = regexp.MustCompile(`^/api/notifications/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/retry$`)
 
@@ -68,6 +70,13 @@ type AlertRuleStore interface {
 type InspectionConfigStore interface {
 	UpdateInspectionTemplate(context.Context, string, storepkg.InspectionTemplatePatch) (any, error)
 	UpsertInspectionSchedule(context.Context, storepkg.InspectionScheduleInput) (any, error)
+}
+type InspectionRunner interface {
+	RunInspection(context.Context, string, string, []byte, string) (any, error)
+	RetryInspection(context.Context, string, []byte) (any, error)
+}
+type InspectionReportReader interface {
+	InspectionReport(context.Context, string, string) (string, error)
 }
 type SilenceStore interface {
 	CreateSilence(context.Context, storepkg.SilenceInput) (json.RawMessage, error)
@@ -337,6 +346,89 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusOK, value)
 			}
 			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/inspections/run" {
+			runner, ok := store.(InspectionRunner)
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Inspection execution unavailable"})
+				return
+			}
+			var input struct {
+				AssetID    string `json:"assetId"`
+				TemplateID string `json:"templateId"`
+			}
+			if readJSON(w, r, &input) != nil ||
+				!assetPath.MatchString("/api/assets/"+input.AssetID) ||
+				!inspectionTemplatePath.MatchString("/api/inspection-templates/"+input.TemplateID) {
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid inspection request"})
+				return
+			}
+			value, err := runner.RunInspection(r.Context(), input.AssetID, input.TemplateID, credentials.MasterKey, "")
+			switch {
+			case errors.Is(err, storepkg.ErrInspectionScheduleReference):
+				respond(w, http.StatusNotFound, map[string]string{"error": "Inspection asset or template not found"})
+			case errors.Is(err, storepkg.ErrInvalidInspection):
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Inspection template does not match asset"})
+			case err != nil:
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Inspection execution unavailable"})
+			default:
+				respond(w, http.StatusCreated, value)
+			}
+			return
+		}
+		if r.Method == http.MethodPost {
+			if match := inspectionRetryPath.FindStringSubmatch(r.URL.Path); match != nil {
+				runner, ok := store.(InspectionRunner)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Inspection retry unavailable"})
+					return
+				}
+				value, err := runner.RetryInspection(r.Context(), match[1], credentials.MasterKey)
+				switch {
+				case errors.Is(err, storepkg.ErrInspectionTemplateNotFound):
+					respond(w, http.StatusNotFound, map[string]string{"error": "Inspection run not found"})
+				case err != nil:
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Inspection retry unavailable"})
+				default:
+					respond(w, http.StatusCreated, value)
+				}
+				return
+			}
+		}
+		if r.Method == http.MethodGet {
+			if match := inspectionReportPath.FindStringSubmatch(r.URL.Path); match != nil {
+				format := r.URL.Query().Get("format")
+				if format == "" {
+					format = "md"
+				}
+				if format != "md" && format != "html" {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid report format"})
+					return
+				}
+				reports, ok := store.(InspectionReportReader)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Inspection reports unavailable"})
+					return
+				}
+				body, err := reports.InspectionReport(r.Context(), match[1], format)
+				if errors.Is(err, storepkg.ErrInspectionTemplateNotFound) {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Inspection run not found"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Inspection report unavailable"})
+					return
+				}
+				contentType := "text/markdown; charset=utf-8"
+				if format == "html" {
+					contentType = "text/html; charset=utf-8"
+				}
+				w.Header().Set("Content-Type", contentType)
+				w.Header().Set("Content-Disposition", "attachment; filename=\"dbsphere-inspection-"+match[1]+"."+format+"\"")
+				w.Header().Set("Cache-Control", "no-store")
+				_, _ = w.Write([]byte(body))
+				return
+			}
 		}
 		if silencesDB, ok := store.(SilenceStore); ok {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/silences" {

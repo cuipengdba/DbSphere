@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,127 @@ func TestGoInspectionConfigurationInPG18(t *testing.T) {
 	if err := pg.pool.QueryRow(ctx, `SELECT next_due_at FROM inspection_schedules
 		WHERE asset_id=$1 AND template_id=$2`, asset.ID, templateID).Scan(&due); err != nil || due.Before(time.Now()) {
 		t.Fatalf("inspection schedule was not persisted: %v %v", due, err)
+	}
+	claimed, err := pg.ClaimDueInspections(ctx, due.Add(time.Second), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range claimed {
+		if item.AssetID == asset.ID && item.TemplateID == templateID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("due inspection not claimed: %+v", claimed)
+	}
+	again, err := pg.ClaimDueInspections(ctx, due.Add(time.Second), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range again {
+		if item.AssetID == asset.ID && item.TemplateID == templateID {
+			t.Fatal("due inspection was claimed twice")
+		}
+	}
+}
+
+func TestGoInspectionRunLinksSamePG18Event(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Go inspection outage test", Host: "127.0.0.1", Port: 1,
+		Database: "postgres", Username: "postgres", Password: "test-secret", SSLMode: "disable", Runtime: "linux"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	value, err := pg.RunInspection(ctx, asset.ID, "pg_daily", key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := value.(map[string]any)["run"].(map[string]any)
+	if run["status"] != "completed" {
+		t.Fatalf("inspection failed: %+v", run)
+	}
+	findings := run["findings"].([]inspectionFinding)
+	if len(findings) < 15 || findings[0].ID != "unavailable" || findings[0].Status != "risk" {
+		t.Fatalf("outage inspection did not identify availability risk: %+v", findings)
+	}
+	ids := run["eventIds"].([]string)
+	if len(ids) != 1 {
+		t.Fatalf("inspection did not link one incident: %+v", ids)
+	}
+	var storedID, sampleID string
+	if err := pg.pool.QueryRow(ctx, `SELECT id::text,sample_id::text FROM inspection_runs
+		WHERE asset_id=$1`, asset.ID).Scan(&storedID, &sampleID); err != nil ||
+		storedID != run["id"] || sampleID != run["sampleId"] {
+		t.Fatalf("inspection run/sample not persisted: %s %s %v", storedID, sampleID, err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `SELECT id::text FROM events WHERE asset_id=$1 AND status='open'`, asset.ID).Scan(&eventID); err != nil || eventID != ids[0] {
+		t.Fatalf("inspection linked a different event ID: %s %+v %v", eventID, ids, err)
+	}
+	repeated, err := pg.RetryInspection(ctx, storedID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := repeated.(map[string]any)["run"].(map[string]any)
+	if retry["retryOf"] != storedID || retry["sampleId"] == sampleID {
+		t.Fatalf("inspection retry did not create a new linked sample: %+v", retry)
+	}
+	report, err := pg.InspectionReport(ctx, storedID, "md")
+	if err != nil || !strings.Contains(report, eventID) || !strings.Contains(report, sampleID) ||
+		!strings.Contains(report, "数据库无法连接") {
+		t.Fatalf("Markdown report omitted source IDs or finding: %v", err)
+	}
+	htmlReport, err := pg.InspectionReport(ctx, storedID, "html")
+	if err != nil || !strings.Contains(htmlReport, eventID) || !strings.Contains(htmlReport, "<table>") {
+		t.Fatalf("HTML report omitted source IDs: %v", err)
+	}
+}
+
+func TestGoInspectionReportEscapesUntrustedText(t *testing.T) {
+	now := time.Now().UTC()
+	finding := inspectionFinding{Title: "bad <script>alert(1)</script>", Status: "unknown",
+		Source: "source|with|pipe", Reason: "line\nbreak"}
+	htmlBody := htmlInspectionReport("run", "asset <img src=x>", "template", 1, "sample",
+		now, inspectionSummary{}, []inspectionFinding{finding}, nil)
+	if strings.Contains(htmlBody, "<script>") || strings.Contains(htmlBody, "<img src=x>") ||
+		!strings.Contains(htmlBody, "&lt;script&gt;") {
+		t.Fatal("HTML inspection report did not escape untrusted fields")
+	}
+	mdBody := markdownInspectionReport("run", "asset", "template", 1, "sample",
+		now, inspectionSummary{}, []inspectionFinding{finding}, nil)
+	if !strings.Contains(mdBody, "source\\|with\\|pipe") || strings.Contains(mdBody, "line\nbreak") {
+		t.Fatal("Markdown inspection table did not escape delimiters")
+	}
+}
+
+func TestGoInspectionComparisonOperators(t *testing.T) {
+	template := inspectionTemplate{Checks: []inspectionCheck{
+		{ID: "less", Metric: "pg.connection_utilization", Operator: "<=", Threshold: 80},
+		{ID: "unknown", Metric: "pg.connection_utilization", Operator: "invalid", Threshold: 80},
+	}}
+	findings, summary := evaluateGoInspection(template,
+		map[string]any{"connections": float64(90), "max_connections": float64(100)}, nil,
+		time.Now().UTC(), nil)
+	if findings[0].Status != "pass" || findings[1].Status != "unknown" ||
+		summary.Pass != 1 || summary.Unknown != 1 {
+		t.Fatalf("inspection operators were misclassified: %+v %+v", findings, summary)
 	}
 }

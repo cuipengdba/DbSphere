@@ -151,6 +151,7 @@ function renderInspections(assets, templates, schedules, runs) {
     const asset = assets.find(item => item.id === run.assetId);
     details.append(cell('summary', `${asset?.name ?? '资产'} · ${run.templateId} v${run.templateVersion} · ${run.status === 'failed' ? '执行失败' : `风险 ${run.summary.risk} / 未知 ${run.summary.unknown} / 不适用 ${run.summary.notApplicable ?? 0}`} · ${formatTime(run.completedAt)}`));
     details.append(cell('small', `巡检 ID ${run.id} · 样本 ${run.sampleId}${run.retryOf ? ' · 重试自 ' + run.retryOf : ''}`));
+    renderRelatedEventButtons(details, run.eventIds);
     if (run.error) details.append(cell('p', run.error, 'warning'));
     for (const finding of run.findings) {
       const change = finding.previousStatus && finding.previousStatus !== finding.status
@@ -394,7 +395,7 @@ function renderRelatedEventButtons(target, eventIds = []) {
   if (!eventIds.length) return;
   const events = document.createElement('div'); events.className = 'actions';
   for (const id of eventIds) {
-    const link = cell('button', `关联开放事件 ${id.slice(0, 8)}`, 'ghost small-button');
+    const link = cell('button', `关联事件 ${id.slice(0, 8)}`, 'ghost small-button');
     link.addEventListener('click', () => showEvent(id)); events.append(link);
   }
   target.append(events);
