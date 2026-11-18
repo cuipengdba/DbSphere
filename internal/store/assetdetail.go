@@ -73,8 +73,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			ORDER BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
 		return map[string]any{"series": values}, err
 	case "capacity":
-		return map[string]any{"forecast": map[string]any{"status": "unavailable",
-			"reason": "Go 容量预测正在迁移；历史采样仍保留在 PostgreSQL 18"}}, nil
+		forecast, err := s.CapacityForecast(ctx, id)
+		return map[string]any{"forecast": forecast}, err
 	default:
 		return nil, fmt.Errorf("unsupported asset section")
 	}
