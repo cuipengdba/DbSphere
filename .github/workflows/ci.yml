@@ -536,6 +536,94 @@ jobs:
               -f test/replication-drill/compose.yaml down -v --remove-orphans
           fi
 
+  kind-pg14-18-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install pinned kind and kubectl
+        run: |
+          mkdir -p "$RUNNER_TEMP/dbsphere-bin"
+          cd "$RUNNER_TEMP/dbsphere-bin"
+          curl -fLsS -O https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fLsS -O https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum
+          sha256sum --check kind-linux-amd64.sha256sum
+          mv kind-linux-amd64 kind
+          chmod +x kind
+          curl -fLsS -O https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl
+          curl -fLsS -O https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl.sha256
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          chmod +x kubectl
+          echo "$RUNNER_TEMP/dbsphere-bin" >> "$GITHUB_PATH"
+          echo "KUBECONFIG=$RUNNER_TEMP/dbsphere-kind-admin.kubeconfig" >> "$GITHUB_ENV"
+      - name: Create isolated four-node Kubernetes cluster
+        run: |
+          cat > "$RUNNER_TEMP/dbsphere-kind-config.yaml" <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+            - role: worker
+            - role: worker
+          YAML
+          kind create cluster --name dbsphere-ci --config "$RUNNER_TEMP/dbsphere-kind-config.yaml" --wait 180s
+          kind get kubeconfig --name dbsphere-ci > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl get nodes -o wide
+      - name: Deploy Go console, PostgreSQL 18 store and five target versions
+        run: |
+          docker build -f Dockerfile-go -t dbsphere/kind-matrix:local .
+          kind load docker-image dbsphere/kind-matrix:local --name dbsphere-ci
+          node scripts/kind-matrix-manifest.mjs dbsphere-ci "$RUNNER_TEMP/dbsphere-kind-manifest.json"
+          node scripts/kind-matrix-secrets.mjs \
+            "$RUNNER_TEMP/dbsphere-kind-secret.json" "$RUNNER_TEMP/dbsphere-kind-credentials.json"
+          kubectl create namespace dbsphere-matrix
+          kubectl create namespace agentsql
+          kubectl apply -f "$RUNNER_TEMP/dbsphere-kind-secret.json"
+          kubectl apply -f "$RUNNER_TEMP/dbsphere-kind-manifest.json"
+          kubectl -n dbsphere-matrix wait --for=condition=available deployment --all --timeout=300s
+          kubectl -n dbsphere-matrix get pods,pvc -o wide
+      - name: Verify PG14-18 and cross-node Kubernetes evidence after Pod replacement
+        run: |
+          forward_pid=''
+          trap 'if [ -n "$forward_pid" ]; then kill "$forward_pid" 2>/dev/null || true; fi' EXIT
+          start_forward() {
+            kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18091:8080 > "$RUNNER_TEMP/dbsphere-kind-forward.log" 2>&1 &
+            forward_pid=$!
+            for attempt in {1..60}; do
+              if curl -fsS http://127.0.0.1:18091/readyz 2>/dev/null |
+                jq -e '.storage=="postgresql18"' >/dev/null; then break; fi
+              sleep 1
+            done
+            curl -fsS http://127.0.0.1:18091/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+          }
+          start_forward
+          node scripts/kind-matrix-acceptance.mjs http://127.0.0.1:18091 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" dbsphere-ci \
+            > "$RUNNER_TEMP/dbsphere-kind-before.json"
+          kill "$forward_pid" 2>/dev/null || true
+          wait "$forward_pid" 2>/dev/null || true
+          forward_pid=''
+          kubectl -n dbsphere-matrix delete pod -l app=dbsphere-go --wait=true
+          kubectl -n dbsphere-matrix rollout status deployment/dbsphere-go --timeout=180s
+          kubectl -n dbsphere-matrix delete pod -l app=dbsphere-store --wait=true
+          kubectl -n dbsphere-matrix rollout status deployment/dbsphere-store --timeout=180s
+          start_forward
+          node scripts/kind-matrix-acceptance.mjs http://127.0.0.1:18091 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" dbsphere-ci \
+            > "$RUNNER_TEMP/dbsphere-kind-after.json"
+          diff -u <(jq -S '[.matrix[].assetId]' "$RUNNER_TEMP/dbsphere-kind-before.json") \
+            <(jq -S '[.matrix[].assetId]' "$RUNNER_TEMP/dbsphere-kind-after.json")
+          cat "$RUNNER_TEMP/dbsphere-kind-after.json"
+      - name: Remove isolated Kubernetes cluster
+        if: always()
+        run: |
+          if command -v kind >/dev/null 2>&1; then kind delete cluster --name dbsphere-ci; fi
+
   external-compose:
     runs-on: ubuntu-latest
     steps:
