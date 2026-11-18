@@ -644,7 +644,7 @@ function renderEvents(events) {
   const filtered = events.filter(event => (status === 'all' || event.status === status) &&
     (!query || [event.id, event.title, event.assetName || ''].some(value =>
       value.toLocaleLowerCase('zh-CN').includes(query))));
-  $('event-filter-summary').textContent = `显示 ${filtered.length} / ${events.length} 条最近事件；列表最多包含 200 条。`;
+  $('event-filter-summary').textContent = `显示 ${filtered.length} / ${events.length} 条最近事件；列表最多包含 200 条。完整事件 ID 可按回车直接打开。`;
   if (!filtered.length) { list.append(cell('p', events.length ? '当前筛选没有匹配事件。' : '暂无问题事件。', 'empty')); return; }
   for (const event of filtered) {
     const button = cell('button', '', 'event-button incident-card');
@@ -658,15 +658,17 @@ function renderEvents(events) {
     button.append(cell('small', `事件 ${event.id.slice(0, 8)} · ${formatTime(event.startedAt)}`, 'incident-card-time'));
     button.classList.toggle('selected', event.id === selectedEvent);
     if (event.id === selectedEvent) button.setAttribute('aria-current', 'true');
-    button.addEventListener('click', async () => {
-      try {
-        await showEvent(event.id);
-        if (matchMedia('(max-width: 1080px)').matches)
-          $('event-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } catch (error) { notice(error.message, true); }
-    });
+    button.addEventListener('click', () => openEvent(event.id));
     list.append(button);
   }
+}
+
+async function openEvent(id) {
+  try {
+    await showEvent(id);
+    if (matchMedia('(max-width: 1080px)').matches)
+      $('event-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) { notice(error.message, true); }
 }
 
 function renderAlerts(alerts) {
@@ -1118,6 +1120,12 @@ for (const button of document.querySelectorAll('[data-nav]')) button.addEventLis
 for (const button of document.querySelectorAll('[data-open-view]')) button.addEventListener('click', () => setView(button.dataset.openView));
 $('event-search').addEventListener('input', () => renderEvents(recentEvents));
 $('event-status').addEventListener('change', () => renderEvents(recentEvents));
+$('event-search').addEventListener('keydown', event => {
+  const id = event.currentTarget.value.trim().toLowerCase();
+  if (event.key !== 'Enter' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)) return;
+  event.preventDefault();
+  openEvent(id);
+});
 window.addEventListener('hashchange', () => setView(location.hash.slice(1), false));
 
 $('login-form').addEventListener('submit', async (event) => {

@@ -14,6 +14,8 @@ Playwright Chromium 登录实际 Go B/S 页面，读取真实 OOM 事件 `50f712
 
 将 Go 镜像 `dbsphere/kind-acceptance:event-filter` 部署到同一 kind，`dbsphere-go` 新 Pod `dbsphere-go-78494c79bc-wjmnk` 为 `1/1 Ready`、零重启，`/readyz` 返回 `ready/postgresql18`。Playwright Chromium 在 390px 视口输入真实 OOM 事件完整 ID，最近 17 条事件筛选为 1 条；切到“处理中”后为 0 条，切回“已恢复”后为 1 条。点击事件后页面滚到同一事件的证据详情，五段链路仍可见，页面无横向溢出或脚本错误。截图保存在本机 `H:\CodexLS\outputs\DbSphere-kind-event-filter-mobile.png`。筛选只作用于 API 返回的最近 200 条事件，不等于全历史搜索；大规模历史分页仍待 V1.0 验收。
 
+随后将 `dbsphere/kind-acceptance:event-filter-id` 滚动到同一 Deployment，新 Pod `dbsphere-go-856576fccf-hdgmm` 为 `1/1 Ready`、零重启。浏览器把状态设成“处理中”，此时已恢复 OOM 事件不在当前列表；输入其大写完整 UUID 并按回车，仍通过受权限约束的事件详情 API 打开原事件、自动滚到证据区，五段链路可见且无脚本错误。该测试验证“列表筛选无匹配时仍可按完整 ID 直达”；未验证超过最近 200 条的实库历史数据分页。
+
 ## 2026-11-19 Go 新镜像滚动验收
 
 本机单节点 `dbsphere-test` 集群的 `dbsphere-smoke` Namespace 将 Go 镜像更新为 `dbsphere/kind-acceptance:collector-workers`，镜像包含托管资产模式、采集缺口面板及有上限的自动采集代码。`dbsphere-go` Deployment 最终为 1/1 Ready，`/readyz` 返回 `ready/postgresql18`；浏览器从替换后的 Go Pod 读取既有 PG14 Patroni 可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b`、关联遥测事件和可展开的证据时间线，控制台无错误。PG14 K8S 资产详情显示数据库诊断 14/14、K8S Pod/Node/PVC 与 Patroni 已采集，Top SQL 缺少扩展时明确标为未采集。截图保存在本机 `H:\CodexLS\outputs\DbSphere-kind-coverage.png`。
