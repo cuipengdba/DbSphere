@@ -589,6 +589,7 @@ jobs:
           kubectl -n dbsphere-matrix get pods,pvc -o wide
       - name: Verify PG14-18 and cross-node Kubernetes evidence after Pod replacement
         run: |
+          node --check scripts/kind-matrix-verify-persistence.mjs
           forward_pid=''
           trap 'if [ -n "$forward_pid" ]; then kill "$forward_pid" 2>/dev/null || true; fi' EXIT
           start_forward() {
@@ -616,9 +617,9 @@ jobs:
           node scripts/kind-matrix-acceptance.mjs http://127.0.0.1:18091 \
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" dbsphere-ci \
             > "$RUNNER_TEMP/dbsphere-kind-after.json"
-          diff -u <(jq -S '[.matrix[].assetId]' "$RUNNER_TEMP/dbsphere-kind-before.json") \
-            <(jq -S '[.matrix[].assetId]' "$RUNNER_TEMP/dbsphere-kind-after.json")
-          cat "$RUNNER_TEMP/dbsphere-kind-after.json"
+          node scripts/kind-matrix-verify-persistence.mjs http://127.0.0.1:18091 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" \
+            "$RUNNER_TEMP/dbsphere-kind-before.json" "$RUNNER_TEMP/dbsphere-kind-after.json"
       - name: Remove isolated Kubernetes cluster
         if: always()
         run: |
