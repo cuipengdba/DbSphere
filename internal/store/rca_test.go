@@ -48,6 +48,32 @@ func TestGoRCAPreservesCrossLayerCandidatesWhenPGFails(t *testing.T) {
 	}
 }
 
+func TestGoRCAProducesOOMCandidateWithoutRestartAlert(t *testing.T) {
+	now := time.Now().UTC()
+	payload, _ := json.Marshal(map[string]any{"metric": "k8s.oom_recent", "sampleId": "sample-oom",
+		"value": 1, "operator": ">=", "threshold": 1})
+	event := &eventRecord{ID: "event-oom", StartedAt: now, Evidence: []eventEvidence{{
+		ID: "evidence-oom", Kind: "alert_firing", ObservedAt: now, Payload: payload}}}
+	sample := sampleObservation{ID: "sample-oom", At: now, Status: "error", Metrics: map[string]any{
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0"},
+			"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
+				"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}}}}}
+	candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-oom": sample},
+		func(string, string, string, string, any) {}, &[]map[string]string{})
+	if len(candidates) != 1 || candidates[0]["code"] != "k8s_oom_killed" ||
+		len(candidates[0]["supports"].([]string)) != 2 {
+		t.Fatalf("standalone OOM alert lost its same-event candidate: %+v", candidates)
+	}
+	noOOM := sample
+	noOOM.Metrics = map[string]any{"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0"},
+		"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "Error",
+			"lastTerminatedAt": now.Add(-time.Minute).Format(time.RFC3339Nano)}}}}
+	if candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-oom": noOOM},
+		func(string, string, string, string, any) {}, &[]map[string]string{}); len(candidates) != 0 {
+		t.Fatalf("non-OOM termination became an OOM candidate: %+v", candidates)
+	}
+}
+
 func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 	now := time.Now().UTC()
 	alert := func(id, metric, sampleID string, value float64) eventEvidence {

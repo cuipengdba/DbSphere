@@ -360,14 +360,12 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					break
 				}
 			}
-		case "k8s.oom_recent":
+		case "k8s.oom_recent", "k8s.restart_delta":
 			k8s := object(sample.Metrics["k8s"])
-			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) != 1 {
+			if stringValue(k8s["status"]) != "ok" || number(payload["value"]) <= 0 {
 				continue
 			}
-		case "k8s.restart_delta":
-			k8s := object(sample.Metrics["k8s"])
-			if stringValue(k8s["status"]) == "ok" && number(payload["value"]) > 0 {
+			if metric == "k8s.restart_delta" {
 				addCandidate("k8s_pod_restart", "PostgreSQL Pod 容器发生重启", "low", supports,
 					[]string{"容器终止原因与 PG 服务退化未核对"},
 					"重启与事件同期出现，不能断定其为唯一故障原因。",
