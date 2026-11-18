@@ -488,6 +488,49 @@ jobs:
           grep -q 'DBSPHERE_KUBECONFIG_HOST_PATH must be an existing absolute file path' \
             "$RUNNER_TEMP/dbsphere-invalid-config.log"
 
+  replication-lag-drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Validate and build isolated Go replication drill
+        run: |
+          bash -n test/replication-drill/primary-init.sh test/replication-drill/replica-init.sh
+          node --check scripts/replication-drill-secrets.mjs
+          node --check scripts/replication-drill-acceptance.mjs
+          node --check scripts/replication-drill-verify.mjs
+          node scripts/replication-drill-secrets.mjs \
+            "$RUNNER_TEMP/dbsphere-replication.env" "$RUNNER_TEMP/dbsphere-replication-credentials.json"
+          docker build -f Dockerfile-go -t dbsphere/replication-drill:local .
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
+            -f test/replication-drill/compose.yaml config --quiet
+      - name: Start PG18 primary, standby, store and Go service
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
+            -f test/replication-drill/compose.yaml up -d --wait --wait-timeout 300
+          curl --fail --silent http://127.0.0.1:18092/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+      - name: Verify real lag incident, recovery and restart persistence
+        run: |
+          node scripts/replication-drill-acceptance.mjs http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-replication-credentials.json" > "$RUNNER_TEMP/dbsphere-replication-result.json"
+          node scripts/replication-drill-verify.mjs http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-replication-credentials.json" "$RUNNER_TEMP/dbsphere-replication-result.json"
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
+            -f test/replication-drill/compose.yaml up -d --no-deps --force-recreate app
+          curl --fail --silent http://127.0.0.1:18092/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+          node scripts/replication-drill-verify.mjs http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-replication-credentials.json" "$RUNNER_TEMP/dbsphere-replication-result.json"
+          cat "$RUNNER_TEMP/dbsphere-replication-result.json"
+      - name: Remove isolated replication drill
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/dbsphere-replication.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
+              -f test/replication-drill/compose.yaml down -v --remove-orphans
+          fi
+
   external-compose:
     runs-on: ubuntu-latest
     steps:
