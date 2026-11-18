@@ -1,0 +1,72 @@
+name: dbsphere-replication-drill
+
+services:
+  store:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: dbsphere
+      POSTGRES_DB: dbsphere
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_STORE_PASSWORD:?Generate the drill env file first}
+    volumes:
+      - store-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U dbsphere -d dbsphere']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  primary:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_MONITOR_PASSWORD: ${DBSPHERE_DRILL_MONITOR_PASSWORD:?Generate the drill env file first}
+    command: [postgres, -c, wal_keep_size=256MB, -c, max_wal_senders=10, -c, max_replication_slots=10]
+    volumes:
+      - primary-data:/var/lib/postgresql
+      - ./primary-init.sh:/docker-entrypoint-initdb.d/01-replication.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  standby:
+    image: postgres:18-bookworm
+    entrypoint: [/bin/bash, /replica-init.sh]
+    environment:
+      PGDATA: /var/lib/postgresql/18/docker
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+    volumes:
+      - standby-data:/var/lib/postgresql
+      - ./replica-init.sh:/replica-init.sh:ro
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: dbsphere/replication-drill:local
+    depends_on:
+      store:
+        condition: service_healthy
+      standby:
+        condition: service_healthy
+    environment:
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store:5432/dbsphere?sslmode=disable
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_DRILL_ADMIN_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_DRILL_MASTER_KEY:?Generate the drill env file first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+    ports:
+      - '127.0.0.1:18092:8080'
+
+volumes:
+  store-data: {}
+  primary-data: {}
+  standby-data: {}

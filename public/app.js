@@ -903,7 +903,22 @@ async function showEvent(id) {
     if (evidence.kind === 'pgbouncer_state') text = evidence.payload.status === 'ok'
       ? `${evidence.payload.pools?.length || 0} 个连接池；等待客户端 ${(evidence.payload.pools || []).reduce((sum, pool) => sum + pool.clientWaiting, 0)}`
       : evidence.payload.reason || evidence.payload.status;
-    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${formatAlertValue(evidence.payload.metric, evidence.payload.value)} ${evidence.payload.operator || ''} ${formatAlertValue(evidence.payload.metric, evidence.payload.threshold)}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
+    if (evidence.kind.startsWith('alert_')) {
+      const alert = evidence.payload;
+      const prefix = `${alert.ruleId || '规则'} · ${alert.source || '未知来源'}`;
+      if (evidence.kind === 'alert_firing') {
+        text = `${prefix} · ${formatAlertValue(alert.metric, alert.value)} ${alert.operator || ''} ${formatAlertValue(alert.metric, alert.threshold)}`;
+      } else if (evidence.kind === 'alert_recovered') {
+        text = `${prefix} · 已恢复；先前告警值 ${formatAlertValue(alert.metric, alert.value)}`;
+      } else {
+        const labels = { alert_signal_missing: '指标暂不可用', alert_disabled: '规则已停用',
+          alert_suppressed: '通知已静默', alert_unsuppressed: '通知静默结束' };
+        text = `${prefix} · ${labels[evidence.kind] || evidence.kind}`;
+      }
+      if (alert.sampleId) text += ` · 样本 ${alert.sampleId}`;
+      if (alert.reason) text += ` · ${alert.reason}`;
+      if (alert.silenceId) text += ` · 静默窗 ${alert.silenceId}`;
+    }
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
