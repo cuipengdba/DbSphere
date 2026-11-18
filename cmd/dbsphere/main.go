@@ -359,9 +359,11 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 			return
 		}
 		now := time.Now().UTC()
+		var sampleCutoff, eventCutoff time.Time
 		if eventDays > 0 {
+			eventCutoff = now.AddDate(0, 0, -eventDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			removed, err := pg.PruneResolvedEvents(sweepCtx, now.AddDate(0, 0, -eventDays), 1000)
+			removed, err := pg.PruneResolvedEvents(sweepCtx, eventCutoff, 1000)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				log.Error("Go event retention sweep failed", "error", err)
@@ -370,14 +372,23 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 			}
 		}
 		if sampleDays > 0 {
+			sampleCutoff = now.AddDate(0, 0, -sampleDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			removed, err := pg.PruneSamples(sweepCtx, now.AddDate(0, 0, -sampleDays), 10000)
+			removed, err := pg.PruneSamples(sweepCtx, sampleCutoff, 10000)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				log.Error("Go sample retention sweep failed", "error", err)
 			} else if removed > 0 {
 				log.Info("Go sample retention sweep", "removed", removed)
 			}
+		}
+		sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		removed, err := pg.DropEmptyExpiredPartitions(sweepCtx, sampleCutoff, eventCutoff, 4)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			log.Error("Go empty partition retention sweep failed", "error", err)
+		} else if removed > 0 {
+			log.Info("Go empty partition retention sweep", "removed", removed)
 		}
 		select {
 		case <-ctx.Done():
