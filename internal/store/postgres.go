@@ -125,6 +125,19 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record event audit migration: %w", err)
 		}
 	}
+	var traceParentMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=18)").Scan(&traceParentMigrated); err != nil {
+		return fmt.Errorf("check trace parent lookup migration: %w", err)
+	}
+	if !traceParentMigrated {
+		if _, err = tx.Exec(ctx, `CREATE INDEX IF NOT EXISTS trace_spans_parent_lookup
+			ON trace_spans(trace_id,parent_span_id) WHERE parent_span_id IS NOT NULL`); err != nil {
+			return fmt.Errorf("index trace parent lookup: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(18) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace parent lookup migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

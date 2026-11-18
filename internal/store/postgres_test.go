@@ -32,7 +32,7 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	}
 	var version, partitions int
 	if err := store.pool.QueryRow(context.Background(),
-		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 17 {
+		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 18 {
 		t.Fatalf("Go schema migration absent: %d %v", version, err)
 	}
 	if err := store.pool.QueryRow(context.Background(),

@@ -82,6 +82,83 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 	}
 }
 
+func TestGoTraceLinksLateSDKParentAcrossOTLPRequests(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	ctx := context.Background()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "SDK split export test",
+		Host: "pg-sdk.internal", Port: 5432, Database: "orders", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	identity := []trace.Asset{{ID: asset.ID, Host: "pg-sdk.internal", Port: 5432, Database: "orders"}}
+	now := time.Now().UTC()
+	traceID := strings.Repeat("f", 32)
+	attr := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	wrap := func(spans ...any) []byte {
+		body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+			"resource":   map[string]any{"attributes": []any{attr("service.name", "sdk-checkout")}},
+			"scopeSpans": []any{map[string]any{"spans": spans}}}}})
+		return body
+	}
+	begin, end := now.Add(-2*time.Second).UnixNano(), now.UnixNano()
+	db := map[string]any{"traceId": traceID, "spanId": "2222222222222222",
+		"parentSpanId": "1111111111111111", "kind": 3,
+		"startTimeUnixNano": begin, "endTimeUnixNano": end,
+		"attributes": []any{attr("db.system.name", "postgresql"), attr("server.address", "pg-sdk.internal"),
+			attr("db.namespace", "orders"), attr("db.statement", "SELECT secret")}}
+	childBatch, err := trace.Decode(wrap(db), identity, now)
+	if err != nil || len(childBatch.Spans) != 1 || len(childBatch.Candidates) != 0 {
+		t.Fatalf("database child was not mapped: %+v %v", childBatch, err)
+	}
+	if imported, linked, err := pg.SaveTraceBatch(ctx, childBatch.Spans, childBatch.Candidates); err != nil || imported != 1 || linked != 0 {
+		t.Fatalf("database child was not stored: %d %d %v", imported, linked, err)
+	}
+	parent := map[string]any{"traceId": traceID, "spanId": "1111111111111111",
+		"parentSpanId": "3333333333333333", "startTimeUnixNano": begin, "endTimeUnixNano": end}
+	grandparent := map[string]any{"traceId": traceID, "spanId": "3333333333333333",
+		"startTimeUnixNano": begin, "endTimeUnixNano": end}
+	unrelated := map[string]any{"traceId": traceID, "spanId": "4444444444444444",
+		"startTimeUnixNano": begin, "endTimeUnixNano": end,
+		"attributes": []any{attr("http.url", "https://secret.invalid/")}}
+	lateBatch, err := trace.Decode(wrap(grandparent, unrelated, parent), identity, now)
+	if err != nil || len(lateBatch.Spans) != 0 || len(lateBatch.Candidates) != 3 {
+		t.Fatalf("late service candidates were lost: %+v %v", lateBatch, err)
+	}
+	if imported, linked, err := pg.SaveTraceBatch(ctx, lateBatch.Spans, lateBatch.Candidates); err != nil || imported != 2 || linked != 2 {
+		t.Fatalf("late parent chain was not attached: %d %d %v", imported, linked, err)
+	}
+	value, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(value)
+	if !strings.Contains(string(encoded), "1111111111111111") ||
+		!strings.Contains(string(encoded), "3333333333333333") ||
+		strings.Contains(string(encoded), "4444444444444444") ||
+		strings.Contains(string(encoded), "secret") {
+		t.Fatalf("late chain leaked unrelated or sensitive spans: %s", encoded)
+	}
+}
+
 func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {

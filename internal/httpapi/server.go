@@ -141,6 +141,10 @@ type TraceStore interface {
 	SaveTraceSpans(context.Context, []trace.Span) (int, error)
 }
 
+type TraceBatchStore interface {
+	SaveTraceBatch(context.Context, []trace.Span, []trace.Span) (int, int, error)
+}
+
 type AuthConfig struct {
 	MasterKey          []byte
 	PasswordHash       string
@@ -229,13 +233,20 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid OTLP resourceSpans"})
 			return
 		}
-		if _, err := tracesDB.SaveTraceSpans(r.Context(), parsed.Spans); err != nil {
+		linkedCandidates := 0
+		if batch, ok := tracesDB.(TraceBatchStore); ok {
+			_, linkedCandidates, err = batch.SaveTraceBatch(r.Context(), parsed.Spans, parsed.Candidates)
+		} else {
+			_, err = tracesDB.SaveTraceSpans(r.Context(), parsed.Spans)
+		}
+		if err != nil {
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace storage unavailable"})
 			return
 		}
-		if parsed.Rejected > 0 {
+		rejected := parsed.Rejected - linkedCandidates
+		if rejected > 0 {
 			respond(w, http.StatusOK, map[string]any{"partialSuccess": map[string]any{
-				"rejectedSpans": parsed.Rejected,
+				"rejectedSpans": rejected,
 				"errorMessage":  "Invalid or unmapped PostgreSQL spans were discarded"}})
 		} else {
 			respond(w, http.StatusOK, map[string]any{})

@@ -120,4 +120,6 @@
     PRIMARY KEY(asset_id,trace_id,span_id)
   );
   CREATE INDEX IF NOT EXISTS trace_spans_asset_time ON trace_spans(asset_id,started_at DESC);
+  CREATE INDEX IF NOT EXISTS trace_spans_parent_lookup ON trace_spans(trace_id,parent_span_id)
+    WHERE parent_span_id IS NOT NULL;
 

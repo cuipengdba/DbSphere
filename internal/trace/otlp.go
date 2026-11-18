@@ -36,9 +36,10 @@ type Span struct {
 }
 
 type Result struct {
-	Spans    []Span
-	Received int
-	Rejected int
+	Spans      []Span
+	Candidates []Span
+	Received   int
+	Rejected   int
 }
 
 type attribute struct {
@@ -223,6 +224,15 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 				}
 				accepted[item.TraceID+":"+item.SpanID] = true
 			}
+		}
+		// Service spans may be exported after their database child in a separate
+		// OTLP request. Keep only sanitized candidates for a store-side lookup;
+		// they must never be persisted without a previously mapped child.
+		for _, item := range group {
+			if item.Kind != "service" || ambiguous[item.SpanID] || accepted[item.TraceID+":"+item.SpanID] {
+				continue
+			}
+			result.Candidates = append(result.Candidates, item.Span)
 		}
 	}
 	result.Rejected = result.Received - len(accepted)
