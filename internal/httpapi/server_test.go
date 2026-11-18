@@ -484,6 +484,13 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 		!strings.Contains(budgetResult.Body.String(), "Daily AI analysis limit reached") {
 		t.Fatalf("daily AI budget did not stop another model call: %d %s", budgetResult.Code, budgetResult.Body.String())
 	}
+	fallbackRequest := httptest.NewRequest(http.MethodGet, "/api/events/"+eventID, nil)
+	fallbackRequest.AddCookie(login.Result().Cookies()[0])
+	fallbackResult := httptest.NewRecorder()
+	budgetHandler.ServeHTTP(fallbackResult, fallbackRequest)
+	if fallbackResult.Code != http.StatusOK || !strings.Contains(fallbackResult.Body.String(), `"analysis"`) {
+		t.Fatalf("AI budget interrupted deterministic event diagnosis: %d %s", fallbackResult.Code, fallbackResult.Body.String())
+	}
 	decisionPath := "/api/events/" + eventID + "/rca-decision"
 	decisionRequest := httptest.NewRequest(http.MethodPost, decisionPath,
 		strings.NewReader(`{"code":"unknown","decision":"confirmed","reason":"no supporting evidence"}`))
