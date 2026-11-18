@@ -14,6 +14,12 @@ Go 服务在**同一个事件** `10b01d66-5969-476d-b1b8-f4112a4e7685` 中保存
 
 浏览器事件页还暴露了一个显示问题：恢复证据没有阈值字段，旧页面仍按触发告警格式渲染，把空阈值显示为“信号缺失”。原始恢复样本与告警状态实际上正常。页面已改为“已恢复；先前告警值…”并附恢复样本 ID；根因候选的支持证据、匹配条件、时间顺序和缺失信号也改为独立行。替换当前 Go 镜像后，Playwright 浏览器重载事件页已看到修正后的时间线、根因候选和同一事件 ID。截图留在 `H:\CodexLS\outputs\DbSphere-replication-event-rca.png`。
 
+## 独立 Linux CI 复验
+
+[GitHub Actions 运行 44310624315](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315) 的 `replication-lag-drill` 作业在 Ubuntu 上重新构建 Go 静态镜像、启动全新 PG18 主备与独立 PG18 存储。事件 `c6451555-a976-418c-9e04-75c02a8a446f` 的故障样本 `09ee3bd1-fa06-4f7b-b3dc-ccea538dffd9` 为 **134540848 字节**延迟；恢复样本 `de59504d-68d5-4863-ac62-2c297166ec37` 为 **0 字节**，主库仍有 1 个流复制备库。作业检查同一事件的 `replication_lag` 候选和报告；替换 app 容器并等待就绪后，原样本、告警和事件仍从 PG18 读回，整个 CI 成功。
+
+首次 Linux CI 的真实故障与恢复断言已通过，但紧接 app 容器重建的就绪请求发生启动竞争；加入就绪等待后，完整重启持久化门槛才在上述运行中通过。
+
 ## 拓扑与故障
 
 - 主库和备库以独立数据卷运行官方 `postgres:18-bookworm`。主库创建只读 `pg_monitor` 账号和专用物理复制账号；备库用 `pg_basebackup`、复制槽与流复制接入。测试时主库 `pg_stat_replication` 和备库 `pg_stat_wal_receiver` 都必须为 `streaming`。
