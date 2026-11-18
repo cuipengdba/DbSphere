@@ -8,6 +8,8 @@
 
 Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证删除本机镜像后的离线安装、健康接口及重复运行；本地 Go 容器也验证了首次管理员登录。Go 后端功能对等、真实故障演练及未来 schema 变更的升级回滚尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
 
+Go 原生进程设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true` 后启动自动采集，一键 Compose 模式默认开启；`DBSPHERE_COLLECT_INTERVAL_SECONDS` 可设为 15–3600 秒，`DBSPHERE_COLLECT_WORKERS` 可设为 1–16（默认 4）。每轮最多选取 100 个到期资产，按工作数并行，每个资产有独立 45 秒上限。请按目标实例及 PG18 监控库的负载调整工作数。多服务副本的跨实例采集租约尚未实现，当前仅在一个 DbSphere 副本启用自动采集。
+
 Go 版额外使用 `scripts/go-offline-upgrade-rollback-smoke.sh` 在 Linux CI 演练旧 Go 包 → 当前包 → 旧 Go 包，复用独立 PG18 数据卷，并逐段读取同一资产、样本和事件 ID。[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44232205949) 已通过该演练；后续 schema 变更必须另做前向迁移和可回滚性验证。
 
 Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版本>-linux-amd64.run --backup /absolute/backup/directory`。命令校验离线包和唯一运行的 Go PG18 容器，以 PG18 `pg_dump -Fc` 生成归档，`pg_restore --list` 验证可读性，并输出带 SHA-256 的 JSON 清单。源码一键部署可运行 `bash scripts/backup-go-store.sh /absolute/backup/directory`。外部 PG18 不由此命令备份，应使用其自身的 PG18 备份体系。此能力仅备份数据库；离线恢复到新 PG18 与升级/回滚联动仍须通过 CI 和生产演练，不应只凭清单认定备份可恢复。

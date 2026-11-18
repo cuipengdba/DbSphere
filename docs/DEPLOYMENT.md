@@ -20,7 +20,7 @@ export DBSPHERE_ADMIN_PASSWORD='替换成不少于12位的独立密码'
 pnpm start
 ```
 
-默认监听 `127.0.0.1:8080`。首次启动后，管理员密码以 scrypt 哈希保存；后续环境变量不会重置已有密码。`GET /healthz` 返回服务存活状态。可设置 `DBSPHERE_HOST`、`DBSPHERE_PORT`、`DBSPHERE_COLLECT_INTERVAL_SECONDS`（15–3600 秒）和 `DBSPHERE_COLLECT_WORKERS`（1–16，默认 4）。自动采集每轮最多选取 100 个到期资产，按工作数并行，每个资产有独立 45 秒上限；应按被监控实例和监控库的实际负载调整工作数。多服务副本的跨实例采集租约尚未实现，当前自动采集只应在一个 DbSphere 副本启用。
+默认监听 `127.0.0.1:8080`。首次启动后，管理员密码以 scrypt 哈希保存；后续环境变量不会重置已有密码。`GET /healthz` 返回服务存活状态。可设置 `DBSPHERE_HOST`、`DBSPHERE_PORT` 和 `DBSPHERE_COLLECT_INTERVAL_SECONDS`（最小 15 秒）。
 
 建议通过独立密钥管理渠道设置 `DBSPHERE_MASTER_KEY`（32 字节随机值的 base64 编码），并保持跨重启一致。未设置时，首次启动在数据目录创建 `master.key`。更换主密钥前需要迁移已有凭据；直接覆盖会使凭据不可解密。
 
