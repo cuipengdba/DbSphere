@@ -12,6 +12,8 @@ Go 事件页把同一次 OOM 故障的历史 `pod_oom_correlated` 证据与新 `
 
 Go K8S 资产现在可只填单 Pod 的 Deployment/StatefulSet Workload；若已配置 Pod 被重建并返回 404，也会按 Workload 标签及 owner UID 只读寻找唯一就绪的新 Pod。多候选、权限缺口和超过 100 项的列表不猜测实例，样本标出原 Pod 和解析 Pod。本机真实 kind 将资产故意改回已删除的旧 Pod 名，再次采样仍正确解析到新 Pod、取得 PG18 和资源指标；Pod 留空的 Workload-only 路径也通过。TLS 模拟 API 验证多就绪 Pod 必须报告歧义。多副本主备映射和大集群分页仍是 V1.0 缺口。
 
+上述 Workload 映射还在真实 OOM 故障中验证了唯一**未就绪**替换 Pod：资产保留旧 Pod 名，Go 自动解析到 `CrashLoopBackOff`/`OOMKilled` 新 Pod，采集失败样本与恢复样本共用事件 `4b72b565-ebcb-4203-9f03-5069bebc93fa`；恢复时再次自动解析健康 Pod。TLS 模拟 API 回归测试新增唯一未就绪 Pod 场景。多 Pod 候选继续报歧义，不推断主备角色。
+
 本机 kind 第三类真实故障演练：测试 PG18 Deployment 指定不存在的 Node 标签后，Pod 一直 `Pending`，真实 `PodScheduled=False/Unschedulable` 与 `FailedScheduling` Event 被 Go 只读采集；Service 无端点导致 PG18 连接失败。三层证据进入事件 `109fcab1-f7c1-456b-aa13-9899a5b23c2f`，并生成有来源的低置信度调度候选。移除错误 Node 选择器后，新 Pod 就绪，采样 `3b396529-04b1-4f3b-aa42-de4955391dd9` 成功连接 PG18；已删除的旧 Pod 映射自动跟随新 Pod，原事件恢复为 `resolved`。本机三类故障演练的环境、证据和局限见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
 
 本机 kind 第二类真实故障演练：测试 PG18 Pod 内存限制为 16 MiB 后出现实际 `OOMKilled`，Go 把 PG 连接失败、K8S 终止状态和 `k8s.oom_recent` 告警归到事件 `58d989b1-ecaa-4e65-acb6-ff50447fd791`，显示带原始来源的中置信度 OOM 候选。将限制调回 256 MiB、更新新 Pod 映射后，成功样本 `fefc1085-8c94-414e-9fae-811458a9b379` 关闭原事件 ID。该演练只覆盖本机单节点 kind 的一种受控 OOM 故障，不代表生产内存策略或其它故障类别已验收。

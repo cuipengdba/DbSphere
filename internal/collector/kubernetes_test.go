@@ -149,6 +149,7 @@ func TestKubernetesMetricsPermissionGapDoesNotHidePodStatus(t *testing.T) {
 
 func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testing.T) {
 	secondReady := false
+	singleUnready := false
 	newMetricsRead := false
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-only-token" {
@@ -168,12 +169,20 @@ func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testin
 			if r.URL.Query().Get("limit") != "100" {
 				t.Errorf("Pod discovery is not bounded: %s", r.URL.RawQuery)
 			}
+			if singleUnready {
+				fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-new","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}`)
+				return
+			}
 			other := "False"
 			if secondReady {
 				other = "True"
 			}
 			fmt.Fprintf(w, `{"items":[{"metadata":{"name":"pg-new","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"pg-other","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":%q}]}},{"metadata":{"name":"unrelated","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"unrelated-rs"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, other)
 		case "/api/v1/namespaces/db/pods/pg-new":
+			if singleUnready {
+				fmt.Fprint(w, `{"metadata":{"name":"pg-new","uid":"new-uid","labels":{"app":"postgres"}},"spec":{},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}],"containerStatuses":[{"name":"postgres","ready":false,"restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-18T00:00:00Z"}}}]}}`)
+				return
+			}
 			fmt.Fprint(w, `{"metadata":{"name":"pg-new","uid":"new-uid","labels":{"app":"postgres"}},"spec":{},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}`)
 		case "/api/v1/namespaces/db/services", "/api/v1/namespaces/db/events":
 			fmt.Fprint(w, `{"items":[]}`)
@@ -199,6 +208,13 @@ func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testin
 		t.Fatalf("workload-only Pod mapping failed: %+v", value)
 	}
 	target.Pod = "pg-old"
+	singleUnready = true
+	value = Kubernetes(context.Background(), target)
+	if value["status"] != "ok" || kubeObject(value["podMapping"])["resolved"] != "pg-new" ||
+		kubeString(kubeObject(kubeList(value["containers"])[0])["terminatedReason"]) != "OOMKilled" {
+		t.Fatalf("unique unready replacement hid OOM evidence: %+v", value)
+	}
+	singleUnready = false
 	secondReady = true
 	value = Kubernetes(context.Background(), target)
 	if value["status"] != "error" || !strings.Contains(fmt.Sprint(value["reason"]), "ambiguous") {
