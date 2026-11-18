@@ -21,6 +21,7 @@ type Config struct {
 	ViewerAssetIDs []string
 	AutoCollect    bool
 	CollectEvery   int
+	CollectWorkers int
 	OTLPToken      string
 	TraceDays      int
 }
@@ -77,6 +78,13 @@ func Load() (Config, error) {
 			return Config{}, errors.New("DBSPHERE_COLLECT_INTERVAL_SECONDS must be between 15 and 3600")
 		}
 	}
+	workers := 4
+	if value := os.Getenv("DBSPHERE_COLLECT_WORKERS"); value != "" {
+		workers, err = strconv.Atoi(value)
+		if err != nil || workers < 1 || workers > 16 {
+			return Config{}, errors.New("DBSPHERE_COLLECT_WORKERS must be between 1 and 16")
+		}
+	}
 	collectorFlag := os.Getenv("DBSPHERE_ENABLE_GO_COLLECTOR")
 	if collectorFlag != "" && collectorFlag != "true" && collectorFlag != "false" {
 		return Config{}, errors.New("DBSPHERE_ENABLE_GO_COLLECTOR must be true or false")
@@ -96,6 +104,6 @@ func Load() (Config, error) {
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
 		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer,
 		ViewerAssetIDs: viewerAssetIDs,
-		AutoCollect:    autoCollect, CollectEvery: interval,
+		AutoCollect:    autoCollect, CollectEvery: interval, CollectWorkers: workers,
 		OTLPToken: otlpToken, TraceDays: traceDays}, nil
 }

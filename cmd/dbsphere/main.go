@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -174,7 +175,8 @@ func run(log *slog.Logger) error {
 		collectorDone = done
 		go func() {
 			defer close(done)
-			runCollector(ctx, pg, cfg.MasterKey, time.Duration(cfg.CollectEvery)*time.Second, log)
+			runCollector(ctx, pg, cfg.MasterKey, time.Duration(cfg.CollectEvery)*time.Second,
+				cfg.CollectWorkers, log)
 		}()
 		log.Info("Go PostgreSQL collector enabled", "intervalSeconds", cfg.CollectEvery)
 	}
@@ -333,7 +335,7 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 	}
 }
 
-func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval time.Duration, log *slog.Logger) {
+func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval time.Duration, workers int, log *slog.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -344,7 +346,7 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 		if err != nil {
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
-			for _, id := range ids {
+			runBoundedBatch(ctx, ids, workers, func(id string) {
 				if err := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); err != nil {
 					log.Error("Go collector could not evaluate stale asset", "assetId", id, "error", err)
 				}
@@ -361,7 +363,7 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 				} else if result.Status == "error" {
 					log.Warn("Go collector observed asset failure", "assetId", id, "sampleId", result.SampleID)
 				}
-			}
+			})
 		}
 		select {
 		case <-ctx.Done():
@@ -369,4 +371,37 @@ func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval 
 		case <-ticker.C:
 		}
 	}
+}
+
+func runBoundedBatch(ctx context.Context, ids []string, workers int, check func(string)) {
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(ids) {
+		workers = len(ids)
+	}
+	jobs := make(chan string)
+	var active sync.WaitGroup
+	for range workers {
+		active.Add(1)
+		go func() {
+			defer active.Done()
+			for id := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				check(id)
+			}
+		}()
+	}
+feed:
+	for _, id := range ids {
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobs <- id:
+		}
+	}
+	close(jobs)
+	active.Wait()
 }

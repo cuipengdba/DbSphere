@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,46 @@ func TestContainerReadinessProbe(t *testing.T) {
 	status = http.StatusServiceUnavailable
 	if err := probeReady(context.Background()); err == nil {
 		t.Fatal("unready PostgreSQL store was reported healthy")
+	}
+}
+
+func TestCollectorBatchRunsInParallelWithinConfiguredLimit(t *testing.T) {
+	started := make(chan string, 6)
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	var active, peak, completed atomic.Int32
+	go func() {
+		runBoundedBatch(context.Background(), []string{"a", "b", "c", "d", "e", "f"}, 3,
+			func(id string) {
+				current := active.Add(1)
+				for old := peak.Load(); current > old; old = peak.Load() {
+					if peak.CompareAndSwap(old, current) {
+						break
+					}
+				}
+				started <- id
+				<-release
+				active.Add(-1)
+				completed.Add(1)
+			})
+		close(finished)
+	}()
+	for range 3 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatal("independent assets did not start in parallel")
+		}
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector batch did not finish")
+	}
+	if completed.Load() != 6 || peak.Load() != 3 {
+		t.Fatalf("collector worker limit was not honored: completed=%d peak=%d", completed.Load(), peak.Load())
 	}
 }
 

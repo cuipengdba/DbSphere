@@ -7,6 +7,7 @@ import (
 )
 
 func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
+	t.Setenv("DBSPHERE_COLLECT_WORKERS", "")
 	t.Setenv("DBSPHERE_DATABASE_URL", "")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PostgreSQL 18") {
 		t.Fatalf("missing PG18 storage should fail clearly: %v", err)
@@ -43,8 +44,16 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 	}
 	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "60")
 	t.Setenv("DBSPHERE_ENABLE_GO_COLLECTOR", "true")
-	if cfg, err := Load(); err != nil || !cfg.AutoCollect || cfg.CollectEvery != 60 {
+	if cfg, err := Load(); err != nil || !cfg.AutoCollect || cfg.CollectEvery != 60 || cfg.CollectWorkers != 4 {
 		t.Fatalf("automatic Go collection settings were not loaded: %+v %v", cfg, err)
+	}
+	t.Setenv("DBSPHERE_COLLECT_WORKERS", "17")
+	if _, err := Load(); err == nil {
+		t.Fatal("unbounded collector worker count was accepted")
+	}
+	t.Setenv("DBSPHERE_COLLECT_WORKERS", "3")
+	if cfg, err := Load(); err != nil || cfg.CollectWorkers != 3 {
+		t.Fatalf("bounded collector worker count was not loaded: %+v %v", cfg, err)
 	}
 	t.Setenv("DBSPHERE_OTLP_TOKEN", "short")
 	if _, err := Load(); err == nil {
