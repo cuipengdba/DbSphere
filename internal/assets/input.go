@@ -72,8 +72,12 @@ func (a Input) Validate() error {
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid PostgreSQL TLS mode")
 	}
-	if a.Runtime != "linux" && a.Runtime != "k8s" {
+	if a.Runtime != "linux" && a.Runtime != "k8s" && a.Runtime != "managed" {
 		return errors.New("invalid runtime")
+	}
+	if a.Runtime == "managed" && (a.LinuxHost != "" || a.LinuxExporterPort != 0 ||
+		a.K8sCluster != "" || a.Namespace != "" || a.Workload != "" || a.Pod != "" || a.Node != "") {
+		return errors.New("managed PostgreSQL cannot have Linux or Kubernetes resource mapping")
 	}
 	if a.Runtime == "k8s" && (a.K8sCluster == "" || a.Namespace == "") {
 		return errors.New("Kubernetes cluster and namespace are required")

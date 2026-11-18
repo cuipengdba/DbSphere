@@ -26,6 +26,17 @@ func TestAssetInputValidationAndBrowserPort(t *testing.T) {
 	if bad.Validate() == nil {
 		t.Fatal("Kubernetes asset without scope accepted")
 	}
+	managed := input
+	managed.Runtime = "managed"
+	managed.LinuxHost = ""
+	managed.LinuxExporterPort = 0
+	if err := managed.Validate(); err != nil {
+		t.Fatalf("managed PostgreSQL rejected: %v", err)
+	}
+	managed.LinuxHost = "stale-host"
+	if managed.Validate() == nil {
+		t.Fatal("managed PostgreSQL accepted a misleading Linux mapping")
+	}
 	bad = input
 	bad.PoolerURL = "http://127.0.0.1/admin"
 	if bad.Validate() == nil {

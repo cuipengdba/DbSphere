@@ -24,14 +24,14 @@ type CheckResult struct {
 	CollectedAt time.Time `json:"collectedAt"`
 }
 
-// DueAssetIDs schedules Linux and Kubernetes PostgreSQL assets, including
+// DueAssetIDs schedules Linux, Kubernetes and managed PostgreSQL assets, including
 // configured PgBouncer endpoints.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
 	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s')
+		WHERE runtime IN ('linux','k8s','managed')
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if runtime != "linux" && runtime != "k8s" {
+	if runtime != "linux" && runtime != "k8s" && runtime != "managed" {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	password, err := security.Decrypt(key, encrypted)
@@ -171,7 +171,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 			kube = collector.Kubernetes(ctx, collector.KubernetesTarget{Cluster: dereference(k8sCluster),
 				Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod), Workload: dereference(k8sWorkload)})
 		}()
-	} else if exporterPort != nil && linuxHost != nil {
+	} else if runtime == "linux" && exporterPort != nil && linuxHost != nil {
 		groupWait.Add(1)
 		go func() {
 			defer groupWait.Done()
@@ -210,7 +210,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		if kube["status"] != "ok" && collectErr == nil {
 			group, reason = "telemetry", "Kubernetes resource collection is unavailable"
 		}
-	} else if exporterPort != nil && linuxHost != nil {
+	} else if runtime == "linux" && exporterPort != nil && linuxHost != nil {
 		if linuxErr != nil {
 			metrics["linux"] = map[string]any{"status": "error", "reason": linuxErr.Error()}
 			if collectErr == nil {

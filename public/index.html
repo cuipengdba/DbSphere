@@ -36,7 +36,7 @@
           <button type="button" data-nav="inspections">巡检与报告</button>
           <button type="button" data-nav="settings">系统状态</button>
         </nav>
-        <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes</div>
+        <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes · 托管 PG</div>
       </aside>
       <div class="workspace-main">
       <div class="workspace-heading"><div><p class="eyebrow">DBSPHERE CONTROL CENTER</p><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label">开发预览</span></div>
@@ -65,7 +65,7 @@
             <label>监控用户名<input name="username" required placeholder="dbsphere_monitor"></label>
             <label>密码<input name="password" type="password" autocomplete="new-password"></label>
             <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
-            <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option></select></label>
+            <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></label>
             <label class="linux-field wide">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field wide">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <label class="wide">PgBouncer 管理连接 URL（可选）<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
@@ -85,7 +85,7 @@
             <button class="wide" id="asset-submit" type="submit">保存资产</button>
             <button class="wide ghost" id="cancel-edit" type="button" hidden>取消编辑</button>
           </form>
-          <p class="hint">Linux 主机指标需部署 node_exporter 并填写端口；K8S Pod/PVC 采集需只读 API 凭据。请使用最小权限监控账号。</p>
+          <p class="hint">Linux 主机指标需部署 node_exporter 并填写端口；K8S Pod/PVC 采集需只读 API 凭据；托管 PostgreSQL 仅采集数据库侧可见信号。请使用最小权限监控账号。</p>
         </section>
       </div>
       <section class="panel lower" data-view="assets"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>

@@ -113,7 +113,7 @@
 
 - [ ] **10-01** PG14–18 × Linux 裸机/虚机/K8S × 单机/主从/Patroni/至少一种云 PG 的支持矩阵和回归结果。
 
-  本机四节点 kind 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 均完成 PG14–18 五版真实只读纳管、样本与 Pod/Service/Node 关联；独立 PG18 存储的 PVC 及 Go/存储 Pod 替换后，五版旧样本和新样本均可读回。PG14、PG18 双节点 Patroni 的只读拓扑与同事件故障恢复另在本机通过，[PG14–18 五版 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 也全部通过，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。生产集群可靠性、K8S Patroni、云 PG 等组合未验收，故保持未勾选。见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
+  本机四节点 kind 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 均完成 PG14–18 五版真实只读纳管、样本与 Pod/Service/Node 关联；独立 PG18 存储的 PVC 及 Go/存储 Pod 替换后，五版旧样本和新样本均可读回。PG14、PG18 双节点 Patroni 的只读拓扑与同事件故障恢复另在本机通过，[PG14–18 五版 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 也全部通过，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。托管 PostgreSQL 模式现可仅采数据库信号，本地 PG18 实库回归已通过；真实云厂商的权限、TLS 与限制尚未验收，见[托管模式能力矩阵](MANAGED_PG.md)。生产集群可靠性、K8S Patroni、云 PG 等组合未验收，故保持未勾选。见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
 - [ ] **10-02** B/S 控制台可访问性、中文与英文基础文案、性能与大规模资产分页/保留期测试。
 - [ ] **10-03** Linux 包/容器镜像、部署文档、配置迁移、升级/回滚和备份恢复演练。
 - [ ] **10-04** 采集开销、故障隔离、断点续传、数据新鲜度和自身监控验收。

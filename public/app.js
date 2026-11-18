@@ -48,6 +48,11 @@ function setView(view, updateHash = true) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
+function assetRuntimeLabel(asset) {
+  if (asset.runtime === 'k8s') return `K8S${asset.namespace ? ' / ' + asset.namespace : ''}`;
+  return asset.runtime === 'managed' ? '托管 PG' : 'Linux';
+}
+
 function renderOverview(assets, events) {
   const focus = $('overview-events'); focus.replaceChildren();
   const open = events.filter(event => event.status === 'open').slice(0, 5);
@@ -60,7 +65,7 @@ function renderOverview(assets, events) {
   if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
   for (const asset of assets.slice(0, 6)) {
     const health = assetHealth(asset);
-    const button = cell('button', `${asset.name} · ${asset.runtime === 'k8s' ? 'K8S' : 'Linux'} · ${health.label}`, `event-button health-${health.kind}`);
+    const button = cell('button', `${asset.name} · ${assetRuntimeLabel(asset)} · ${health.label}`, `event-button health-${health.kind}`);
     button.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     fleet.append(button);
   }
@@ -236,7 +241,7 @@ function renderAssets(assets) {
   for (const asset of assets) {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
-    info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${asset.runtime === 'k8s' ? 'K8S / ' + asset.namespace : 'Linux'}`));
+    info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${assetRuntimeLabel(asset)}`));
     info.append(cell('small', `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
     const health = assetHealth(asset);
@@ -271,7 +276,10 @@ async function showAsset(id) {
     api(`/api/assets/${id}/sql-plans`)]);
   const detail = $('detail'); detail.replaceChildren();
   detail.append(cell('h3', asset.name));
-  detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}` : asset.linuxHost || 'Linux 主机未关联'}`));
+  const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
+    : asset.runtime === 'managed' ? '托管 PostgreSQL · 主机与 K8S 资源信号不可用'
+      : asset.linuxHost || 'Linux 主机未关联';
+  detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${location}`));
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
@@ -389,7 +397,8 @@ function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false
   const definitions = [
     ['pg-diagnostics', 'PostgreSQL'], ['sql-performance', 'Top SQL'],
     ['slow-logs', '慢 SQL 日志'], ['sql-plans', '执行计划'],
-    [asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail', asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机'],
+    ...(asset.runtime === 'managed' ? [] : [[asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail',
+      asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机']]),
     ['pooler-detail', 'PgBouncer'], ['patroni-detail', 'Patroni'], ['capacity-detail', '容量趋势']
   ];
   const labels = new Map(definitions);
@@ -1107,8 +1116,13 @@ $('silence-form').addEventListener('submit', async event => {
 });
 $('runtime').addEventListener('change', (event) => {
   const k8s = event.target.value === 'k8s';
+  const linux = event.target.value === 'linux';
   $('k8s-fields').hidden = !k8s;
-  for (const field of document.querySelectorAll('.linux-field')) field.hidden = k8s;
+  for (const field of document.querySelectorAll('.linux-field')) {
+    field.hidden = !linux;
+    field.querySelector('input').disabled = !linux;
+  }
+  for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s;
   $('asset-form').elements.k8sCluster.required = k8s;
   $('asset-form').elements.namespace.required = k8s;
 });
