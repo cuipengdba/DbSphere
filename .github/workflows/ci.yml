@@ -172,7 +172,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate Go deployment scripts
-        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh
+        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
       - name: Install Go container twice from local images
@@ -191,6 +191,27 @@ jobs:
           docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm >/dev/null
           bash "${archive[0]}"
           curl --fail --silent http://127.0.0.1:8081/readyz
+
+      - name: Back up offline Go PG18 and restore into an independent PG18 container
+        env:
+          DBSPHERE_GO_CONFIG_DIR: ${{ runner.temp }}/dbsphere-go-offline-config
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          bash "${archive[0]}" --backup "$RUNNER_TEMP/dbsphere-go-backup"
+          dump=("$RUNNER_TEMP"/dbsphere-go-backup/*.dump)
+          manifest=("$RUNNER_TEMP"/dbsphere-go-backup/*.json)
+          test "${#dump[@]}" -eq 1 && test "${#manifest[@]}" -eq 1
+          test "$(sha256sum "${dump[0]}" | cut -d ' ' -f 1)" = "$(jq -er .sha256 "${manifest[0]}")"
+          docker run -d --pull never --name dbsphere-go-restore-ci -e POSTGRES_PASSWORD=restore-ci-password postgres:18-bookworm
+          trap 'docker rm -f dbsphere-go-restore-ci >/dev/null' EXIT
+          for attempt in {1..30}; do
+            if docker exec dbsphere-go-restore-ci pg_isready -U postgres -d postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec -i dbsphere-go-restore-ci pg_restore -U postgres -d postgres --no-owner --no-acl < "${dump[0]}"
+          version="$(docker exec dbsphere-go-restore-ci psql -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
+          test "$version" -ge 17
 
   go-offline-upgrade-rollback:
     runs-on: ubuntu-latest

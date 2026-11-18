@@ -38,7 +38,9 @@ cp -- "$repo_dir/deploy/compose/compose.go.external.yaml" "$stage/deploy/compose
 cp -- "$repo_dir/deploy/compose/compose.go.k8s.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/deploy/compose/compose.go.offline.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/scripts/install-go-offline.sh" "$stage/install.sh"
+cp -- "$repo_dir/scripts/backup-go-store.sh" "$stage/backup.sh"
 chmod 0755 "$stage/install.sh"
+chmod 0755 "$stage/backup.sh"
 printf 'DBSPHERE_GO_OFFLINE_VERSION=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE=%s\n' \
   "$version" "$app_image" > "$stage/bundle.env"
 docker image save --platform linux/amd64 "$app_image" postgres:18-bookworm | gzip -n > "$stage/images.tar.gz"

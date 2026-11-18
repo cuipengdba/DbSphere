@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 0 ]]; then echo 'Usage: bash install.sh' >&2; exit 1; fi
+if [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
+  echo 'Usage: bash install.sh [--backup /absolute/output/directory]' >&2
+  exit 1
+fi
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]] ||
    ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
@@ -17,6 +20,10 @@ fi
   echo 'Go offline bundle checksum verification failed.' >&2
   exit 1
 }
+if [[ $# -eq 2 ]]; then
+  bash "$bundle_dir/backup.sh" "$2"
+  exit 0
+fi
 source "$bundle_dir/bundle.env"
 if [[ ! "${DBSPHERE_GO_OFFLINE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ||
   "${DBSPHERE_GO_OFFLINE_APP_IMAGE:-}" != "dbsphere/offline-go-app:$DBSPHERE_GO_OFFLINE_VERSION" ]]; then
