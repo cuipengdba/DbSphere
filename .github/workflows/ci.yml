@@ -220,6 +220,36 @@ jobs:
         run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
+      - name: Generate SBOMs for the exact bundled container images
+        run: |
+          mkdir -p "$RUNNER_TEMP/dbsphere-syft"
+          curl -fLsS -o "$RUNNER_TEMP/dbsphere-syft/syft.tar.gz" \
+            https://github.com/anchore/syft/releases/download/v1.57.2/syft_1.57.2_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b \
+            "$RUNNER_TEMP/dbsphere-syft/syft.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/dbsphere-syft/syft.tar.gz" -C "$RUNNER_TEMP/dbsphere-syft" syft
+          version="$(jq -r .version package.json)"
+          "$RUNNER_TEMP/dbsphere-syft/syft" "dbsphere/offline-go-app:$version" --from docker \
+            -o "cyclonedx-json=$RUNNER_TEMP/dbsphere-go-image.cdx.json"
+          "$RUNNER_TEMP/dbsphere-syft/syft" postgres:18-bookworm --from docker \
+            -o "cyclonedx-json=$RUNNER_TEMP/dbsphere-postgres18-image.cdx.json"
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
+            "$RUNNER_TEMP/dbsphere-go-image.cdx.json" >/dev/null
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
+            "$RUNNER_TEMP/dbsphere-postgres18-image.cdx.json" >/dev/null
+          docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm \
+            --format '{{.Id}} {{join .RepoDigests " "}}' > "$RUNNER_TEMP/dbsphere-image-ids.txt"
+      - name: Preserve bundled image SBOMs and image IDs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-offline-image-sboms
+          path: |
+            ${{ runner.temp }}/dbsphere-go-image.cdx.json
+            ${{ runner.temp }}/dbsphere-postgres18-image.cdx.json
+            ${{ runner.temp }}/dbsphere-image-ids.txt
+          if-no-files-found: warn
       - name: Install Go container twice from local images
         env:
           DBSPHERE_NO_PRINT_PASSWORD: 'true'

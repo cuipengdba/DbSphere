@@ -10,4 +10,6 @@ CI 的 `go-dependency-inventory` 作业针对 `cmd/dbsphere` 的 Linux amd64、`
 
 [修补后的 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44372845603) 已通过 30/30 作业，包括 Go 依赖审计。本机重新构建的 Go 镜像包含自身许可证及第三方许可证目录，抽取比对的 pgx 许可证与仓库原文一致。
 
-审计边界目前仅为 Go 应用的 Linux amd64 依赖。离线包另包含 PostgreSQL 18 容器镜像；该镜像、构建基础镜像、遗留 Node.js 预览版、密钥和默认配置，以及完整发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
+离线包 CI 在打包后还使用固定版本 Syft v1.57.2，直接扫描构建出的 Go 镜像和同批次拉取的 PostgreSQL 18 镜像，保存两个 CycloneDX JSON 及镜像 ID。独立本机扫描得到 Go 镜像 11 个组件、PostgreSQL 18 镜像 693 个组件。镜像清单只是盘点；PostgreSQL 镜像漏洞、许可证义务及最终发布包的完整审查仍未通过。
+
+目前的漏洞扫描仅覆盖 Go 代码路径，镜像扫描仅生成组件清单。PostgreSQL 18 镜像、构建基础镜像、遗留 Node.js 预览版、密钥和默认配置，以及完整发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
