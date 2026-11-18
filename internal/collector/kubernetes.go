@@ -234,19 +234,50 @@ func kubeShort(value any) string {
 	return text
 }
 
+// Kubernetes continue tokens keep a list snapshot stable across pages. Bound both
+// request count and total objects so discovery cannot consume unbounded memory.
+func (k *kubeClient) listBounded(ctx context.Context, path string) ([]any, error) {
+	const pageSize, maxPages = 100, 10
+	items := make([]any, 0, pageSize)
+	seenTokens := map[string]bool{}
+	token := ""
+	for page := 0; page < maxPages; page++ {
+		query := url.Values{"limit": {strconv.Itoa(pageSize)}}
+		if token != "" {
+			query.Set("continue", token)
+		}
+		result, err := k.get(ctx, path, query)
+		if err != nil {
+			return nil, err
+		}
+		pageItems := kubeList(result["items"])
+		if len(pageItems) > pageSize || len(items)+len(pageItems) > pageSize*maxPages {
+			return nil, errors.New("Kubernetes list exceeds 1000 items; mapping is uncertain")
+		}
+		items = append(items, pageItems...)
+		next := kubeString(kubeObject(result["metadata"])["continue"])
+		if next == "" {
+			return items, nil
+		}
+		if seenTokens[next] {
+			return nil, errors.New("Kubernetes list repeated a continue token; mapping is uncertain")
+		}
+		seenTokens[next] = true
+		token = next
+	}
+	return nil, errors.New("Kubernetes list exceeds 10 pages; mapping is uncertain")
+}
+
 func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload string) (string, error) {
 	base := "/apis/apps/v1/namespaces/" + url.PathEscape(namespace)
 	var selector map[string]any
 	workloadUID, workloadKind := "", ""
 	for _, resource := range []string{"deployments", "statefulsets"} {
-		items, err := k.get(ctx, base+"/"+resource, url.Values{"limit": {"100"}})
+		items, err := k.listBounded(ctx, base+"/"+resource)
 		if err != nil {
 			return "", fmt.Errorf("read Kubernetes Workload list: %w", err)
 		}
-		if kubeString(kubeObject(items["metadata"])["continue"]) != "" {
-			return "", errors.New("Kubernetes Workload list exceeds 100; Pod mapping is uncertain")
-		}
-		for _, raw := range kubeList(items["items"]) {
+		for _, raw := range items {
 			item := kubeObject(raw)
 			if kubeString(kubeObject(item["metadata"])["name"]) != workload {
 				continue
@@ -274,14 +305,11 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 	}
 	replicaSetUIDs := map[string]bool{}
 	if workloadKind == "deployments" {
-		sets, err := k.get(ctx, base+"/replicasets", url.Values{"limit": {"100"}})
+		sets, err := k.listBounded(ctx, base+"/replicasets")
 		if err != nil {
 			return "", fmt.Errorf("read Kubernetes ReplicaSets for Workload: %w", err)
 		}
-		if kubeString(kubeObject(sets["metadata"])["continue"]) != "" {
-			return "", errors.New("Kubernetes ReplicaSet list exceeds 100; Pod mapping is uncertain")
-		}
-		for _, raw := range kubeList(sets["items"]) {
+		for _, raw := range sets {
 			metadata := kubeObject(kubeObject(raw)["metadata"])
 			setUID := kubeString(metadata["uid"])
 			if setUID == "" {
@@ -295,15 +323,12 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 			}
 		}
 	}
-	pods, err := k.get(ctx, "/api/v1/namespaces/"+url.PathEscape(namespace)+"/pods", url.Values{"limit": {"100"}})
+	pods, err := k.listBounded(ctx, "/api/v1/namespaces/"+url.PathEscape(namespace)+"/pods")
 	if err != nil {
 		return "", fmt.Errorf("read Kubernetes Pods for Workload: %w", err)
 	}
-	if kubeString(kubeObject(pods["metadata"])["continue"]) != "" {
-		return "", errors.New("Kubernetes Pod list exceeds 100; mapping is uncertain")
-	}
 	all, ready := []string{}, []string{}
-	for _, raw := range kubeList(pods["items"]) {
+	for _, raw := range pods {
 		pod := kubeObject(raw)
 		metadata := kubeObject(pod["metadata"])
 		name := kubeString(metadata["name"])

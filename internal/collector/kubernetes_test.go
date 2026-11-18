@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -219,6 +220,98 @@ func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testin
 	value = Kubernetes(context.Background(), target)
 	if value["status"] != "error" || !strings.Contains(fmt.Sprint(value["reason"]), "ambiguous") {
 		t.Fatalf("multiple ready Pods were silently mapped: %+v", value)
+	}
+}
+
+func TestKubernetesWorkloadDiscoveryFollowsBoundedPages(t *testing.T) {
+	pageCalls := map[string]int{}
+	writeList := func(w http.ResponseWriter, items []any, next string) {
+		data, err := json.Marshal(map[string]any{"metadata": map[string]any{"continue": next}, "items": items})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = w.Write(data)
+	}
+	dummies := func(kind string) []any {
+		items := make([]any, 100)
+		for i := range items {
+			items[i] = map[string]any{"metadata": map[string]any{"name": fmt.Sprintf("other-%s-%d", kind, i)}}
+		}
+		return items
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-only-token" ||
+			r.URL.Query().Get("limit") != "100" {
+			t.Errorf("unbounded or unauthenticated Kubernetes discovery: %s %s", r.Method, r.URL.String())
+		}
+		pageCalls[r.URL.Path]++
+		second := r.URL.Query().Get("continue") != ""
+		switch r.URL.Path {
+		case "/apis/apps/v1/namespaces/db/deployments":
+			if !second {
+				writeList(w, dummies("deployment"), "deployment-page-2")
+			} else {
+				if r.URL.Query().Get("continue") != "deployment-page-2" {
+					t.Error("wrong deployment continue token")
+				}
+				writeList(w, []any{map[string]any{"metadata": map[string]any{"name": "postgres", "uid": "deployment-uid"},
+					"spec": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}}}}}, "")
+			}
+		case "/apis/apps/v1/namespaces/db/statefulsets":
+			writeList(w, nil, "")
+		case "/apis/apps/v1/namespaces/db/replicasets":
+			if !second {
+				writeList(w, dummies("replicaset"), "replicaset-page-2")
+			} else {
+				writeList(w, []any{map[string]any{"metadata": map[string]any{"uid": "rs-uid",
+					"ownerReferences": []any{map[string]any{"kind": "Deployment", "uid": "deployment-uid"}}}}}, "")
+			}
+		case "/api/v1/namespaces/db/pods":
+			if !second {
+				writeList(w, dummies("pod"), "pod-page-2")
+			} else {
+				writeList(w, []any{map[string]any{"metadata": map[string]any{"name": "pg-new",
+					"labels":          map[string]any{"app": "postgres"},
+					"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "uid": "rs-uid"}}},
+					"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}}, "")
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	client, err := kubeCredentials(KubernetesTarget{Cluster: "test-context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod, err := client.resolveWorkloadPod(context.Background(), "db", "postgres")
+	if err != nil || pod != "pg-new" {
+		t.Fatalf("Pod on a later list page was missed: %s, %v", pod, err)
+	}
+	for _, path := range []string{"/apis/apps/v1/namespaces/db/deployments", "/apis/apps/v1/namespaces/db/replicasets", "/api/v1/namespaces/db/pods"} {
+		if pageCalls[path] != 2 {
+			t.Errorf("expected two pages of %s, got %d", path, pageCalls[path])
+		}
+	}
+}
+
+func TestKubernetesListRejectsRepeatedContinueToken(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"metadata":{"continue":"stuck"},"items":[]}`)
+	}))
+	defer server.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	client, err := kubeCredentials(KubernetesTarget{Cluster: "test-context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.listBounded(context.Background(), "/api/v1/namespaces/db/pods")
+	if err == nil || !strings.Contains(err.Error(), "repeated a continue token") {
+		t.Fatalf("repeated token was not rejected: %v", err)
 	}
 }
 

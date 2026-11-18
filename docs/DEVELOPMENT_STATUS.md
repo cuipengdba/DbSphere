@@ -10,7 +10,7 @@ Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HT
 
 Go 事件页把同一次 OOM 故障的历史 `pod_oom_correlated` 证据与新 `k8s.oom_recent` 告警合并成一条候选，保留已有人工确认/驳回所用的候选代码，并把采集失败、K8S 状态、告警和原始样本全部连到候选；单独出现 OOM 告警时仍生成 `k8s_oom_killed` 候选。乱序证据单元测试、PG18 实库测试和 Go 全量测试通过。本机 kind 更新镜像后短暂发生 API/etcd 超时，恢复后直接复核旧 OOM 事件 `58d989b1-ecaa-4e65-acb6-ff50447fd791`：同一已恢复事件只显示一条 `pod_oom_correlated` 候选，包含 5 条支撑证据和告警匹配条件；见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
 
-Go K8S 资产现在可只填单 Pod 的 Deployment/StatefulSet Workload；若已配置 Pod 被重建并返回 404，也会按 Workload 标签及 owner UID 只读寻找唯一就绪的新 Pod。多候选、权限缺口和超过 100 项的列表不猜测实例，样本标出原 Pod 和解析 Pod。本机真实 kind 将资产故意改回已删除的旧 Pod 名，再次采样仍正确解析到新 Pod、取得 PG18 和资源指标；Pod 留空的 Workload-only 路径也通过。TLS 模拟 API 验证多就绪 Pod 必须报告歧义。多副本主备映射和大集群分页仍是 V1.0 缺口。
+Go K8S 资产现在可只填单 Pod 的 Deployment/StatefulSet Workload；若已配置 Pod 被重建并返回 404，也会按 Workload 标签及 owner UID 只读寻找唯一就绪的新 Pod。多候选、权限缺口和超过 1000 项或 10 页的列表不猜测实例，样本标出原 Pod 和解析 Pod。本机真实 kind 将资产故意改回已删除的旧 Pod 名，再次采样仍正确解析到新 Pod、取得 PG18 和资源指标；Pod 留空的 Workload-only 路径也通过。TLS 模拟 API 验证多就绪 Pod 必须报告歧义，并在 Workload、ReplicaSet 和 Pod 均跨页时只读解析第二页的唯一目标；重复 `continue` 令牌会拒绝映射。多副本主备映射和实际大集群容量验收仍是 V1.0 缺口。
 
 上述 Workload 映射还在真实 OOM 故障中验证了唯一**未就绪**替换 Pod：资产保留旧 Pod 名，Go 自动解析到 `CrashLoopBackOff`/`OOMKilled` 新 Pod，采集失败样本与恢复样本共用事件 `4b72b565-ebcb-4203-9f03-5069bebc93fa`；恢复时再次自动解析健康 Pod。TLS 模拟 API 回归测试新增唯一未就绪 Pod 场景。多 Pod 候选继续报歧义，不推断主备角色。
 
