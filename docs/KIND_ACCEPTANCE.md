@@ -2,6 +2,12 @@
 
 > 2026-11-18，单节点 kind `dbsphere-test`，Namespace `dbsphere-smoke`，PostgreSQL 18 测试数据库。此记录只证明列出的本机故障路径，不是生产 Kubernetes 或 V1.0 正式版验收。PG14–18 多节点矩阵另见[独立验收记录](KIND_MATRIX_ACCEPTANCE.md)。
 
+## 2026-11-19 Go 新镜像滚动验收
+
+本机单节点 `dbsphere-test` 集群的 `dbsphere-smoke` Namespace 将 Go 镜像更新为 `dbsphere/kind-acceptance:collector-workers`，镜像包含托管资产模式、采集缺口面板及有上限的自动采集代码。`dbsphere-go` Deployment 最终为 1/1 Ready，`/readyz` 返回 `ready/postgresql18`；浏览器从替换后的 Go Pod 读取既有 PG14 Patroni 可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b`、关联遥测事件和可展开的证据时间线，控制台无错误。PG14 K8S 资产详情显示数据库诊断 14/14、K8S Pod/Node/PVC 与 Patroni 已采集，Top SQL 缺少扩展时明确标为未采集。截图保存在本机 `H:\CodexLS\outputs\DbSphere-kind-coverage.png`。
+
+滚动初段新 Pod 曾处于 Pending，原因是既有 kind 控制面的 `kube-scheduler` 持续重启，日志显示访问 API Server 更新 leader lease 超时。人工尝试更新 Pod 的 `nodeName` 被 API 拒绝；随后尝试创建 Binding 时 Pod 已由恢复的调度器自动分配，Binding 返回冲突。最终滚动由正常调度完成，未把手工绑定计作成功路径。此集群的控制面波动不能作为生产 K8S 稳定性验收。
+
 ## 本轮本机集群接入与最终代码复验
 
 用户要求直接在本机搭建并验收 Kubernetes 环境。本机已有专用 `dbsphere-test` kind 集群，本轮复用其隔离的 `dbsphere-smoke` Namespace，没有修改 AgentSQL 集群。重新从 kind 控制平面导出仅供本地故障注入的管理员 kubeconfig，保存在 `H:\CodexLS\tmp\dbsphere-local-admin.kubeconfig`，未签发新的 ServiceAccount token，也未提交凭据。控制平面 Node 为 `Ready`；DbSphere Pod 继续使用已存在的 `dbsphere-reader` 投射凭据。`kubectl auth can-i` 核对该账号能读取目标 Pod，不能读取 Secret 或删除 Pod。

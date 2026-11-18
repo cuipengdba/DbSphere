@@ -2,7 +2,7 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
-[当前 Go 自动采集与故障矩阵 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44365500776) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni 与托管模式本地目标、复制延迟、真实 WAL 归档失败、autovacuum 关闭、默认 120 秒连接压力、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
+[当前 Go 自动采集与故障矩阵 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44367664009) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni 与托管模式本地目标、复制延迟、真实 WAL 归档失败、autovacuum 关闭、默认 120 秒连接压力、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
 
 新增独立的托管 PostgreSQL 资产类型：Go 调度器对其只采数据库与可选的 PgBouncer/Patroni 端点，B/S 页面不再把它显示为 Linux 主机或要求 K8S 映射。本机以 PG18 监控库和 PG14 目标验证了自动调度、成功诊断样本和不存在虚构主机/Pod 指标；浏览器完成表单隐藏、创建、手动采集及详情缺口提示验收，无控制台错误，截图为 `H:\CodexLS\outputs\DbSphere-managed-ui.png`。厂商实际云数据库及 TLS 路径尚未验收，具体能力与限制见[托管模式能力矩阵](MANAGED_PG.md)。
 
@@ -11,6 +11,8 @@
 自动采集器从串行处理改为有上限的工作队列：默认 4 个并行目标，可配置 1–16；每轮仍最多 100 个到期资产、每资产独立 45 秒超时，原有采样陈旧告警和结果持久化保留。单元测试用真实并发屏障验证三个资产同时开始且峰值不超过配置值。本机以 15 秒周期和 3 个工作进程启动新的 Go 二进制后，PG18 监控库的托管 PG14 资产样本数从 1 增至 2，最新样本为 `ok` 且目标版本 14；这只验证真实自动采集路径，不等于负载基准。尚未完成采集器 CPU/SQL 开销实测、规模压测和多副本租约，见[Go 部署参数](OFFLINE_DEPLOYMENT.md)。
 
 追加的[本机工作队列负载冒烟](COLLECTOR_LOAD_ACCEPTANCE.md)用 20 个一次性资产指向同一个 PG14 容器、4 个工作进程和 15 秒周期，两轮各 20 个样本全部成功，首末落库时间差分别为 0.66 与 0.85 秒；测试资产已清理。这不是生产规模或目标数据库开销证明。
+
+最新 Go 镜像在本机单节点 kind 通过滚动替换与浏览器复验：Go Pod 1/1 Ready、PG18 存储就绪，旧 PG14 Patroni 主事件及关联遥测事件仍可读；新采集缺口面板显示实际 K8S/Patroni 状态。kind 调度器在初段因 API Server lease 超时重启，恢复后自行调度新 Pod，故不将此次过程写成生产 K8S 可靠性通过。见[本机 kind 验收](KIND_ACCEPTANCE.md)。
 
 隔离 PG18 主备夹具新增真实 WAL 归档失败故障：测试命令使 `pg_stat_archiver.failed_count` 从 0 增加，Go 以 `pg_monitor` 只读账号采集后在事件 `8dad5aff-608f-4d86-9cab-3e94bd826cff` 关联 `pg_archive_failures` 告警、`wal_archive_failures` 候选、原始样本与报告；恢复归档命令后新失败数归零，恢复样本关闭原事件。第一次尝试因 PostgreSQL 命令行参数覆盖 `ALTER SYSTEM` 而未注入故障，调整夹具后本机通过。真实仓库、备份恢复和生产告警仍待验收，见[WAL 归档故障演练](WAL_ARCHIVE_DRILL.md)。
 
