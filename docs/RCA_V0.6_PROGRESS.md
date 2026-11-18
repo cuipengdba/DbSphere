@@ -14,6 +14,8 @@
 
 根因候选现在列出来自告警的实际指标值/阈值、首次证据时间与事件开始时间，并展示可用反证和缺失信号。Pod OOMKilled 的容器终止时间必须早于 PostgreSQL 连接失败且位于十分钟窗口内；未来时间戳不再产生连接故障的 OOM 候选。历史候选若缺少容器终止时间，时间顺序标记为未知。
 
+Go 版现对**观测时间晚于事件开始超过 5 分钟**的候选信号补充时间反证，并把原本为高/中置信度的候选降为低置信度。该信号仍保留在同一事件中，供运维人员判断是否为后续加重因素；若早期采集有缺口，仍需补齐先发证据。真实 OOM 终止时间优先于较晚的告警记录时间；单元测试覆盖“事件先发生、OOM 七分钟后出现”的顺序。报告和事件页已有反证及时间顺序字段。此规则只处理明确的时间冲突，不表示其他候选已完成反证检查。
+
 新增 Kubernetes 调度失败信号：`PodScheduled=False` 和同 Pod 近 15 分钟 `FailedScheduling`、`FailedMount` 或 `FailedAttachVolume` 事件独立标记来源；权限不足或未来时间戳保持未知/正常观测，不当作根因。真实 kind 演练使用[临时 Pod 清单](../test/fixtures/k8s-rca-pending.yaml)的不可满足 Node 选择条件，只读 ServiceAccount 采集到 `Pending`、`PodScheduled=False` 与 `FailedScheduling`。`scripts/k8s-scheduling-rca-smoke.mjs` 将该真实 K8S 证据与**注入的** PG 连接失败写入一个事件 ID，检查调度候选、事件图和 PG 告警；演练后已删除 Pod。此实验验证跨层归并与真实 K8S 信号，不等于真实业务 PG Pod 调度失败的完整故障演练。
 
 复现时在已有的 `dbsphere-smoke` 测试 Namespace 中运行：

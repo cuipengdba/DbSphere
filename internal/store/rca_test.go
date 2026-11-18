@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +72,40 @@ func TestGoRCAProducesOOMCandidateWithoutRestartAlert(t *testing.T) {
 	if candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-oom": noOOM},
 		func(string, string, string, string, any) {}, &[]map[string]string{}); len(candidates) != 0 {
 		t.Fatalf("non-OOM termination became an OOM candidate: %+v", candidates)
+	}
+}
+
+func TestGoRCALateOOMDoesNotExplainInitialFailure(t *testing.T) {
+	started := time.Now().UTC()
+	alertAt := started.Add(8 * time.Minute)
+	oomAt := started.Add(7 * time.Minute)
+	payload, _ := json.Marshal(map[string]any{"metric": "k8s.oom_recent", "sampleId": "late-sample",
+		"value": 1, "operator": ">=", "threshold": 1})
+	event := &eventRecord{ID: "event-late-oom", StartedAt: started, Evidence: []eventEvidence{{
+		ID: "late-alert", Kind: "alert_firing", ObservedAt: alertAt, Payload: payload}}}
+	sample := sampleObservation{ID: "late-sample", At: alertAt, Status: "error", Metrics: map[string]any{
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"name": "pg-0"},
+			"containers": []any{map[string]any{"name": "postgres", "terminatedReason": "OOMKilled",
+				"lastTerminatedAt": oomAt.Format(time.RFC3339Nano)}}}}}
+	candidates := analyzeCandidates(event, map[string]sampleObservation{"late-sample": sample},
+		func(string, string, string, string, any) {}, &[]map[string]string{})
+	if len(candidates) != 1 || candidates[0]["code"] != "k8s_oom_killed" ||
+		candidates[0]["confidence"] != "low" ||
+		len(candidates[0]["against"].([]string)) != 1 ||
+		object(candidates[0]["timeOrder"])["relation"] != "after_event" {
+		t.Fatalf("late OOM should remain a secondary hypothesis with counterevidence: %+v", candidates)
+	}
+	reportPayload, _ := json.Marshal(map[string]any{"event": event,
+		"analysis": map[string]any{"status": "candidate", "candidates": candidates}})
+	var report eventReportData
+	if err := json.Unmarshal(reportPayload, &report); err != nil {
+		t.Fatal(err)
+	}
+	markdown := renderEventMarkdown(report)
+	if !strings.Contains(markdown, "置信级别：low") ||
+		!strings.Contains(markdown, "反证：当前支撑信号的观测时间晚于事件开始超过 5 分钟") ||
+		!strings.Contains(markdown, "after_event") {
+		t.Fatalf("event report omitted late-cause uncertainty: %s", markdown)
 	}
 }
 

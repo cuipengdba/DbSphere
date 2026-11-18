@@ -134,10 +134,15 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 		seen[code] = true
 		relation := "same_window"
+		against := []string{}
 		if at.Before(event.StartedAt) {
 			relation = "before_event"
 		} else if at.After(event.StartedAt.Add(5 * time.Minute)) {
 			relation = "after_event"
+			against = append(against, "当前支撑信号的观测时间晚于事件开始超过 5 分钟；缺少先发证据，不能单独解释最初异常")
+			if confidence == "high" || confidence == "medium" {
+				confidence = "low"
+			}
 		}
 		conditions := []any{}
 		if condition != nil {
@@ -145,7 +150,7 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 		candidate := map[string]any{
 			"code": code, "title": title, "confidence": confidence,
-			"supports": supports, "against": []string{}, "missing": missing,
+			"supports": supports, "against": against, "missing": missing,
 			"limitation": limitation, "detail": detail, "state": "hypothesis",
 			"matchedConditions": conditions, "review": reviews[code],
 			"timeOrder": map[string]any{"firstObservedAt": at, "eventStartedAt": event.StartedAt, "relation": relation},
