@@ -1,6 +1,6 @@
-# Patroni 只读监控与本机验收
+# Patroni 只读监控与故障验收
 
-> 2026-11-18 开发版记录。当前实现是可选信号；未填写 Patroni 地址的 PostgreSQL 资产仍按原方式采集。本记录不代表 PG14–18 × Patroni 全矩阵、生产高可用或 V1.0 发布验收。
+> 2026-11-18 开发版记录。当前实现是可选信号；未填写 Patroni 地址的 PostgreSQL 资产仍按原方式采集。PG14–18 的隔离 Linux 容器双节点故障矩阵已通过；本记录不代表生产高可用、全部运行形态或 V1.0 发布验收。
 
 ## 接入与边界
 
@@ -20,11 +20,11 @@ Go 后端没有调用切主、重启、重建副本等 Patroni 写接口。HTTP 
 
 ## 可重复故障演练
 
-仓库新增 `test/patroni-drill/` 与 `scripts/patroni-drill-acceptance.mjs`：使用一次性凭据，在隔离 Docker Compose 网络中启动两个 Patroni 4.1.5 + PostgreSQL 18 节点、etcd、独立 PG18 监控库及 Go 静态页面服务。脚本动态找出 leader，以 `pg_monitor` 账号纳管，停止 leader，要求得到 PG 不可用和无 leader 的真实样本，待原节点作为 streaming replica 重入后，检查**同一个事件 ID**中的告警、原始样本、根因候选、证据图、恢复和复盘报告。测试将 leader 规则持续时间临时设为 0 秒，结束时恢复为 30 秒。镜像构建需要联网安装测试用 Patroni；它不是 DbSphere 的离线交付镜像。
+仓库新增 `test/patroni-drill/` 与 `scripts/patroni-drill-acceptance.mjs`：使用一次性凭据，在隔离 Docker Compose 网络中启动两个 Patroni 4.1.5 + 指定 PG14–18 版本节点、etcd、独立 PG18 监控库及 Go 静态页面服务。脚本动态找出 leader，以 `pg_monitor` 账号纳管，停止 leader，要求得到 PG 不可用和无 leader 的真实样本，待原节点作为 streaming replica 重入后，检查**同一个事件 ID**中的告警、原始样本、根因候选、证据图、恢复和复盘报告。测试将 leader 规则持续时间临时设为 0 秒，结束时恢复为 30 秒。镜像构建需要联网安装测试用 Patroni；它不是 DbSphere 的离线交付镜像。
 
 本机首次运行揭示测试容器的本地 PostgreSQL socket 缺少 `pg_hba` 规则，修正后 PG18 自动演练通过，事件 `520f45e8-48ea-4599-8176-bf8eeba79fa6` 仅有一个已恢复的可用性事件；无 leader 样本 `400f5476-5543-40f8-92a6-59a37a7afd43` 与恢复样本 `f41020c2-2568-4a48-b0a3-b5ff8fde8747` 均在其证据图中。脱敏结果保存在本机 `H:\CodexLS\outputs\DbSphere-patroni-ci-local.json`。
 
-[首次独立 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44336037312) 在 PG18 快速自动切换中没有采到短暂的无 leader 窗口，因而故障演练作业失败，其余作业通过。为消除时序依赖，脚本现在由测试夹具的 `patronictl` 先暂停自动切换，待 PG 不可用和无 leader 样本落入监控库后恢复自动切换；**DbSphere 服务仍只读**。本机 PG14 双节点用更新后的脚本通过，目标版本 14、单事件 `17df8d8a-31b6-4a88-a4fc-67a24724aa4b`、无 leader 样本 `52ea1b9e-8729-45b1-8b92-c0a10a8b16ec`、恢复样本 `bbda1d8c-8cc3-4164-ba4e-c6c21b9dde86` 已核对；脱敏结果在 `H:\CodexLS\outputs\DbSphere-patroni-pg14-local.json`。GitHub CI 已扩展为 PG14–18 五版独立作业，结果仍需复核。
+[首次独立 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44336037312) 在 PG18 快速自动切换中没有采到短暂的无 leader 窗口，因而故障演练作业失败，其余作业通过。为消除时序依赖，脚本现在由测试夹具的 `patronictl` 先暂停自动切换，待 PG 不可用和无 leader 样本落入监控库后恢复自动切换；**DbSphere 服务仍只读**。本机 PG14 双节点用更新后的脚本通过，目标版本 14、单事件 `17df8d8a-31b6-4a88-a4fc-67a24724aa4b`、无 leader 样本 `52ea1b9e-8729-45b1-8b92-c0a10a8b16ec`、恢复样本 `bbda1d8c-8cc3-4164-ba4e-c6c21b9dde86` 已核对；脱敏结果在 `H:\CodexLS\outputs\DbSphere-patroni-pg14-local.json`。[修正后的独立 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 中 PG14–18 五个 Patroni 作业及其他作业全部通过。
 
 Linux 开发机可执行以下复现命令，`TMPDIR` 指向仓库外的临时目录，运行完成后删除一次性数据卷：
 
@@ -43,4 +43,4 @@ docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.ya
 
 ## 尚待验收
 
-本机覆盖 PG14 和 PG18 双节点、单节点 DCS 和人工故障注入。PG15–17 Patroni 组合、三节点 DCS、Kubernetes Operator/StatefulSet、TLS/Basic Auth 生产证书、跨节点网络分区、长期负载、自动发现与真实业务 Trace 尚未测试。PG14–18 五版 CI 及生产稳定性仍待验收。DbSphere 仍是只读监控，不承担 Patroni 的自动选主或故障切换。V1.0 任务保持未完成，见[开发任务](DEVELOPMENT_TASKS.md)。
+本机覆盖 PG14 和 PG18 双节点、单节点 DCS 和人工故障注入；PG15–17 双节点已由独立 Linux CI 验证。三节点 DCS、Kubernetes Operator/StatefulSet、TLS/Basic Auth 生产证书、跨节点网络分区、长期负载、自动发现与真实业务 Trace 尚未测试。生产稳定性仍待验收。DbSphere 仍是只读监控，不承担 Patroni 的自动选主或故障切换。V1.0 任务保持未完成，见[开发任务](DEVELOPMENT_TASKS.md)。

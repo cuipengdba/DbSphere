@@ -21,7 +21,7 @@ V1.0 完成 PostgreSQL 运维监控闭环：纳管、监控、告警、巡检、
 | **V0.9** | 运维治理与协同 | B/S 控制台 RBAC、工单/审批/审计、受控低风险操作、变更关联和复盘；K8S 权限最小化与操作边界 | 只读用户不能执行操作；审批动作全程可追溯；事件从首次告警、根因到恢复形成闭环 |
 | **V1.0** | PostgreSQL 正式版 | PG14–18 × Linux/K8S 兼容矩阵、Linux 与容器在线/离线一键部署/升级/回滚、PG18 长期存储性能与恢复、安全加固、故障演练、文档和支持矩阵 | 通过 [产品设计中的 V1.0 验收基线](PRODUCT_DESIGN.md#6-v10-验收基线)，发布能力矩阵、已知限制及 PG14 EOL 提示 |
 
-当前 Go 开发版已增加可选 Patroni `GET /cluster` 只读接入：PG18 双节点本机验收了拓扑、无 leader 告警及同事件恢复；PG14–17、K8S Patroni 和生产 DCS 尚未进入支持矩阵。此进度不改变 V1.0 的发布门槛，详见[验收记录](PATRONI_ACCEPTANCE.md)。
+当前 Go 开发版已增加可选 Patroni `GET /cluster` 只读接入：PG14/18 双节点本机验收了拓扑、无 leader 告警及同事件恢复，[PG14–18 五版 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 已通过真实故障演练。K8S Patroni 和生产 DCS 尚未进入支持矩阵。此进度不改变 V1.0 的发布门槛，详见[验收记录](PATRONI_ACCEPTANCE.md)。
 
 ## 三条贯穿版本的交付线
 
