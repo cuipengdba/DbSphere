@@ -24,6 +24,8 @@
 
 更新 Go 静态镜像为 `dbsphere/kind-acceptance:trace-impact` 后，在同一个已恢复 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 上复验：服务 `dbsphere-lock-demo` 的同期观测为 3 条 Trace、6 条 Span，**仅 1 条**带数据库错误的 Trace `e46e8da8d03862799d72df932d5dd51c` 被标为故障信号关联；另 2 条正常同期 Trace 未算入。管理员下钻原始脱敏 Trace 读到 2 条 `error` Span，Markdown 复盘也包含“故障信号关联 1 条”及该 Trace 链接。该分类证明事件页不再把所有同窗请求都称作故障影响；请求错误与 OOM 的因果关系仍须结合事件时间、Pod 状态和人工复核判断。
 
+Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打开上述 OOM 事件，展开“查看应用请求关联证据”，看到“同期 Trace 3 条 · 故障信号关联 1 条”和准确的原始 Trace 链接；点击后浏览器读到 2 条错误 Span JSON。功能调用无脚本错误；导航到原始 JSON 时浏览器额外请求 `/favicon.ico` 返回 404，不影响 Trace 下钻。[该提交的 22 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44278562315)全部通过，覆盖 PG14–18 与既有离线部署门禁。Playwright 所需 Node/npm 只安装在本机开发工具目录，不属于 Go 静态部署包。
+
 ### 标准 OpenTelemetry Collector 转发
 
 在同一 Namespace 运行官方 `otel/opentelemetry-collector:0.165.0` Linux 镜像。其 OTLP HTTP Receiver 监听 `:4318`，`otlp_http` Exporter 以 JSON、无压缩和独立写入令牌发往 Go DbSphere `/v1/traces`；配置在[无密钥示例](../examples/trace-lock-app/otel-collector.yaml)。将示例应用的 OTLP 目标改成 Collector Service 后，真实 `/checkout` 请求成功，返回 Trace `f331080ca67953004cd1adb745d14dfd` 和 PG 后端 PID `1212`。管理员从 DbSphere 的 PG18 存储读取同一 Trace，确认服务父 Span → PG 客户端 Span 共 2 条，均关联受管 PG 资产，客户端 Span 保留实际 PID。Collector 镜像配置验证也通过。此项只证明本机标准 Collector 的 Trace JSON 转发和资产关联；未验证生产 TLS、队列持久化、第三方 SDK 自动埋点或负载下丢包率。[Exporter 配置依据](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlphttpexporter/README.md)。
