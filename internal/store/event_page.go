@@ -20,6 +20,43 @@ type EventPageQuery struct {
 	Limit  int
 }
 
+// EventOverview counts all open events and returns their five most recent rows.
+// Asset scope is applied in SQL before counting or limiting.
+func (s *Postgres) EventOverview(ctx context.Context, assetIDs []string) (any, error) {
+	where := "WHERE e.status='open'"
+	args := []any{}
+	if assetIDs != nil {
+		where += " AND e.asset_id=ANY($1::uuid[])"
+		args = append(args, assetIDs)
+	}
+	var count int64
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM events e "+where, args...).Scan(&count); err != nil {
+		return nil, fmt.Errorf("count open events: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT jsonb_build_object(
+		'id',e.id,'assetId',e.asset_id,'assetName',a.name,'kind',e.kind,
+		'eventGroup',e.event_group,'title',e.title,'status',e.status,
+		'startedAt',e.started_at,'endedAt',e.ended_at,'acknowledgedAt',e.acknowledged_at)
+		FROM events e JOIN assets a ON a.id=e.asset_id `+where+
+		" ORDER BY e.started_at DESC,e.id DESC LIMIT 5", args...)
+	if err != nil {
+		return nil, fmt.Errorf("read open events: %w", err)
+	}
+	defer rows.Close()
+	latest := make([]json.RawMessage, 0, 5)
+	for rows.Next() {
+		var event json.RawMessage
+		if err := rows.Scan(&event); err != nil {
+			return nil, fmt.Errorf("scan open event: %w", err)
+		}
+		latest = append(latest, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read open events: %w", err)
+	}
+	return map[string]any{"openCount": count, "latestOpen": latest}, nil
+}
+
 // EventPage searches all retained events with a stable (time, ID) cursor.
 // Asset scope is applied in SQL before the page limit.
 func (s *Postgres) EventPage(ctx context.Context, query EventPageQuery, assetIDs []string) (any, error) {

@@ -61,7 +61,7 @@ function assetRuntimeLabel(asset) {
 
 function renderOverview(assets, events) {
   const focus = $('overview-events'); focus.replaceChildren();
-  const open = events.filter(event => event.status === 'open').slice(0, 5);
+  const open = events.slice(0, 5);
   if (!open.length) focus.append(cell('p', '当前没有待处理事件。', 'empty'));
   for (const event of open) {
     const button = cell('button', `${event.assetName} · ${event.title} · ${formatTime(event.startedAt)}`, 'event-button event-open');
@@ -119,12 +119,15 @@ async function refresh() {
     intervalMs: Number.isFinite(interval) && interval > 0 ? interval * 1000 : 60000,
     clockOffsetMs: Number.isFinite(serverTime) ? serverTime - Date.now() : 0
   };
+  const eventOverview = runtime?.backend === 'go' ? await api('/api/events/overview') :
+    { openCount: events.filter(event => event.status === 'open').length,
+      latestOpen: events.filter(event => event.status === 'open').slice(0, 5) };
   $('asset-count').textContent = assets.length;
   $('healthy-label').textContent = collectorSchedule.known && !collectorSchedule.enabled ? '最近一次成功' : '采集正常';
   $('healthy-count').textContent = assets.filter(a => assetHealth(a).kind === (collectorSchedule.known && !collectorSchedule.enabled ? 'manual' : 'ok')).length;
-  $('event-count').textContent = events.filter(e => e.status === 'open').length;
-  $('event-count').closest('.stat').classList.toggle('alerting', events.some(e => e.status === 'open'));
-  renderOverview(assets, events);
+  $('event-count').textContent = eventOverview.openCount;
+  $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
+  renderOverview(assets, eventOverview.latestOpen);
   renderAssets(assets);
   eventServerPaging = runtime?.backend === 'go';
   $('event-page-controls').hidden = !eventServerPaging;

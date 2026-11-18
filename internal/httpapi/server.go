@@ -36,6 +36,9 @@ type ScopedCollectionReader interface {
 type EventPager interface {
 	EventPage(context.Context, storepkg.EventPageQuery, []string) (any, error)
 }
+type EventOverviewReader interface {
+	EventOverview(context.Context, []string) (any, error)
+}
 type AssetStore interface {
 	AssetByID(context.Context, string) (json.RawMessage, error)
 	CreateAsset(context.Context, assets.Input, []byte) (json.RawMessage, error)
@@ -1064,6 +1067,24 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/events/overview" {
+				reader, ok := store.(EventOverviewReader)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Event overview unavailable"})
+					return
+				}
+				var scopedIDs []string
+				if viewerScope != nil {
+					scopedIDs = credentials.ViewerAssetIDs
+				}
+				value, err := reader.EventOverview(r.Context(), scopedIDs)
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event overview unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, value)
+				return
+			}
 			if r.URL.Path == "/api/events/page" {
 				pager, ok := store.(EventPager)
 				if !ok {

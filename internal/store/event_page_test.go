@@ -148,4 +148,19 @@ func TestEventPageFindsOlderHistoryWithoutLeakingScopedAssets(t *testing.T) {
 			t.Fatalf("invalid page query accepted: %+v %v", bad, err)
 		}
 	}
+	if _, err := pg.pool.Exec(ctx, "UPDATE events SET status='open',ended_at=NULL WHERE asset_id=$1", visible); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := pg.EventOverview(ctx, []string{visible})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := overview.(map[string]any)
+	if result["openCount"].(int64) != 205 || len(result["latestOpen"].([]json.RawMessage)) != 5 {
+		t.Fatalf("overview truncated the open event count: %+v", result)
+	}
+	hiddenOverview, err := pg.EventOverview(ctx, []string{hidden})
+	if err != nil || hiddenOverview.(map[string]any)["openCount"].(int64) != 0 {
+		t.Fatal("scoped overview leaked another asset", err)
+	}
 }

@@ -127,3 +127,5 @@ Playwright Chromium 实际打开 Go 静态页面和该 OOM 事件：桌面与 39
 在上述隔离 PVC 恢复库的 `dbsphere-go-restore` Deployment 更新 Go 静态镜像后，PG18 从 schema 21 迁到 22，建立事件时间/ID 和状态/时间/ID 分页索引；新 Pod `dbsphere-go-restore-67b697dc48-n4cqj` 1/1 Ready、零重启。原 OOM 事件仍有 8 条证据、24 个图节点、47 条关系、6 条 Span 和原根因候选，新 PG18/K8S 采样成功。Go 实库回归另创建 205 个事件，验证超过旧版最近 200 条窗口后的搜索、五页游标无重复，以及受限查看账号的资产过滤发生在分页前。
 
 Playwright Chromium 在恢复库 B/S 页面按 `Kind OOM PG18` 搜到 4 条；筛选“处理中”后为 0 条，输入完整 OOM 事件 ID 仍能打开原证据详情。仅在隔离恢复库中临时增加 60 个测试事件，页面第 1 页显示 50 条、第 2 页显示 27 条，点击“上一页”返回 50 条；随后删除全部 60 条测试事件，库中恢复原有 17 条。390px 视口 `scrollWidth=390`，浏览器控制台无错误，截图存于本机 `H:\CodexLS\outputs\DbSphere-event-page-mobile.png`。该测试覆盖小型真实浏览器翻页，不等于百万级历史搜索性能或完整无障碍验收。
+
+事件总览修复后，再次只更新隔离的 `dbsphere-go-restore` Go 镜像。Deployment 完成滚动升级，`/readyz` 报告 `postgresql18`；管理员登录后 `/api/events/overview` 返回 `openCount=0`、`latestOpen=0`，分页接口仍返回原有 17 条事件。独立 PG18 实库回归将同一受限资产的 205 条事件设为未结，验证总览精确计数 205、只返回最近 5 条，以及其他资产不可见。此处的 kind 库原本无未结事件，因此大于 200 条的计数依据实库回归，不能解释为在 kind 中注入了 205 条故障。

@@ -18,8 +18,9 @@ const scopeEventA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 const scopeEventB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 type scopedViewerStub struct {
-	collections map[string]any
-	pageScope   []string
+	collections   map[string]any
+	pageScope     []string
+	overviewScope []string
 }
 
 func (*scopedViewerStub) Health(context.Context) error { return nil }
@@ -36,6 +37,11 @@ func (s *scopedViewerStub) EventPage(_ context.Context, query storepkg.EventPage
 	s.pageScope = append([]string(nil), assetIDs...)
 	return map[string]any{"events": []any{map[string]any{"id": scopeEventA,
 		"assetId": scopeAssetA}}, "hasMore": false, "nextCursor": ""}, nil
+}
+func (s *scopedViewerStub) EventOverview(_ context.Context, assetIDs []string) (any, error) {
+	s.overviewScope = append([]string(nil), assetIDs...)
+	return map[string]any{"openCount": 1, "latestOpen": []any{map[string]any{
+		"id": scopeEventA, "assetId": scopeAssetA}}}, nil
 }
 
 func (*scopedViewerStub) AssetIDForResource(_ context.Context, kind, id string) (string, error) {
@@ -105,6 +111,11 @@ func TestScopedViewerCannotReadOtherAssetsOrAggregates(t *testing.T) {
 	}
 	if got := get("/api/events/page?limit=invalid"); got.Code != http.StatusBadRequest {
 		t.Fatalf("invalid page limit accepted: %d", got.Code)
+	}
+	if got := get("/api/events/overview"); got.Code != http.StatusOK ||
+		strings.Contains(got.Body.String(), scopeAssetB) ||
+		len(stub.overviewScope) != 1 || stub.overviewScope[0] != scopeAssetA {
+		t.Fatalf("event overview scope missing: %d %s %+v", got.Code, got.Body.String(), stub.overviewScope)
 	}
 	if got := get("/api/notifications"); got.Code != http.StatusOK || strings.Contains(got.Body.String(), "private") {
 		t.Fatalf("notification leaked: %d %s", got.Code, got.Body.String())
