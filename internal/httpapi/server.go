@@ -73,7 +73,8 @@ type EventResponseStore interface {
 }
 type EventAIStore interface {
 	EventAIEvidence(context.Context, string) (string, []string, error)
-	RecordAIInvocation(context.Context, string, string, string, []string) error
+	ReserveAIInvocation(context.Context, string, string, int) (string, error)
+	CompleteAIInvocation(context.Context, string, string, string, []string) error
 }
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
@@ -118,6 +119,7 @@ type AuthConfig struct {
 	SecureCookie       bool
 	OTLPToken          string
 	AI                 *ai.Client
+	AIDailyLimit       int
 }
 
 type loginAttempt struct {
@@ -129,6 +131,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	var credentials *AuthConfig
 	if len(auth) > 0 {
 		credentials = &auth[0]
+		if credentials.AIDailyLimit == 0 {
+			credentials.AIDailyLimit = 20
+		}
 	}
 	var attemptsMu sync.Mutex
 	attempts := map[string]loginAttempt{}
@@ -383,7 +388,8 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if credentials.AI == nil {
 				respond(w, http.StatusOK, map[string]any{"enabled": false})
 			} else {
-				respond(w, http.StatusOK, map[string]any{"enabled": true, "model": credentials.AI.Model()})
+				respond(w, http.StatusOK, map[string]any{"enabled": true, "model": credentials.AI.Model(),
+					"dailyLimit": credentials.AIDailyLimit})
 			}
 			return
 		}
@@ -416,13 +422,25 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				aiAttempts[match[1]] = time.Now()
 				aiAttemptsMu.Unlock()
+				invocationID, err := aiStore.ReserveAIInvocation(r.Context(), match[1],
+					credentials.AI.Model(), credentials.AIDailyLimit)
+				if errors.Is(err, storepkg.ErrAIBudgetExceeded) {
+					respond(w, http.StatusTooManyRequests, map[string]string{"error": "Daily AI analysis limit reached; rule-based diagnosis remains available"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI budget audit unavailable"})
+					return
+				}
 				result, modelErr := credentials.AI.Analyze(r.Context(), prompt, ids)
 				status := "success"
 				cited := result.EvidenceIDs
 				if modelErr != nil {
 					status, cited = "failed", nil
 				}
-				if err := aiStore.RecordAIInvocation(r.Context(), match[1], credentials.AI.Model(), status, cited); err != nil {
+				auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer auditCancel()
+				if err := aiStore.CompleteAIInvocation(auditCtx, match[1], invocationID, status, cited); err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI audit unavailable"})
 					return
 				}

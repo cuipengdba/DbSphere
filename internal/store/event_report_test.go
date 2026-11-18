@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,12 +76,31 @@ func TestEventReportLinksSamePG18Incident(t *testing.T) {
 		strings.Contains(aiEvidence, "secret-report-password") {
 		t.Fatalf("AI evidence was not redacted or linked: %v", err)
 	}
-	if err := pg.RecordAIInvocation(ctx, eventID, "local-model", "success", ids[:1]); err != nil {
+	var usedToday int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE kind='ai_invocation'
+		AND observed_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`).Scan(&usedToday); err != nil {
 		t.Fatal(err)
+	}
+	invocationID, err := pg.ReserveAIInvocation(ctx, eventID, "local-model", usedToday+1)
+	if err != nil || invocationID == "" {
+		t.Fatal("AI budget reservation failed", err)
+	}
+	if _, err := pg.ReserveAIInvocation(ctx, eventID, "local-model", usedToday+1); !errors.Is(err, ErrAIBudgetExceeded) {
+		t.Fatal("daily AI budget was bypassed", err)
+	}
+	if err := pg.CompleteAIInvocation(ctx, eventID, invocationID, "success", ids[:1]); err != nil {
+		t.Fatal("AI audit completion failed", err)
+	}
+	if err := pg.CompleteAIInvocation(ctx, eventID, invocationID, "failed", nil); !errors.Is(err, ErrEventNotFound) {
+		t.Fatal("completed AI audit was overwritten", err)
 	}
 	var auditCount int
 	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE event_id=$1 AND kind='ai_invocation'`,
 		eventID).Scan(&auditCount); err != nil || auditCount != 1 {
 		t.Fatalf("AI invocation was not audited under the same event ID: %d %v", auditCount, err)
+	}
+	_, allowedAfter, err := pg.EventAIEvidence(ctx, eventID)
+	if err != nil || slices.Contains(allowedAfter, invocationID) {
+		t.Fatal("a prior AI invocation became citable root cause evidence", err)
 	}
 }

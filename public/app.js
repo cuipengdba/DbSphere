@@ -745,7 +745,7 @@ async function showEvent(id) {
   const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
   if (aiStatus.enabled) {
     const aiResult = document.createElement('div'); aiResult.className = 'evidence';
-    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model}`, 'ghost small-button write-action');
+    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model} · 每日最多 ${aiStatus.dailyLimit ?? 20} 次`, 'ghost small-button write-action');
     analyze.addEventListener('click', async () => {
       analyze.disabled = true;
       aiResult.replaceChildren(cell('p', '正在分析当前事件的脱敏证据…'));

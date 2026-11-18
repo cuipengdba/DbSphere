@@ -3,12 +3,15 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+var ErrAIBudgetExceeded = errors.New("daily AI invocation budget exceeded")
 
 type eventReportData struct {
 	Event    eventRecord `json:"event"`
@@ -90,7 +93,9 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	ids := make([]string, 0, len(data.Event.Evidence))
 	for _, item := range data.Event.Evidence {
-		ids = append(ids, item.ID)
+		if item.Kind != "ai_invocation" && item.Kind != "operator_response" && item.Kind != "rca_decision" {
+			ids = append(ids, item.ID)
+		}
 	}
 	data.Event.AssetName = "[资产名称已省略]"
 	data.Analysis.TraceCoverage.Services = nil
@@ -121,18 +126,67 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	return prompt, ids, nil
 }
 
-func (s *Postgres) RecordAIInvocation(ctx context.Context, eventID, model, status string, citedIDs []string) error {
+// ReserveAIInvocation counts both successful and failed external calls. The
+// PostgreSQL transaction lock makes the daily cap shared across Go replicas.
+func (s *Postgres) ReserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
+	if dailyLimit < 1 || dailyLimit > 1000 || model == "" {
+		return "", fmt.Errorf("invalid AI daily limit or model")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(1742028)"); err != nil {
+		return "", err
+	}
+	var now time.Time
+	if err := tx.QueryRow(ctx, "SELECT now()").Scan(&now); err != nil {
+		return "", err
+	}
+	day := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	var used int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE kind='ai_invocation'
+		AND observed_at >= $1 AND observed_at < $2`, day, day.Add(24*time.Hour)).Scan(&used); err != nil {
+		return "", err
+	}
+	if used >= dailyLimit {
+		return "", ErrAIBudgetExceeded
+	}
+	payload, err := json.Marshal(map[string]any{"model": model, "status": "pending", "actor": "admin",
+		"evidenceIds": []string{}})
+	if err != nil {
+		return "", err
+	}
+	var id string
+	if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'ai_invocation',$2,$3) RETURNING id::text`, eventID, now, payload).Scan(&id); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *Postgres) CompleteAIInvocation(ctx context.Context, eventID, invocationID, status string, citedIDs []string) error {
 	if status != "success" && status != "failed" {
 		return ErrInvalidRCADecision
 	}
-	payload, err := json.Marshal(map[string]any{"model": model, "status": status,
-		"evidenceIds": citedIDs, "actor": "admin"})
+	update, err := json.Marshal(map[string]any{"status": status, "evidenceIds": citedIDs})
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,'ai_invocation',now(),$2)`, eventID, payload)
-	return err
+	result, err := s.pool.Exec(ctx, `UPDATE evidence SET payload_json=payload_json || $3::jsonb
+		WHERE id=$1 AND event_id=$2 AND kind='ai_invocation' AND payload_json->>'status'='pending'`,
+		invocationID, eventID, update)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrEventNotFound
+	}
+	return nil
 }
 
 func reportText(value string) string {

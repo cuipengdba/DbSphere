@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -89,11 +90,18 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	aiDailyLimit := 20
+	if raw := os.Getenv("DBSPHERE_AI_DAILY_LIMIT"); raw != "" {
+		aiDailyLimit, err = strconv.Atoi(raw)
+		if err != nil || aiDailyLimit < 1 || aiDailyLimit > 1000 {
+			return fmt.Errorf("DBSPHERE_AI_DAILY_LIMIT must be between 1 and 1000")
+		}
+	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash: viewerHash,
 			SecureCookie:       os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
-			OTLPToken:          cfg.OTLPToken, AI: aiClient}),
+			OTLPToken:          cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {

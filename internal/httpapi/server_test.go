@@ -473,6 +473,17 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if aiResult.Code != http.StatusOK || !strings.Contains(aiResult.Body.String(), evidenceIDs[0]) {
 		t.Fatalf("AI response did not cite same-event evidence: %d %s", aiResult.Code, aiResult.Body.String())
 	}
+	budgetHandler := New(pg, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"),
+		PasswordHash: hash, AI: aiClient, AIDailyLimit: 1})
+	budgetRequest := httptest.NewRequest(http.MethodPost, aiPath, nil)
+	budgetRequest.AddCookie(login.Result().Cookies()[0])
+	budgetRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	budgetResult := httptest.NewRecorder()
+	budgetHandler.ServeHTTP(budgetResult, budgetRequest)
+	if budgetResult.Code != http.StatusTooManyRequests ||
+		!strings.Contains(budgetResult.Body.String(), "Daily AI analysis limit reached") {
+		t.Fatalf("daily AI budget did not stop another model call: %d %s", budgetResult.Code, budgetResult.Body.String())
+	}
 	decisionPath := "/api/events/" + eventID + "/rca-decision"
 	decisionRequest := httptest.NewRequest(http.MethodPost, decisionPath,
 		strings.NewReader(`{"code":"unknown","decision":"confirmed","reason":"no supporting evidence"}`))

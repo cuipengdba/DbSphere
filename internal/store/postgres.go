@@ -80,6 +80,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record trace backend PID migration: %w", err)
 		}
 	}
+	var aiBudgetMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=15)").Scan(&aiBudgetMigrated); err != nil {
+		return fmt.Errorf("check AI budget migration: %w", err)
+	}
+	if !aiBudgetMigrated {
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS evidence_ai_invocation_time ON evidence(observed_at) WHERE kind='ai_invocation'"); err != nil {
+			return fmt.Errorf("index AI invocation budget: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(15) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record AI budget migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
