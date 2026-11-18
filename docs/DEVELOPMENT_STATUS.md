@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HTTP JSON 导出。本机 PG14 整链路测试使用真实应用请求、Go DbSphere OTLP 接口和独立 PG18 监控库：请求被 advisory lock 阻塞，数据库采样与锁告警创建一个事件 ID，释放后应用 Span 带实际等待 PID；同一事件图出现服务→PG Span、`same_backend_pid`、等待→阻塞会话，恢复采样关闭原事件。PG14–18 CI 矩阵及第三方 SDK/Collector 仍待验收，详见[示例应用](../examples/trace-lock-app/README.md)与[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
+Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HTTP JSON 导出。本机 PG14 整链路测试使用真实应用请求、Go DbSphere OTLP 接口和独立 PG18 监控库：请求被 advisory lock 阻塞，数据库采样与锁告警创建一个事件 ID，释放后应用 Span 带实际等待 PID；同一事件图出现服务→PG Span、`same_backend_pid`、等待→阻塞会话，恢复采样关闭原事件。[PG14–18 五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)也通过该测试；第三方 SDK/Collector 和场景 B 仍待验收，详见[示例应用](../examples/trace-lock-app/README.md)与[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
 
 Go 事件页把同一次 OOM 故障的历史 `pod_oom_correlated` 证据与新 `k8s.oom_recent` 告警合并成一条候选，保留已有人工确认/驳回所用的候选代码，并把采集失败、K8S 状态、告警和原始样本全部连到候选；单独出现 OOM 告警时仍生成 `k8s_oom_killed` 候选。乱序证据单元测试、PG18 实库测试和 Go 全量测试通过。本机 kind 更新镜像后短暂发生 API/etcd 超时，恢复后直接复核旧 OOM 事件 `58d989b1-ecaa-4e65-acb6-ff50447fd791`：同一已恢复事件只显示一条 `pod_oom_correlated` 候选，包含 5 条支撑证据和告警匹配条件；见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
 

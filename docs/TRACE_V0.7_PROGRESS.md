@@ -4,7 +4,7 @@
 
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。真实 OpenTelemetry SDK/Collector 导出兼容和完整应用故障矩阵仍待验收。
 
-新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机通过，PG14–18 CI 矩阵待确认。第三方 SDK/Collector 兼容与 K8S OOM 应用场景 B 仍待验收。
+新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14–18 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机 PG14 与[五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44253585868)均通过。第三方 SDK/Collector 兼容与 K8S OOM 应用场景 B 仍待验收。
 
 Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存该 PG 资产对应的父链；同一 Trace 中的旁支服务 Span 和不相关请求不再进入该资产的事件图。重复 Span ID 视为歧义，跨其他 PG 资产的数据库父链在边界处停止。单元测试覆盖共享父链、旁支和不相关 Span；真实示例应用仍待验收。
 
