@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/ai"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/store"
 	"github.com/cuipengdba/dbsphere/internal/trace"
@@ -408,6 +409,45 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 		strings.Contains(report.Body.String(), "test-secret") ||
 		!strings.Contains(report.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatalf("event report did not retain safe evidence: %d %s", report.Code, report.Body.String())
+	}
+	aiDisabled := httptest.NewRecorder()
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/ai/status", nil)
+	statusRequest.AddCookie(login.Result().Cookies()[0])
+	handler.ServeHTTP(aiDisabled, statusRequest)
+	if aiDisabled.Code != http.StatusOK || !strings.Contains(aiDisabled.Body.String(), `"enabled":false`) {
+		t.Fatalf("AI should be optional: %d %s", aiDisabled.Code, aiDisabled.Body.String())
+	}
+	_, evidenceIDs, err := pg.EventAIEvidence(context.Background(), eventID)
+	if err != nil || len(evidenceIDs) == 0 {
+		t.Fatal("event has no AI-safe evidence", err)
+	}
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content, _ := json.Marshal(map[string]any{"summary": "数据库连接异常，需要继续核查。",
+			"evidenceIds": []string{evidenceIDs[0]}, "uncertainty": "主机证据不足。",
+			"suggestedChecks": []string{"核查 PostgreSQL 进程"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+			"finish_reason": "stop", "message": map[string]any{"content": string(content)}}}})
+	}))
+	defer model.Close()
+	aiClient, err := ai.New(ai.Config{URL: model.URL + "/v1/chat/completions", Model: "test-local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aiHandler := New(pg, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"),
+		PasswordHash: hash, AI: aiClient})
+	aiPath := "/api/events/" + eventID + "/ai-summary"
+	aiRequest := httptest.NewRequest(http.MethodPost, aiPath, nil)
+	aiRequest.AddCookie(login.Result().Cookies()[0])
+	deniedAI := httptest.NewRecorder()
+	aiHandler.ServeHTTP(deniedAI, aiRequest)
+	if deniedAI.Code != http.StatusForbidden {
+		t.Fatalf("AI invocation accepted without CSRF: %d", deniedAI.Code)
+	}
+	aiRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	aiResult := httptest.NewRecorder()
+	aiHandler.ServeHTTP(aiResult, aiRequest)
+	if aiResult.Code != http.StatusOK || !strings.Contains(aiResult.Body.String(), evidenceIDs[0]) {
+		t.Fatalf("AI response did not cite same-event evidence: %d %s", aiResult.Code, aiResult.Body.String())
 	}
 	decisionPath := "/api/events/" + eventID + "/rca-decision"
 	decisionRequest := httptest.NewRequest(http.MethodPost, decisionPath,

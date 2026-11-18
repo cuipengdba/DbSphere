@@ -739,6 +739,25 @@ async function showEvent(id) {
     reports.append(button);
   }
   target.append(reports);
+  const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
+  if (aiStatus.enabled) {
+    const aiResult = document.createElement('div'); aiResult.className = 'evidence';
+    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model}`, 'ghost small-button');
+    analyze.addEventListener('click', async () => {
+      analyze.disabled = true;
+      aiResult.replaceChildren(cell('p', '正在分析当前事件的脱敏证据…'));
+      try {
+        const { result } = await api(`/api/events/${event.id}/ai-summary`, 'POST');
+        aiResult.replaceChildren(cell('h4', 'AI 建议 · 待人工核验'),
+          cell('p', result.summary), cell('p', `证据 ID：${result.evidenceIds.join('、') || '未引用'}`),
+          cell('p', `不确定性：${result.uncertainty || '模型未提供'}`));
+        for (const check of result.suggestedChecks) aiResult.append(cell('p', `待检查：${check}`));
+        aiResult.append(cell('small', result.notice));
+      } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
+      finally { analyze.disabled = false; }
+    });
+    target.append(analyze, aiResult);
+  }
   if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
     const acknowledge = cell('button', '确认事件', 'ghost small-button');
@@ -763,6 +782,7 @@ async function showEvent(id) {
     if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
+    if (evidence.kind === 'ai_invocation') text = `${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
 }

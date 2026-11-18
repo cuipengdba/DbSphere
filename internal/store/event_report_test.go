@@ -68,4 +68,18 @@ func TestEventReportLinksSamePG18Incident(t *testing.T) {
 	if err != nil || !strings.Contains(htmlReport, eventID) || !strings.Contains(htmlReport, "<pre>") {
 		t.Fatalf("HTML event report was not generated: %v", err)
 	}
+	aiEvidence, ids, err := pg.EventAIEvidence(ctx, eventID)
+	if err != nil || len(ids) == 0 || !strings.Contains(aiEvidence, eventID) ||
+		strings.Contains(aiEvidence, "Event report outage") ||
+		strings.Contains(aiEvidence, "secret-report-password") {
+		t.Fatalf("AI evidence was not redacted or linked: %v", err)
+	}
+	if err := pg.RecordAIInvocation(ctx, eventID, "local-model", "success", ids[:1]); err != nil {
+		t.Fatal(err)
+	}
+	var auditCount int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE event_id=$1 AND kind='ai_invocation'`,
+		eventID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("AI invocation was not audited under the same event ID: %d %v", auditCount, err)
+	}
 }

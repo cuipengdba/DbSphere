@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/ai"
 	"github.com/cuipengdba/dbsphere/internal/config"
 	"github.com/cuipengdba/dbsphere/internal/httpapi"
 	"github.com/cuipengdba/dbsphere/internal/notify"
@@ -74,10 +75,20 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	remoteAI := os.Getenv("DBSPHERE_AI_ALLOW_REMOTE")
+	if remoteAI != "" && remoteAI != "true" && remoteAI != "false" {
+		return fmt.Errorf("DBSPHERE_AI_ALLOW_REMOTE must be true or false")
+	}
+	aiClient, err := ai.New(ai.Config{URL: os.Getenv("DBSPHERE_AI_CHAT_URL"),
+		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"),
+		AllowRemote: remoteAI == "true"})
+	if err != nil {
+		return err
+	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			SecureCookie: os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
-			OTLPToken:    cfg.OTLPToken}),
+			OTLPToken:    cfg.OTLPToken, AI: aiClient}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {

@@ -7,6 +7,7 @@ import (
 	"html"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type eventReportData struct {
@@ -46,19 +47,8 @@ func (s *Postgres) EventReport(ctx context.Context, id, format string) (string, 
 	if format != "md" && format != "html" {
 		return "", ErrInvalidInspection
 	}
-	value, err := s.EventByID(ctx, id)
+	data, err := s.loadEventReportData(ctx, id)
 	if err != nil {
-		return "", err
-	}
-	if value == nil {
-		return "", ErrEventNotFound
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	var data eventReportData
-	if err := json.Unmarshal(encoded, &data); err != nil {
 		return "", err
 	}
 	markdown := renderEventMarkdown(data)
@@ -71,6 +61,67 @@ func (s *Postgres) EventReport(ctx context.Context, id, format string) (string, 
 		"max-width:1000px;margin:32px auto;padding:0 20px;color:#243b53}" +
 		"pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}</style><pre>" +
 		html.EscapeString(markdown) + "</pre></html>", nil
+}
+
+func (s *Postgres) loadEventReportData(ctx context.Context, id string) (eventReportData, error) {
+	value, err := s.EventByID(ctx, id)
+	if err != nil {
+		return eventReportData{}, err
+	}
+	if value == nil {
+		return eventReportData{}, ErrEventNotFound
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return eventReportData{}, err
+	}
+	var data eventReportData
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		return eventReportData{}, err
+	}
+	return data, nil
+}
+
+// EventAIEvidence prepares an explicitly requested, redacted context for a model.
+func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []string, error) {
+	data, err := s.loadEventReportData(ctx, id)
+	if err != nil {
+		return "", nil, err
+	}
+	ids := make([]string, 0, len(data.Event.Evidence))
+	for _, item := range data.Event.Evidence {
+		ids = append(ids, item.ID)
+	}
+	data.Event.AssetName = "[资产名称已省略]"
+	data.Analysis.TraceCoverage.Services = nil
+	for i := range data.Analysis.Candidates {
+		if data.Analysis.Candidates[i].Review != nil {
+			data.Analysis.Candidates[i].Review.Reason = "[人工备注已省略]"
+		}
+	}
+	prompt := renderEventMarkdown(data)
+	if len(prompt) > 12000 {
+		cut := 12000
+		for !utf8.ValidString(prompt[:cut]) {
+			cut--
+		}
+		prompt = prompt[:cut] + "\n[后续证据已省略]"
+	}
+	return prompt, ids, nil
+}
+
+func (s *Postgres) RecordAIInvocation(ctx context.Context, eventID, model, status string, citedIDs []string) error {
+	if status != "success" && status != "failed" {
+		return ErrInvalidRCADecision
+	}
+	payload, err := json.Marshal(map[string]any{"model": model, "status": status,
+		"evidenceIds": citedIDs, "actor": "admin"})
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'ai_invocation',now(),$2)`, eventID, payload)
+	return err
 }
 
 func reportText(value string) string {

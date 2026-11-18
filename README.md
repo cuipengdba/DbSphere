@@ -17,7 +17,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 | 巡检与报告 | PostgreSQL、Linux、Kubernetes 和备份模板；手动与定时巡检、阈值版本、异常与未知项、历史差异、Markdown/HTML 报告及关联事件 ID。 |
 | SQL 性能 | Top SQL 指纹与趋势、退化线索、慢日志和执行计划安全导入；不保存原始 SQL 文本与参数。 |
 | 数据与部署 | 独立 PostgreSQL 18 保存长期监控数据；B/S 架构。提供容器化一键部署与离线部署方案，目标机无需安装 Node.js 或 Go 编译器。 |
-| AI 增强 | 规划可选模型接入，用于证据解读、预警建议和运维问答。**不接模型时**，采集、告警、巡检和规则分析仍应独立可用；模型不默认执行生产变更。 |
+| AI 增强 | Go 开发版可选接入兼容 Chat Completions 的本地或 HTTPS 模型，按事件请求脱敏证据解读，并校验证据 ID；预警建议和运维问答仍在规划。**不接模型时**，采集、告警、巡检和规则分析独立可用；模型不执行生产变更。 |
 
 ### 一个问题的全链路定位
 
@@ -36,6 +36,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 - [离线部署](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序与容器离线包的开发验收范围。
 - [Kubernetes 接入](docs/DEPLOYMENT_V0.2.md)：只读 ServiceAccount、Namespace 与指标权限。
 - [告警通知](docs/NOTIFICATIONS_V0.3.md)、[巡检报告](docs/INSPECTIONS_V0.4.md)、[SQL 性能](docs/SQL_PERFORMANCE_V0.5.md)：各功能的配置与使用。
+- [可选 AI 诊断](docs/AI_INTEGRATION.md)：Go 版接入方式、脱敏范围与故障回退。
 
 纳管目标建议使用专用 `pg_monitor` 账号，默认只读。仅有 PostgreSQL 连接串时只提供数据库侧观测；主机、K8S、连接池、备份和应用链路需要相应的数据源。对外访问应使用 HTTPS 入口。
 

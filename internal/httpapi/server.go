@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere"
+	"github.com/cuipengdba/dbsphere/internal/ai"
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	storepkg "github.com/cuipengdba/dbsphere/internal/store"
@@ -40,6 +41,7 @@ var rawSamplePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0
 var rawTracePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/traces/([0-9a-f]{32})$`)
 var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
+var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-summary$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
@@ -63,6 +65,10 @@ type EventStore interface {
 }
 type EventReportReader interface {
 	EventReport(context.Context, string, string) (string, error)
+}
+type EventAIStore interface {
+	EventAIEvidence(context.Context, string) (string, []string, error)
+	RecordAIInvocation(context.Context, string, string, string, []string) error
 }
 type AssetSectionReader interface {
 	ReadAssetSection(context.Context, string, string, url.Values) (any, error)
@@ -99,6 +105,7 @@ type AuthConfig struct {
 	PasswordHash string
 	SecureCookie bool
 	OTLPToken    string
+	AI           *ai.Client
 }
 
 type loginAttempt struct {
@@ -113,6 +120,8 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	}
 	var attemptsMu sync.Mutex
 	attempts := map[string]loginAttempt{}
+	var aiAttemptsMu sync.Mutex
+	aiAttempts := map[string]time.Time{}
 	static, err := fs.Sub(dbsphere.Assets, "public")
 	if err != nil {
 		panic(err)
@@ -272,6 +281,61 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/ai/status" {
+			if credentials.AI == nil {
+				respond(w, http.StatusOK, map[string]any{"enabled": false})
+			} else {
+				respond(w, http.StatusOK, map[string]any{"enabled": true, "model": credentials.AI.Model()})
+			}
+			return
+		}
+		if r.Method == http.MethodPost {
+			if match := eventAIPath.FindStringSubmatch(r.URL.Path); match != nil {
+				if credentials.AI == nil {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI model is not configured"})
+					return
+				}
+				aiStore, ok := store.(EventAIStore)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI evidence unavailable"})
+					return
+				}
+				prompt, ids, err := aiStore.EventAIEvidence(r.Context(), match[1])
+				if errors.Is(err, storepkg.ErrEventNotFound) {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI evidence unavailable"})
+					return
+				}
+				aiAttemptsMu.Lock()
+				last := aiAttempts[match[1]]
+				if time.Since(last) < 30*time.Second {
+					aiAttemptsMu.Unlock()
+					respond(w, http.StatusTooManyRequests, map[string]string{"error": "Please wait before requesting another AI summary"})
+					return
+				}
+				aiAttempts[match[1]] = time.Now()
+				aiAttemptsMu.Unlock()
+				result, modelErr := credentials.AI.Analyze(r.Context(), prompt, ids)
+				status := "success"
+				cited := result.EvidenceIDs
+				if modelErr != nil {
+					status, cited = "failed", nil
+				}
+				if err := aiStore.RecordAIInvocation(r.Context(), match[1], credentials.AI.Model(), status, cited); err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI audit unavailable"})
+					return
+				}
+				if modelErr != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI analysis unavailable; rule-based diagnosis remains available"})
+					return
+				}
+				respond(w, http.StatusOK, map[string]any{"result": result})
+				return
+			}
 		}
 		if r.Method == http.MethodPatch {
 			if match := inspectionTemplatePath.FindStringSubmatch(r.URL.Path); match != nil {
