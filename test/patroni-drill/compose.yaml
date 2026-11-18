@@ -1,0 +1,84 @@
+name: dbsphere-patroni-drill-ci
+
+services:
+  store:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: dbsphere
+      POSTGRES_DB: dbsphere
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_STORE_PASSWORD:?Generate the drill env file first}
+    volumes:
+      - store-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U dbsphere -d dbsphere']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
+      - --data-dir=/etcd-data
+
+  patroni1:
+    image: dbsphere/patroni-drill:local
+    build:
+      context: ../..
+      dockerfile: test/patroni-drill/Dockerfile
+    depends_on: [etcd]
+    environment:
+      PATRONI_NAME: patroni1
+      DBSPHERE_DRILL_PG_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+    ports:
+      - '127.0.0.1:18018:8008'
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 36
+
+  patroni2:
+    image: dbsphere/patroni-drill:local
+    depends_on:
+      patroni1:
+        condition: service_healthy
+    environment:
+      PATRONI_NAME: patroni2
+      DBSPHERE_DRILL_PG_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+    ports:
+      - '127.0.0.1:18019:8008'
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 36
+
+  app:
+    image: dbsphere/patroni-app-drill:local
+    depends_on:
+      store:
+        condition: service_healthy
+      patroni2:
+        condition: service_healthy
+    environment:
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store:5432/dbsphere?sslmode=disable
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_DRILL_ADMIN_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_DRILL_MASTER_KEY:?Generate the drill env file first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+    ports:
+      - '127.0.0.1:18097:8080'
+
+volumes:
+  store-data: {}

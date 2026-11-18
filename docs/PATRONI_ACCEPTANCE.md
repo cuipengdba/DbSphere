@@ -18,6 +18,25 @@ Go 后端没有调用切主、重启、重建副本等 Patroni 写接口。HTTP 
 
 本轮最终源码执行 `go test ./... -count=1`（连接隔离 PG18 测试库）、`go vet ./...` 和 `node --check public/app.js` 均通过。Go Linux 静态镜像还在本机 kind 的既有 PG18/K8S 资产上取得新成功样本，见[本机 Kubernetes 验收](KIND_ACCEPTANCE.md)。
 
+## 可重复故障演练
+
+仓库新增 `test/patroni-drill/` 与 `scripts/patroni-drill-acceptance.mjs`：使用一次性凭据，在隔离 Docker Compose 网络中启动两个 Patroni 4.1.5 + PostgreSQL 18 节点、etcd、独立 PG18 监控库及 Go 静态页面服务。脚本动态找出 leader，以 `pg_monitor` 账号纳管，停止 leader，要求得到 PG 不可用和无 leader 的真实样本，待原节点作为 streaming replica 重入后，检查**同一个事件 ID**中的告警、原始样本、根因候选、证据图、恢复和复盘报告。测试将 leader 规则持续时间临时设为 0 秒，结束时恢复为 30 秒。镜像构建需要联网安装测试用 Patroni；它不是 DbSphere 的离线交付镜像。
+
+本机首次运行揭示测试容器的本地 PostgreSQL socket 缺少 `pg_hba` 规则，修正后自动演练在第二次故障复跑通过，事件 `520f45e8-48ea-4599-8176-bf8eeba79fa6` 仅有一个已恢复的可用性事件；无 leader 样本 `400f5476-5543-40f8-92a6-59a37a7afd43` 与恢复样本 `f41020c2-2568-4a48-b0a3-b5ff8fde8747` 均在其证据图中。脱敏结果保存在本机 `H:\CodexLS\outputs\DbSphere-patroni-ci-local.json`。该演练已加入 GitHub CI，独立 runner 结果仍需核对。
+
+Linux 开发机可执行以下复现命令，`TMPDIR` 指向仓库外的临时目录，运行完成后删除一次性数据卷：
+
+```bash
+TMPDIR=$(mktemp -d)
+node scripts/replication-drill-secrets.mjs "$TMPDIR/patroni.env" "$TMPDIR/patroni-credentials.json"
+docker build -f test/patroni-drill/Dockerfile -t dbsphere/patroni-drill:local .
+docker build -f Dockerfile-go -t dbsphere/patroni-app-drill:local .
+docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.yaml up -d --wait --wait-timeout 300
+node scripts/patroni-drill-acceptance.mjs http://127.0.0.1:18097 \
+  "$TMPDIR/patroni-credentials.json" "$TMPDIR/patroni.env" "$TMPDIR/patroni-result.json"
+docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.yaml down -v --remove-orphans
+```
+
 ## 尚待验收
 
 本次只覆盖 PG18 双节点、单节点 DCS、同一台开发机和人工故障注入。PG14–17 Patroni 组合、三节点 DCS、Kubernetes Operator/StatefulSet、TLS/Basic Auth 生产证书、跨节点网络分区、长期负载、自动发现与真实业务 Trace 尚未测试。DbSphere 仍是只读监控，不承担 Patroni 的自动选主或故障切换。V1.0 任务保持未完成，见[开发任务](DEVELOPMENT_TASKS.md)。
