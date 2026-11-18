@@ -6,7 +6,7 @@
 
 2026-11-18 本机 kind 复验：既有 `dbsphere-test` 集群中，Go 服务的 PG18 存储、PG18/K8S/metrics-server 正常采样及只读 ServiceAccount 权限再次核对通过；临时探针故障使 PG 连接失败、Pod `Ready=False`、`Unhealthy` 事件与 `k8s_pod_not_ready` 候选归入事件 `4f76762c-191f-4fdc-bdad-77cc257b4b4d`，恢复后同一事件自动关闭。新 Go 镜像又读取真实 OOM 应用故障事件：3 条同期 Trace 中仅 1 条错误 Trace 被标为故障信号关联，原始 Trace 和复盘报告均可下钻。详见[本机 kind 验收](KIND_ACCEPTANCE.md)。跨服务链路、采样率和生产集群仍待发布门禁。
 
-Go 管理员密码可通过显式静态命令轮换；离线安装器新增 `--rotate-admin-password`，不会因普通重启而隐式替换凭据。管理员会话密钥绑定已存储的密码哈希，轮换后的旧会话失效。PG18 实库测试、本机 kind 旧密码 401/新密码登录及 Go 全量测试通过；离线安装器端到端 CI 正在验证。测试密码保存在 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`，正式部署随机生成独立凭据。
+Go 管理员密码可通过显式静态命令轮换；离线安装器新增 `--rotate-admin-password`，不会因普通重启而隐式替换凭据。管理员会话密钥绑定已存储的密码哈希，轮换后的旧会话失效。PG18 实库测试、本机 kind 旧密码 401/新密码登录、Go 全量测试和[22 作业 CI 的离线包轮换演练](https://github.com/cuipengdba/DbSphere/actions/runs/44282697078)均通过。测试密码保存在 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`，正式部署随机生成独立凭据。
 
 Go 应用场景 B 已在本机 kind 实测：真实 HTTP 请求在测试 PG18 Pod `OOMKilled` 后返回 502，错误服务/PG Span 经 Go OTLP 接口存入独立 PG18；PG 连接失败、K8S OOM 和中置信度根因候选汇入事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`。恢复内存限制后，自动跟随新 Pod 的成功样本 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 关闭该事件；应用再次请求成功。该演练仅证明单节点 kind 的一条应用故障链，故障前健康 Trace 也落入事件时间窗，影响面需按错误 Span 核对。完整证据及局限见[本机 kind 验收](KIND_ACCEPTANCE.md)。
 

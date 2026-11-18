@@ -26,7 +26,7 @@
 
 Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打开上述 OOM 事件，展开“查看应用请求关联证据”，看到“同期 Trace 3 条 · 故障信号关联 1 条”和准确的原始 Trace 链接；点击后浏览器读到 2 条错误 Span JSON。功能调用无脚本错误；导航到原始 JSON 时浏览器额外请求 `/favicon.ico` 返回 404，不影响 Trace 下钻。[该提交的 22 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44278562315)全部通过，覆盖 PG14–18 与既有离线部署门禁。Playwright 所需 Node/npm 只安装在本机开发工具目录，不属于 Go 静态部署包。
 
-管理员密码轮换复验：Go 开发版曾只在空库启动时初始化管理员密码，修改 K8S Secret 后新密码登录返回 401。补充显式 `rotate-admin-password` 静态命令后，将镜像 `dbsphere/kind-acceptance:admin-rotate` 装入 kind，在使用新 Secret 的 Go Pod 内执行该命令并滚动重启；旧密码登录返回 401，新密码登录为 `admin`、可读取原有 4 个资产，`/readyz` 仍报告 `postgresql18`。新密码只保存在本机 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`，未进入仓库。离线包同参数的完整流程还需 CI 验证。
+管理员密码轮换复验：Go 开发版曾只在空库启动时初始化管理员密码，修改 K8S Secret 后新密码登录返回 401。补充显式 `rotate-admin-password` 静态命令后，将镜像 `dbsphere/kind-acceptance:admin-rotate` 装入 kind，在使用新 Secret 的 Go Pod 内执行该命令并滚动重启；旧密码登录返回 401，新密码登录为 `admin`、可读取原有 4 个资产，`/readyz` 仍报告 `postgresql18`。新密码只保存在本机 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`，未进入仓库。[22 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44282697078)进一步通过 Go 离线包实际轮换、旧密码拒绝和旧会话失效检查。
 
 ### 标准 OpenTelemetry Collector 转发
 
