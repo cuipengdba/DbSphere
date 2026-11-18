@@ -352,7 +352,7 @@ func runPartitionMaintainer(ctx context.Context, pg *store.Postgres, log *slog.L
 }
 
 func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, eventDays int, log *slog.Logger) {
-	ticker := time.NewTicker(24 * time.Hour)
+	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
@@ -363,23 +363,27 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 		if eventDays > 0 {
 			eventCutoff = now.AddDate(0, 0, -eventDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			removed, err := pg.PruneResolvedEvents(sweepCtx, eventCutoff, 1000)
+			removed, more, err := drainRetention(sweepCtx, 1000, func(ctx context.Context, limit int) (int64, error) {
+				return pg.PruneResolvedEvents(ctx, eventCutoff, limit)
+			})
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				log.Error("Go event retention sweep failed", "error", err)
-			} else if removed > 0 {
-				log.Info("Go event retention sweep", "removed", removed)
+				log.Error("Go event retention sweep failed", "removed", removed, "error", err)
+			} else if removed > 0 || more {
+				log.Info("Go event retention sweep", "removed", removed, "backlogPossible", more)
 			}
 		}
 		if sampleDays > 0 {
 			sampleCutoff = now.AddDate(0, 0, -sampleDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			removed, err := pg.PruneSamples(sweepCtx, sampleCutoff, 10000)
+			removed, more, err := drainRetention(sweepCtx, 10000, func(ctx context.Context, limit int) (int64, error) {
+				return pg.PruneSamples(ctx, sampleCutoff, limit)
+			})
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				log.Error("Go sample retention sweep failed", "error", err)
-			} else if removed > 0 {
-				log.Info("Go sample retention sweep", "removed", removed)
+				log.Error("Go sample retention sweep failed", "removed", removed, "error", err)
+			} else if removed > 0 || more {
+				log.Info("Go sample retention sweep", "removed", removed, "backlogPossible", more)
 			}
 		}
 		sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -396,6 +400,32 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 		case <-ticker.C:
 		}
 	}
+}
+
+// drainRetention limits each hourly sweep by time, batch size and batch count.
+// A full last batch may leave a backlog for the next hour.
+func drainRetention(ctx context.Context, batchSize int, prune func(context.Context, int) (int64, error)) (int64, bool, error) {
+	const maxBatches = 100
+	var removed int64
+	for batch := range maxBatches {
+		count, err := prune(ctx, batchSize)
+		removed += count
+		if err != nil {
+			return removed, false, err
+		}
+		if count < int64(batchSize) {
+			return removed, false, nil
+		}
+		if batch == maxBatches-1 {
+			return removed, true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return removed, false, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return removed, true, nil
 }
 
 func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log *slog.Logger) {

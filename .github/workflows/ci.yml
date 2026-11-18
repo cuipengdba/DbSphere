@@ -63,6 +63,30 @@ jobs:
           curl --fail --silent -b "$RUNNER_TEMP/dbsphere-go-cookies" \
             http://127.0.0.1:18085/api/session | grep '"authenticated":true'
 
+  go-storage-retention-capacity:
+    runs-on: ubuntu-latest
+    services:
+      pg18:
+        image: postgres:18.7-bookworm@sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f
+        ports:
+          - 15434:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Drain 120000 samples and 5000 events from an isolated PostgreSQL 18 store
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_PG18_CAPACITY: '1'
+        run: go test ./cmd/dbsphere -run '^TestRunDataRetentionDrainsBacklog$' -count=1 -timeout 5m -v
+
   go-dependency-inventory:
     runs-on: ubuntu-latest
     steps:
