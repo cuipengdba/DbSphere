@@ -61,3 +61,60 @@ func TestDecodeRejectsInvalidAndExcessiveOTLP(t *testing.T) {
 		t.Fatal("unbounded scopes accepted")
 	}
 }
+
+func TestDecodeOnlyKeepsDatabaseAncestorChain(t *testing.T) {
+	now := time.Now().UTC()
+	attr := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	traceID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	makeSpan := func(id, parent string, db bool) map[string]any {
+		span := map[string]any{"traceId": traceID, "spanId": id, "parentSpanId": parent,
+			"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano()}
+		if db {
+			span["kind"] = 3
+			span["attributes"] = []any{attr("db.system.name", "postgresql"),
+				attr("server.address", "pg-a"), attr("server.port", "5432"), attr("db.namespace", "orders")}
+		}
+		return span
+	}
+	root := "1111111111111111"
+	parent := "2222222222222222"
+	db := "3333333333333333"
+	sibling := "4444444444444444"
+	unrelated := "5555555555555555"
+	body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource": map[string]any{"attributes": []any{attr("service.name", "checkout")}},
+		"scopeSpans": []any{map[string]any{"spans": []any{makeSpan(root, "", false),
+			makeSpan(parent, root, false), makeSpan(db, parent, true),
+			makeSpan(sibling, root, false), makeSpan(unrelated, "", false)}}}}}})
+	result, err := Decode(body, []Asset{{ID: "asset-a", Host: "pg-a", Port: 5432, Database: "orders"}}, now)
+	if err != nil || result.Received != 5 || result.Rejected != 2 || len(result.Spans) != 3 {
+		t.Fatalf("unrelated branch was retained: %+v %v", result, err)
+	}
+	for _, span := range result.Spans {
+		if span.SpanID == sibling || span.SpanID == unrelated || span.AssetID != "asset-a" {
+			t.Fatalf("trace crossed the database parent chain: %+v", span)
+		}
+	}
+}
+
+func TestDecodeRejectsAmbiguousSpanIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	attribute := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	span := map[string]any{"traceId": "cccccccccccccccccccccccccccccccc",
+		"spanId": "1111111111111111", "kind": 3,
+		"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano(),
+		"attributes": []any{attribute("db.system.name", "postgresql"),
+			attribute("server.address", "pg-a"), attribute("server.port", "5432"),
+			attribute("db.namespace", "orders")}}
+	body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource":   map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
+		"scopeSpans": []any{map[string]any{"spans": []any{span, span}}}}}})
+	result, err := Decode(body, []Asset{{ID: "asset-a", Host: "pg-a", Port: 5432, Database: "orders"}}, now)
+	if err != nil || result.Received != 2 || result.Rejected != 2 || len(result.Spans) != 0 {
+		t.Fatalf("ambiguous database span entered an asset: %+v %v", result, err)
+	}
+}

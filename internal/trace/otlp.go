@@ -161,10 +161,19 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 	}
 	accepted := map[string]bool{}
 	for _, group := range groups {
+		byID := map[string]parsedSpan{}
+		ambiguous := map[string]bool{}
+		for _, item := range group {
+			if _, exists := byID[item.SpanID]; exists {
+				ambiguous[item.SpanID] = true
+			}
+			byID[item.SpanID] = item
+		}
 		matched := map[string]bool{}
 		dbAsset := map[string]string{}
 		for _, item := range group {
-			if item.Kind != "postgresql_client" || item.address == "" || item.port < 1 || item.port > 65535 {
+			if item.Kind != "postgresql_client" || ambiguous[item.SpanID] ||
+				item.address == "" || item.port < 1 || item.port > 65535 {
 				continue
 			}
 			match := ""
@@ -182,8 +191,25 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 			}
 		}
 		for assetID := range matched {
+			include := map[string]bool{}
+			for spanID, mappedAsset := range dbAsset {
+				if mappedAsset != assetID {
+					continue
+				}
+				visited := map[string]bool{}
+				for current := spanID; current != "" && !visited[current]; {
+					visited[current] = true
+					item, exists := byID[current]
+					if !exists || ambiguous[current] ||
+						(item.Kind == "postgresql_client" && dbAsset[current] != assetID) {
+						break
+					}
+					include[current] = true
+					current = item.ParentSpanID
+				}
+			}
 			for _, item := range group {
-				if item.Kind == "postgresql_client" && dbAsset[item.SpanID] != assetID {
+				if !include[item.SpanID] {
 					continue
 				}
 				item.AssetID = assetID
