@@ -199,6 +199,31 @@ jobs:
           bash "${archive[0]}"
           curl --fail --silent http://127.0.0.1:8081/readyz
 
+      - name: Rotate Go offline administrator password and revoke old session
+        env:
+          DBSPHERE_NO_PRINT_PASSWORD: 'true'
+          DBSPHERE_GO_CONFIG_DIR: ${{ runner.temp }}/dbsphere-go-offline-config
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          env_file="$DBSPHERE_GO_CONFIG_DIR/dbsphere-go.env"
+          old_password="$(sed -n 's/^DBSPHERE_ADMIN_PASSWORD=//p' "$env_file" | head -n 1)"
+          jq -nc --arg password "$old_password" '{password:$password}' |
+            curl --fail --silent --show-error -c "$RUNNER_TEMP/dbsphere-old-admin-cookie" \
+              -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8081/api/login >/dev/null
+          new_password='dbsphere-rotated-ci-password'
+          sed -i "s/^DBSPHERE_ADMIN_PASSWORD=.*/DBSPHERE_ADMIN_PASSWORD=$new_password/" "$env_file"
+          bash "${archive[0]}" --rotate-admin-password
+          jq -nc --arg password "$new_password" '{password:$password}' |
+            curl --fail --silent --show-error -H 'Content-Type: application/json' \
+              --data-binary @- http://127.0.0.1:8081/api/login | jq -e '.role=="admin"' >/dev/null
+          test "$(curl --silent -o /dev/null -w '%{http_code}' \
+            -b "$RUNNER_TEMP/dbsphere-old-admin-cookie" http://127.0.0.1:8081/api/assets)" = 401
+          test "$(jq -nc --arg password "$old_password" '{password:$password}' |
+            curl --silent -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+              --data-binary @- http://127.0.0.1:8081/api/login)" = 401
+          curl --fail --silent http://127.0.0.1:8081/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+
       - name: Back up offline Go PG18 and restore into an independent PG18 container
         env:
           DBSPHERE_GO_CONFIG_DIR: ${{ runner.temp }}/dbsphere-go-offline-config

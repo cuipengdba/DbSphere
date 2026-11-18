@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
-  echo 'Usage: bash install.sh [--backup /absolute/output/directory]' >&2
+rotate_admin=false
+if [[ $# -eq 1 && "$1" == --rotate-admin-password ]]; then
+  rotate_admin=true
+elif [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
+  echo 'Usage: bash install.sh [--backup /absolute/output/directory | --rotate-admin-password]' >&2
   exit 1
 fi
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +40,10 @@ if [[ "$config_dir" != /* ]]; then echo 'DBSPHERE_GO_CONFIG_DIR must be absolute
 mkdir -p -- "$config_dir"
 chmod 0700 "$config_dir"
 env_file="$config_dir/dbsphere-go.env"
+if [[ "$rotate_admin" == true && ! -f "$env_file" ]]; then
+  echo 'Administrator password rotation requires an existing Go installation.' >&2
+  exit 1
+fi
 new_admin_password=''
 if [[ ! -e "$env_file" ]]; then
   umask 077
@@ -68,6 +75,14 @@ if [[ "$base" == "$bundle_dir/deploy/compose/compose.go.yaml" ]]; then
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" config -q
+if [[ "$rotate_admin" == true ]]; then
+  docker compose --env-file "$env_file" "${compose_args[@]}" \
+    -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
+    run --rm --no-deps --pull never app rotate-admin-password
+  docker compose --env-file "$env_file" "${compose_args[@]}" \
+    -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
+    up -d --no-build --pull never --no-deps --force-recreate app
+fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
   up -d --no-build --pull never --wait --wait-timeout 180

@@ -46,7 +46,7 @@ func TestAdministratorMutationAuditAndViewerBoundary(t *testing.T) {
 	}
 	stub := &adminAuditStub{}
 	handler := New(stub, AuthConfig{MasterKey: key, ViewerPasswordHash: viewerHash})
-	adminToken, err := security.CreateSession(key, time.Now())
+	adminToken, err := security.CreateSession(security.AdminSessionKey(key, ""), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

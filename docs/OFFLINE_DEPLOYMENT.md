@@ -14,6 +14,8 @@ Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版�
 
 如需 Go 控制台的只读查看账号，在 Go 配置文件 `dbsphere-go.env` 中增加 `DBSPHERE_VIEWER_PASSWORD`（至少 12 字符，且不同于管理员密码），然后重新运行同一安装包。更改该值并重启会轮换密码；移除该行并重启会停用账号，旧查看会话失效。默认可读取全部资产；如需限定范围，再设置 `DBSPHERE_VIEWER_ASSET_IDS=资产UUID1,资产UUID2` 并重启。资产 UUID 可从管理员登录后的资产列表或 URL 取得；白名单中填写不存在的 UUID 不会授予访问。受限账号无法读取全平台存储统计或修改任何数据。当前只有一个查看账号，尚无多用户/组织 RBAC。
 
+管理员密码只在空库首次启动时初始化；仅修改 `DBSPHERE_ADMIN_PASSWORD` 并重启不会轮换。要轮换现有安装，先在权限为 `0600` 的 `dbsphere-go.env` 中更改该值，再运行同一离线包的 `--rotate-admin-password` 参数。安装器在已运行的 PG18 存储中更新密码哈希，随后重建 Go 应用容器；旧管理员会话随密码哈希变化失效。源码 Compose 部署可在修改 `deploy/compose/.env.go` 后执行 `docker compose --env-file deploy/compose/.env.go -f deploy/compose/compose.go.yaml run --rm --no-deps app rotate-admin-password`，再重建应用容器。不要轮换 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
+
 Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发部署）或 `${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}/dbsphere-go.env`（离线包）追加 `DBSPHERE_KUBECONFIG_HOST_PATH=/absolute/path/to/read-only-kubeconfig` 后重新执行一键脚本。脚本校验文件存在并只读挂载；配置需使用静态 ServiceAccount token 和受信 CA，不执行 kubeconfig 中的 `exec` 凭据插件。Go K8S 适配器支持已映射 Pod 的状态、Node、Service、PVC/PV、Pod 事件与可用的 metrics.k8s.io，真实集群验收尚未完成。
 
 如已有 Prometheus 抓取 kubelet 的 `kubelet_volume_stats_used_bytes`，可在同一配置文件设置 `DBSPHERE_PROMETHEUS_URL=https://prometheus.example.internal`，需要 Bearer 令牌时再设置 `DBSPHERE_PROMETHEUS_TOKEN`，并重新运行一键脚本。此项可选；未配置或指标缺失时 PVC 使用率保持未知，不会误判为健康。Go 适配器按资产映射的 Namespace/PVC 查询，不接收浏览器指定的 Prometheus 地址。生产 Prometheus 仍待验收。

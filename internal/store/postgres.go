@@ -229,6 +229,27 @@ func (s *Postgres) AdminPasswordHash(ctx context.Context, bootstrapPassword stri
 	return stored, nil
 }
 
+// RotateAdminPassword is an explicit operation. Ordinary startup only uses
+// DBSPHERE_ADMIN_PASSWORD to bootstrap an empty store, so a configuration
+// change cannot silently replace an existing administrator credential.
+func (s *Postgres) RotateAdminPassword(ctx context.Context, password string) error {
+	if len(password) < 12 {
+		return errors.New("DBSPHERE_ADMIN_PASSWORD must contain at least 12 characters")
+	}
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash administrator password: %w", err)
+	}
+	result, err := s.pool.Exec(ctx, "UPDATE settings SET value=$1 WHERE key='admin_password_hash'", hash)
+	if err != nil {
+		return fmt.Errorf("rotate administrator password: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return errors.New("administrator password is not initialized")
+	}
+	return nil
+}
+
 // ViewerPasswordHash reconciles the optional global read-only account with
 // startup configuration. Removing the password disables the account.
 func (s *Postgres) ViewerPasswordHash(ctx context.Context, bootstrapPassword string) (string, error) {

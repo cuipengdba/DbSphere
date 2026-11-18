@@ -30,10 +30,33 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "rotate-admin-password" {
+		if err := rotateAdminPassword(); err != nil {
+			log.Error("DbSphere administrator password rotation failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("DbSphere administrator password rotated; restart the app to apply it")
+		return
+	}
 	if err := run(log); err != nil {
 		log.Error("DbSphere Go startup failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func rotateAdminPassword() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	pg, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pg.Close()
+	return pg.RotateAdminPassword(ctx, cfg.AdminPass)
 }
 
 func probeReady(ctx context.Context) error {

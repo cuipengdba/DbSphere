@@ -47,6 +47,21 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	if err != nil || kept != hash {
 		t.Fatal("existing administrator hash was replaced")
 	}
+	if err := store.RotateAdminPassword(context.Background(), "short"); err == nil {
+		t.Fatal("short administrator password was accepted for rotation")
+	}
+	if err := store.RotateAdminPassword(context.Background(), "rotated-administrator-password"); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := store.AdminPasswordHash(context.Background(), "ignored-bootstrap-password")
+	if err != nil || !security.VerifyPassword("rotated-administrator-password", rotated) ||
+		security.VerifyPassword("first-bootstrap-password", rotated) {
+		t.Fatal("administrator password rotation did not replace the stored hash", err)
+	}
+	if _, err := store.pool.Exec(context.Background(),
+		"UPDATE settings SET value=$1 WHERE key='admin_password_hash'", hash); err != nil {
+		t.Fatal("restore administrator hash after test", err)
+	}
 	for _, path := range []string{"/api/assets", "/api/events", "/api/alerts", "/api/alert-rules",
 		"/api/silences", "/api/notifications", "/api/storage", "/api/inspection-templates",
 		"/api/inspection-schedules", "/api/inspection-runs"} {

@@ -74,6 +74,20 @@ func TestViewerSessionCannotBeInterpretedAsAdmin(t *testing.T) {
 	}
 }
 
+func TestAdminSessionInvalidatedByPasswordRotation(t *testing.T) {
+	master := bytes.Repeat([]byte{9}, 32)
+	now := time.Now().UTC()
+	oldKey := AdminSessionKey(master, "old-password-hash")
+	token, err := CreateSession(oldKey, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifySession(oldKey, token, now) || VerifySession(AdminSessionKey(master, "new-password-hash"), token, now) ||
+		VerifySession(master, token, now) {
+		t.Fatal("administrator session survived password rotation or used the asset master key directly")
+	}
+}
+
 func TestNodeSessionCompatibility(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	token := "eyJleHAiOjk5OTk5OTk5OTk5OTksIm5vbmNlIjoiMDAwMTAyMDMwNDA1MDYwNzA4MDkwYTBiMGMwZDBlMGYifQ.Y2xRmFlsu57CkZsdF4CpJrytLZT-KR3qDiPFGN4hzBA"

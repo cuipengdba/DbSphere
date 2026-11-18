@@ -273,7 +273,8 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if cookie != nil {
 			token = cookie.Value
 		}
-		role, loggedIn := security.SessionRole(credentials.MasterKey, token, time.Now())
+		adminKey := security.AdminSessionKey(credentials.MasterKey, credentials.PasswordHash)
+		role, loggedIn := security.SessionRole(adminKey, token, time.Now())
 		if !loggedIn && credentials.ViewerPasswordHash != "" {
 			viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
 			role, loggedIn = security.SessionRole(viewerKey, token, time.Now())
@@ -328,7 +329,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
 				session, err = security.CreateViewerSession(viewerKey, time.Now())
 			} else {
-				session, err = security.CreateSession(credentials.MasterKey, time.Now())
+				session, err = security.CreateSession(adminKey, time.Now())
 			}
 			if err != nil {
 				respond(w, http.StatusInternalServerError, map[string]string{"error": "Session unavailable"})
