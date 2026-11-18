@@ -63,6 +63,38 @@ jobs:
           curl --fail --silent -b "$RUNNER_TEMP/dbsphere-go-cookies" \
             http://127.0.0.1:18085/api/session | grep '"authenticated":true'
 
+  go-dependency-inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify Go module downloads and install pinned audit tools
+        run: |
+          go mod verify
+          mkdir -p "$RUNNER_TEMP/dbsphere-tools"
+          GOBIN="$RUNNER_TEMP/dbsphere-tools" go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+          GOBIN="$RUNNER_TEMP/dbsphere-tools" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: Generate CycloneDX SBOM for the Linux Go application
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            "$RUNNER_TEMP/dbsphere-tools/cyclonedx-gomod" app \
+            -json -licenses -packages -main cmd/dbsphere \
+            -output "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" .
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
+            "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" >/dev/null
+      - name: Scan reachable Go vulnerabilities
+        run: "$RUNNER_TEMP/dbsphere-tools/govulncheck" ./...
+      - name: Preserve Go SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-go-linux-amd64-sbom
+          path: ${{ runner.temp }}/dbsphere-go-linux-amd64.cdx.json
+          if-no-files-found: warn
+
   go-pg-compat-matrix:
     runs-on: ubuntu-latest
     strategy:
