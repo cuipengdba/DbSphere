@@ -14,6 +14,8 @@
 
 最新 Go 镜像在本机单节点 kind 通过滚动替换与浏览器复验：Go Pod 1/1 Ready、PG18 存储就绪，旧 PG14 Patroni 主事件及关联遥测事件仍可读；新采集缺口面板显示实际 K8S/Patroni 状态。kind 调度器在初段因 API Server lease 超时重启，恢复后自行调度新 Pod，故不将此次过程写成生产 K8S 可靠性通过。见[本机 kind 验收](KIND_ACCEPTANCE.md)。
 
+V0.9 的事件复盘报告内容核对已完成：PG18 实库测试覆盖处置与成功样本恢复验证，本机 kind 的旧探针故障事件 `37821d0d-9309-4582-a37d-90314c49abef` 由新 Go Pod 返回 Markdown 报告 200，仍包含 `k8s_pod_not_ready` 根因候选、恢复样本 `6b60df49-f5a0-4cb5-8bf6-3ba6b8dbaf3e` 和证据时间线。报告有已观测影响与信号缺口，但不推断未接入 Trace 的业务影响。工单审批与个人操作人仍未实现。
+
 隔离 PG18 主备夹具新增真实 WAL 归档失败故障：测试命令使 `pg_stat_archiver.failed_count` 从 0 增加，Go 以 `pg_monitor` 只读账号采集后在事件 `8dad5aff-608f-4d86-9cab-3e94bd826cff` 关联 `pg_archive_failures` 告警、`wal_archive_failures` 候选、原始样本与报告；恢复归档命令后新失败数归零，恢复样本关闭原事件。第一次尝试因 PostgreSQL 命令行参数覆盖 `ALTER SYSTEM` 而未注入故障，调整夹具后本机通过。真实仓库、备份恢复和生产告警仍待验收，见[WAL 归档故障演练](WAL_ARCHIVE_DRILL.md)。
 
 独立 PG18 维护夹具又通过 autovacuum 参数故障：真实 `autovacuum=off` 采样在事件 `ffd4e827-8719-45b5-b8a4-2f5d2657cc3f` 产生告警、低置信度候选与报告；参数恢复为 `on` 后同一事件关闭。初次在主备容器上尝试遇到本机数据库进程重启，已恢复主库参数并改用隔离容器，不能将初次失败写成产品通过。候选不声称已证明业务查询变慢，见[autovacuum 演练](AUTOVACUUM_DRILL.md)。
