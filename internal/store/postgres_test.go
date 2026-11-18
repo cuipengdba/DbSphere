@@ -32,7 +32,7 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	}
 	var version, partitions int
 	if err := store.pool.QueryRow(context.Background(),
-		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 13 {
+		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 14 {
 		t.Fatalf("Go schema migration absent: %d %v", version, err)
 	}
 	if err := store.pool.QueryRow(context.Background(),
@@ -225,18 +225,21 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		}
 	}
 	traceID := strings.Repeat("a", 32)
-	for _, span := range []struct{ id, parent, kind string }{
-		{"1111111111111111", "", "service"},
-		{"2222222222222222", "1111111111111111", "postgresql_client"},
+	for _, span := range []struct {
+		id, parent, kind string
+		backendPID       int
+	}{
+		{"1111111111111111", "", "service", 0},
+		{"2222222222222222", "1111111111111111", "postgresql_client", 101},
 	} {
 		var parent any
 		if span.parent != "" {
 			parent = span.parent
 		}
 		if _, err := pg.pool.Exec(context.Background(), `INSERT INTO trace_spans
-			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
-			VALUES($1,$2,$3,$4,'api',$5,now()-interval '1 second',now(),'ok')`,
-			asset.ID, traceID, span.id, parent, span.kind); err != nil {
+			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid)
+			VALUES($1,$2,$3,$4,'api',$5,now()-interval '1 second',now(),'ok',$6)`,
+			asset.ID, traceID, span.id, parent, span.kind, optionalBackendPID(span.backendPID)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -264,7 +267,8 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	encoded, err := json.Marshal(detail)
 	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) ||
 		!strings.Contains(string(encoded), "connection_pressure") || !strings.Contains(string(encoded), "lock_chain") ||
-		!strings.Contains(string(encoded), "trace_lock_correlated") ||
+		!strings.Contains(string(encoded), "trace_lock_pid_matched") ||
+		!strings.Contains(string(encoded), "same_backend_pid") ||
 		!strings.Contains(string(encoded), "blocked_by") || !strings.Contains(string(encoded), "sql_fingerprint") ||
 		!strings.Contains(string(encoded), "scheduled_on") || !strings.Contains(string(encoded), "pvc:") ||
 		!strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), "parent_of") ||

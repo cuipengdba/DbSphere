@@ -68,6 +68,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record DbSphere Go schema migration: %w", err)
 		}
 	}
+	var tracePIDMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=14)").Scan(&tracePIDMigrated); err != nil {
+		return fmt.Errorf("check trace backend PID migration: %w", err)
+	}
+	if !tracePIDMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE trace_spans ADD COLUMN IF NOT EXISTS backend_pid integer"); err != nil {
+			return fmt.Errorf("migrate trace backend PID: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(14) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace backend PID migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

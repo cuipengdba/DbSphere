@@ -40,11 +40,11 @@ func (s *Postgres) SaveTraceSpans(ctx context.Context, spans []trace.Span) (int,
 			parent = span.ParentSpanID
 		}
 		result, err := tx.Exec(ctx, `INSERT INTO trace_spans
-			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 			span.TraceID, span.SpanID, parent, span.Service, span.Kind,
-			span.Start, span.End, span.Status)
+			span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID))
 		if err != nil {
 			return 0, fmt.Errorf("save OTLP span: %w", err)
 		}
@@ -54,6 +54,13 @@ func (s *Postgres) SaveTraceSpans(ctx context.Context, spans []trace.Span) (int,
 		return 0, err
 	}
 	return imported, nil
+}
+
+func optionalBackendPID(value int) any {
+	if value > 0 {
+		return value
+	}
+	return nil
 }
 
 func (s *Postgres) PruneTraceSpans(ctx context.Context, days int) (int64, error) {

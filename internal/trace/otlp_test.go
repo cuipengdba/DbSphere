@@ -118,3 +118,37 @@ func TestDecodeRejectsAmbiguousSpanIdentity(t *testing.T) {
 		t.Fatalf("ambiguous database span entered an asset: %+v %v", result, err)
 	}
 }
+
+func TestDecodeKeepsOnlyValidatedBackendPIDOnDatabaseSpan(t *testing.T) {
+	now := time.Now().UTC()
+	attribute := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	build := func(pid string) []byte {
+		span := map[string]any{
+			"traceId": "dddddddddddddddddddddddddddddddd", "spanId": "1111111111111111",
+			"kind": 3, "startTimeUnixNano": now.Add(-time.Second).UnixNano(),
+			"endTimeUnixNano": now.UnixNano(), "attributes": []any{
+				attribute("db.system.name", "postgresql"), attribute("server.address", "pg-a"),
+				attribute("server.port", "5432"), attribute("db.namespace", "orders"),
+				attribute("dbsphere.pg.backend_pid", pid), attribute("db.statement", "SELECT secret")}}
+		resource := map[string]any{"resource": map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
+			"scopeSpans": []any{map[string]any{"spans": []any{span}}}}
+		body, _ := json.Marshal(map[string]any{"resourceSpans": []any{resource}})
+		return body
+	}
+	assets := []Asset{{ID: "asset-a", Host: "pg-a", Port: 5432, Database: "orders"}}
+	for _, test := range []struct {
+		raw      string
+		expected int
+	}{{"101", 101}, {"0", 0}, {"-1", 0}, {"2147483648", 0}, {"101.5", 0}} {
+		result, err := Decode(build(test.raw), assets, now)
+		if err != nil || len(result.Spans) != 1 || result.Spans[0].BackendPID != test.expected {
+			t.Fatalf("backend PID %q was not validated: %+v %v", test.raw, result, err)
+		}
+		encoded, _ := json.Marshal(result.Spans[0])
+		if strings.Contains(string(encoded), "secret") {
+			t.Fatal("SQL text entered decoded span")
+		}
+	}
+}

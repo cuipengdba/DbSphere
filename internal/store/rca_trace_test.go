@@ -37,3 +37,42 @@ func TestTraceLockCandidateRequiresParentAndObservedLock(t *testing.T) {
 		t.Fatal("distant lock sample became a trace candidate")
 	}
 }
+
+func TestTraceLockCandidateMatchesReportedBackendPID(t *testing.T) {
+	now := time.Now().UTC()
+	event := &eventRecord{ID: "event", StartedAt: now}
+	span := traceDBSpan{Node: "span:trace:db", Parent: "span:trace:app", Service: "checkout",
+		Start: now.Add(-time.Second), End: now, BackendPID: 101}
+	parents := map[string]bool{span.Node: true, span.Parent: true}
+	makeSample := func(waiting int, at time.Time) sampleObservation {
+		return sampleObservation{ID: "sample", At: at, Status: "ok", Metrics: map[string]any{
+			"diagnostics": map[string]any{"lockChain": map[string]any{"status": "ok",
+				"data": []any{map[string]any{"waitingPid": waiting, "blockerPid": 202}}}}}}
+	}
+	make := func(sample sampleObservation) (map[string]any, []map[string]string) {
+		edges := []map[string]string{}
+		candidate := traceLockCandidate(event, map[string]sampleObservation{"sample": sample},
+			[]traceDBSpan{span}, parents, func(string, string, string, string, any) {}, &edges)
+		return candidate, edges
+	}
+	candidate, edges := make(makeSample(101, now))
+	if candidate == nil || candidate["code"] != "trace_lock_pid_matched" ||
+		candidate["confidence"] != "medium" {
+		t.Fatalf("exact backend PID did not strengthen the same-event candidate: %+v", candidate)
+	}
+	linked := false
+	for _, edge := range edges {
+		if edge["relation"] == "same_backend_pid" && edge["from"] == span.Node && edge["to"] == "sample:sample" {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Fatal("PID-matched trace did not point to raw sample")
+	}
+	if candidate, _ := make(makeSample(999, now)); candidate != nil {
+		t.Fatal("different waiting PID became a direct application lock diagnosis")
+	}
+	if candidate, _ := make(makeSample(101, now.Add(30*time.Second))); candidate != nil {
+		t.Fatal("distant PID sample became a direct application lock diagnosis")
+	}
+}

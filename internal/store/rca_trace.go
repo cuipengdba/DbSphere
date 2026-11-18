@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"time"
 )
@@ -9,6 +10,7 @@ import (
 type traceDBSpan struct {
 	Node, Parent, Service string
 	Start, End            time.Time
+	BackendPID            int
 }
 
 // traceLockCandidate preserves the application → database span → PG lock sample
@@ -33,8 +35,12 @@ func traceLockCandidate(event *eventRecord, samples map[string]sampleObservation
 		}
 		for _, id := range sampleIDs {
 			sample := samples[id]
-			if sample.Status != "ok" || sample.At.Before(span.Start.Add(-time.Minute)) ||
-				sample.At.After(span.End.Add(time.Minute)) {
+			window := time.Minute
+			if span.BackendPID > 0 {
+				window = 5 * time.Second
+			}
+			if sample.Status != "ok" || sample.At.Before(span.Start.Add(-window)) ||
+				sample.At.After(span.End.Add(window)) {
 				continue
 			}
 			chain := object(object(sample.Metrics["diagnostics"])["lockChain"])
@@ -42,8 +48,36 @@ func traceLockCandidate(event *eventRecord, samples map[string]sampleObservation
 			if stringValue(chain["status"]) != "ok" || len(pairs) == 0 {
 				continue
 			}
+			matchedBlocker := 0
+			if span.BackendPID > 0 {
+				for _, pair := range pairs {
+					row := object(pair)
+					waiting, waitingOK := numeric(row["waitingPid"])
+					blocker, blockerOK := numeric(row["blockerPid"])
+					if waitingOK && blockerOK && waiting == float64(span.BackendPID) &&
+						blocker > 0 && blocker == math.Trunc(blocker) {
+						matchedBlocker = int(blocker)
+						break
+					}
+				}
+				if matchedBlocker == 0 {
+					continue
+				}
+			}
 			code := "trace_lock_correlated"
 			title := "应用数据库调用变慢与锁阻塞同期出现"
+			confidence := "low"
+			missing := []string{"Trace 未包含 PostgreSQL 后端 PID，未证实该请求等待于所见锁链"}
+			limitation := "慢调用与锁阻塞在同一资产和时间窗出现，只能提示排查方向，不能证明同一 SQL 或唯一根因。"
+			if span.BackendPID > 0 {
+				code = "trace_lock_pid_matched"
+				title = "应用数据库会话与锁等待 PID 匹配"
+				confidence = "medium"
+				missing = []string{"仍需核对 SQL 指纹及阻塞事务的业务原因"}
+				limitation = "应用埋点报告的后端 PID 与近期 PG 锁样本匹配；PID 可能复用，不能仅凭此证明业务根因。"
+				*edges = append(*edges, map[string]string{"from": span.Node,
+					"to": "sample:" + sample.ID, "relation": "same_backend_pid"})
+			}
 			candidateNode := "candidate:" + code
 			add(candidateNode, "candidate", title, "/api/events/"+event.ID, sample.At)
 			supports := []string{span.Parent, span.Node, "sample:" + sample.ID}
@@ -75,11 +109,12 @@ func traceLockCandidate(event *eventRecord, samples map[string]sampleObservation
 				relation = "after_event"
 			}
 			return map[string]any{
-				"code": code, "title": title, "confidence": "low", "supports": supports,
-				"against": []string{}, "missing": []string{"Trace 未包含 PostgreSQL 后端 PID，未证实该请求等待于所见锁链"},
-				"limitation": "慢调用与锁阻塞在同一资产和时间窗出现，只能提示排查方向，不能证明同一 SQL 或唯一根因。",
+				"code": code, "title": title, "confidence": confidence, "supports": supports,
+				"against": []string{}, "missing": missing,
+				"limitation": limitation,
 				"detail": map[string]any{"service": span.Service,
-					"databaseSpanMs": span.End.Sub(span.Start).Milliseconds(), "lockPairs": len(pairs)},
+					"databaseSpanMs": span.End.Sub(span.Start).Milliseconds(), "lockPairs": len(pairs),
+					"backendPid": optionalBackendPID(span.BackendPID), "blockerPid": optionalBackendPID(matchedBlocker)},
 				"state": "hypothesis", "matchedConditions": []any{}, "review": review,
 				"timeOrder": map[string]any{"firstObservedAt": sample.At,
 					"eventStartedAt": event.StartedAt, "relation": relation},

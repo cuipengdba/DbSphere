@@ -6,6 +6,8 @@ Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces`
 
 Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存该 PG 资产对应的父链；同一 Trace 中的旁支服务 Span 和不相关请求不再进入该资产的事件图。重复 Span ID 视为歧义，跨其他 PG 资产的数据库父链在边界处停止。单元测试覆盖共享父链、旁支和不相关 Span；真实示例应用仍待验收。
 
+自定义可选属性 `dbsphere.pg.backend_pid` 可由有能力取得当前 PostgreSQL 会话 PID 的应用埋点写在数据库客户端 Span 上。Go 仅保留 1 至 2147483647 的整数，并通过 PG18 schema 版本 14 存储。若同资产锁链样本的等待 PID 相同且采样时间在 Span 前后五秒内，事件根因图增加 `same_backend_pid` 连接与中置信度候选；不匹配时不推断该锁链属于请求。该属性不是 OpenTelemetry 标准 PostgreSQL 字段，也不要求普通 SDK 自动提供；PID 仍可能复用，须结合时间和 SQL/事务证据人工复核。无该属性时保持低置信度同窗分析。
+
 ## 已实现的首段链路
 
 - 可选 `POST /v1/traces` 接收 **OTLP/HTTP JSON** 的 `resourceSpans`。设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN` 后启用；未设置时接口关闭。请求使用 `Authorization: Bearer <token>`，限制 1 MiB 和 256 个 Span。
