@@ -95,3 +95,5 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 ### 2026-11-19 Go 保留期代码滚动复验
 
 提交 `cedd75c` 新增 Go/PG18 可选历史数据保留期，[31 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44397517514)全部通过。以 `dbsphere/kind-acceptance:retention-cedd75c` 在原单节点 kind Namespace 滚动更新 Go Deployment；新 Pod `dbsphere-go-7bf76986bd-vrdf5` 1/1 Ready、0 次重启，`/readyz` 返回 `ready/postgresql18`。原 OOM 闭环事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍为 `resolved`，读回 8 条证据和 1 条根因候选；事件列表仍有 17 条，PG18 存储状态显示 122 条样本。测试集群未设置样本或事件保留期，控制台 API 两项均为 `null`，本次只证明关闭自动清理时升级不丢已核对数据。清理逻辑另由隔离 PG18 集成测试验证，生产容量与备份恢复仍待验收。
+
+另在同一测试 Namespace 临时摘除 PG18 Service 的 Pod selector。原 Go 进程仍持有有效的 PG18 TCP 连接，因此 `/readyz` 继续返回 200；这一步不能算真实存储失联。保持 Service 无端点时滚动重启 Go Deployment，新 Pod `dbsphere-go-68b9c878c6-2nhlv` 未就绪，前次启动日志记录连接 `dbsphere-go-store:5432` 被拒绝。恢复原 Service selector 后，Deployment 完成滚动并就绪（该 Pod 曾重启 1 次）；API 再次读回同一事件的 8 条证据、1 条候选、122 条样本和 17 个事件。存储 Pod 始终运行，避免其 `emptyDir` 测试卷被删除。此演练仅覆盖新进程启动时 PG18 无法连接及恢复，未覆盖运行中 TCP 断连、持久卷损坏或生产备份恢复。
