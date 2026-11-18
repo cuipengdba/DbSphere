@@ -39,6 +39,54 @@ type eventRecord struct {
 	Evidence       []eventEvidence `json:"evidence"`
 }
 
+type relatedEventRecord struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	EventGroup     string `json:"eventGroup"`
+	Status         string `json:"status"`
+	SharedSampleID string `json:"sharedSampleId"`
+}
+
+// A shared original sample is an exact link between incidents, not a claim that
+// either incident caused the other. Keep the query within the same asset.
+func (s *Postgres) relatedEvents(ctx context.Context, event *eventRecord) ([]relatedEventRecord, error) {
+	ids := make([]string, 0, len(event.Evidence))
+	seen := make(map[string]bool)
+	for _, item := range event.Evidence {
+		var payload struct {
+			SampleID string `json:"sampleId"`
+		}
+		if json.Unmarshal(item.Payload, &payload) == nil && evidenceUUID.MatchString(payload.SampleID) && !seen[payload.SampleID] {
+			seen[payload.SampleID] = true
+			ids = append(ids, payload.SampleID)
+		}
+	}
+	result := []relatedEventRecord{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT e.id::text,e.title,e.event_group,e.status,
+		MIN(ev.payload_json->>'sampleId')
+		FROM events e JOIN evidence ev ON ev.event_id=e.id
+		WHERE e.asset_id=$1 AND e.id<>$2
+		  AND e.event_group IN ('availability','telemetry')
+		  AND ev.payload_json->>'sampleId'=ANY($3::text[])
+		GROUP BY e.id,e.title,e.event_group,e.status,e.started_at
+		ORDER BY e.started_at DESC LIMIT 10`, event.AssetID, event.ID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read related events: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row relatedEventRecord
+		if err := rows.Scan(&row.ID, &row.Title, &row.EventGroup, &row.Status, &row.SharedSampleID); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 type serviceTraceImpact struct {
 	Service          string    `json:"service"`
 	Spans            int       `json:"spans"`
@@ -90,6 +138,10 @@ func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, erro
 func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	event, err := s.loadEvent(ctx, id)
 	if err != nil || event == nil {
+		return nil, err
+	}
+	related, err := s.relatedEvents(ctx, event)
+	if err != nil {
 		return nil, err
 	}
 	eventNode := "event:" + event.ID
@@ -295,7 +347,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
 			"services": services, "serviceImpact": impactList, "atLimit": traceCount == 100},
 	}
-	return map[string]any{"event": event, "analysis": analysis}, nil
+	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related}, nil
 }
 
 func (s *Postgres) AcknowledgeEvent(ctx context.Context, id string) (any, error) {

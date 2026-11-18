@@ -6,6 +6,8 @@
 .layer-nav button.active{background:#245ea7;color:#fff;filter:none}
 .asset-layer{min-width:0}
 .asset-layer>h3:first-child{margin-top:0}
+.event-highlights{margin-top:18px}.event-highlights h4{margin:0 0 10px}.event-highlights .evidence{margin:7px 0}
+.event-timeline{margin-top:14px}.event-timeline summary{cursor:pointer;color:#245ea7;font-weight:600}
 .rule-card{border:1px solid #dce7ed;border-radius:9px;padding:10px 12px;font-size:13px}.rule-card summary{cursor:pointer;color:#275667}.rule-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.rule-form label{display:grid;gap:4px;color:#405b68}.rule-form input,.rule-form select{min-width:0;border:1px solid #cbdbe2;border-radius:7px;padding:7px}.rule-form input[type="checkbox"]{justify-self:start}.rule-form button{grid-column:1/-1}@media(max-width:600px){.rule-form{grid-template-columns:1fr}}
 .list-item>.event-button{flex:1;width:auto;overflow-wrap:anywhere}
 

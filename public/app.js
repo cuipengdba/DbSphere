@@ -792,7 +792,7 @@ function resetEdit() {
 
 async function showEvent(id) {
   setView('incidents');
-  const { event, analysis } = await api(`/api/events/${id}`);
+  const { event, analysis, relatedEvents = [] } = await api(`/api/events/${id}`);
   const eventAudit = currentRole === 'admin' ? await api(`/api/events/${id}/audit`).catch(() => null) : null;
   selectedEvent = id;
   for (const button of $('event-list').querySelectorAll('[data-event-id]')) {
@@ -803,6 +803,19 @@ async function showEvent(id) {
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
   target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));
+  if (relatedEvents.length) {
+    const related = document.createElement('details'); related.className = 'evidence';
+    related.append(cell('summary', `查看共享原始样本的其他事件（${relatedEvents.length}）`));
+    for (const item of relatedEvents) {
+      const row = document.createElement('p');
+      const button = cell('button', `${item.eventGroup === 'telemetry' ? '采集缺口' : '可用性'} · ${item.title} · ${item.status === 'open' ? '处理中' : '已恢复'}`, 'ghost small-button');
+      button.addEventListener('click', () => showEvent(item.id));
+      row.append(button, cell('small', ` 事件 ID ${item.id} · 共享样本 ${item.sharedSampleId}`));
+      related.append(row);
+    }
+    related.append(cell('small', '共享样本表示两个事件记录了同一次采样，不证明它们具有相同根因。'));
+    target.append(related);
+  }
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
   diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
@@ -971,6 +984,17 @@ async function showEvent(id) {
     } catch (error) { notice(error.message, true); }
   });
   target.append(responseForm);
+  const condensedTimeline = event.evidence.length > 12;
+  const highlights = document.createElement('div'); highlights.className = 'event-highlights';
+  if (condensedTimeline) highlights.append(cell('h4', '关键时间节点'));
+  const timeline = document.createElement('details'); timeline.className = 'settings-details event-timeline';
+  timeline.open = !condensedTimeline;
+  timeline.append(cell('summary', `完整证据时间线（${event.evidence.length} 条）`));
+  const timelineEntries = document.createElement('div'); timeline.append(timelineEntries);
+  if (condensedTimeline) target.append(highlights);
+  target.append(timeline);
+  let highlightCount = 0;
+  let highlightedNoLeader = false;
   for (const evidence of event.evidence) {
     let text = evidence.payload.error || evidence.payload.sampleId || '';
     if (evidence.kind === 'k8s_state') text = k8sStateText(evidence.payload);
@@ -1006,8 +1030,19 @@ async function showEvent(id) {
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') text =
       `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
-    target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
+    const row = cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence');
+    timelineEntries.append(row);
+    const noLeader = evidence.kind === 'patroni_state' && evidence.payload?.leaderCount === 0;
+    if (condensedTimeline && highlightCount < 8 && (
+      evidence.kind === 'alert_firing' || evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered' ||
+      evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' ||
+      (noLeader && !highlightedNoLeader))) {
+      highlights.append(row.cloneNode(true));
+      highlightCount++;
+      if (noLeader) highlightedNoLeader = true;
+    }
   }
+  if (condensedTimeline && !highlightCount) highlights.append(cell('p', '暂无可提炼的关键节点，请展开完整证据时间线。', 'empty'));
 }
 
 async function boot() {

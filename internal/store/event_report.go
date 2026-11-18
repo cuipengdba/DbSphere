@@ -18,8 +18,9 @@ var ErrAIAlreadyAnalyzed = errors.New("automatic AI analysis already reserved fo
 var ErrAIEventNotEligible = errors.New("event is not eligible for automatic AI analysis")
 
 type eventReportData struct {
-	Event    eventRecord `json:"event"`
-	Analysis struct {
+	Event         eventRecord          `json:"event"`
+	RelatedEvents []relatedEventRecord `json:"relatedEvents"`
+	Analysis      struct {
 		Status         string   `json:"status"`
 		MissingSignals []string `json:"missingSignals"`
 		TraceCoverage  struct {
@@ -112,6 +113,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 		}
 	}
 	data.Event.AssetName = "[资产名称已省略]"
+	data.RelatedEvents = nil
 	data.Analysis.TraceCoverage.Services = nil
 	data.Analysis.TraceCoverage.ServiceImpact = nil
 	for i := range data.Analysis.Candidates {
@@ -342,6 +344,15 @@ func renderEventMarkdown(data eventReportData) string {
 		reportText(event.Title), event.ID, reportText(event.AssetName), event.AssetID,
 		reportText(event.Status), reportTime(&event.StartedAt), reportTime(event.EndedAt),
 		reportTime(event.AcknowledgedAt))
+	if len(data.RelatedEvents) > 0 {
+		out.WriteString("## 同一原始样本关联的其他事件\n\n")
+		for _, related := range data.RelatedEvents {
+			fmt.Fprintf(&out, "- [%s](/api/events/%s)：%s（%s，%s）；共享样本 %s。\n",
+				reportText(related.ID), related.ID, reportText(related.Title),
+				reportText(related.EventGroup), reportText(related.Status), reportText(related.SharedSampleID))
+		}
+		out.WriteString("共享原始样本仅证明两个事件记录了同一次采样，不证明相同根因。\n\n")
+	}
 	out.WriteString("## 应用链路覆盖\n\n")
 	fmt.Fprintf(&out, "Span %d 条，其中 PostgreSQL 客户端 Span %d 条；服务：%s。采样率和时钟偏移尚未验证。\n\n",
 		data.Analysis.TraceCoverage.Spans, data.Analysis.TraceCoverage.DatabaseSpans,

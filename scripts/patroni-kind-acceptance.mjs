@@ -180,18 +180,25 @@ assert.ok(closing?.payload?.sampleId);
 const candidate = detail.analysis.candidates.find(row => row.code === 'patroni_leader_anomaly');
 assert.ok(candidate?.supports.includes(`sample:${noLeaderSample.id}`));
 assert.ok(detail.analysis.graph.nodes.some(row => row.id === `sample:${closing.payload.sampleId}`));
+const telemetryEvents = events.filter(row => row.eventGroup === 'telemetry');
+for (const telemetry of telemetryEvents) {
+  assert.ok(detail.relatedEvents?.some(row => row.id === telemetry.id &&
+    row.eventGroup === 'telemetry' && row.sharedSampleId === unavailableSample.id),
+    'same-sample telemetry gap must link from the availability incident');
+}
 const reportResponse = await fetch(`${base}/api/events/${eventId}/report?format=md`,
   { headers: { Cookie: cookie }, signal: AbortSignal.timeout(20000) });
 assert.equal(reportResponse.status, 200);
 const report = await reportResponse.text();
 assert.ok(report.includes(eventId) && report.includes('patroni_leader_anomaly') &&
   report.includes(noLeaderSample.id), 'report must preserve the availability evidence chain');
+for (const telemetry of telemetryEvents) assert.ok(report.includes(telemetry.id));
 const result = { eventId, assetId: asset.id, targetPGMajor: Number(major), leader, survivor,
   noLeaderSampleId: noLeaderSample.id, unavailableSampleId: unavailableSample.id,
   recoverySampleId: closing.payload.sampleId, rejoinSampleId: recovery.id,
   status: detail.event.status, candidate: candidate.code,
   k8sPod: recovery.metrics.k8s?.pod?.name,
-  telemetryEventIds: events.filter(row => row.eventGroup === 'telemetry').map(row => row.id),
+  telemetryEventIds: telemetryEvents.map(row => row.id),
   storage: 'postgresql18' };
 writeFileSync(resultPath, JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

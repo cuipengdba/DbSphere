@@ -49,6 +49,8 @@ docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.ya
 
 修正断言后再次演练通过：PG14 基线样本 `29a7b368-c65d-432e-8ccb-3404f37fc8dc`，无 leader 样本 `4e5936c2-d5eb-4406-adc3-bf28f77804be`，PG 不可用样本 `eb12d2dc-3283-4846-bd9c-1a9013738bc4`，恢复样本 `b2822229-4802-45df-8a3f-c4e196179eb1`；可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b` 在同一 ID 下关联 Patroni/K8S 状态、`patroni_leader_invalid` 告警、`patroni_leader_anomaly` 候选与恢复，状态为 `resolved`。该事件的 Markdown 复盘报告返回 200，并包含事件 ID、候选代码和无 leader 样本 ID。单独的遥测事件为 `536500d4-a2da-4e3a-9504-bb47d5c2d0bf`。脱敏结果保存在本机 `H:\CodexLS\outputs\DbSphere-patroni-kind-pg14.json`。测试期间 Patroni leader 告警持续时间设为 0 秒以捕获选主窗口，结束后恢复默认 30 秒。
 
+跨事件下钻补充：Go 事件 API 现在只用**同资产、同一原始样本 ID**关联单独的遥测事件，双向返回事件 ID、状态和共享样本；浏览器可从主可用性事件打开采集缺口事件，Markdown 报告也列出链接。模型证据包省略关联事件详情，不扩大外发范围。PG18 实库测试验证精确匹配、反向链接、不同样本及跨资产隔离；本机 kind 既有事件复验确认主事件关联遥测事件 `536500d4-a2da-4e3a-9504-bb47d5c2d0bf`，共享样本 `eb12d2dc-3283-4846-bd9c-1a9013738bc4`，报告包含该事件链接。共享样本只证明同一次采集，不把采集缺口解释为故障根因。
+
 复现前需有 `dbsphere-smoke` 测试 Namespace、已运行的 Go 服务与独立 PG18、镜像 `dbsphere/patroni-drill:local` 已导入 kind，以及只包含 `DBSPHERE_DRILL_PG_PASSWORD`、`DBSPHERE_DRILL_REPL_PASSWORD` 的 `dbsphere-patroni-drill` Secret。管理员 kubeconfig 只供测试脚本故障注入；Go 服务继续使用 Namespace 内只读 ServiceAccount。对 Go 服务做本机端口转发后运行：
 
 ```powershell
