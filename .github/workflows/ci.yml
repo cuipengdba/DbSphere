@@ -316,6 +316,49 @@ jobs:
             psql -h 127.0.0.1 -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
           test "$version" -ge 20
 
+  container-vulnerability-inventory:
+    needs: go-offline-package
+    runs-on: ubuntu-latest
+    env:
+      GRYPE_DB_CACHE_DIR: ${{ runner.temp }}/dbsphere-grype-db
+      GRYPE_CHECK_FOR_APP_UPDATE: 'false'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dbsphere-offline-image-sboms
+          path: ${{ runner.temp }}/dbsphere-image-sboms
+      - name: Scan both bundled image SBOMs with pinned Grype
+        run: |
+          mkdir -p "$RUNNER_TEMP/dbsphere-grype"
+          curl -fLsS -o "$RUNNER_TEMP/dbsphere-grype/grype.tar.gz" \
+            https://github.com/anchore/grype/releases/download/v0.122.1/grype_0.122.1_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            f1ba7e2917ee1395618de20a98da0aa7c0fb1788927797651047c50502a37538 \
+            "$RUNNER_TEMP/dbsphere-grype/grype.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/dbsphere-grype/grype.tar.gz" -C "$RUNNER_TEMP/dbsphere-grype" grype
+          "$RUNNER_TEMP/dbsphere-grype/grype" \
+            "sbom:$RUNNER_TEMP/dbsphere-image-sboms/dbsphere-go-image.cdx.json" \
+            --output json > "$RUNNER_TEMP/dbsphere-go-image-vulnerabilities.json"
+          "$RUNNER_TEMP/dbsphere-grype/grype" \
+            "sbom:$RUNNER_TEMP/dbsphere-image-sboms/dbsphere-postgres18-image.cdx.json" \
+            --output json > "$RUNNER_TEMP/dbsphere-postgres18-image-vulnerabilities.json"
+          jq -e '.matches | type == "array"' \
+            "$RUNNER_TEMP/dbsphere-go-image-vulnerabilities.json" >/dev/null
+          jq -e '.matches | type == "array"' \
+            "$RUNNER_TEMP/dbsphere-postgres18-image-vulnerabilities.json" >/dev/null
+          jq -n --slurpfile app "$RUNNER_TEMP/dbsphere-go-image-vulnerabilities.json" \
+            --slurpfile store "$RUNNER_TEMP/dbsphere-postgres18-image-vulnerabilities.json" \
+            '{go_matches:($app[0].matches|length),postgres18_matches:($store[0].matches|length)}'
+      - name: Preserve container vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-offline-image-vulnerability-reports
+          path: |
+            ${{ runner.temp }}/dbsphere-go-image-vulnerabilities.json
+            ${{ runner.temp }}/dbsphere-postgres18-image-vulnerabilities.json
+          if-no-files-found: warn
+
   go-offline-upgrade-rollback:
     runs-on: ubuntu-latest
     steps:
