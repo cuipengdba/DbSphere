@@ -32,14 +32,14 @@ Go 自动摘要可显式开启，对最近 24 小时严重开放事件在同一�
 
 Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指标，并把 Linux 节点连入同一事件 ID 的图。本机真实 PG14/node_exporter/PG18 演练和 [21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44096143595) 已通过。K8S Pod/Node/PVC/Service 和 PgBouncer 的只读适配已接入；更深的重启增量、真实 PVC 用量与故障矩阵仍待验收。
 
-Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubeconfig，拒绝执行式凭据插件与关闭 TLS 校验。已用 TLS 测试 API 验证只读请求、按 Pod UID 限定事件、容器 OOM、Node/PVC/PV 信息、Pod/Node `metrics.k8s.io` 与 403 缺口；PG18 实库测试验证 PG 连接失败与近期同 Pod OOM 证据归入一个事件 ID，并在恢复时关闭。现有本地 kind 测试 token 过期，真实集群只读验收尚未通过；临时 token 签发被自动审批策略阻止，不能将模拟 API 测试记作 kind 验收。Go Compose 与离线包已支持可选的只读 kubeconfig 挂载。
+Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubeconfig，拒绝执行式凭据插件与关闭 TLS 校验。TLS 模拟 API 验证了只读请求、按 Pod UID 限定事件、容器 OOM、Node/PVC/PV 信息、Pod/Node `metrics.k8s.io` 与 403 缺口；PG18 实库测试验证 PG 连接失败与近期同 Pod OOM 证据归入一个事件 ID，并在恢复时关闭。2026-11-18 又在本机 kind 中将 Go 服务部署为 Pod，使用现有只读 ServiceAccount 的自动挂载凭据，完成真实 PG18、K8S 指标和探针失败→同事件根因候选→恢复样本的闭环；该账号不能读 Secret 或删除 Pod。原外部只读 kubeconfig token 仍过期，临时 token 签发曾被自动审批阻止，本次未签发新 token。Go Compose 与离线包支持可选的只读 kubeconfig 挂载，其真实外部接入仍未验收。
 
 Go K8S 告警移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled、Node 压力及可选 Prometheus PVC 使用率规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。PVC 告警的真实 Prometheus 路径仍待验收。
 Go 现从同一资产的前次 PG18 样本计算 WAL 归档失败与同 Pod 重启增量；首次采样、计数回退或 Pod UID 改变保持未知。PG18 实库演练验证两条增量规则触发并在后续零增量时按原事件 ID 恢复。PVC 告警的真实 Prometheus 路径仍待验收。
 
 Go 告警静默与维护窗现支持 B/S 创建、查看和撤销；服务端校验资产/规则、起止时间、最长 30 天和原因，所有写操作要求登录和 CSRF。PG18 实库故障演练确认锁等待告警触发时写入 `alert_suppressed`，撤销维护窗后写入 `alert_unsuppressed`，两条证据使用同一个事件 ID。告警触发、解除静默及恢复会向 PG18 持久化 Webhook/邮件投递任务；Go 后台工作器支持级别路由、Webhook HMAC、SMTP TLS、失败退避和 B/S 手动重试。未确认的严重事件超过 15 分钟会在原事件 ID 下写入一次升级证据并再次通知；PG18 实库已验证未到期不升级、静默时不升级、解除静默后只升级一次。生产通知通道仍待验收。
 
-Go 已按 Pod 标签选择同 Namespace 的匹配 Service，并将 Service → Pod 路由关系加入事件证据图和资产详情。列表限定 100 条，权限不足或分页截断会显式标记缺口；TLS 模拟 API 与 PG18 实库证据图通过，真实 kind 仍需重新验收。
+Go 已按 Pod 标签选择同 Namespace 的匹配 Service，并将 Service → Pod 路由关系加入事件证据图和资产详情。列表限定 100 条，权限不足或分页截断会显式标记缺口；TLS 模拟 API、PG18 实库和本机 kind 探针故障事件图均已验证，生产多节点和 PVC 用量来源仍待验收。
 
 Go PgBouncer 适配器采用只读的简单查询协议读取 `SHOW POOLS` 和 `SHOW STATS`，仅保留映射数据库最多 100 条连接池/统计记录，不保存管理员 URL 或密码。本机真实 PgBouncer 1.26.1、PG14 与独立 PG18 联合采样测试和 [修复后的 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44107307127)已通过；对应客户端等待规则进入同事件告警流程。
 

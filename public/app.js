@@ -109,6 +109,19 @@ function renderAdminAudit(entries, target = $('admin-audit-list')) {
     `${formatTime(item.observedAt)} · ${item.actor} · ${item.method} ${item.path} · ${item.statusCode || '进行中'} · ${item.outcome}`, 'evidence'));
 }
 
+function k8sStateText(payload) {
+  if (payload.status !== 'ok') return payload.reason || payload.status;
+  const pod = payload.pod || {};
+  const ready = (pod.conditions || []).find(condition => condition.type === 'Ready');
+  const readiness = ready ? `Ready=${ready.status}${ready.reason ? ` (${ready.reason})` : ''}` : 'Ready=未知';
+  const containers = (payload.containers || []).map(container =>
+    `${container.name}: ${container.ready === false ? '未就绪' : container.ready === true ? '就绪' : '状态未知'}` +
+    `${container.terminatedReason ? `（上次终止 ${container.terminatedReason}）` : ''}`).join('，');
+  const unhealthy = (payload.events || []).filter(event => event.reason === 'Unhealthy');
+  return `Pod ${pod.name || '未知'} / ${pod.phase || '未知'} / ${readiness}；${containers || '无容器状态'}` +
+    `${unhealthy.length ? `；近期探针失败事件 ${unhealthy.length} 条` : ''}`;
+}
+
 function renderInspections(assets, templates, schedules, runs) {
   const assetSelect = $('inspection-asset');
   const templateSelect = $('inspection-template');
@@ -833,9 +846,7 @@ async function showEvent(id) {
   target.append(responseForm);
   for (const evidence of event.evidence) {
     let text = evidence.payload.error || evidence.payload.sampleId || '';
-    if (evidence.kind === 'k8s_state') text = evidence.payload.status === 'ok'
-      ? `Pod ${evidence.payload.pod?.name || '未知'} / ${evidence.payload.pod?.phase || '未知'}；${(evidence.payload.containers || []).map(c => `${c.name}: ${c.terminatedReason || '运行中'}`).join('，')}`
-      : evidence.payload.reason || evidence.payload.status;
+    if (evidence.kind === 'k8s_state') text = k8sStateText(evidence.payload);
     if (evidence.kind === 'root_cause_candidate') text = `${evidence.payload.hypothesis} · 置信度 ${evidence.payload.confidence}。${evidence.payload.limitation}`;
     if (evidence.kind === 'linux_state') text = evidence.payload.status === 'ok'
       ? `Linux 内存已用 ${evidence.payload.memory?.usedPercent ?? '未知'}%；负载 ${evidence.payload.cpu?.load1 ?? '未知'}`

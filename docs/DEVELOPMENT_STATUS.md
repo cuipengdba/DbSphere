@@ -4,9 +4,11 @@
 
 ## 当前阶段
 
-Go 离线包加入 `--backup /absolute/path`：在目标 Linux 机上备份随包部署的独立 PG18，并输出 SHA-256 清单；外部 PG18 由其自身备份系统负责。CI 新增从离线包执行备份、在另一 PG18 容器恢复并核对 schema 版本的演练。脚本语法已通过本机检查，完整恢复结果待本轮 Linux CI；这不是生产恢复演练。
+Go 版在本机 kind 单节点测试集群完成一次真实 K8S/PG18 故障闭环：Go 静态镜像以现有只读 ServiceAccount 在 Pod 内运行，另有独立 PG18 监控库；先从既有 PG18 Pod 成功采到数据库、Pod、Service、PVC/PV、Node 和 metrics-server Pod/Node CPU/内存。ServiceAccount 的 `get secrets` 与 `delete pods` 均为 `no`。随后创建探针始终失败的测试 PG18 Pod，Service 无就绪端点，Go 把 PG 连接失败、Pod `Ready=False`、`Unhealthy` 事件与 Service→Pod→Node 关系归入事件 `37821d0d-9309-4582-a37d-90314c49abef`；持续时间达到规则要求后出现有来源的低置信度 `k8s_pod_not_ready` 候选。修复探针并更新映射后，成功 PG18/K8S 样本 `6b60df49-f5a0-4cb5-8bf6-3ba6b8dbaf3e` 关闭**同一事件 ID**；人工恢复验证引用该样本，操作审计也关联该 ID。浏览器查看了候选、时间线与审计，并修复了“容器运行中”掩盖 `Ready=False` 的文案。此演练为本机 kind 测试，不代表多节点、生产 K8S、真实应用 Trace 或八类故障矩阵通过；旧外部只读 kubeconfig 仍已过期，本次使用 Pod 自动挂载的 ServiceAccount 凭据。
 
-Go 管理员 API 写入审计已接入 PG18 schema 版本 16/17：已认证且通过 CSRF 的 POST/PUT/PATCH/DELETE 在执行业务逻辑前写入操作尝试；记录失败时拒绝运行请求。完成后更新 HTTP 状态，管理员可在系统状态页看最近 100 条；事件处理路径自动关联原事件 ID，并在事件页折叠显示。查看账号不能读取。只存管理员角色、方法、路径和可解析的事件 ID，不存请求正文、查询参数、Cookie 或凭据。版本 16 本机 PG18、HTTP 权限、浏览器角色隔离及 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44241694121) 均通过；事件 ID 关联的本机 PG18 和 HTTP 测试通过，仍待本轮 CI。当前只有共享管理员身份，没有具体操作人、审批或审计防篡改能力。
+Go 离线包加入 `--backup /absolute/path`：在目标 Linux 机上备份随包部署的独立 PG18，并输出 SHA-256 清单；外部 PG18 由其自身备份系统负责。本机临时 PG18 归档与清单生成成功，[20 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44243312616) 已从离线包执行备份、在另一 PG18 容器恢复并核对 schema 版本；这不是生产恢复演练。
+
+Go 管理员 API 写入审计已接入 PG18 schema 版本 16/17：已认证且通过 CSRF 的 POST/PUT/PATCH/DELETE 在执行业务逻辑前写入操作尝试；记录失败时拒绝运行请求。完成后更新 HTTP 状态，管理员可在系统状态页看最近 100 条；事件处理路径自动关联原事件 ID，并在事件页折叠显示。查看账号不能读取。只存管理员角色、方法、路径和可解析的事件 ID，不存请求正文、查询参数、Cookie 或凭据。本机 PG18、HTTP 权限、浏览器角色隔离、真实 kind 事件操作和 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44242609766) 均通过。当前只有共享管理员身份，没有具体操作人、审批或审计防篡改能力。
 
 Go 事件分析新增应用服务的已观测影响面：在原事件 ID 的 Trace 时间窗内按服务汇总 Span、PostgreSQL 客户端 Span、错误 Span 与首末时间，工作台折叠显示，复盘报告列出统计。达到 100 条查询上限会提示可能不完整；采样率未知，数字不代表全部受影响请求。PG18 实库验证父子 Span 的汇总与 AI 证据包对服务名的遮蔽；生产追踪采样策略仍待验收。
 
@@ -64,13 +66,13 @@ V0.1 功能验收样例覆盖 Linux 原生 Node 进程及 kind 中的 K8S Postgr
 
 Go 告警迁移已加入 PG 连接使用率、锁等待、长事务和 Linux 内存/磁盘五条默认规则。采样事务写入规则状态与触发、信号缺失、恢复、静默状态变化证据；同一资产同一问题组的 PG 与 Linux 告警共用事件 ID，全部恢复后关闭。本机 PG18 测试验证规则修改持久化、连接压力根因候选及同 ID 恢复；Go API 的规则编辑受管理员登录和 CSRF 保护。旧版未移植规则在 Go 页面只读，通知投递、K8S/PgBouncer 规则和完整巡检写入仍待迁移。本段是开发进度，尚非正式版验收。
 
-Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMKilled、Pod 条件与事件、Node 条件及 PVC 绑定信息；TLS 模拟 API 验证了 bearer token、Pod UID 事件过滤和只读请求。PG18 实库合成样本验证了 PG 连接失败 + 10 分钟内同 Pod OOM 的一个事件 ID、带来源的中等置信度候选和恢复闭环。Go Compose/离线包增加可选的只读 kubeconfig 挂载。真实 kind ServiceAccount 的旧 token 已过期，重新签发临时 token 的命令被自动审批拒绝，因此本轮没有真实 kind 验收；后续的 Service 与 PVC 用量适配虽已有代码和模拟测试，仍无真实集群验收。
+Go K8S 只读采集第一段已覆盖指定 Namespace/Pod 的容器状态、OOMKilled、Pod 条件与事件、Node 条件及 PVC 绑定信息；TLS 模拟 API 验证了 bearer token、Pod UID 事件过滤和只读请求。PG18 实库合成样本验证了 PG 连接失败 + 10 分钟内同 Pod OOM 的一个事件 ID、带来源的中等置信度候选和恢复闭环。Go Compose/离线包增加可选的只读 kubeconfig 挂载。旧外部只读 kubeconfig 已过期，临时 token 签发曾被自动审批拒绝；随后改用 Pod 自动挂载的现有只读 ServiceAccount，在本机 kind 完成探针故障、Service/PVC/Node 与恢复闭环。生产集群和真实 OOM 故障仍未验收。
 
 Go K8S PVC 详情现继续以只读请求读取绑定的 PV 名称、阶段和容量；权限缺失时保留 `volumeError`。B/S 资产页按既有 PVC/PV 结构显示，不再把 PV 名称字符串当作对象。metrics.k8s.io 暂不可用时在样本中明确标记缺口。
 
-Go K8S 采集现可选读取 `metrics.k8s.io/v1beta1` 的指定 Pod 容器和 Node CPU/内存；TLS 模拟 API 验证了有指标时显示来源与时间，以及 403 时保留 Pod 健康状态并标记资源指标缺失。真实 kind metrics-server 仍未重新验收。
+Go K8S 采集现可选读取 `metrics.k8s.io/v1beta1` 的指定 Pod 容器和 Node CPU/内存；TLS 模拟 API 验证了有指标时显示来源与时间，以及 403 时保留 Pod 健康状态并标记资源指标缺失。本机 kind 起初因只读 RBAC 缺少 metrics `get` 返回 403，补充最小只读权限后，Go Pod 采集到真实 Pod/Node 资源指标。
 
-Go 只读采集现按 Pod 标签关联同 Namespace 中的 Service，并在 B/S 资产页及同一事件 ID 的证据图添加 Service → Pod 关系；列表限制 100 条，权限缺失或截断显式标记。TLS 模拟 API、PG18 实库事件图和本地 Go 测试通过，真实 kind 仍待重新验收。
+Go 只读采集现按 Pod 标签关联同 Namespace 中的 Service，并在 B/S 资产页及同一事件 ID 的证据图添加 Service → Pod 关系；列表限制 100 条，权限缺失或截断显式标记。TLS 模拟 API、PG18 实库和本机 kind 探针故障事件图均验证了该关系；生产多节点仍待验收。
 
 Go 每次资产采样现并行读取 PG、Linux/K8S 和 PgBouncer，K8S API 的总时间预算为 12 秒；后台采集和 HTTP 响应上限相应调整为 45 秒，避免多个可选适配器的超时直接累加。PG18/PG14/PgBouncer 本机联合采样和全量 Go 测试通过，生产规模采集调度仍待负载验收。
 
