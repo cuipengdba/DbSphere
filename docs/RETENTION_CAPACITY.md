@@ -6,7 +6,7 @@
 
 在隔离库中建立一个测试资产、一个四个月前的 UTC 月分区，写入 120000 条过期样本及 5000 个过期已结事件，再启动真实 Go 保留期工作器。样本及事件均在同一轮清空，耗时约 3.162 秒；含数据生成、迁移、清理和测试收尾的整个测试用时约 6.35 秒。测试由 `TestRunDataRetentionDrainsBacklog` 驱动，使用 Docker Desktop 中的 PostgreSQL 18.6；主机 CPU 为 Intel Core i7-6700，Docker 报告 8 个 CPU 和约 16.7 GB 内存。独立 PG18 集成测试另覆盖证据引用、巡检、待投递通知和未结事件保护。该测试不是生产性能承诺。
 
-CI 将同一追赶测试放在独立 PostgreSQL 18.7 固定摘要的 Linux 作业中运行，并设置 5 分钟测试上限；普通单元/集成测试跳过此容量用例。代码见[`cmd/dbsphere/retention_capacity_test.go`](../cmd/dbsphere/retention_capacity_test.go)和[任务清单](DEVELOPMENT_TASKS.md)。
+[Linux 容量作业](https://github.com/cuipengdba/DbSphere/actions/runs/44409372242)在独立 PostgreSQL 18.7 固定摘要的容器中执行同一用例，120000 条样本与 5000 个已结事件约 2.554 秒清空，测试用时约 4.26 秒，5 分钟上限未触发。补充 Kubernetes 工具下载重试后的[34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44409784854)全部通过。普通单元/集成测试跳过此容量用例。代码见[`cmd/dbsphere/retention_capacity_test.go`](../cmd/dbsphere/retention_capacity_test.go)和[任务清单](DEVELOPMENT_TASKS.md)。
 
 ## 尚未覆盖
 

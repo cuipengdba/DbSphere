@@ -105,3 +105,7 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 ### 2026-11-19 保留期与空分区运行复验
 
 提交 `3e6f64d` 给 Go 版每日保留期任务加入空旧月分区的限量删除，独立 PG18 测试验证非空过期分区不删、清空后删除，以及只启用样本保留期时不动事件分区。[33 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44406742952)全部通过。本机 kind 中最早的样本与事件均为 2026-11-18；配置 `DBSPHERE_RETENTION_DAYS=90`、`DBSPHERE_EVENT_RETENTION_DAYS=180`，加载镜像 `dbsphere/kind-acceptance:partition-retention-3e6f64d` 并滚动更新。新 Pod `dbsphere-go-6d5d76c9bc-j4q2b` 1/1 Ready、0 次重启，`/readyz` 为 `ready/postgresql18`；控制台 API 显示两项保留期分别为 90、180 天。PG18 仍有 7 个资产、122 条样本、17 个事件、343 条证据及 172 个证据样本引用；原 OOM 事件仍有 8 条证据和 1 条根因候选。由于此集群没有过期数据，本项不证明在 kind 中实际删除分区；删除行为由隔离 PG18 集成测试证明。测试集群的存储使用 `emptyDir`，不能作为生产持久化验收。
+
+### 2026-11-19 小批量追赶工作器复验
+
+提交 `7582717` 将 Go 保留期工作器从每日单批改为每小时限时、限批次追赶；固定 PG18.7 的[Linux 容量作业](https://github.com/cuipengdba/DbSphere/actions/runs/44409372242)清理 120000 条样本和 5000 个已结事件。固定工具下载添加有限重试后，[34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44409784854)全部通过，包含四节点 kind/PG14–18 矩阵。本机 kind 更新到镜像 `dbsphere/kind-acceptance:hourly-retention-821f7f6` 后，Pod `dbsphere-go-5596547bcd-grr2c` 1/1 Ready、0 次重启；`/readyz` 仍为 `ready/postgresql18`。配置的样本 90 天、已结事件 180 天策略仍出现在 `/api/storage`；原 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍有 8 条证据和 1 条候选，PG18 仍有 122 条样本、17 个事件、343 条证据和 172 条证据样本引用。kind 无过期数据，因此仅验证启用策略后的滚动更新及现有数据可读；实际追赶吞吐由隔离 PG18 作业验证，生产性能门槛仍未完成。
