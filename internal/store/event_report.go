@@ -30,14 +30,21 @@ type eventReportData struct {
 			AtLimit       bool                 `json:"atLimit"`
 		} `json:"traceCoverage"`
 		Candidates []struct {
-			Code       string   `json:"code"`
-			Title      string   `json:"title"`
-			Confidence string   `json:"confidence"`
-			Supports   []string `json:"supports"`
-			Against    []string `json:"against"`
-			Missing    []string `json:"missing"`
-			Limitation string   `json:"limitation"`
-			TimeOrder  struct {
+			Code              string   `json:"code"`
+			Title             string   `json:"title"`
+			Confidence        string   `json:"confidence"`
+			Supports          []string `json:"supports"`
+			Against           []string `json:"against"`
+			Missing           []string `json:"missing"`
+			Limitation        string   `json:"limitation"`
+			MatchedConditions []struct {
+				Metric    string `json:"metric"`
+				Observed  any    `json:"observed"`
+				Operator  string `json:"operator"`
+				Threshold any    `json:"threshold"`
+				SampleID  string `json:"sampleId"`
+			} `json:"matchedConditions"`
+			TimeOrder struct {
 				FirstObservedAt time.Time `json:"firstObservedAt"`
 				Relation        string    `json:"relation"`
 			} `json:"timeOrder"`
@@ -370,6 +377,15 @@ func renderEventMarkdown(data eventReportData) string {
 		}
 		if len(candidate.Missing) > 0 {
 			fmt.Fprintf(&out, "待验证：%s\n\n", reportText(strings.Join(candidate.Missing, "；")))
+		}
+		for _, condition := range candidate.MatchedConditions {
+			fmt.Fprintf(&out, "匹配条件：%s；观测 %s %s %s",
+				reportText(condition.Metric), reportText(fmt.Sprint(condition.Observed)),
+				reportText(condition.Operator), reportText(fmt.Sprint(condition.Threshold)))
+			if condition.SampleID != "" {
+				fmt.Fprintf(&out, "；样本 %s", reportText(condition.SampleID))
+			}
+			out.WriteString("。\n\n")
 		}
 		if candidate.Review != nil {
 			fmt.Fprintf(&out, "人工结论：%s（%s）；依据：%s\n\n",

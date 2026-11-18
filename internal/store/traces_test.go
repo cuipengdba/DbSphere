@@ -527,6 +527,10 @@ func TestRealPostgreSQLLockPIDConnectsApplicationTraceToOneEvent(t *testing.T) {
 		!strings.Contains(string(encoded), `"correlatedTraces":1`) {
 		t.Fatalf("real PG lock was not linked to one application event: %s", encoded)
 	}
+	if report, err := pg.EventReport(ctx, eventID, "md"); err != nil ||
+		!strings.Contains(report, "匹配条件：PG 等待 PID") {
+		t.Fatal("incident report lost exact PID match conditions", err)
+	}
 	cancel()
 	select {
 	case <-waitDone:

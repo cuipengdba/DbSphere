@@ -4,6 +4,8 @@
 
 ## 当前阶段
 
+Go Trace 锁候选现在优先使用精确后端 PID 匹配，再回退到无 PID 的同窗慢调用；两者都保留不确定性说明。匹配条件写入事件页和复盘报告。较新的弱线索与较旧的精确线索并存的单元测试、PG14 锁等待整链路报告测试和 Go 全量测试通过；详见[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。
+
 2026-11-18 本机 kind 复验：既有 `dbsphere-test` 集群中，Go 服务的 PG18 存储、PG18/K8S/metrics-server 正常采样及只读 ServiceAccount 权限再次核对通过；临时探针故障使 PG 连接失败、Pod `Ready=False`、`Unhealthy` 事件与 `k8s_pod_not_ready` 候选归入事件 `4f76762c-191f-4fdc-bdad-77cc257b4b4d`，恢复后同一事件自动关闭。新 Go 镜像又读取真实 OOM 应用故障事件：3 条同期 Trace 中仅 1 条错误 Trace 被标为故障信号关联，原始 Trace 和复盘报告均可下钻。详见[本机 kind 验收](KIND_ACCEPTANCE.md)。跨服务链路、采样率和生产集群仍待发布门禁。
 
 Go 管理员密码可通过显式静态命令轮换；离线安装器新增 `--rotate-admin-password`，不会因普通重启而隐式替换凭据。管理员会话密钥绑定已存储的密码哈希，轮换后的旧会话失效。PG18 实库测试、本机 kind 旧密码 401/新密码登录、Go 全量测试和[22 作业 CI 的离线包轮换演练](https://github.com/cuipengdba/DbSphere/actions/runs/44282697078)均通过。测试密码保存在 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`，正式部署随机生成独立凭据。

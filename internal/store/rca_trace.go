@@ -2,7 +2,7 @@ package store
 
 import (
 	"encoding/json"
-	"math"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -13,8 +13,8 @@ type traceDBSpan struct {
 	BackendPID            int
 }
 
-// traceLockCandidate preserves the application → database span → PG lock sample
-// path under one event. The trace has no backend PID, so it is only a lead.
+// traceLockCandidate prefers an exact backend PID match over a weaker
+// same-window lead, regardless of which Span arrived most recently.
 func traceLockCandidate(event *eventRecord, samples map[string]sampleObservation,
 	spans []traceDBSpan, spanSet map[string]bool, add graphAdder,
 	edges *[]map[string]string) map[string]any {
@@ -29,95 +29,102 @@ func traceLockCandidate(event *eventRecord, samples map[string]sampleObservation
 		}
 		return left.At.After(right.At)
 	})
-	for _, span := range spans {
-		if !spanSet[span.Parent] || span.End.Sub(span.Start) < 500*time.Millisecond {
-			continue
-		}
-		for _, id := range sampleIDs {
-			sample := samples[id]
-			window := time.Minute
-			if span.BackendPID > 0 {
-				window = 5 * time.Second
-			}
-			if sample.Status != "ok" || sample.At.Before(span.Start.Add(-window)) ||
-				sample.At.After(span.End.Add(window)) {
+	for _, requirePID := range []bool{true, false} {
+		for _, span := range spans {
+			if (span.BackendPID > 0) != requirePID {
 				continue
 			}
-			chain := object(object(sample.Metrics["diagnostics"])["lockChain"])
-			pairs := list(chain["data"])
-			if stringValue(chain["status"]) != "ok" || len(pairs) == 0 {
+			if !spanSet[span.Parent] || span.End.Sub(span.Start) < 500*time.Millisecond {
 				continue
 			}
-			matchedBlocker := 0
-			if span.BackendPID > 0 {
-				for _, pair := range pairs {
-					row := object(pair)
-					waiting, waitingOK := numeric(row["waitingPid"])
-					blocker, blockerOK := numeric(row["blockerPid"])
-					if waitingOK && blockerOK && waiting == float64(span.BackendPID) &&
-						blocker > 0 && blocker == math.Trunc(blocker) {
-						matchedBlocker = int(blocker)
-						break
+			for _, id := range sampleIDs {
+				sample := samples[id]
+				window := time.Minute
+				if span.BackendPID > 0 {
+					window = 5 * time.Second
+				}
+				if sample.Status != "ok" || sample.At.Before(span.Start.Add(-window)) ||
+					sample.At.After(span.End.Add(window)) {
+					continue
+				}
+				chain := object(object(sample.Metrics["diagnostics"])["lockChain"])
+				pairs := list(chain["data"])
+				if stringValue(chain["status"]) != "ok" || len(pairs) == 0 {
+					continue
+				}
+				matchedBlocker := 0
+				if span.BackendPID > 0 {
+					matchedBlocker = matchedLockWaitBlocker(sample, span.Start, span.End, span.BackendPID)
+					if matchedBlocker == 0 {
+						continue
 					}
 				}
-				if matchedBlocker == 0 {
-					continue
+				code := "trace_lock_correlated"
+				title := "应用数据库调用变慢与锁阻塞同期出现"
+				confidence := "low"
+				missing := []string{"Trace 未包含 PostgreSQL 后端 PID，未证实该请求等待于所见锁链"}
+				limitation := "慢调用与锁阻塞在同一资产和时间窗出现，只能提示排查方向，不能证明同一 SQL 或唯一根因。"
+				if span.BackendPID > 0 {
+					code = "trace_lock_pid_matched"
+					title = "应用数据库会话与锁等待 PID 匹配"
+					confidence = "medium"
+					missing = []string{"仍需核对 SQL 指纹及阻塞事务的业务原因"}
+					limitation = "应用埋点报告的后端 PID 与近期 PG 锁样本匹配；PID 可能复用，不能仅凭此证明业务根因。"
+					*edges = append(*edges, map[string]string{"from": span.Node,
+						"to": "sample:" + sample.ID, "relation": "same_backend_pid"})
 				}
-			}
-			code := "trace_lock_correlated"
-			title := "应用数据库调用变慢与锁阻塞同期出现"
-			confidence := "low"
-			missing := []string{"Trace 未包含 PostgreSQL 后端 PID，未证实该请求等待于所见锁链"}
-			limitation := "慢调用与锁阻塞在同一资产和时间窗出现，只能提示排查方向，不能证明同一 SQL 或唯一根因。"
-			if span.BackendPID > 0 {
-				code = "trace_lock_pid_matched"
-				title = "应用数据库会话与锁等待 PID 匹配"
-				confidence = "medium"
-				missing = []string{"仍需核对 SQL 指纹及阻塞事务的业务原因"}
-				limitation = "应用埋点报告的后端 PID 与近期 PG 锁样本匹配；PID 可能复用，不能仅凭此证明业务根因。"
-				*edges = append(*edges, map[string]string{"from": span.Node,
-					"to": "sample:" + sample.ID, "relation": "same_backend_pid"})
-			}
-			candidateNode := "candidate:" + code
-			add(candidateNode, "candidate", title, "/api/events/"+event.ID, sample.At)
-			supports := []string{span.Parent, span.Node, "sample:" + sample.ID}
-			*edges = append(*edges, map[string]string{"from": "event:" + event.ID,
-				"to": candidateNode, "relation": "hypothesizes"})
-			for _, support := range supports {
-				*edges = append(*edges, map[string]string{"from": candidateNode,
-					"to": support, "relation": "supported_by"})
-			}
-			var review any
-			for _, evidence := range event.Evidence {
-				if evidence.Kind != "rca_decision" {
-					continue
+				candidateNode := "candidate:" + code
+				add(candidateNode, "candidate", title, "/api/events/"+event.ID, sample.At)
+				supports := []string{span.Parent, span.Node, "sample:" + sample.ID}
+				*edges = append(*edges, map[string]string{"from": "event:" + event.ID,
+					"to": candidateNode, "relation": "hypothesizes"})
+				for _, support := range supports {
+					*edges = append(*edges, map[string]string{"from": candidateNode,
+						"to": support, "relation": "supported_by"})
 				}
-				var payload map[string]any
-				if json.Unmarshal(evidence.Payload, &payload) == nil && payload["code"] == code {
-					review = map[string]any{"decision": payload["decision"], "actor": payload["actor"],
-						"reason": payload["reason"], "at": evidence.ObservedAt, "evidenceId": evidence.ID}
+				var review any
+				for _, evidence := range event.Evidence {
+					if evidence.Kind != "rca_decision" {
+						continue
+					}
+					var payload map[string]any
+					if json.Unmarshal(evidence.Payload, &payload) == nil && payload["code"] == code {
+						review = map[string]any{"decision": payload["decision"], "actor": payload["actor"],
+							"reason": payload["reason"], "at": evidence.ObservedAt, "evidenceId": evidence.ID}
+					}
 				}
-			}
-			if reviewed := object(review); reviewed != nil {
-				*edges = append(*edges, map[string]string{"from": candidateNode,
-					"to": "evidence:" + stringValue(reviewed["evidenceId"]), "relation": "reviewed_by"})
-			}
-			relation := "same_window"
-			if sample.At.Before(event.StartedAt) {
-				relation = "before_event"
-			} else if sample.At.After(event.StartedAt.Add(5 * time.Minute)) {
-				relation = "after_event"
-			}
-			return map[string]any{
-				"code": code, "title": title, "confidence": confidence, "supports": supports,
-				"against": []string{}, "missing": missing,
-				"limitation": limitation,
-				"detail": map[string]any{"service": span.Service,
-					"databaseSpanMs": span.End.Sub(span.Start).Milliseconds(), "lockPairs": len(pairs),
-					"backendPid": optionalBackendPID(span.BackendPID), "blockerPid": optionalBackendPID(matchedBlocker)},
-				"state": "hypothesis", "matchedConditions": []any{}, "review": review,
-				"timeOrder": map[string]any{"firstObservedAt": sample.At,
-					"eventStartedAt": event.StartedAt, "relation": relation},
+				if reviewed := object(review); reviewed != nil {
+					*edges = append(*edges, map[string]string{"from": candidateNode,
+						"to": "evidence:" + stringValue(reviewed["evidenceId"]), "relation": "reviewed_by"})
+				}
+				relation := "same_window"
+				if sample.At.Before(event.StartedAt) {
+					relation = "before_event"
+				} else if sample.At.After(event.StartedAt.Add(5 * time.Minute)) {
+					relation = "after_event"
+				}
+				conditions := []any{map[string]any{"metric": "数据库调用耗时 (ms)",
+					"observed": span.End.Sub(span.Start).Milliseconds(), "operator": ">=", "threshold": 500,
+					"sampleId": sample.ID}}
+				if span.BackendPID > 0 {
+					conditions = append(conditions, map[string]any{"metric": "PG 等待 PID",
+						"observed": span.BackendPID, "operator": "=", "threshold": fmt.Sprintf("Trace 后端 PID %d", span.BackendPID),
+						"sampleId": sample.ID, "blockerPid": matchedBlocker})
+				} else {
+					conditions = append(conditions, map[string]any{"metric": "PG 锁链对数",
+						"observed": len(pairs), "operator": ">", "threshold": 0, "sampleId": sample.ID})
+				}
+				return map[string]any{
+					"code": code, "title": title, "confidence": confidence, "supports": supports,
+					"against": []string{}, "missing": missing,
+					"limitation": limitation,
+					"detail": map[string]any{"service": span.Service,
+						"databaseSpanMs": span.End.Sub(span.Start).Milliseconds(), "lockPairs": len(pairs),
+						"backendPid": optionalBackendPID(span.BackendPID), "blockerPid": optionalBackendPID(matchedBlocker)},
+					"state": "hypothesis", "matchedConditions": conditions, "review": review,
+					"timeOrder": map[string]any{"firstObservedAt": sample.At,
+						"eventStartedAt": event.StartedAt, "relation": relation},
+				}
 			}
 		}
 	}
