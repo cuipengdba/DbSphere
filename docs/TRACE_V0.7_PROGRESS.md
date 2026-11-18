@@ -8,6 +8,8 @@ Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存�
 
 自定义可选属性 `dbsphere.pg.backend_pid` 可由有能力取得当前 PostgreSQL 会话 PID 的应用埋点写在数据库客户端 Span 上。Go 仅保留 1 至 2147483647 的整数，并通过 PG18 schema 版本 14 存储。若同资产锁链样本的等待 PID 相同且采样时间在 Span 前后五秒内，事件根因图增加 `same_backend_pid` 连接与中置信度候选；不匹配时不推断该锁链属于请求。该属性不是 OpenTelemetry 标准 PostgreSQL 字段，也不要求普通 SDK 自动提供；PID 仍可能复用，须结合时间和 SQL/事务证据人工复核。无该属性时保持低置信度同窗分析。
 
+本机真实 PG14 两会话 advisory lock 演练已从 Go 只读采集得到等待 PID → 阻塞 PID，测试用 OTLP Span 携带同一等待 PID，经独立 PG18 存储后在一个事件 ID 的图中出现 `same_backend_pid`；此项也加入 PG14–18 CI 矩阵。测试埋点由受控用例生成，尚未等同生产应用 SDK 自动埋点验收。
+
 ## 已实现的首段链路
 
 - 可选 `POST /v1/traces` 接收 **OTLP/HTTP JSON** 的 `resourceSpans`。设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN` 后启用；未设置时接口关闭。请求使用 `Authorization: Bearer <token>`，限制 1 MiB 和 256 个 Span。

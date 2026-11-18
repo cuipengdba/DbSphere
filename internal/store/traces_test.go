@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/trace"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
@@ -140,5 +143,167 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	if !strings.Contains(string(encoded), eventID) || !strings.Contains(string(encoded), "parent_of") ||
 		!strings.Contains(string(encoded), "db_client_span") || !strings.Contains(string(encoded), "checkout") {
 		t.Fatalf("existing incident did not include application-to-PG trace: %s", encoded)
+	}
+}
+
+func TestRealPostgreSQLLockPIDConnectsApplicationTraceToOneEvent(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
+	password := os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD")
+	if storeURL == "" || portText == "" || password == "" {
+		t.Skip("PG18 store and PostgreSQL target are required")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Go real PID trace test", Host: "localhost",
+		Port: port, Database: "postgres", Username: "postgres", Password: password,
+		SSLMode: "disable", Runtime: "linux"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	targetURL := url.URL{Scheme: "postgres", Host: "127.0.0.1:" + portText,
+		Path: "/postgres", User: url.UserPassword("postgres", password), RawQuery: "sslmode=disable"}
+	blocker, err := pgx.Connect(ctx, targetURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close(ctx)
+	waiter, err := pgx.Connect(ctx, targetURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiter.Close(ctx)
+	var blockerPID, waitingPID int
+	if err := blocker.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := waiter.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&waitingPID); err != nil {
+		t.Fatal(err)
+	}
+	lockKey := time.Now().UnixNano()
+	if _, err := blocker.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Exec(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		_, _ = waiter.Exec(waitCtx, "SELECT pg_advisory_lock($1)", lockKey)
+	}()
+	blocked := false
+	for range 40 {
+		var count int
+		if err := blocker.QueryRow(ctx, "SELECT cardinality(pg_blocking_pids($1))", waitingPID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			blocked = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("real PostgreSQL waiter never blocked")
+	}
+	spanStart := time.Now().UTC().Add(-time.Second)
+	result, err := pg.CheckAsset(ctx, asset.ID, key)
+	if err != nil || result.Status != "ok" {
+		t.Fatalf("real PG lock collection failed: %+v %v", result, err)
+	}
+	spanEnd := time.Now().UTC()
+	var metricsJSON []byte
+	if err := pg.pool.QueryRow(ctx, "SELECT metrics_json FROM samples WHERE id=$1", result.SampleID).Scan(&metricsJSON); err != nil {
+		t.Fatal(err)
+	}
+	var metrics map[string]any
+	if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	chain := object(object(metrics["diagnostics"])["lockChain"])
+	foundPair := false
+	for _, raw := range list(chain["data"]) {
+		row := object(raw)
+		if number(row["waitingPid"]) == float64(waitingPID) && number(row["blockerPid"]) == float64(blockerPID) {
+			foundPair = true
+		}
+	}
+	if !foundPair {
+		t.Fatalf("real lock pair was absent from PG sample: %s", metricsJSON)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, asset.ID, spanStart).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+		VALUES($1,$2,'alert','Real lock wait','open',$3,'trace_pid_test')`, eventID, asset.ID, spanStart); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"sampleId": result.SampleID, "metric": "pg.blocked_sessions",
+		"value": 1, "operator": ">=", "threshold": 1})
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'alert_firing',$2,$3)`, eventID, result.CollectedAt, payload); err != nil {
+		t.Fatal(err)
+	}
+	attribute := func(name, value string) map[string]any {
+		return map[string]any{"key": name, "value": map[string]string{"stringValue": value}}
+	}
+	traceID := strings.Repeat("e", 32)
+	parent := map[string]any{"traceId": traceID, "spanId": "1111111111111111",
+		"startTimeUnixNano": spanStart.UnixNano(), "endTimeUnixNano": spanEnd.UnixNano()}
+	dbSpan := map[string]any{"traceId": traceID, "spanId": "2222222222222222",
+		"parentSpanId": "1111111111111111", "kind": 3,
+		"startTimeUnixNano": spanStart.UnixNano(), "endTimeUnixNano": spanEnd.UnixNano(),
+		"attributes": []any{attribute("db.system.name", "postgresql"),
+			attribute("server.address", "localhost"), attribute("server.port", portText),
+			attribute("db.namespace", "postgres"),
+			attribute("dbsphere.pg.backend_pid", strconv.Itoa(waitingPID))}}
+	body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource":   map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
+		"scopeSpans": []any{map[string]any{"spans": []any{parent, dbSpan}}}}}})
+	identities, err := pg.TraceAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := trace.Decode(body, identities, time.Now().UTC())
+	if err != nil || len(parsed.Spans) != 2 {
+		t.Fatalf("real PID trace did not map: %+v %v", parsed, err)
+	}
+	if imported, err := pg.SaveTraceSpans(ctx, parsed.Spans); err != nil || imported != 2 {
+		t.Fatalf("real PID trace was not stored: %d %v", imported, err)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	if !strings.Contains(string(encoded), eventID) ||
+		!strings.Contains(string(encoded), `"code":"trace_lock_pid_matched"`) ||
+		!strings.Contains(string(encoded), `"relation":"same_backend_pid"`) {
+		t.Fatalf("real PG lock was not linked to one application event: %s", encoded)
+	}
+	cancel()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("real lock waiter did not stop")
 	}
 }
