@@ -4,6 +4,8 @@
 
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。真实 OpenTelemetry SDK/Collector 导出兼容和完整应用故障矩阵仍待验收。
 
+新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。集成测试验证请求被阻塞、同一 PID、导出契约和 SQL/密码不外泄，并进入 PG14–18 CI 矩阵。该测试接收端是临时 HTTP 服务；示例应用到 DbSphere 真实事件页的端到端演练及第三方 SDK/Collector 兼容仍待验收。
+
 Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存该 PG 资产对应的父链；同一 Trace 中的旁支服务 Span 和不相关请求不再进入该资产的事件图。重复 Span ID 视为歧义，跨其他 PG 资产的数据库父链在边界处停止。单元测试覆盖共享父链、旁支和不相关 Span；真实示例应用仍待验收。
 
 自定义可选属性 `dbsphere.pg.backend_pid` 可由有能力取得当前 PostgreSQL 会话 PID 的应用埋点写在数据库客户端 Span 上。Go 仅保留 1 至 2147483647 的整数，并通过 PG18 schema 版本 14 存储。若同资产锁链样本的等待 PID 相同且采样时间在 Span 前后五秒内，事件根因图增加 `same_backend_pid` 连接与中置信度候选；不匹配时不推断该锁链属于请求。该属性不是 OpenTelemetry 标准 PostgreSQL 字段，也不要求普通 SDK 自动提供；PID 仍可能复用，须结合时间和 SQL/事务证据人工复核。无该属性时保持低置信度同窗分析。

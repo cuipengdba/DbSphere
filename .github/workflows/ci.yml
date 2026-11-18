@@ -87,13 +87,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Verify Go read-only collection and one event ID on PostgreSQL ${{ matrix.pg }}
+      - name: Verify Go collection, event linkage and real HTTP lock Trace on PostgreSQL ${{ matrix.pg }}
         env:
           DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
           DBSPHERE_TEST_PG_TARGET_PORT: '15435'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-target-test
           DBSPHERE_TEST_PG_TARGET_MAJOR: ${{ matrix.pg }}
-        run: go test ./internal/collector ./internal/store -count=1 -v
+        run: go test ./internal/collector ./internal/store ./examples/trace-lock-app -count=1 -v
 
   offline-upgrade-rollback:
     runs-on: ubuntu-latest
