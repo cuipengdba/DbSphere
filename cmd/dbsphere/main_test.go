@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/cuipengdba/dbsphere/internal/ai"
 )
 
 func TestContainerReadinessProbe(t *testing.T) {
@@ -25,5 +32,68 @@ func TestContainerReadinessProbe(t *testing.T) {
 	status = http.StatusServiceUnavailable
 	if err := probeReady(context.Background()); err == nil {
 		t.Fatal("unready PostgreSQL store was reported healthy")
+	}
+}
+
+type autoAITestStore struct {
+	cancel    context.CancelFunc
+	completed chan *ai.Result
+}
+
+func (s *autoAITestStore) AutoAIEventIDs(context.Context, int) ([]string, error) {
+	return []string{"event-1"}, nil
+}
+func (s *autoAITestStore) EventAIEvidence(context.Context, string) (string, []string, error) {
+	return "脱敏事件证据 evidence-1", []string{"evidence-1"}, nil
+}
+func (s *autoAITestStore) ReserveAutomaticAIInvocation(context.Context, string, string, int) (string, error) {
+	return "invocation-1", nil
+}
+func (s *autoAITestStore) CompleteAutomaticAIInvocation(_ context.Context, eventID, invocationID string, result *ai.Result) error {
+	if eventID != "event-1" || invocationID != "invocation-1" {
+		return ai.ErrUnavailable
+	}
+	s.completed <- result
+	s.cancel()
+	return nil
+}
+
+func TestAutomaticAIWorkerKeepsValidatedAdvice(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			t.Error("unexpected model request")
+		}
+		content, _ := json.Marshal(map[string]any{"summary": "数据库告警需要核查。",
+			"evidenceIds": []string{"evidence-1"}, "uncertainty": "还有未知项。",
+			"suggestedChecks": []string{"查看原始样本"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+			"finish_reason": "stop", "message": map[string]any{"content": string(content)}}}})
+	}))
+	defer model.Close()
+	client, err := ai.New(ai.Config{URL: model.URL + "/v1/chat/completions", Model: "local-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub := &autoAITestStore{cancel: cancel, completed: make(chan *ai.Result, 1)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAutoAI(ctx, stub, client, 20, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+	select {
+	case result := <-stub.completed:
+		if result == nil || result.Model != "local-test" || len(result.EvidenceIDs) != 1 ||
+			result.EvidenceIDs[0] != "evidence-1" {
+			t.Fatalf("auto AI advice was not validated: %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("automatic AI worker did not analyze critical event")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("automatic AI worker did not stop")
 	}
 }

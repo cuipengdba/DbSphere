@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/cuipengdba/dbsphere/internal/ai"
 )
 
 var ErrAIBudgetExceeded = errors.New("daily AI invocation budget exceeded")
+var ErrAIAlreadyAnalyzed = errors.New("automatic AI analysis already reserved for event")
 
 type eventReportData struct {
 	Event    eventRecord `json:"event"`
@@ -93,7 +96,8 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	ids := make([]string, 0, len(data.Event.Evidence))
 	for _, item := range data.Event.Evidence {
-		if item.Kind != "ai_invocation" && item.Kind != "operator_response" && item.Kind != "rca_decision" {
+		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" &&
+			item.Kind != "operator_response" && item.Kind != "rca_decision" {
 			ids = append(ids, item.ID)
 		}
 	}
@@ -115,6 +119,13 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 			item.Payload, _ = json.Marshal(payload)
 		}
 	}
+	filtered := data.Event.Evidence[:0]
+	for _, item := range data.Event.Evidence {
+		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" {
+			filtered = append(filtered, item)
+		}
+	}
+	data.Event.Evidence = filtered
 	prompt := renderEventMarkdown(data)
 	if len(prompt) > 12000 {
 		cut := 12000
@@ -129,6 +140,14 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 // ReserveAIInvocation counts both successful and failed external calls. The
 // PostgreSQL transaction lock makes the daily cap shared across Go replicas.
 func (s *Postgres) ReserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
+	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "admin")
+}
+
+func (s *Postgres) ReserveAutomaticAIInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
+	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "auto")
+}
+
+func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int, actor string) (string, error) {
 	if dailyLimit < 1 || dailyLimit > 1000 || model == "" {
 		return "", fmt.Errorf("invalid AI daily limit or model")
 	}
@@ -139,6 +158,16 @@ func (s *Postgres) ReserveAIInvocation(ctx context.Context, eventID, model strin
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(1742028)"); err != nil {
 		return "", err
+	}
+	if actor == "auto" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1
+			AND kind='ai_invocation' AND payload_json->>'actor'='auto')`, eventID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if exists {
+			return "", ErrAIAlreadyAnalyzed
+		}
 	}
 	var now time.Time
 	if err := tx.QueryRow(ctx, "SELECT now()").Scan(&now); err != nil {
@@ -153,7 +182,7 @@ func (s *Postgres) ReserveAIInvocation(ctx context.Context, eventID, model strin
 	if used >= dailyLimit {
 		return "", ErrAIBudgetExceeded
 	}
-	payload, err := json.Marshal(map[string]any{"model": model, "status": "pending", "actor": "admin",
+	payload, err := json.Marshal(map[string]any{"model": model, "status": "pending", "actor": actor,
 		"evidenceIds": []string{}})
 	if err != nil {
 		return "", err
@@ -187,6 +216,89 @@ func (s *Postgres) CompleteAIInvocation(ctx context.Context, eventID, invocation
 		return ErrEventNotFound
 	}
 	return nil
+}
+
+// AutoAIEventIDs only selects recent critical incidents which have a real
+// firing alert and have not been submitted for automatic analysis.
+func (s *Postgres) AutoAIEventIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit < 1 || limit > 20 {
+		return nil, fmt.Errorf("invalid automatic AI batch size")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT e.id::text FROM events e
+		WHERE e.status='open' AND e.started_at>=now()-interval '24 hours'
+		AND EXISTS(SELECT 1 FROM evidence f WHERE f.event_id=e.id AND f.kind='alert_firing'
+			AND f.payload_json->>'severity'='critical')
+		AND NOT EXISTS(SELECT 1 FROM evidence a WHERE a.event_id=e.id AND a.kind='ai_invocation'
+			AND a.payload_json->>'actor'='auto')
+		ORDER BY e.started_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CompleteAutomaticAIInvocation stores a bounded, validated suggestion in the
+// same event as its audit record. It remains advice, never a root cause verdict.
+func (s *Postgres) CompleteAutomaticAIInvocation(ctx context.Context, eventID, invocationID string,
+	result *ai.Result) error {
+	status := "failed"
+	ids := []string{}
+	if result != nil {
+		if len([]rune(result.Summary)) < 3 || len([]rune(result.Summary)) > 800 ||
+			len([]rune(result.Uncertainty)) < 3 || len([]rune(result.Uncertainty)) > 500 ||
+			len(result.EvidenceIDs) == 0 || len(result.EvidenceIDs) > 12 ||
+			len(result.SuggestedChecks) > 6 {
+			return ai.ErrUnavailable
+		}
+		status, ids = "success", result.EvidenceIDs
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	update, _ := json.Marshal(map[string]any{"status": status, "evidenceIds": ids})
+	changed, err := tx.Exec(ctx, `UPDATE evidence SET payload_json=payload_json || $3::jsonb
+		WHERE id=$1 AND event_id=$2 AND kind='ai_invocation' AND payload_json->>'status'='pending'
+		AND payload_json->>'actor'='auto'`, invocationID, eventID, update)
+	if err != nil {
+		return err
+	}
+	if changed.RowsAffected() != 1 {
+		return ErrEventNotFound
+	}
+	if result != nil {
+		for _, id := range ids {
+			var belongs bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1 AND id=$2)`,
+				eventID, id).Scan(&belongs); err != nil || !belongs {
+				return ai.ErrInvalidEvidence
+			}
+		}
+		for _, check := range result.SuggestedChecks {
+			if len([]rune(check)) > 200 {
+				return ai.ErrUnavailable
+			}
+		}
+		payload, _ := json.Marshal(map[string]any{"summary": result.Summary,
+			"uncertainty": result.Uncertainty, "suggestedChecks": result.SuggestedChecks,
+			"evidenceIds": ids, "model": result.Model, "actor": "auto",
+			"notice": "AI 建议仅供排查，须以原始证据和人工验证为准。"})
+		if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			VALUES(gen_random_uuid(),$1,'ai_advisory',now(),$2)`, eventID, payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func reportText(value string) string {
@@ -231,6 +343,33 @@ func renderEventMarkdown(data eventReportData) string {
 				reportText(candidate.Review.Decision), reportTime(&candidate.Review.At),
 				reportText(candidate.Review.Reason))
 		}
+	}
+	autoAdvice := false
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "ai_advisory" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(evidence.Payload, &payload) != nil {
+			continue
+		}
+		if !autoAdvice {
+			out.WriteString("## 可选 AI 告警建议（待人工核验）\n\n")
+			autoAdvice = true
+		}
+		cited := []string{}
+		for _, raw := range list(payload["evidenceIds"]) {
+			if id := stringValue(raw); id != "" {
+				cited = append(cited, id)
+			}
+		}
+		fmt.Fprintf(&out, "- %s · 证据 %s · 模型 %s：%s；不确定性：%s；引用：%s\n",
+			reportTime(&evidence.ObservedAt), evidence.ID, reportText(stringValue(payload["model"])),
+			reportText(stringValue(payload["summary"])), reportText(stringValue(payload["uncertainty"])),
+			reportText(strings.Join(cited, "、")))
+	}
+	if autoAdvice {
+		out.WriteString("\n")
 	}
 	out.WriteString("## 处置与恢复验证\n\n")
 	responseCount := 0

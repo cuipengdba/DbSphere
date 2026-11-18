@@ -97,6 +97,13 @@ func run(log *slog.Logger) error {
 			return fmt.Errorf("DBSPHERE_AI_DAILY_LIMIT must be between 1 and 1000")
 		}
 	}
+	autoAI := os.Getenv("DBSPHERE_AI_AUTO_SUMMARY")
+	if autoAI != "" && autoAI != "true" && autoAI != "false" {
+		return fmt.Errorf("DBSPHERE_AI_AUTO_SUMMARY must be true or false")
+	}
+	if autoAI == "true" && aiClient == nil {
+		return fmt.Errorf("automatic AI analysis requires a configured model")
+	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash: viewerHash,
@@ -126,6 +133,16 @@ func run(log *slog.Logger) error {
 		defer close(inspectionDone)
 		runInspectionScheduler(ctx, pg, cfg.MasterKey, log)
 	}()
+	var autoAIDone <-chan struct{}
+	if autoAI == "true" {
+		done := make(chan struct{})
+		autoAIDone = done
+		go func() {
+			defer close(done)
+			runAutoAI(ctx, pg, aiClient, aiDailyLimit, log)
+		}()
+		log.Info("automatic critical event AI summaries enabled", "dailyLimit", aiDailyLimit)
+	}
 	if cfg.AutoCollect {
 		done := make(chan struct{})
 		collectorDone = done
@@ -144,10 +161,72 @@ func run(log *slog.Logger) error {
 	<-notifierDone
 	<-tracePrunerDone
 	<-inspectionDone
+	if autoAIDone != nil {
+		<-autoAIDone
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+type autoAIStore interface {
+	AutoAIEventIDs(context.Context, int) ([]string, error)
+	EventAIEvidence(context.Context, string) (string, []string, error)
+	ReserveAutomaticAIInvocation(context.Context, string, string, int) (string, error)
+	CompleteAutomaticAIInvocation(context.Context, string, string, *ai.Result) error
+}
+
+func runAutoAI(ctx context.Context, pg autoAIStore, model *ai.Client, dailyLimit int, log *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		ids, err := pg.AutoAIEventIDs(ctx, 5)
+		if err != nil && ctx.Err() == nil {
+			log.Error("automatic AI event scan failed", "error", err)
+		}
+		for _, eventID := range ids {
+			analyzeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			prompt, evidenceIDs, err := pg.EventAIEvidence(analyzeCtx, eventID)
+			if err != nil || len(evidenceIDs) == 0 {
+				cancel()
+				continue
+			}
+			invocationID, err := pg.ReserveAutomaticAIInvocation(analyzeCtx, eventID, model.Model(), dailyLimit)
+			if errors.Is(err, store.ErrAIBudgetExceeded) {
+				cancel()
+				break
+			}
+			if errors.Is(err, store.ErrAIAlreadyAnalyzed) {
+				cancel()
+				continue
+			}
+			if err != nil {
+				log.Error("automatic AI budget reservation failed", "eventId", eventID, "error", err)
+				cancel()
+				continue
+			}
+			result, modelErr := model.Analyze(analyzeCtx, prompt, evidenceIDs)
+			cancel()
+			auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var advisory *ai.Result
+			if modelErr == nil {
+				advisory = &result
+			}
+			if err := pg.CompleteAutomaticAIInvocation(auditCtx, eventID, invocationID, advisory); err != nil {
+				log.Error("automatic AI audit failed", "eventId", eventID, "error", err)
+			}
+			auditCancel()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func runInspectionScheduler(ctx context.Context, pg *store.Postgres, key []byte, log *slog.Logger) {
