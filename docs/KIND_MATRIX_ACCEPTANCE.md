@@ -13,6 +13,8 @@
 
 五个目标的样本状态及 Kubernetes 证据均为 `ok`；Pod 名与对应 Deployment、Service 一致，Node 分布在两个工作节点。验收程序核对 `dbsphere-reader` ServiceAccount 可读取目标 Namespace 的 Pod、Event、PVC 和集群 Node/PV；不能读取 Secret、删除 Pod 或列出原有 `agentsql` Namespace 的 Pod。DbSphere Go 使用 Pod 内投射的只读 ServiceAccount 凭据，故障注入或资源部署使用独立管理员 kubeconfig。管理员 kubeconfig 和随机测试密钥没有提交到仓库。
 
+本机 Playwright 浏览器登录后，总览显示五个 K8S 资产和五个“最近一次成功”；从总览直接进入 PG18 资产详情，显示五版资产、PG14 EOL 标记、PG18 深度指标，以及 Pod、Service、Node、PVC/PV 与 Kubernetes Event。桌面和 390 px 窄屏页面可读，浏览器控制台没有错误。截图仅保存在本机 `H:\CodexLS\outputs\DbSphere-matrix-browser.png` 与 `H:\CodexLS\outputs\DbSphere-matrix-browser-mobile.png`。此集群没有注册 `v1beta1.metrics.k8s.io` APIService，因此 Pod/Node CPU 和内存资源指标未在本次多节点验收中取得；页面明确显示资源指标缺口。初始 Role 只授予 `list pods.metrics.k8s.io`，浏览器检查时发现 Pod 指标请求缺少 `get`；清单已补齐 `get`，并在集群的 ServiceAccount 规则中核对。该集群未部署 metrics-server，不能把权限修正写成指标采集通过；单节点集群的真实 metrics-server 验收另见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
+
 本机脱敏结果保存在 `H:\CodexLS\outputs\DbSphere-matrix-acceptance.json`。仓库脚本：[`kind-matrix-manifest.mjs`](../scripts/kind-matrix-manifest.mjs)、[`kind-matrix-secrets.mjs`](../scripts/kind-matrix-secrets.mjs)、[`kind-matrix-acceptance.mjs`](../scripts/kind-matrix-acceptance.mjs)。验收程序可重复运行，已有资产按名称复用，并写入新的真实样本。
 
 ## 复现

@@ -76,7 +76,7 @@ SQL
       { apiGroups: [''], resources: ['pods', 'persistentvolumeclaims'], verbs: ['get', 'list'] },
       { apiGroups: [''], resources: ['events', 'services'], verbs: ['list'] },
       { apiGroups: ['apps'], resources: ['deployments', 'replicasets', 'statefulsets'], verbs: ['list'] },
-      { apiGroups: ['metrics.k8s.io'], resources: ['pods'], verbs: ['list'] }
+      { apiGroups: ['metrics.k8s.io'], resources: ['pods'], verbs: ['get', 'list'] }
     ]
   },
   {
