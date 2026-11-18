@@ -129,7 +129,7 @@ func (s *Postgres) UpsertInspectionSchedule(ctx context.Context, input Inspectio
 		"nextDueAt": next, "enabled": *input.Enabled}}, nil
 }
 
-func (s *Postgres) RunInspection(ctx context.Context, assetID, templateID string, key []byte, retryOf string) (any, error) {
+func (s *Postgres) RunInspection(ctx context.Context, assetID, templateID string, key []byte, retryOf string) (value any, runErr error) {
 	var runtime string
 	var raw []byte
 	if err := s.pool.QueryRow(ctx, `SELECT a.runtime,t.definition_json FROM assets a
@@ -147,6 +147,15 @@ func (s *Postgres) RunInspection(ctx context.Context, assetID, templateID string
 		return nil, ErrInvalidInspection
 	}
 	started := time.Now().UTC()
+	defer func() {
+		if runErr == nil || ctx.Err() != nil {
+			return
+		}
+		failure, err := s.saveFailedInspection(ctx, assetID, templateID, template, retryOf, started)
+		if err == nil {
+			value, runErr = failure, nil
+		}
+	}()
 	result, err := s.CheckAsset(ctx, assetID, key)
 	if err != nil {
 		return nil, err
@@ -217,6 +226,34 @@ func (s *Postgres) RunInspection(ctx context.Context, assetID, templateID string
 		"templateVersion": template.Version, "sampleId": result.SampleID, "retryOf": retry,
 		"startedAt": started, "completedAt": completed, "status": "completed",
 		"error": nil, "summary": summary, "findings": findings, "eventIds": eventIDs}}, nil
+}
+
+func (s *Postgres) saveFailedInspection(ctx context.Context, assetID, templateID string,
+	template inspectionTemplate, retryOf string, started time.Time) (any, error) {
+	completed := time.Now().UTC()
+	summary := inspectionSummary{Unknown: len(template.Checks)}
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		return nil, err
+	}
+	var retry any
+	if retryOf != "" {
+		retry = retryOf
+	}
+	const reason = "巡检执行失败，请检查采集配置后重试"
+	var id string
+	if err := s.pool.QueryRow(ctx, `INSERT INTO inspection_runs(id,asset_id,template_id,template_version,
+		sample_id,retry_of,started_at,completed_at,summary_json,findings_json,status,error,event_ids_json)
+		VALUES(gen_random_uuid(),$1,$2,$3,NULL,$4,$5,$6,$7,'[]'::jsonb,'failed',$8,'[]'::jsonb)
+		RETURNING id::text`, assetID, templateID, template.Version, retry, started,
+		completed, summaryJSON, reason).Scan(&id); err != nil {
+		return nil, err
+	}
+	return map[string]any{"run": map[string]any{"id": id, "assetId": assetID,
+		"templateId": templateID, "templateVersion": template.Version, "sampleId": nil,
+		"retryOf": retry, "startedAt": started, "completedAt": completed,
+		"status": "failed", "error": reason, "summary": summary,
+		"findings": []inspectionFinding{}, "eventIds": []string{}}}, nil
 }
 
 func (s *Postgres) RetryInspection(ctx context.Context, id string, key []byte) (any, error) {

@@ -226,6 +226,20 @@ func TestGoInspectionRunLinksSamePG18Event(t *testing.T) {
 	if err != nil || !strings.Contains(htmlReport, eventID) || !strings.Contains(htmlReport, "<table>") {
 		t.Fatalf("HTML report omitted source IDs: %v", err)
 	}
+	failed, err := pg.RunInspection(ctx, asset.ID, "pg_daily", []byte("wrong-master-key-wrong-master-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedRun := failed.(map[string]any)["run"].(map[string]any)
+	if failedRun["status"] != "failed" || failedRun["sampleId"] != nil ||
+		failedRun["error"] == nil {
+		t.Fatalf("inspection collection failure was not archived: %+v", failedRun)
+	}
+	var failedStatus string
+	if err := pg.pool.QueryRow(ctx, `SELECT status FROM inspection_runs WHERE id=$1`, failedRun["id"]).
+		Scan(&failedStatus); err != nil || failedStatus != "failed" {
+		t.Fatalf("failed inspection was not persisted: %s %v", failedStatus, err)
+	}
 }
 
 func TestGoInspectionReportEscapesUntrustedText(t *testing.T) {
