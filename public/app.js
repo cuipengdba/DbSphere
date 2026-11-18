@@ -299,6 +299,7 @@ async function showAsset(id) {
     const heading = cell('h3', 'Kubernetes 运行状态'); heading.id = 'k8s-detail'; detail.append(heading);
     if (k8s.status === 'ok') {
       detail.append(cell('p', `Pod ${k8s.pod.name} · ${k8s.pod.phase || '未知'} · Node ${k8s.pod.node || '未映射'}`));
+      if (k8s.podMapping) detail.append(cell('p', `Workload ${k8s.podMapping.workload} 已自动解析到新 Pod ${k8s.podMapping.resolved}；资产中原 Pod 映射 ${k8s.podMapping.configured || '未设置'}。`, 'hint'));
       for (const service of k8s.services || []) detail.append(cell('p', `Service ${service.name} · 端口 ${(service.ports || []).join(', ') || '未知'}`));
       if (k8s.servicesError) detail.append(cell('p', `Service 关联未完整采集：${k8s.servicesError}`, 'warning'));
       if (k8s.pod.reason) detail.append(cell('p', `Pod 原因：${k8s.pod.reason}${k8s.pod.message ? ' · ' + k8s.pod.message : ''}`, 'warning'));

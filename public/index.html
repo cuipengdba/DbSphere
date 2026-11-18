@@ -72,8 +72,9 @@
             <div id="k8s-fields" class="nested wide" hidden>
               <label>K8S 集群<input name="k8sCluster" placeholder="production"></label>
               <label>Namespace<input name="namespace" placeholder="database"></label>
-              <label>Workload<input name="workload" placeholder="postgresql"></label>
-              <label>Pod<input name="pod" placeholder="postgresql-0"></label>
+              <label>Workload（Deployment / StatefulSet）<input name="workload" placeholder="postgresql"></label>
+              <label>Pod（可选）<input name="pod" placeholder="postgresql-0"></label>
+              <p class="hint">单 Pod Workload 可自动解析；重建后按唯一就绪 Pod 跟随。多副本请指定 Pod，映射不唯一时会报错。</p>
               <label>Node<input name="node" placeholder="worker-01"></label>
               <button id="discover-k8s" class="ghost" type="button">发现此 Namespace 的 PostgreSQL Pod</button>
               <div id="discovery-results" class="wide" aria-live="polite"></div>

@@ -117,13 +117,13 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	var linuxHost *string
 	var exporterPort *int
 	var poolerEncrypted *string
-	var k8sCluster, k8sNamespace, k8sPod *string
+	var k8sCluster, k8sNamespace, k8sWorkload, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
 		runtime,linux_host,linux_exporter_port,pooler_url_enc,
-		k8s_cluster,k8s_namespace,k8s_pod
+		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod
 		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
 		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
-		&poolerEncrypted, &k8sCluster, &k8sNamespace, &k8sPod)
+		&poolerEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
@@ -157,7 +157,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		go func() {
 			defer groupWait.Done()
 			kube = collector.Kubernetes(ctx, collector.KubernetesTarget{Cluster: dereference(k8sCluster),
-				Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod)})
+				Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod), Workload: dereference(k8sWorkload)})
 		}()
 	} else if exporterPort != nil && linuxHost != nil {
 		groupWait.Add(1)

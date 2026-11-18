@@ -44,6 +44,8 @@ PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔�
 
 Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `get,list`，`services`、`events` 的 `list`，以及 `deployments`、`replicasets`、`statefulsets` 的 `list`。关联 Node 和 PV 需额外在 ClusterRole 授予 `nodes`、`persistentvolumes` 的 `get`。若集群提供 metrics-server，Go 采集器按指定 Pod/Node 发起 `get`，因此 Namespace 中 `metrics.k8s.io/pods` 和 ClusterRole 中 `metrics.k8s.io/nodes` 都需 `get`；需要兼容列表发现时可同时授予 `list`。本机 kind 曾因示例仅含 `list` 返回 403，补充只读 `get` 后实际采到了 Pod/Node 资源指标。测试用配置见 [`k8s-postgres.yaml`](../test/fixtures/k8s-postgres.yaml)，其中 PostgreSQL 测试密码不得用于生产。
 
+Go 版可只配置单 Pod Deployment/StatefulSet 的 Workload 名称；初始 Pod 被重建时也能按该 Workload 的 selector 与 owner UID 解析唯一新 Pod。为防止误连多副本实例，多个就绪 Pod 或列表截断时会返回映射错误。此路径需要上面的 `pods`、`deployments`、`replicasets`、`statefulsets` 列表权限；多副本主备应分别纳管并明确 Pod/实例身份。
+
 在 Compose 模式使用 K8S 时，将只读 kubeconfig 保存为 Linux 主机上仅运维账号可读的文件，并在 `deploy/compose/.env` 增加 `DBSPHERE_KUBECONFIG_HOST_PATH=/绝对路径/readonly.kubeconfig`，再运行 `bash scripts/one-click.sh`。脚本验证文件存在后将其只读挂载到应用容器。kubeconfig 的 context 名须与资产中填写的集群名一致；DbSphere 禁止执行其中的外部认证插件。Kubernetes API 地址须从应用容器可达，ServiceAccount token 应按集群策略轮换。
 
 metrics-server 提供 Pod/Node 资源使用量，不提供 PVC 文件系统实际用量。若已有 Prometheus 抓取 kubelet 的 `kubelet_volume_stats_used_bytes`，可在 `.env` 设置 `DBSPHERE_PROMETHEUS_URL=https://prometheus.example.internal`，如需 bearer token 再设置 `DBSPHERE_PROMETHEUS_TOKEN`。DbSphere 对每个关联 PVC 发起只读即时查询，限制 4 秒和 1 MiB 响应；实际用量与 PVC 申请量、容量分别展示。Prometheus 地址由管理员在部署配置中设置，不能从资产表单指定。如没有 metrics-server、Prometheus、权限或目标指标，DbSphere 会记录未采集原因，PG 侧监控继续工作。

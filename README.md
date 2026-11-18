@@ -10,7 +10,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 | 领域 | 功能 |
 |---|---|
-| 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、备份信息和应用 Trace。 |
+| 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。Go 开发版可按唯一 Deployment/StatefulSet 自动解析重建后的 Pod，歧义时明确报错。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、备份信息和应用 Trace。 |
 | 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件和连接池状态。缺失或无权限的数据明确标为未知。 |
 | 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；按服务展示已观测的调用与错误 Span，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
 | 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |

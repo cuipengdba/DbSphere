@@ -26,7 +26,12 @@ type KubernetesTarget struct {
 	Cluster   string
 	Namespace string
 	Pod       string
+	Workload  string
 }
+
+type kubeHTTPError int
+
+func (e kubeHTTPError) Error() string { return fmt.Sprintf("Kubernetes API HTTP %d", int(e)) }
 
 type kubeConfig struct {
 	CurrentContext string `yaml:"current-context"`
@@ -202,7 +207,7 @@ func (k *kubeClient) get(ctx context.Context, path string, query url.Values) (ma
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Kubernetes API HTTP %d", response.StatusCode)
+		return nil, kubeHTTPError(response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
 	if err != nil {
@@ -229,23 +234,160 @@ func kubeShort(value any) string {
 	return text
 }
 
-// Kubernetes reads only the mapped Pod and related read-only resources.
+func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload string) (string, error) {
+	base := "/apis/apps/v1/namespaces/" + url.PathEscape(namespace)
+	var selector map[string]any
+	workloadUID, workloadKind := "", ""
+	for _, resource := range []string{"deployments", "statefulsets"} {
+		items, err := k.get(ctx, base+"/"+resource, url.Values{"limit": {"100"}})
+		if err != nil {
+			return "", fmt.Errorf("read Kubernetes Workload list: %w", err)
+		}
+		if kubeString(kubeObject(items["metadata"])["continue"]) != "" {
+			return "", errors.New("Kubernetes Workload list exceeds 100; Pod mapping is uncertain")
+		}
+		for _, raw := range kubeList(items["items"]) {
+			item := kubeObject(raw)
+			if kubeString(kubeObject(item["metadata"])["name"]) != workload {
+				continue
+			}
+			if selector != nil {
+				return "", errors.New("Kubernetes Workload name is ambiguous")
+			}
+			workloadUID = kubeString(kubeObject(item["metadata"])["uid"])
+			if workloadUID == "" {
+				return "", errors.New("Kubernetes Workload UID is missing")
+			}
+			workloadKind = resource
+			specSelector := kubeObject(kubeObject(item["spec"])["selector"])
+			if len(kubeList(specSelector["matchExpressions"])) != 0 {
+				return "", errors.New("Kubernetes Workload selector expressions are not supported")
+			}
+			selector = kubeObject(specSelector["matchLabels"])
+			if len(selector) == 0 {
+				return "", errors.New("Kubernetes Workload has no exact Pod labels")
+			}
+		}
+	}
+	if selector == nil {
+		return "", errors.New("Kubernetes Workload was not found for Pod mapping")
+	}
+	replicaSetUIDs := map[string]bool{}
+	if workloadKind == "deployments" {
+		sets, err := k.get(ctx, base+"/replicasets", url.Values{"limit": {"100"}})
+		if err != nil {
+			return "", fmt.Errorf("read Kubernetes ReplicaSets for Workload: %w", err)
+		}
+		if kubeString(kubeObject(sets["metadata"])["continue"]) != "" {
+			return "", errors.New("Kubernetes ReplicaSet list exceeds 100; Pod mapping is uncertain")
+		}
+		for _, raw := range kubeList(sets["items"]) {
+			metadata := kubeObject(kubeObject(raw)["metadata"])
+			setUID := kubeString(metadata["uid"])
+			if setUID == "" {
+				continue
+			}
+			for _, reference := range kubeList(metadata["ownerReferences"]) {
+				owner := kubeObject(reference)
+				if kubeString(owner["kind"]) == "Deployment" && kubeString(owner["uid"]) == workloadUID {
+					replicaSetUIDs[setUID] = true
+				}
+			}
+		}
+	}
+	pods, err := k.get(ctx, "/api/v1/namespaces/"+url.PathEscape(namespace)+"/pods", url.Values{"limit": {"100"}})
+	if err != nil {
+		return "", fmt.Errorf("read Kubernetes Pods for Workload: %w", err)
+	}
+	if kubeString(kubeObject(pods["metadata"])["continue"]) != "" {
+		return "", errors.New("Kubernetes Pod list exceeds 100; mapping is uncertain")
+	}
+	all, ready := []string{}, []string{}
+	for _, raw := range kubeList(pods["items"]) {
+		pod := kubeObject(raw)
+		metadata := kubeObject(pod["metadata"])
+		name := kubeString(metadata["name"])
+		if name == "" || !kubeName.MatchString(name) {
+			continue
+		}
+		labels := kubeObject(metadata["labels"])
+		matched := true
+		for key, value := range selector {
+			if labels[key] != value {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		owned := false
+		for _, reference := range kubeList(metadata["ownerReferences"]) {
+			owner := kubeObject(reference)
+			if workloadKind == "statefulsets" && kubeString(owner["kind"]) == "StatefulSet" && kubeString(owner["uid"]) == workloadUID {
+				owned = true
+			}
+			if workloadKind == "deployments" && kubeString(owner["kind"]) == "ReplicaSet" && replicaSetUIDs[kubeString(owner["uid"])] {
+				owned = true
+			}
+		}
+		if !owned {
+			continue
+		}
+		all = append(all, name)
+		for _, rawCondition := range kubeList(kubeObject(pod["status"])["conditions"]) {
+			condition := kubeObject(rawCondition)
+			if kubeString(condition["type"]) == "Ready" && kubeString(condition["status"]) == "True" {
+				ready = append(ready, name)
+				break
+			}
+		}
+	}
+	if len(ready) == 1 {
+		return ready[0], nil
+	}
+	if len(ready) > 1 {
+		return "", errors.New("Kubernetes Workload has multiple ready Pods; mapping is ambiguous")
+	}
+	if len(all) == 1 {
+		return all[0], nil
+	}
+	if len(all) == 0 {
+		return "", errors.New("Kubernetes Workload has no matching Pod")
+	}
+	return "", errors.New("Kubernetes Workload has multiple unready Pods; mapping is ambiguous")
+}
+
+// Kubernetes reads the mapped Pod and related read-only resources. A configured
+// single-replica workload can resolve a replacement Pod after a rollout.
 func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	if !kubeName.MatchString(target.Namespace) || len(target.Namespace) > 63 ||
+		(target.Workload != "" && (!kubeName.MatchString(target.Workload) || len(target.Workload) > 253)) ||
 		(target.Pod != "" && (!kubeName.MatchString(target.Pod) || len(target.Pod) > 253)) {
-		return map[string]any{"status": "error", "reason": "Invalid Kubernetes namespace or Pod mapping"}
+		return map[string]any{"status": "error", "reason": "Invalid Kubernetes namespace, Workload or Pod mapping"}
 	}
-	if target.Pod == "" {
-		return map[string]any{"status": "unmapped", "reason": "Namespace and Pod mapping are required"}
+	if target.Pod == "" && target.Workload == "" {
+		return map[string]any{"status": "unmapped", "reason": "Namespace and Pod or Workload mapping are required"}
 	}
 	k, err := kubeCredentials(target)
 	if err != nil {
 		return map[string]any{"status": "not_configured", "reason": err.Error()}
 	}
 	base := "/api/v1/namespaces/" + url.PathEscape(target.Namespace)
-	pod, err := k.get(ctx, base+"/pods/"+url.PathEscape(target.Pod), nil)
+	podName := target.Pod
+	var pod map[string]any
+	if podName != "" {
+		pod, err = k.get(ctx, base+"/pods/"+url.PathEscape(podName), nil)
+	}
+	if target.Workload != "" && (podName == "" || errors.Is(err, kubeHTTPError(http.StatusNotFound))) {
+		podName, err = k.resolveWorkloadPod(ctx, target.Namespace, target.Workload)
+		if err != nil {
+			return map[string]any{"status": "error", "reason": err.Error()}
+		}
+		pod, err = k.get(ctx, base+"/pods/"+url.PathEscape(podName), nil)
+	}
 	if err != nil {
 		return map[string]any{"status": "error", "reason": err.Error()}
 	}
@@ -277,6 +419,10 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
 		"node": nil, "services": []any{}, "resourceMetrics": nil,
 		"resourceMetricsError": "metrics.k8s.io adapter is not available in Go"}
+	if podName != target.Pod {
+		result["podMapping"] = map[string]any{"configured": target.Pod, "resolved": podName,
+			"workload": target.Workload, "source": "workload_selector"}
+	}
 	if nodeName != "" && kubeName.MatchString(nodeName) {
 		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
 			info := kubeObject(node["status"])
@@ -377,7 +523,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	}
 	metricPath := "/apis/metrics.k8s.io/v1beta1"
 	if podMetrics, err := k.get(ctx, metricPath+"/namespaces/"+url.PathEscape(target.Namespace)+
-		"/pods/"+url.PathEscape(target.Pod), nil); err == nil {
+		"/pods/"+url.PathEscape(podName), nil); err == nil {
 		usage := []any{}
 		for _, raw := range kubeList(podMetrics["containers"]) {
 			container := kubeObject(raw)

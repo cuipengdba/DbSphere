@@ -34,6 +34,8 @@ Go Linux node_exporter 联合采集现可在 PG 连接失败时保留主机指�
 
 Go K8S 第一段适配器只接受 ServiceAccount 或静态 bearer token kubeconfig，拒绝执行式凭据插件与关闭 TLS 校验。TLS 模拟 API 验证了只读请求、按 Pod UID 限定事件、容器 OOM、Node/PVC/PV 信息、Pod/Node `metrics.k8s.io` 与 403 缺口；PG18 实库测试验证 PG 连接失败与近期同 Pod OOM 证据归入一个事件 ID，并在恢复时关闭。2026-11-18 又在本机 kind 中将 Go 服务部署为 Pod，使用现有只读 ServiceAccount 的自动挂载凭据，完成真实 PG18、K8S 指标和探针失败→同事件根因候选→恢复样本的闭环；该账号不能读 Secret 或删除 Pod。原外部只读 kubeconfig token 仍过期，临时 token 签发曾被自动审批阻止，本次未签发新 token。Go Compose 与离线包支持可选的只读 kubeconfig 挂载，其真实外部接入仍未验收。
 
+Pod 重建后的纳管补充：Go 资产可只填写单 Pod 的 Deployment/StatefulSet 名称，或同时保存初始 Pod 名。初始 Pod 返回 404 时，采集器只读列出同 Namespace 的 Workload、ReplicaSet 和 Pod，以标签和 owner UID 确认归属；唯一就绪 Pod 才自动跟随，并在样本中标记原映射与解析结果。多副本同时就绪、列表超过 100 或权限缺失会报映射歧义，不会随意选 Pod。TLS 模拟 API 与本机 kind 已验证重建后旧 Pod 映射、Workload-only 映射仍能取得 PG18/K8S 成功样本；大集群分页和多副本主备映射仍待设计。
+
 Go K8S 告警移植了 Pod 未就绪、Pod 未调度、近期调度/挂载事件、近期 OOMKilled、Node 压力及可选 Prometheus PVC 使用率规则。PG18 实库验证了 PG 连接故障恢复后，OOM 告警仍触发时同一事件 ID 保持开放，两个信号都恢复才关闭。PVC 告警的真实 Prometheus 路径仍待验收。
 Go 现从同一资产的前次 PG18 样本计算 WAL 归档失败与同 Pod 重启增量；首次采样、计数回退或 Pod UID 改变保持未知。PG18 实库演练验证两条增量规则触发并在后续零增量时按原事件 ID 恢复。PVC 告警的真实 Prometheus 路径仍待验收。
 
