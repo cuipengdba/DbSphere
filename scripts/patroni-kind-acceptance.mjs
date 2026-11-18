@@ -180,6 +180,12 @@ assert.ok(closing?.payload?.sampleId);
 const candidate = detail.analysis.candidates.find(row => row.code === 'patroni_leader_anomaly');
 assert.ok(candidate?.supports.includes(`sample:${noLeaderSample.id}`));
 assert.ok(detail.analysis.graph.nodes.some(row => row.id === `sample:${closing.payload.sampleId}`));
+const reportResponse = await fetch(`${base}/api/events/${eventId}/report?format=md`,
+  { headers: { Cookie: cookie }, signal: AbortSignal.timeout(20000) });
+assert.equal(reportResponse.status, 200);
+const report = await reportResponse.text();
+assert.ok(report.includes(eventId) && report.includes('patroni_leader_anomaly') &&
+  report.includes(noLeaderSample.id), 'report must preserve the availability evidence chain');
 const result = { eventId, assetId: asset.id, targetPGMajor: Number(major), leader, survivor,
   noLeaderSampleId: noLeaderSample.id, unavailableSampleId: unavailableSample.id,
   recoverySampleId: closing.payload.sampleId, rejoinSampleId: recovery.id,
