@@ -44,6 +44,5 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 - [功能与产品边界](docs/PRODUCT_DESIGN.md)
 - [V0.1–V1.0 功能规划](docs/ROADMAP.md)
 - [开发任务归档](docs/DEVELOPMENT_TASKS.md)
-- [参考产品与资料来源](docs/RESEARCH.md)
 
-DbSphere 采用 [Apache License 2.0](LICENSE)。设计参考 DeepLens、DBdoctor 与 Pigsty 的公开功能和信息组织，独立实现代码与界面，不复用其程序、视觉素材或仪表盘。欢迎通过 [GitHub Issues](https://github.com/cuipengdba/DbSphere/issues) 提交 PostgreSQL 故障场景与需求。
+DbSphere 是独立自主研发的开源项目，采用 [Apache License 2.0](LICENSE)。欢迎通过 [GitHub Issues](https://github.com/cuipengdba/DbSphere/issues) 提交 PostgreSQL 故障场景与需求。
