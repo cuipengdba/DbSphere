@@ -151,6 +151,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	traceCount := 0
 	databaseSpans := 0
 	services := []string{}
+	traceDBSpans := []traceDBSpan{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
@@ -183,6 +184,11 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if kind == "postgresql_client" {
 			databaseSpans++
 			spanType = "db_client_span"
+			if parentID != nil {
+				traceDBSpans = append(traceDBSpans, traceDBSpan{
+					Node: spanNode, Parent: "span:" + traceID + ":" + *parentID,
+					Service: service, Start: at, End: endedAt})
+			}
 		}
 		addNode(spanNode, spanType, fmt.Sprintf("%s · %d ms · %s", service,
 			endedAt.Sub(at).Milliseconds(), spanStatus),
@@ -206,6 +212,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if spanSet[edge["from"]] {
 			edges = append(edges, edge)
 		}
+	}
+	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
+		candidates = append(candidates, candidate)
 	}
 	if traceCount == 0 {
 		missing = append(missing, "应用 Trace 未接入或当前时间窗无可关联 Span")

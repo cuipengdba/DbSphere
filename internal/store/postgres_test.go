@@ -231,6 +231,7 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	encoded, err := json.Marshal(detail)
 	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) ||
 		!strings.Contains(string(encoded), "connection_pressure") || !strings.Contains(string(encoded), "lock_chain") ||
+		!strings.Contains(string(encoded), "trace_lock_correlated") ||
 		!strings.Contains(string(encoded), "blocked_by") || !strings.Contains(string(encoded), "sql_fingerprint") ||
 		!strings.Contains(string(encoded), "scheduled_on") || !strings.Contains(string(encoded), "pvc:") ||
 		!strings.Contains(string(encoded), "linux:") || !strings.Contains(string(encoded), "parent_of") ||
