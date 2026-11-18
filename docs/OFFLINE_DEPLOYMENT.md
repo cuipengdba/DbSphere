@@ -6,9 +6,9 @@
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18，连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。
 
-Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证删除本机镜像后的离线安装、健康接口及重复运行；本地 Go 容器也验证了首次管理员登录。Go 后端功能对等、故障演练及升级回滚尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
+Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证删除本机镜像后的离线安装、健康接口及重复运行；本地 Go 容器也验证了首次管理员登录。Go 后端功能对等、真实故障演练及未来 schema 变更的升级回滚尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
 
-Go 版额外使用 `scripts/go-offline-upgrade-rollback-smoke.sh` 在 Linux CI 演练旧 Go 包 → 当前包 → 旧 Go 包，复用独立 PG18 数据卷，并逐段读取同一资产、样本和事件 ID。首次加入的演练仍待 CI 结果，后续 schema 变更必须另做前向迁移和可回滚性验证。
+Go 版额外使用 `scripts/go-offline-upgrade-rollback-smoke.sh` 在 Linux CI 演练旧 Go 包 → 当前包 → 旧 Go 包，复用独立 PG18 数据卷，并逐段读取同一资产、样本和事件 ID。[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44232205949) 已通过该演练；后续 schema 变更必须另做前向迁移和可回滚性验证。
 
 Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发部署）或 `${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}/dbsphere-go.env`（离线包）追加 `DBSPHERE_KUBECONFIG_HOST_PATH=/absolute/path/to/read-only-kubeconfig` 后重新执行一键脚本。脚本校验文件存在并只读挂载；配置需使用静态 ServiceAccount token 和受信 CA，不执行 kubeconfig 中的 `exec` 凭据插件。Go K8S 适配器支持已映射 Pod 的状态、Node、Service、PVC/PV、Pod 事件与可用的 metrics.k8s.io，真实集群验收尚未完成。
 

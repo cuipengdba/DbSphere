@@ -40,11 +40,11 @@ Go 只读 PostgreSQL 诊断现覆盖 14 个分区，PG14 与 PG18 实库及真�
 
 Go 自动采集调度已实现：Linux 与已映射的 K8S PostgreSQL 资产按配置间隔并发采集 PG、主机/K8S 与可选 PgBouncer，在 PG18 写入样本/事件；默认 Compose 启用，连接外部 PG18 的 Go 开发配置默认关闭，需显式启用，避免与历史 Node 采集并行。本机真实 PG18 演练验证自动连接失败生成同一事件入口，仍须五版与恢复矩阵 CI。
 
-Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 升级回滚和功能对等仍须完成。
+Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 旧开发包 → 当前包 → 旧开发包的离线升级回滚已通过 [Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44232205949)，同一 PG18 资产、样本、事件 ID 和配置哈希保持；未来 schema 变更、功能对等与正式发布仍须完成。
 
 根因分析迁移补充：Go 已能从同一事件 ID 关联原始样本、应用服务与父子 Span、锁链、SQL 指纹、Linux 和 K8S 拓扑。确定性候选现覆盖历史 Pod OOMKilled 关联、连接数压力、锁阻塞、Linux 内存/磁盘、PgBouncer 等待、K8S Pod 未就绪/OOM/调度、Node 压力与 PVC 高水位；每个候选显示支持证据、时间顺序与局限，管理员确认/驳回写入该事件的证据时间线。PG18 实库验证 PG 连接失败时仍保留同采样的 K8S OOM 候选和同一事件 ID；应用父 Span、慢 PG 客户端 Span 与同窗锁链样本可形成低置信度候选，缺 PID 直接映射会明示；同一事件 ID 的 SQL 计划退化候选现须同时有事前基线、新计划和同期慢日志，并在证据图给出三条可打开的来源，支持人工复核；缺任一证据不推断。**复制/WAL、SQL 退化的完整规则矩阵及真实跨层故障仍未完成，证据不足显示“未定位”**。
 
-Go 事件页现在可下载 Markdown/HTML 复盘报告，报告列出同一事件 ID 的状态、资产、应用 Span 覆盖、根因候选及人工结论、信号缺口和最多 500 条证据时间线。报告只输出证据/样本/规则 ID 与受控摘要，不导出原始 SQL 或指标 JSON；达到时间线上限时明确提示。PG18 实库和 API 测试覆盖鉴权、脱敏、事件/样本 ID，真实浏览器完成下载验收。处置操作和恢复验证的完整记录仍待后续版本实现。
+Go 事件页现在可下载 Markdown/HTML 复盘报告，报告列出同一事件 ID 的状态、资产、应用 Span 覆盖、根因候选及人工结论、信号缺口和最多 500 条证据时间线。报告输出证据/样本/规则 ID、受控摘要和管理员主动填写的处置备注，不导出自动采集的原始 SQL 或指标 JSON；达到时间线上限时明确提示。PG18 实库和 API 测试覆盖鉴权、脱敏、事件/样本 ID，真实浏览器完成下载验收。事件页已能记录人工诊断/处置，并要求成功样本支撑恢复验证；完整工单审批和生产处置演练仍待后续版本。
 
 Go 可选 AI 接入已实现手动事件解读的第一段：默认关闭，配置本机 HTTP 或显式开启的外部 HTTPS Chat Completions 后才在事件页显示按钮。发送的 12 KiB 以内摘要省略资产名、服务名、人工备注及原始 SQL；模型回复须包含当前事件真实证据 ID，不符合格式或超时就返回错误，不影响规则根因候选。调用成功/失败及引用 ID 作为 `ai_invocation` 留在同一事件时间线，API Key 和回复不入库。真实外部模型、预算/保留期、自动预警及问答仍未完成；配置见 [AI 接入说明](AI_INTEGRATION.md)。
 

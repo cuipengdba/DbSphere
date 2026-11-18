@@ -387,6 +387,30 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if eventID == "" {
 		t.Fatal("collection failure event missing")
 	}
+	responsePath := "/api/events/" + eventID + "/response"
+	responseBody := `{"phase":"mitigation","note":"已核查采集连接失败，等待目标实例恢复","sampleId":""}`
+	writeResponse := func(cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, responsePath, strings.NewReader(responseBody))
+		request.Header.Set("Content-Type", "application/json")
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		if csrf != "" {
+			request.Header.Set("X-CSRF-Token", csrf)
+		}
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, request)
+		return result
+	}
+	if got := writeResponse(nil, ""); got.Code != http.StatusUnauthorized {
+		t.Fatal("anonymous event response accepted")
+	}
+	if got := writeResponse(login.Result().Cookies()[0], ""); got.Code != http.StatusForbidden {
+		t.Fatal("event response without CSRF accepted")
+	}
+	if got := writeResponse(login.Result().Cookies()[0], credentials.CSRF); got.Code != http.StatusOK {
+		t.Fatalf("event response failed: %d %s", got.Code, got.Body.String())
+	}
 	eventRequest := httptest.NewRequest(http.MethodGet, "/api/events/"+eventID, nil)
 	eventRequest.AddCookie(login.Result().Cookies()[0])
 	eventDetail := httptest.NewRecorder()

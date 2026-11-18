@@ -99,6 +99,17 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 			data.Analysis.Candidates[i].Review.Reason = "[人工备注已省略]"
 		}
 	}
+	for i := range data.Event.Evidence {
+		item := &data.Event.Evidence[i]
+		if item.Kind != "operator_response" && item.Kind != "recovery_verified" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(item.Payload, &payload) == nil {
+			payload["note"] = "[人工备注已省略]"
+			item.Payload, _ = json.Marshal(payload)
+		}
+	}
 	prompt := renderEventMarkdown(data)
 	if len(prompt) > 12000 {
 		cut := 12000
@@ -167,6 +178,25 @@ func renderEventMarkdown(data eventReportData) string {
 				reportText(candidate.Review.Reason))
 		}
 	}
+	out.WriteString("## 处置与恢复验证\n\n")
+	responseCount := 0
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "operator_response" && evidence.Kind != "recovery_verified" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(evidence.Payload, &payload) != nil {
+			continue
+		}
+		responseCount++
+		fmt.Fprintf(&out, "- %s · %s · 证据 %s · 成功采样 %s：%s\n",
+			reportTime(&evidence.ObservedAt), reportText(stringValue(payload["phase"])), evidence.ID,
+			reportText(stringValue(payload["sampleId"])), reportText(stringValue(payload["note"])))
+	}
+	if responseCount == 0 {
+		out.WriteString("暂无人工处置或恢复验证记录。\n")
+	}
+	out.WriteString("\n")
 	out.WriteString("## 信号缺口\n\n")
 	if len(data.Analysis.MissingSignals) == 0 {
 		out.WriteString("无已标记的信号缺口。\n\n")

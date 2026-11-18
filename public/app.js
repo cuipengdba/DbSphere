@@ -767,6 +767,40 @@ async function showEvent(id) {
     });
     target.append(acknowledge);
   }
+  const responseForm = document.createElement('form'); responseForm.className = 'response-form';
+  responseForm.append(cell('h4', '处置与恢复验证'));
+  const phaseLabel = cell('label', '记录类型');
+  const phase = document.createElement('select');
+  for (const [value, label] of [['diagnosis', '诊断记录'], ['mitigation', '处置记录'],
+    ['recovery_verification', '恢复验证']]) {
+    const option = document.createElement('option'); option.value = value; option.textContent = label;
+    if (value === 'recovery_verification' && event.status !== 'resolved') option.disabled = true;
+    phase.append(option);
+  }
+  phaseLabel.append(phase);
+  const noteLabel = cell('label', '处理记录（5–500 字）');
+  const note = document.createElement('textarea'); note.required = true; note.minLength = 5; note.maxLength = 500;
+  note.rows = 3; note.placeholder = '记录核查、处置或恢复验证依据'; noteLabel.append(note);
+  const sampleLabel = cell('label', '成功采样 ID');
+  const sample = document.createElement('input'); sample.placeholder = '恢复后成功采样的 UUID';
+  sample.value = [...event.evidence].reverse().find(item =>
+    ['collection_recovered', 'alert_recovered'].includes(item.kind) && item.payload?.sampleId)?.payload.sampleId || '';
+  sampleLabel.append(sample);
+  const syncPhase = () => { sampleLabel.hidden = phase.value !== 'recovery_verification';
+    sample.required = phase.value === 'recovery_verification'; };
+  phase.addEventListener('change', syncPhase); syncPhase();
+  const saveResponse = cell('button', '保存到事件时间线'); saveResponse.type = 'submit';
+  responseForm.append(phaseLabel, noteLabel, sampleLabel, saveResponse);
+  responseForm.addEventListener('submit', async formEvent => {
+    formEvent.preventDefault();
+    try {
+      await api(`/api/events/${event.id}/response`, 'POST', {
+        phase: phase.value, note: note.value.trim(), sampleId: sampleLabel.hidden ? '' : sample.value.trim()
+      });
+      notice('处理记录已保存到当前事件。'); await showEvent(event.id); await refresh();
+    } catch (error) { notice(error.message, true); }
+  });
+  target.append(responseForm);
   for (const evidence of event.evidence) {
     let text = evidence.payload.error || evidence.payload.sampleId || '';
     if (evidence.kind === 'k8s_state') text = evidence.payload.status === 'ok'
@@ -783,6 +817,8 @@ async function showEvent(id) {
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
+    if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') text =
+      `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
     target.append(cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence'));
   }
 }

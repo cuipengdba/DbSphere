@@ -44,6 +44,7 @@ var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-
 var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-summary$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
+var eventResponsePath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/response$`)
 var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|slow-logs|sql-plans|series|capacity)$`)
 var slowLogImportPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/slow-logs/import$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
@@ -66,6 +67,9 @@ type EventStore interface {
 }
 type EventReportReader interface {
 	EventReport(context.Context, string, string) (string, error)
+}
+type EventResponseStore interface {
+	RecordEventResponse(context.Context, string, string, string, string) error
 }
 type EventAIStore interface {
 	EventAIEvidence(context.Context, string) (string, []string, error)
@@ -771,6 +775,36 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 			}
 			if r.Method == http.MethodPost {
+				if match := eventResponsePath.FindStringSubmatch(r.URL.Path); match != nil {
+					writer, ok := store.(EventResponseStore)
+					if !ok {
+						respond(w, http.StatusNotImplemented, map[string]string{"error": "Event response unavailable"})
+						return
+					}
+					var input struct {
+						Phase    string `json:"phase"`
+						Note     string `json:"note"`
+						SampleID string `json:"sampleId"`
+					}
+					if readJSON(w, r, &input) != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid event response"})
+						return
+					}
+					err := writer.RecordEventResponse(r.Context(), match[1], input.Phase, input.Note, input.SampleID)
+					switch {
+					case errors.Is(err, storepkg.ErrInvalidEventResponse):
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Valid phase and note are required"})
+					case errors.Is(err, storepkg.ErrEventNotFound):
+						respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+					case errors.Is(err, storepkg.ErrRecoveryNotVerified):
+						respond(w, http.StatusConflict, map[string]string{"error": "Recovery requires a successful sample after event resolution"})
+					case err != nil:
+						respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event response storage unavailable"})
+					default:
+						respond(w, http.StatusOK, map[string]bool{"ok": true})
+					}
+					return
+				}
 				if match := eventDecisionPath.FindStringSubmatch(r.URL.Path); match != nil {
 					var input struct {
 						Code     string `json:"code"`

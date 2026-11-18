@@ -52,8 +52,10 @@ func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, erro
 		return nil, fmt.Errorf("read event: %w", err)
 	}
 	event.Evidence = []eventEvidence{}
-	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,observed_at,payload_json
-		FROM evidence WHERE event_id=$1 ORDER BY observed_at,id LIMIT 500`, id)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,observed_at,payload_json FROM (
+		SELECT id,kind,observed_at,payload_json FROM evidence WHERE event_id=$1
+		ORDER BY observed_at DESC,id DESC LIMIT 500
+		) latest ORDER BY observed_at,id`, id)
 	if err != nil {
 		return nil, fmt.Errorf("read event evidence: %w", err)
 	}

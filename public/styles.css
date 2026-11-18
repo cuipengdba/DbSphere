@@ -73,3 +73,5 @@ button{background:#245ea7}
 .flow-step.missing{border-style:dashed;color:#8b6c5d}
 @media(max-width:1080px){.workspace-nav button.active{box-shadow:inset 0 -3px #2a66bd}}
 @media(max-width:650px){.flow-strip{grid-template-columns:1fr 1fr}}
+
+.response-form{display:grid;gap:10px;margin:18px 0;padding:16px;border:1px solid #dce7ed;border-radius:12px;background:#f8fbfc}.response-form h4{margin:0}.response-form label{display:grid;gap:5px;font-size:13px;color:#405b68}.response-form select,.response-form input,.response-form textarea{width:100%;border:1px solid #cbdbe2;border-radius:8px;padding:9px 10px;background:#fff;color:#183340;font:inherit}.response-form textarea{resize:vertical}.response-form button{justify-self:start}.response-form [hidden]{display:none}
