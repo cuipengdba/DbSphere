@@ -108,7 +108,7 @@ rules:
     verbs: [list]
   - apiGroups: [metrics.k8s.io]
     resources: [pods]
-    verbs: [list]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -134,7 +134,7 @@ rules:
     verbs: [get]
   - apiGroups: [metrics.k8s.io]
     resources: [nodes]
-    verbs: [list]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

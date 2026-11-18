@@ -42,7 +42,7 @@ PG18 存储是 DbSphere 自身的监控库，必须与被纳管的业务库隔�
 
 浏览器选择 K8S 运行环境，填写 kubeconfig context 和 Namespace 后可查询该 Namespace 的 Pod，并按容器镜像/5432 端口提示可能的 PostgreSQL Pod。选择后会填入 Pod、Workload 与 Node，列出匹配的 Service。数据库地址须填写从 DbSphere 运行位置实际可达的地址；集群外的 Compose 容器通常不能直接解析 `.svc` 域名。每类资源最多读取 100 项；结果截断或缺少权限会显示具体原因。Pod 重建后应重新确认映射。
 
-Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `get,list`，`services`、`events` 的 `list`，以及 `deployments`、`replicasets`、`statefulsets` 的 `list`。关联 Node 和 PV 需额外在 ClusterRole 授予 `nodes`、`persistentvolumes` 的 `get`。若集群提供 metrics-server，可在 Namespace 授予 `metrics.k8s.io/pods` 的 `list`，在 ClusterRole 授予 `metrics.k8s.io/nodes` 的 `list`。测试用的具体只读配置见 [`k8s-postgres.yaml`](../test/fixtures/k8s-postgres.yaml)，其中 PostgreSQL 测试密码不得用于生产。
+Namespace 内的 ServiceAccount 需要 `pods`、`persistentvolumeclaims` 的 `get,list`，`services`、`events` 的 `list`，以及 `deployments`、`replicasets`、`statefulsets` 的 `list`。关联 Node 和 PV 需额外在 ClusterRole 授予 `nodes`、`persistentvolumes` 的 `get`。若集群提供 metrics-server，Go 采集器按指定 Pod/Node 发起 `get`，因此 Namespace 中 `metrics.k8s.io/pods` 和 ClusterRole 中 `metrics.k8s.io/nodes` 都需 `get`；需要兼容列表发现时可同时授予 `list`。本机 kind 曾因示例仅含 `list` 返回 403，补充只读 `get` 后实际采到了 Pod/Node 资源指标。测试用配置见 [`k8s-postgres.yaml`](../test/fixtures/k8s-postgres.yaml)，其中 PostgreSQL 测试密码不得用于生产。
 
 在 Compose 模式使用 K8S 时，将只读 kubeconfig 保存为 Linux 主机上仅运维账号可读的文件，并在 `deploy/compose/.env` 增加 `DBSPHERE_KUBECONFIG_HOST_PATH=/绝对路径/readonly.kubeconfig`，再运行 `bash scripts/one-click.sh`。脚本验证文件存在后将其只读挂载到应用容器。kubeconfig 的 context 名须与资产中填写的集群名一致；DbSphere 禁止执行其中的外部认证插件。Kubernetes API 地址须从应用容器可达，ServiceAccount token 应按集群策略轮换。
 
