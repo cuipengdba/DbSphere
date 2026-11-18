@@ -1,75 +1,49 @@
 # DbSphere
 
-**中文名：全域数据库智能运维管理平台**
+**全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-**英文名：DbSphere**
+![当前开发版本 v0.6.0-dev](https://img.shields.io/badge/当前开发版本-v0.6.0--dev-2F6FEB?style=flat-square) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
-DbSphere 是一个以 PostgreSQL 为第一阶段重点的开源数据库运维平台。目标是在一处完成资产纳管、持续监控、告警、巡检、SQL 性能诊断、故障定位、根因分析和处置追踪。V0.1–V1.0 支持 PostgreSQL 14–18，覆盖 Linux 主机及运行在 Kubernetes 中的 PostgreSQL，采用浏览器/服务器（B/S）架构；“全域”表示未来的产品方向，V1.0 不宣称支持所有数据库。
+DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。第一阶段支持 PostgreSQL 14–18；“全域”是产品方向，不表示当前支持所有数据库。
 
-**2026-11-17 架构调整**：V1.0 后端必须为 Go，前端为静态页面加 HTTP API，并以单文件 Go 程序和 PG18 长期存储提供简化部署。当前已发布 V0.1–V0.5 与 V0.6 开发预览仍是 Node.js 历史实现。Go 开发版已具备独立镜像/离线包、PG14–18 基础采集、Linux node_exporter、初步 K8S 与 PgBouncer 只读采集、二十四条 PG/Linux/K8S/PgBouncer/采集器告警规则及同一事件 ID 的证据图；功能尚未与历史版本对等，不能作为 V1.0 正式版。六视图静态工作台已重整。进度和发布门槛见[Go 与工作台迁移清单](docs/GO_UI_MIGRATION.md)。
+## 功能说明
 
-已发布 [V0.1.0 基础版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.1.0)、[V0.2.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.2.0)、[V0.3.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.3.0)、[V0.4.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.4.0) 和 [V0.5.0](https://github.com/cuipengdba/DbSphere/releases/tag/v0.5.0)：Docker Compose 一键部署、独立 PostgreSQL 18 存储、Linux 与 Kubernetes 资源采集、跨层告警、静默维护窗、可选通知、版本化巡检、监控存储备份恢复演练及 SQL 性能洞察。后续版本仅在满足各自验收条件后发布。
+| 领域 | 功能 |
+|---|---|
+| 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、备份信息和应用 Trace。 |
+| 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件和连接池状态。缺失或无权限的数据明确标为未知。 |
+| 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；证据不足时显示“未定位”。 |
+| 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |
+| 巡检与报告 | PostgreSQL、Linux、Kubernetes 和备份模板；手动与定时巡检、阈值版本、异常与未知项、历史差异、Markdown/HTML 报告及关联事件 ID。 |
+| SQL 性能 | Top SQL 指纹与趋势、退化线索、慢日志和执行计划安全导入；不保存原始 SQL 文本与参数。 |
+| 数据与部署 | 独立 PostgreSQL 18 保存长期监控数据；B/S 架构。提供容器化一键部署与离线部署方案，目标机无需安装 Node.js 或 Go 编译器。 |
+| AI 增强 | 规划可选模型接入，用于证据解读、预警建议和运维问答。**不接模型时**，采集、告警、巡检和规则分析仍应独立可用；模型不默认执行生产变更。 |
 
-## 核心原则
+### 一个问题的全链路定位
 
-- **没有 AI 也能运维**：采集、阈值与规则告警、巡检、故障证据和根因候选完全独立运行；模型仅增强解释、问答与预警建议。
-- **先观察，后操作**：默认只读纳管。生产处置动作需单独授权、审批、预演与审计。
-- **证据先于结论**：每条根因候选都展示时间线、相关指标、日志、SQL、等待/锁、拓扑与反证，标明置信程度和数据缺口。
-- **明确采集边界**：仅有 PostgreSQL 连接串时，提供数据库侧观测；主机、连接池、HA、备份及应用链路需要相应采集器、组件接口或应用 Trace 接入。
-- **可独立部署**：面向已有 PostgreSQL、托管 PostgreSQL 和云 RDS，优先纳管，不要求由 DbSphere 创建或接管数据库集群。
+1. 从异常告警或资产进入问题事件，先确认影响范围与事件 ID。
+2. 按时间查看应用 Trace、PostgreSQL 会话/等待/SQL、PgBouncer、Linux 与 Kubernetes 的同窗证据。
+3. 查看根因候选、支持证据、时间顺序和缺失信号；证据不足时保持“未定位”。
+4. 记录人工结论与处置，再以新样本和恢复证据关闭同一个事件。
 
-## 阅读规划
+## 当前交付状态
 
-- [V0.1–V1.0 十版本路线图](docs/ROADMAP.md)
-- [产品设计与能力边界](docs/PRODUCT_DESIGN.md)
-- [全版本开发任务清单](docs/DEVELOPMENT_TASKS.md)
-- [当前开发状态与测试记录](docs/DEVELOPMENT_STATUS.md)
-- [部署与接入](docs/DEPLOYMENT.md)
-- [V0.1.0 发行说明](docs/RELEASE_NOTES_V0.1.md)
-- [V0.2.0 发行说明](docs/RELEASE_NOTES_V0.2.md)
-- [V0.3.0 发行说明](docs/RELEASE_NOTES_V0.3.md)
-- [V0.4.0 发行说明](docs/RELEASE_NOTES_V0.4.md)
-- [V0.5.0 发行说明](docs/RELEASE_NOTES_V0.5.md)
-- [V0.2 一键部署与 PG18 存储](docs/DEPLOYMENT_V0.2.md)
-- [V0.3 告警通知配置](docs/NOTIFICATIONS_V0.3.md)
-- [V0.3 PG18 分区与保留策略](docs/STORAGE_V0.3.md)
-- [V0.4 巡检与可恢复性](docs/INSPECTIONS_V0.4.md)
-- [V0.5 SQL 性能洞察](docs/SQL_PERFORMANCE_V0.5.md)
-- [V0.6 Linux 一键离线部署开发记录](docs/OFFLINE_DEPLOYMENT.md)
-- [Go 后端与分层工作台迁移清单](docs/GO_UI_MIGRATION.md)
-- [V0.7 Trace 开发记录](docs/TRACE_V0.7_PROGRESS.md)
+`main` 的开发版本为 **v0.6.0-dev**；[最新正式发布版](https://github.com/cuipengdba/DbSphere/releases/latest)为现有 Node.js 后端实现。V1.0 的交付目标是 **Go 后端 + 内嵌静态前端 + HTTP API + 独立 PG18 存储**。Go 版已能进行 PG14–18 基础采集、Linux/K8S/PgBouncer 只读采集、规则告警、同事件 ID 证据分析和部分巡检，但尚未完成全部功能对等、生产环境验收与正式发布。完整的跨应用根因分析、AI、生产 K8S/通知路径及离线升级回滚仍在开发。具体状态以[开发进度](docs/DEVELOPMENT_STATUS.md)和[Go 迁移清单](docs/GO_UI_MIGRATION.md)为准。
+
+## 部署与接入
+
+- [部署说明](docs/DEPLOYMENT.md)：容器一键部署、PG18 存储及运行配置。
+- [离线部署](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序与容器离线包的开发验收范围。
+- [Kubernetes 接入](docs/DEPLOYMENT_V0.2.md)：只读 ServiceAccount、Namespace 与指标权限。
+- [告警通知](docs/NOTIFICATIONS_V0.3.md)、[巡检报告](docs/INSPECTIONS_V0.4.md)、[SQL 性能](docs/SQL_PERFORMANCE_V0.5.md)：各功能的配置与使用。
+
+纳管目标建议使用专用 `pg_monitor` 账号，默认只读。仅有 PostgreSQL 连接串时只提供数据库侧观测；主机、K8S、连接池、备份和应用链路需要相应的数据源。对外访问应使用 HTTPS 入口。
+
+## 项目文档
+
+- [功能与产品边界](docs/PRODUCT_DESIGN.md)
+- [V0.1–V1.0 功能规划](docs/ROADMAP.md)
+- [开发任务归档](docs/DEVELOPMENT_TASKS.md)
 - [参考产品与资料来源](docs/RESEARCH.md)
 
-## 当前可用范围
-
-已实现浏览器登录、PostgreSQL 资产增删改查、AES-256-GCM 加密凭据、PG14–18 版本识别、基础只读采样、采集失败/恢复事件与证据时间线。V0.2 的 PG 诊断采集覆盖会话、等待、阻塞链、长事务、WAL、检查点、autovacuum 和表/索引容量，五个大版本均有真实锁等待演练。Linux 主机可从 node_exporter 读取资源指标；K8S 可按 Namespace 发现 Pod、Workload、Service、Node、PVC/PV，并读取可用的 metrics-server 指标和可选的 Prometheus PVC 用量。PgBouncer 连接池统计为可选接入。V0.3 加入规则告警、同事件 ID 告警证据、采样陈旧状态、静默维护窗、持久化 Webhook/邮件通知和 PG18 月度采样/事件分区。V0.4 加入 PostgreSQL/Linux/K8S/备份巡检、容量粗估、Markdown/HTML 报告和 PG18 存储恢复演练。V0.5 加入 Top SQL 指纹趋势、退化提示、慢日志和执行计划安全导入。跨应用的完整全链路根因分析仍在 V0.6–V0.7 任务中。控制台会明确呈现数据缺口。
-
-### 本机开发启动
-
-Go 后端开发版可在 Linux 联网构建机运行 `bash scripts/one-click-go.sh`，以独立 PG18 和默认 `127.0.0.1:8081` 启动；Go 静态二进制与一键离线包说明见[离线部署文档](docs/OFFLINE_DEPLOYMENT.md)。可选 OTLP/HTTP JSON Trace 接入已能把应用 Span 关联到现有事件 ID，范围与限制见[Trace 开发记录](docs/TRACE_V0.7_PROGRESS.md)。以下 Node.js 命令用于已发布历史实现。
-
-需要 Node.js 24 和 pnpm。首次启动先设置不少于 12 位的 `DBSPHERE_ADMIN_PASSWORD`，再执行：
-
-```bash
-pnpm install --frozen-lockfile
-export DBSPHERE_ADMIN_PASSWORD='choose-a-strong-password'
-pnpm start
-```
-
-默认仅监听 `127.0.0.1:8080`，数据保存在 `./data`。可设置 `DBSPHERE_DATA_DIR`、`DBSPHERE_HOST`、`DBSPHERE_PORT`、`DBSPHERE_COLLECT_INTERVAL_SECONDS`。首次启动会在数据目录生成权限为 `0600` 的主密钥；正式部署建议从独立密钥管理渠道设置 32 字节 base64 编码的 `DBSPHERE_MASTER_KEY`。更换主密钥前必须处理已有加密凭据。
-
-Linux 容器镜像可用 `docker build -t dbsphere:dev .` 构建。对外提供浏览器访问时，应通过 HTTPS 反向代理，并设置 `DBSPHERE_COOKIE_SECURE=true`。目前尚未通过生产部署与安全验收。
-
-建议为纳管目标创建专用 PostgreSQL 登录角色并授予 `pg_monitor`；DbSphere 不需要数据库超级用户。PG14 的监控兼容已纳入测试，但其上游已停止安全维护，控制台会显示 EOL 提示。
-
-### Kubernetes 接入
-
-如果 DbSphere 在 Kubernetes 内运行，可给它配置只读 ServiceAccount；如果在集群外运行，设置 `DBSPHERE_KUBECONFIG` 为可信 kubeconfig 文件路径，资产里的“K8S 集群”填写该文件中的 context 名。服务端禁止执行 kubeconfig 中的外部认证插件。Compose 部署可在 `.env` 中设置只读 kubeconfig 的绝对路径。所需的 Namespace/ClusterRole 权限与可选指标来源见 [V0.2 部署说明](docs/DEPLOYMENT_V0.2.md)。kind 中的 PostgreSQL 18 Pod、PVC/PV、Service、Node、只读 ServiceAccount 与容器重启已通过实际演练。
-
-## 许可与参考边界
-
-DbSphere 仓库采用 [Apache License 2.0](LICENSE)。DeepLens 的本地安装包及其程序代码、DBdoctor 的产品实现、Pigsty 的代码和界面均不属于本仓库；这里只参考公开或用户提供的功能信息，DbSphere 将独立设计与实现。若未来复用第三方组件或素材，应逐项核查原始许可与署名要求。
-
-## 参与讨论
-
-路线图是交付计划。建议通过 GitHub Issues 反馈 PostgreSQL 场景、关键指标、故障案例与版本优先级。
+DbSphere 采用 [Apache License 2.0](LICENSE)。设计参考 DeepLens、DBdoctor 与 Pigsty 的公开功能和信息组织，独立实现代码与界面，不复用其程序、视觉素材或仪表盘。欢迎通过 [GitHub Issues](https://github.com/cuipengdba/DbSphere/issues) 提交 PostgreSQL 故障场景与需求。
