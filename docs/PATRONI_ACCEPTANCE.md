@@ -51,6 +51,8 @@ docker compose --env-file "$TMPDIR/patroni.env" -f test/patroni-drill/compose.ya
 
 跨事件下钻补充：Go 事件 API 现在只用**同资产、同一原始样本 ID**关联单独的遥测事件，双向返回事件 ID、状态和共享样本；浏览器可从主可用性事件打开采集缺口事件，Markdown 报告也列出链接。模型证据包省略关联事件详情，不扩大外发范围。PG18 实库测试验证精确匹配、反向链接、不同样本及跨资产隔离；本机 kind 既有事件复验确认主事件关联遥测事件 `536500d4-a2da-4e3a-9504-bb47d5c2d0bf`，共享样本 `eb12d2dc-3283-4846-bd9c-1a9013738bc4`，报告包含该事件链接。共享样本只证明同一次采集，不把采集缺口解释为故障根因。
 
+加入关联断言后的**最终脚本**在当前 Go 镜像上再次完成真实故障闭环：可用性事件 `5072a5d0-ec57-460a-a03e-4fc7b02fa71b`、无 leader 样本 `c541a05a-63d2-4e5f-833b-4f1ebadcb1b7`、恢复样本 `edfbb10b-cd89-4098-be74-2405b6a14ee1`；另列遥测事件 `9b6e8cb4-1f21-4b8e-9314-41adf9758cd7` 通过同一 PG 不可用样本精确关联，报告包含其事件 ID。脱敏结果在本机 `H:\CodexLS\outputs\DbSphere-patroni-kind-pg14-final.json`。
+
 复现前需有 `dbsphere-smoke` 测试 Namespace、已运行的 Go 服务与独立 PG18、镜像 `dbsphere/patroni-drill:local` 已导入 kind，以及只包含 `DBSPHERE_DRILL_PG_PASSWORD`、`DBSPHERE_DRILL_REPL_PASSWORD` 的 `dbsphere-patroni-drill` Secret。管理员 kubeconfig 只供测试脚本故障注入；Go 服务继续使用 Namespace 内只读 ServiceAccount。对 Go 服务做本机端口转发后运行：
 
 ```powershell

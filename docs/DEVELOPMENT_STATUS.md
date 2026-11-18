@@ -2,6 +2,8 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
+[当前事件关联与时间线改动的 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44353066286) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni、复制延迟、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
+
 资产详情页原先的监控层导航只会滚动到长页面中的位置。现改为实际标签页：PostgreSQL、SQL、Linux/K8S、PgBouncer、Patroni 与容量趋势按需显示；切换后只保留当前面板，支持键盘切换、刷新后保留选中层与焦点。本机真实 PG14 Patroni 演练数据的浏览器验收覆盖桌面 1280 px 和窄屏 390 px，两种宽度均无横向溢出，控制台无错误；不代表全站交互和生产环境完成验收。
 
 Patroni 可选只读采集现已接入 Go 资产、PG18 加密配置、采样、默认告警、事件证据图与静态前端。真实 PG18 双节点 Patroni/etcd 故障演练中，第二轮在修正 PostgreSQL `57P03` 等连接类 SQLSTATE 分类后，原 leader 故障、两次无 leader 样本、两个告警、`patroni_leader_anomaly` 候选及成功恢复只产生**一个**可用性事件 `7410d94d-0e99-45dd-ad08-8f961c2952df`；浏览器核对了候选、证据和恢复时间线。PG18 实库测试另验证接入 URL 加密、更新保留与清除及同事件生命周期。该早期 PG18 演练只覆盖单节点 DCS；生产 Patroni/K8S 组合及 DCS 故障推断尚未验收，详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
@@ -11,6 +13,8 @@ Patroni 可选只读采集现已接入 Go 资产、PG18 加密配置、采样、
 本机单节点 kind 的 PG14 双节点 Patroni 故障演练也已通过：可用性事件 `c0c3e0dc-a8df-4d37-a86d-5464013d416b` 在同一 ID 下关联真实 PG 不可用、无 leader、K8S 状态缺口、Patroni 告警/候选和恢复样本；Pod 缩容期间的 K8S 映射失败另有一个已恢复的遥测事件，不能把它隐藏成已知健康。测试镜像使用单节点 etcd 和临时 Pod 数据，不代表生产 K8S/Patroni 组合通过，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
 
 事件 API/页面新增同资产、同原始样本的跨事件下钻：主可用性事件可打开另列的 K8S 采集缺口事件，复盘报告保留关联 ID 与共享样本；并明确这种关联不证明相同根因。PG18 实库测试覆盖双向关联、不同样本与跨资产排除、AI 证据包不包含关联事件详情；本机 kind 既有真实事件 API 和报告复验通过，浏览器点击关联事件无控制台错误。长事件页现将关键告警、Patroni 无主与恢复节点置于前方，超过 12 条证据时折叠完整时间线；真实 80 条证据事件的浏览器验收确认默认折叠、可展开、关键节点可见，控制台无错误，截图保存在本机 `H:\CodexLS\outputs\DbSphere-related-event-kind.png`。
+
+新增关联断言后的最终 kind Patroni 脚本又独立完成一次 PG14 故障闭环：可用性事件 `5072a5d0-ec57-460a-a03e-4fc7b02fa71b` 与遥测事件 `9b6e8cb4-1f21-4b8e-9314-41adf9758cd7` 共享真实 PG 不可用样本，报告和 API 均可追踪，旧主以备库重入。结果文件为 `H:\CodexLS\outputs\DbSphere-patroni-kind-pg14-final.json`，单节点 kind 仍不能替代多节点生产验收。
 
 隔离 Docker Compose 的 PG18 主备演练新增真实复制延迟故障：备库暂停回放、主库产生 WAL 后，DbSphere 用只读账号取得 128 MiB 级延迟；默认规则持续 120 秒触发告警和 `replication_lag` 候选，原始样本、证据图和 Markdown 报告共用事件 `10b01d66-5969-476d-b1b8-f4112a4e7685`。恢复后主库仍有 1 个流复制备库且延迟为 0，告警引用成功样本关闭原事件；当前源码的 Go 镜像替换后数据仍在独立 PG18。收紧恢复样本断言后，最终脚本和当前镜像再次通过同事件闭环（事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc`）。浏览器复验确认时间线已正确显示恢复证据及其样本 ID，根因候选的证据和局限已分行呈现。[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315) 重新执行真实主备故障并在 app 替换后读回同一事件，见[复制故障演练](REPLICATION_DRILL.md)。此结果不覆盖 Patroni、云 PG、生产可靠性或完整八类故障门槛。
 
