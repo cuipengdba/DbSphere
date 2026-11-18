@@ -90,7 +90,9 @@
       </div>
       <section class="panel lower" data-view="assets"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
       <div class="grid incident-grid" data-view="incidents">
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div><div id="event-list" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div>
+          <div class="incident-filters"><input id="event-search" type="search" maxlength="128" aria-label="筛选最近事件" placeholder="标题、资产或事件 ID"><select id="event-status" aria-label="筛选事件状态"><option value="all">全部状态</option><option value="open">处理中</option><option value="resolved">已恢复</option></select></div>
+          <p id="event-filter-summary" class="hint" aria-live="polite"></p><div id="event-list" class="list"></div></section>
         <section class="panel"><div class="section-head"><div><p class="eyebrow">EVIDENCE</p><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择左侧事件查看同一事件 ID 的全链路证据。</div></section>
       </div>
       <div class="grid" data-view="alerts">
