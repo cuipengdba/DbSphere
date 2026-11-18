@@ -503,6 +503,7 @@ jobs:
           node --check scripts/replication-drill-verify.mjs
           node --check scripts/wal-archive-drill-acceptance.mjs
           node --check scripts/autovacuum-drill-acceptance.mjs
+          node --check scripts/connection-pressure-drill-acceptance.mjs
           node scripts/replication-drill-secrets.mjs \
             "$RUNNER_TEMP/dbsphere-replication.env" "$RUNNER_TEMP/dbsphere-replication-credentials.json"
           docker build -f Dockerfile-go -t dbsphere/replication-drill:local .
@@ -540,6 +541,11 @@ jobs:
           node scripts/autovacuum-drill-acceptance.mjs http://127.0.0.1:18092 \
             "$RUNNER_TEMP/dbsphere-replication-credentials.json" > "$RUNNER_TEMP/dbsphere-autovacuum-result.json"
           cat "$RUNNER_TEMP/dbsphere-autovacuum-result.json"
+      - name: Verify sustained real connection pressure and same-event recovery
+        run: |
+          node scripts/connection-pressure-drill-acceptance.mjs http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-replication-credentials.json" > "$RUNNER_TEMP/dbsphere-connection-result.json"
+          cat "$RUNNER_TEMP/dbsphere-connection-result.json"
       - name: Remove isolated replication drill
         if: always()
         run: |
