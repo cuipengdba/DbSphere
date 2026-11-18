@@ -204,6 +204,10 @@ func runAutoAI(ctx context.Context, pg autoAIStore, model *ai.Client, dailyLimit
 				cancel()
 				continue
 			}
+			if errors.Is(err, store.ErrAIEventNotEligible) {
+				cancel()
+				continue
+			}
 			if err != nil {
 				log.Error("automatic AI budget reservation failed", "eventId", eventID, "error", err)
 				cancel()

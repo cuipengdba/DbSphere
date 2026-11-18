@@ -191,4 +191,10 @@ func TestAutomaticAICriticalEventKeepsOneAuditedAdvisory(t *testing.T) {
 	if err != nil || slices.Contains(due, eventID) {
 		t.Fatal("analyzed event was scheduled again", err)
 	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE events SET status='resolved',ended_at=now() WHERE id=$1`, eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ReserveAutomaticAIInvocation(ctx, eventID, "test-model", 1000); !errors.Is(err, ErrAIEventNotEligible) {
+		t.Fatal("resolved event accepted new automatic AI analysis", err)
+	}
 }

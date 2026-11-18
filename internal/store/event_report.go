@@ -15,6 +15,7 @@ import (
 
 var ErrAIBudgetExceeded = errors.New("daily AI invocation budget exceeded")
 var ErrAIAlreadyAnalyzed = errors.New("automatic AI analysis already reserved for event")
+var ErrAIEventNotEligible = errors.New("event is not eligible for automatic AI analysis")
 
 type eventReportData struct {
 	Event    eventRecord `json:"event"`
@@ -160,6 +161,17 @@ func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model strin
 		return "", err
 	}
 	if actor == "auto" {
+		var eligible bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM events e WHERE e.id=$1
+			AND e.status='open' AND e.started_at>=now()-interval '24 hours'
+			AND EXISTS(SELECT 1 FROM evidence f WHERE f.event_id=e.id
+				AND f.kind='alert_firing' AND f.payload_json->>'severity'='critical'))`, eventID).
+			Scan(&eligible); err != nil {
+			return "", err
+		}
+		if !eligible {
+			return "", ErrAIEventNotEligible
+		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1
 			AND kind='ai_invocation' AND payload_json->>'actor'='auto')`, eventID).Scan(&exists); err != nil {
@@ -279,7 +291,8 @@ func (s *Postgres) CompleteAutomaticAIInvocation(ctx context.Context, eventID, i
 	if result != nil {
 		for _, id := range ids {
 			var belongs bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1 AND id=$2)`,
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1 AND id=$2
+				AND kind NOT IN ('ai_invocation','ai_advisory','operator_response','rca_decision'))`,
 				eventID, id).Scan(&belongs); err != nil || !belongs {
 				return ai.ErrInvalidEvidence
 			}
