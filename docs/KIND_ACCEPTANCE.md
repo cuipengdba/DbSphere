@@ -101,3 +101,7 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 ### 2026-11-19 证据引用索引迁移
 
 提交 `3324e07` 新增 schema 21，给事件证据中的样本引用建立索引，以免每日保留期清理全表扫描证据。升级前，kind 测试库是 schema 20，包含 7 个资产、122 条样本、17 个事件和 343 条证据；先以 PG18 `pg_dump -Fc` 导出 `H:\CodexLS\outputs\DbSphere-kind-before-schema21.dump`（111331 字节），`pg_restore --list` 可读取，文件与容器内 SHA-256 一致。加载新 Go 镜像 `dbsphere/kind-acceptance:refs-3324e07` 后，Deployment 滚动成功，新 Pod `dbsphere-go-554d795b7-6cl62` 1/1 Ready、0 次重启。PG18 达到 schema 21，前述四项数据量不变；逐条从原证据 JSON 提取的 172 个去重样本引用与新表的 172 行完全一致，缺失 0 行。原 OOM 闭环事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 的 API 仍返回 `resolved`、8 条证据和 1 条候选。[33 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44403758760)全部通过，外部 PG18 旧包→当前包→旧包作业也验证了既有证据引用回填。本项是小规模单节点测试；生产数据量的迁移时长、索引容量、备份恢复和高并发清理仍待验收。
+
+### 2026-11-19 保留期与空分区运行复验
+
+提交 `3e6f64d` 给 Go 版每日保留期任务加入空旧月分区的限量删除，独立 PG18 测试验证非空过期分区不删、清空后删除，以及只启用样本保留期时不动事件分区。[33 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44406742952)全部通过。本机 kind 中最早的样本与事件均为 2026-11-18；配置 `DBSPHERE_RETENTION_DAYS=90`、`DBSPHERE_EVENT_RETENTION_DAYS=180`，加载镜像 `dbsphere/kind-acceptance:partition-retention-3e6f64d` 并滚动更新。新 Pod `dbsphere-go-6d5d76c9bc-j4q2b` 1/1 Ready、0 次重启，`/readyz` 为 `ready/postgresql18`；控制台 API 显示两项保留期分别为 90、180 天。PG18 仍有 7 个资产、122 条样本、17 个事件、343 条证据及 172 个证据样本引用；原 OOM 事件仍有 8 条证据和 1 条根因候选。由于此集群没有过期数据，本项不证明在 kind 中实际删除分区；删除行为由隔离 PG18 集成测试证明。测试集群的存储使用 `emptyDir`，不能作为生产持久化验收。
