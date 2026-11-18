@@ -14,4 +14,6 @@ CI 的 `go-dependency-inventory` 作业针对 `cmd/dbsphere` 的 Linux amd64、`
 
 CI 增加固定版本 Grype v0.122.1，对上述两份镜像 SBOM 生成漏洞报告；现阶段报告为人工审查输入，尚未设置发布阻断阈值。本机缓存的 `postgres:18-bookworm` 为 18.6，而 CI 同名标签拉取到 18.7，说明该标签会改变实际交付内容。正式发行包须锁定并记录 PostgreSQL 镜像来源、补丁版本与摘要，再针对该摘要复核 SBOM、漏洞和许可证。
 
+CI 本次镜像扫描的匹配数、Critical 来源和 Debian 安全公告状态记录在[容器镜像漏洞初审](CONTAINER_VULNERABILITY_REVIEW.md)。
+
 Go 代码漏洞扫描已通过；镜像漏洞报告仍待核实。PostgreSQL 18 镜像、构建基础镜像、遗留 Node.js 预览版、密钥和默认配置，以及完整发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
