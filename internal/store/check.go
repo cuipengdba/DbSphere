@@ -264,6 +264,11 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	if reason != "" {
 		status = "error"
 	}
+	if status == "ok" {
+		if err := attachDatabaseGrowth(ctx, tx, id, metrics, now); err != nil {
+			return CheckResult{}, err
+		}
+	}
 	encoded, err := json.Marshal(metrics)
 	if err != nil {
 		return CheckResult{}, err

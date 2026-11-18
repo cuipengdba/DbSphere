@@ -60,7 +60,7 @@ func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []s
 		"/api/alert-rules": {"rules", `SELECT definition_json || jsonb_build_object('editable',
 			definition_json->>'metric' IN ('pg.unavailable','collector.pg_failed',
 			'collector.missed_intervals','collector.k8s_failed','collector.linux_failed',
-			'pg.connection_utilization','pg.blocked_sessions',
+			'pg.connection_utilization','pg.database_growth_bytes_per_day','pg.blocked_sessions',
 			'pg.long_transactions','pg.replication_lag_bytes','pg.wal_receiver_down',
 			'pg.archive_fail_delta',
 			'pg.autovacuum_disabled','pg.vacuum_backlog_percent',

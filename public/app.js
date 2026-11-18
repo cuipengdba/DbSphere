@@ -7,6 +7,9 @@ let editingAsset = null;
 let pg18Store = false;
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
+const growthMetric = 'pg.database_growth_bytes_per_day';
+const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
+  metric === growthMetric ? `${(Number(value) / (1024 ** 3)).toFixed(2)} GiB/日` : String(value);
 const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
@@ -527,7 +530,7 @@ function renderAlerts(alerts) {
   const list = $('alert-list'); list.replaceChildren();
   if (!alerts.length) { list.append(cell('p', '当前没有触发中的告警。', 'empty')); return; }
   for (const alert of alerts) {
-    const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${alert.state.lastValue ?? '信号缺失'}${alert.state.missingSince ? ' · 指标已失联' : ''}${alert.state.mutedBy ? ' · 通知已静默' : ''}`, 'event-button');
+    const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${formatAlertValue(alert.rule.metric, alert.state.lastValue)}${alert.state.missingSince ? ' · 指标已失联' : ''}${alert.state.mutedBy ? ' · 通知已静默' : ''}`, 'event-button');
     button.addEventListener('click', () => showEvent(alert.state.eventId));
     list.append(button);
   }
@@ -632,14 +635,16 @@ function renderRules(rules) {
   const list = $('rule-list'); list.replaceChildren();
   for (const rule of rules) {
     const details = document.createElement('details'); details.className = 'rule-card';
-    details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${rule.threshold} · ${rule.durationSeconds}s`));
+    details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${formatAlertValue(rule.metric, rule.threshold)} · ${rule.durationSeconds}s`));
     if (rule.editable === false) {
       details.append(cell('p', 'Go 采集器尚未接入此规则；历史配置可查看，暂不能修改。', 'warning'));
       list.append(details);
       continue;
     }
     const form = document.createElement('form'); form.className = 'rule-form';
-    const threshold = document.createElement('input'); threshold.type = 'number'; threshold.step = 'any'; threshold.min = '0'; threshold.value = rule.threshold; threshold.required = true;
+    const threshold = document.createElement('input'); threshold.type = 'number'; threshold.step = 'any'; threshold.min = '0';
+    threshold.value = rule.metric === growthMetric ? Number(rule.threshold) / (1024 ** 3) : rule.threshold;
+    threshold.required = true;
     const duration = document.createElement('input'); duration.type = 'number'; duration.step = '1'; duration.min = '0'; duration.max = '86400'; duration.value = rule.durationSeconds; duration.required = true;
     const severity = document.createElement('select');
     for (const value of ['info', 'warning', 'critical']) {
@@ -648,14 +653,14 @@ function renderRules(rules) {
     }
     severity.value = rule.severity;
     const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;
-    for (const [label, input] of [['阈值', threshold], ['持续秒数', duration], ['级别', severity], ['启用', enabled]]) {
+    for (const [label, input] of [[rule.metric === growthMetric ? '阈值（GiB/日）' : '阈值', threshold], ['持续秒数', duration], ['级别', severity], ['启用', enabled]]) {
       const wrapper = document.createElement('label'); wrapper.append(cell('span', label), input); form.append(wrapper);
     }
     const save = cell('button', '保存规则', 'small-button'); save.type = 'submit'; form.append(save);
     form.addEventListener('submit', async event => {
       event.preventDefault();
       try {
-        await api(`/api/alert-rules/${rule.id}`, 'PATCH', { threshold: Number(threshold.value),
+        await api(`/api/alert-rules/${rule.id}`, 'PATCH', { threshold: Number(threshold.value) * (rule.metric === growthMetric ? 1024 ** 3 : 1),
           durationSeconds: Number(duration.value), severity: severity.value, enabled: enabled.checked });
         notice(`${rule.title} 已更新；新配置将在下次采样时生效。`);
         document.activeElement?.blur(); await refresh();
@@ -860,7 +865,7 @@ async function showEvent(id) {
     if (evidence.kind === 'pgbouncer_state') text = evidence.payload.status === 'ok'
       ? `${evidence.payload.pools?.length || 0} 个连接池；等待客户端 ${(evidence.payload.pools || []).reduce((sum, pool) => sum + pool.clientWaiting, 0)}`
       : evidence.payload.reason || evidence.payload.status;
-    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${evidence.payload.value ?? '信号缺失'} ${evidence.payload.operator || ''} ${evidence.payload.threshold ?? ''}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
+    if (evidence.kind.startsWith('alert_')) text = `${evidence.payload.ruleId || '规则'} · ${evidence.payload.source || '未知来源'} · ${formatAlertValue(evidence.payload.metric, evidence.payload.value)} ${evidence.payload.operator || ''} ${formatAlertValue(evidence.payload.metric, evidence.payload.threshold)}${evidence.payload.reason ? ' · ' + evidence.payload.reason : ''}${evidence.payload.silenceId ? ' · 静默窗 ' + evidence.payload.silenceId : ''}`;
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;

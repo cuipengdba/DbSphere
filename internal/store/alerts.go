@@ -32,6 +32,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
+	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "capacity", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
@@ -102,7 +103,7 @@ func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
 		"collector.k8s_failed", "collector.linux_failed",
-		"pg.connection_utilization", "pg.blocked_sessions", "pg.long_transactions",
+		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.long_transactions",
 		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
@@ -165,6 +166,14 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 		maximum, hasMaximum := numeric(metrics["max_connections"])
 		if hasConnections && hasMaximum && maximum > 0 {
 			return alertSignal{Available: true, Value: connections / maximum * 100, Source: "PostgreSQL"}
+		}
+	case "pg.database_growth_bytes_per_day":
+		signal.Source = "PostgreSQL 18 历史样本"
+		growth := object(metrics["databaseGrowth"])
+		if stringValue(growth["status"]) == "ok" {
+			if value, ok := numeric(growth["growthBytesPerDay"]); ok && value >= 0 {
+				return alertSignal{Available: true, Value: value, Source: signal.Source, Detail: growth}
+			}
 		}
 	case "pg.blocked_sessions", "pg.long_transactions":
 		section, field := "locks", "blockedSessions"
