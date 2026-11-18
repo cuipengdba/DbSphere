@@ -79,6 +79,23 @@ func TestGoRetentionKeepsEvidenceAndPendingNotifications(t *testing.T) {
 		VALUES(gen_random_uuid(),$1,'webhook','pending',now())`, protectedEvidenceID); err != nil {
 		t.Fatal(err)
 	}
+	var refs int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence_sample_refs
+		WHERE evidence_id=$1 AND sample_id=$2`, protectedEvidenceID, evidenceSample).Scan(&refs); err != nil || refs != 1 {
+		t.Fatalf("nested evidence sample reference was not indexed: %d %v", refs, err)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE evidence SET payload_json='{}'::jsonb WHERE id=$1`, protectedEvidenceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence_sample_refs
+		WHERE evidence_id=$1`, protectedEvidenceID).Scan(&refs); err != nil || refs != 0 {
+		t.Fatalf("stale evidence sample reference survived update: %d %v", refs, err)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE evidence SET payload_json=
+		jsonb_build_object('nested',jsonb_build_object('baselineSampleId',$2::text))
+		WHERE id=$1`, protectedEvidenceID, evidenceSample); err != nil {
+		t.Fatal(err)
+	}
 	openEvent := createEvent("open", oldAt)
 	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,'collection_error',$2,jsonb_build_object('sampleId',$3::text))`,
@@ -104,10 +121,11 @@ func TestGoRetentionKeepsEvidenceAndPendingNotifications(t *testing.T) {
 	}
 	inspectionProtected := createEvent("resolved", oldAt)
 	deletable1, deletable2 := createEvent("resolved", oldAt), createEvent("resolved", oldAt)
+	deletableSample := createSample(oldAt)
 	var deliveredEvidenceID string
 	if err := pg.pool.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,'alert_recovered',$2,'{}'::jsonb) RETURNING id::text`,
-		deletable1, oldAt).Scan(&deliveredEvidenceID); err != nil {
+		VALUES(gen_random_uuid(),$1,'alert_recovered',$2,jsonb_build_object('sampleId',$3::text))
+		RETURNING id::text`, deletable1, oldAt, deletableSample).Scan(&deliveredEvidenceID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pg.pool.Exec(ctx, `INSERT INTO notification_outbox
@@ -150,6 +168,11 @@ func TestGoRetentionKeepsEvidenceAndPendingNotifications(t *testing.T) {
 			t.Fatalf("protected or recent sample %s was lost: %v", id, err)
 		}
 	}
+	var protectedByResolvedEvent bool
+	if err := pg.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM samples WHERE id=$1)",
+		deletableSample).Scan(&protectedByResolvedEvent); err != nil || !protectedByResolvedEvent {
+		t.Fatalf("sample cited by retained resolved event was lost: %v", err)
+	}
 	for _, id := range []string{unreferenced1, unreferenced2} {
 		var present bool
 		if err := pg.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM samples WHERE id=$1)", id).Scan(&present); err != nil || present {
@@ -173,6 +196,13 @@ func TestGoRetentionKeepsEvidenceAndPendingNotifications(t *testing.T) {
 		if err := pg.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM event_keys WHERE id=$1)", id).Scan(&present); err != nil || present {
 			t.Fatalf("expired resolved event %s remains: %v", id, err)
 		}
+	}
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence_sample_refs
+		WHERE evidence_id=$1`, deliveredEvidenceID).Scan(&refs); err != nil || refs != 0 {
+		t.Fatalf("deleted event left an evidence sample reference: %d %v", refs, err)
+	}
+	if removed, err := pg.PruneSamples(ctx, cutoff, 1); err != nil || removed != 1 {
+		t.Fatalf("sample was not pruned after its resolved event expired: %d %v", removed, err)
 	}
 	if _, err := pg.PruneSamples(ctx, cutoff, 0); err == nil {
 		t.Fatal("unbounded sample retention was accepted")

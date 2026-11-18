@@ -181,6 +181,62 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record Patroni endpoint migration: %w", err)
 		}
 	}
+	var evidenceRefsMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=21)").Scan(&evidenceRefsMigrated); err != nil {
+		return fmt.Errorf("check evidence sample reference migration: %w", err)
+	}
+	if !evidenceRefsMigrated {
+		if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS evidence_sample_refs (
+			evidence_id uuid NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+			sample_id text NOT NULL,
+			PRIMARY KEY(evidence_id,sample_id))`); err != nil {
+			return fmt.Errorf("create evidence sample reference index: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS evidence_sample_refs_sample ON evidence_sample_refs(sample_id)"); err != nil {
+			return fmt.Errorf("index evidence sample references: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS inspection_runs_sample ON inspection_runs(sample_id) WHERE sample_id IS NOT NULL"); err != nil {
+			return fmt.Errorf("index inspection sample references: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS inspection_runs_events ON inspection_runs USING gin(event_ids_json)"); err != nil {
+			return fmt.Errorf("index inspection event references: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS samples_retention_time ON samples(collected_at,id)"); err != nil {
+			return fmt.Errorf("index sample retention time: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS events_resolved_ended ON events(ended_at) WHERE status='resolved'"); err != nil {
+			return fmt.Errorf("index resolved event retention time: %w", err)
+		}
+		if _, err = tx.Exec(ctx, `CREATE OR REPLACE FUNCTION dbsphere_index_evidence_samples()
+			RETURNS trigger LANGUAGE plpgsql AS $function$
+			BEGIN
+				DELETE FROM evidence_sample_refs WHERE evidence_id=NEW.id;
+				INSERT INTO evidence_sample_refs(evidence_id,sample_id)
+				SELECT DISTINCT NEW.id, ref.value #>> '{}' FROM jsonb_path_query(NEW.payload_json,
+				  '$.** ? (@.type() == "object").keyvalue() ? (@.key like_regex "SampleId$" flag "i").value') AS ref(value)
+				WHERE jsonb_typeof(ref.value)='string';
+				RETURN NEW;
+			END
+			$function$`); err != nil {
+			return fmt.Errorf("create evidence sample reference trigger function: %w", err)
+		}
+		if _, err = tx.Exec(ctx, `CREATE TRIGGER dbsphere_evidence_sample_refs
+			AFTER INSERT OR UPDATE OF payload_json ON evidence
+			FOR EACH ROW EXECUTE FUNCTION dbsphere_index_evidence_samples()`); err != nil {
+			return fmt.Errorf("create evidence sample reference trigger: %w", err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO evidence_sample_refs(evidence_id,sample_id)
+			SELECT DISTINCT ev.id, ref.value #>> '{}' FROM evidence ev
+			CROSS JOIN LATERAL jsonb_path_query(ev.payload_json,
+			  '$.** ? (@.type() == "object").keyvalue() ? (@.key like_regex "SampleId$" flag "i").value') AS ref(value)
+			WHERE jsonb_typeof(ref.value)='string'
+			ON CONFLICT DO NOTHING`); err != nil {
+			return fmt.Errorf("backfill evidence sample references: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(21) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record evidence sample reference migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

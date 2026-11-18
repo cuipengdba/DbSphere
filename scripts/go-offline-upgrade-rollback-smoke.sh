@@ -108,6 +108,12 @@ check_state 'dbsphere/offline-go-app:0.6.0-dev.prev'
 
 bash "$new_archive"
 check_state "dbsphere/offline-go-app:$new_version"
+if [[ "$mode" == external ]]; then
+  [[ "$sample_id" =~ ^[0-9a-f-]{36}$ ]]
+  ref_count="$(docker exec "$external_container" psql -U postgres -d postgres -Atqc \
+    "SELECT count(*) FROM evidence_sample_refs WHERE sample_id='$sample_id'")"
+  test "$ref_count" -ge 1
+fi
 
 bash "$old_archive"
 check_state 'dbsphere/offline-go-app:0.6.0-dev.prev'
