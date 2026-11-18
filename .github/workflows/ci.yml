@@ -85,6 +85,11 @@ jobs:
             -output "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" .
           jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' \
             "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" >/dev/null
+          test -s LICENSE
+          jq -r '.components[].name' "$RUNNER_TEMP/dbsphere-go-linux-amd64.cdx.json" |
+            while IFS= read -r module; do
+              test -s "third_party/licenses/go/$module/LICENSE"
+            done
       - name: Scan reachable Go vulnerabilities
         run: |
           "$RUNNER_TEMP/dbsphere-tools/govulncheck" ./...

@@ -13,6 +13,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/dbsphere /dbsphere
+COPY LICENSE /licenses/DBSphere-LICENSE
+COPY third_party/licenses/go /licenses/go
 USER 65532:65532
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --retries=12 CMD ["/dbsphere", "healthcheck"]
