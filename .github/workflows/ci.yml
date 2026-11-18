@@ -519,6 +519,11 @@ jobs:
             "$RUNNER_TEMP/dbsphere-replication-credentials.json" "$RUNNER_TEMP/dbsphere-replication-result.json"
           docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
             -f test/replication-drill/compose.yaml up -d --no-deps --force-recreate app
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:18092/readyz 2>/dev/null |
+              jq -e '.storage=="postgresql18"' >/dev/null; then break; fi
+            sleep 1
+          done
           curl --fail --silent http://127.0.0.1:18092/readyz | jq -e '.storage=="postgresql18"' >/dev/null
           node scripts/replication-drill-verify.mjs http://127.0.0.1:18092 \
             "$RUNNER_TEMP/dbsphere-replication-credentials.json" "$RUNNER_TEMP/dbsphere-replication-result.json"

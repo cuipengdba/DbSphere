@@ -8,11 +8,11 @@
 
 Go 服务在**同一个事件** `10b01d66-5969-476d-b1b8-f4112a4e7685` 中保存延迟告警、原始故障样本 `4a1c96ea-0c99-459c-854f-15e13ff1ca43`、`replication_lag` 候选、支持证据与 Markdown 复盘。恢复回放并追平后，成功样本 `43ba041a-60d8-4762-b37f-84a17a3f5135` 的延迟为 **0 字节**、主库仍有 1 个流复制备库，且 `alert_recovered` 引用该样本；原事件变为 `resolved`，故障告警和候选仍可追溯。当前源码的 Go 静态镜像替换 app 容器后，这些数据仍能从独立 PG18 存储读回。脱敏机器结果在 `H:\CodexLS\outputs\DbSphere-replication-acceptance.json`。
 
-最终脚本和当前 Go 镜像再次执行完整故障闭环：新事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc` 包含故障样本 `5825f5c1-fa0e-44a2-9c9e-95b60eeccfc5`（134217672 字节）、`replication_lag` 根因候选和恢复样本 `accade38-0274-40f4-b174-f632a46e5c9b`（0 字节、1 个流复制备库）；恢复告警引用该样本，事件为 `resolved`。当前镜像下的只读验证再次通过，备库回放未暂停。脱敏结果在 `H:\CodexLS\outputs\DbSphere-replication-acceptance-current.json`。
+最终脚本和当前 Go 镜像再次执行完整故障闭环：新事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc` 包含故障样本 `5825f5c1-fa0e-44a2-9c9e-95b60eeccfc5`（134217672 字节）、`replication_lag` 根因候选和恢复样本 `accade38-0274-40f4-b174-f632a46e5c9b`（0 字节、1 个流复制备库）；恢复告警引用该样本，事件为 `resolved`。再次替换 Go app 容器后只读验证通过，备库回放未暂停。脱敏结果在 `H:\CodexLS\outputs\DbSphere-replication-acceptance-current.json`。
 
 首次试跑发现两个测试脚本问题：连续 `pg_switch_wal()` 而不写 WAL 只形成一段有效差值；旧断言把 Node API 的 `analysis.eventId` 用到了 Go API，而 Go 的 ID 位于 `event.id`。两处已修正，首轮留下的测试事件 `b429c5db-a2fc-44bc-a4c5-291977932842` 在恢复采样后确认为 `resolved`。上述通过结果来自修正后的第二轮完整脚本。
 
-浏览器事件页还暴露了一个显示问题：恢复证据没有阈值字段，旧页面仍按触发告警格式渲染，把空阈值显示为“信号缺失”。原始恢复样本与告警状态实际上正常。页面已改为“已恢复；先前告警值…”并附恢复样本 ID；替换当前 Go 镜像后，Playwright 浏览器重载事件页已看到修正后的时间线、根因候选和同一事件 ID。
+浏览器事件页还暴露了一个显示问题：恢复证据没有阈值字段，旧页面仍按触发告警格式渲染，把空阈值显示为“信号缺失”。原始恢复样本与告警状态实际上正常。页面已改为“已恢复；先前告警值…”并附恢复样本 ID；根因候选的支持证据、匹配条件、时间顺序和缺失信号也改为独立行。替换当前 Go 镜像后，Playwright 浏览器重载事件页已看到修正后的时间线、根因候选和同一事件 ID。截图留在 `H:\CodexLS\outputs\DbSphere-replication-event-rca.png`。
 
 ## 拓扑与故障
 

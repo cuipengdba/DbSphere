@@ -793,14 +793,20 @@ async function showEvent(id) {
   diagnosis.append(graphDetails);
   if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));
   for (const candidate of analysis.candidates) {
-    diagnosis.append(cell('p', `${candidate.title} · 置信级别 ${candidate.confidence} · 证据 ${candidate.supports.join('、')}。${candidate.limitation}`, 'warning'));
-    if (candidate.matchedConditions?.length) diagnosis.append(cell('small', `匹配条件：${candidate.matchedConditions.map(item =>
+    const candidateCard = cell('section', '', 'rca-candidate');
+    candidateCard.append(cell('h5', candidate.title),
+      cell('p', `置信级别 ${candidate.confidence} · ${candidate.limitation}`, 'rca-candidate-interpretation'));
+    const facts = cell('div', '', 'rca-facts');
+    facts.append(cell('p', `支持证据：${candidate.supports.join('、')}`));
+    if (candidate.matchedConditions?.length) facts.append(cell('p', `匹配条件：${candidate.matchedConditions.map(item =>
       `${item.metric}：${item.observed ?? '未知'} ${item.operator ?? ''} ${item.threshold ?? ''}`).join('；')}`));
-    if (candidate.against?.length) diagnosis.append(cell('small', `反证：${candidate.against.join('；')}`));
-    if (candidate.timeOrder) diagnosis.append(cell('small', `时间顺序：${candidate.timeOrder.firstObservedAt
+    if (candidate.against?.length) facts.append(cell('p', `反证：${candidate.against.join('；')}`));
+    if (candidate.timeOrder) facts.append(cell('p', `时间顺序：${candidate.timeOrder.firstObservedAt
       ? formatTime(candidate.timeOrder.firstObservedAt) : '未知'} · ${candidate.timeOrder.relation} · 事件开始 ${formatTime(candidate.timeOrder.eventStartedAt)}`));
-    if (candidate.missing.length) diagnosis.append(cell('small', `缺失：${candidate.missing.join('；')}`));
-    if (candidate.review) diagnosis.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));
+    if (candidate.missing.length) facts.append(cell('p', `缺失：${candidate.missing.join('；')}`));
+    candidateCard.append(facts);
+    if (candidate.review) candidateCard.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));
+    const reviewActions = cell('div', '', 'rca-candidate-actions');
     for (const [decision, label] of [['confirmed', '确认候选'], ['rejected', '驳回候选']]) {
       const button = cell('button', label, 'ghost small-button write-action');
       button.addEventListener('click', async () => {
@@ -812,8 +818,10 @@ async function showEvent(id) {
           await showEvent(event.id);
         } catch (error) { notice(error.message, true); }
       });
-      diagnosis.append(button);
+      reviewActions.append(button);
     }
+    candidateCard.append(reviewActions);
+    diagnosis.append(candidateCard);
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
   target.append(diagnosis);
