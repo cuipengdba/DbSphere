@@ -22,6 +22,10 @@
 
 将内存限制恢复为 256 MiB 后，新 Pod 就绪；成功采样 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 自动把已删除的旧 Pod 名解析到新 Pod，原事件变为 `resolved`，恢复证据仍挂在该 ID。应用再次请求返回成功。场景 B 目前只在单节点 kind 本机测试，尚无多节点/生产 Operator、真实业务应用或自动 CI 演练；事件时间窗还包含故障前一次健康 Trace，因此影响面数值必须按错误 Span 与时间逐项核对。
 
+### 标准 OpenTelemetry Collector 转发
+
+在同一 Namespace 运行官方 `otel/opentelemetry-collector:0.165.0` Linux 镜像。其 OTLP HTTP Receiver 监听 `:4318`，`otlp_http` Exporter 以 JSON、无压缩和独立写入令牌发往 Go DbSphere `/v1/traces`；配置在[无密钥示例](../examples/trace-lock-app/otel-collector.yaml)。将示例应用的 OTLP 目标改成 Collector Service 后，真实 `/checkout` 请求成功，返回 Trace `f331080ca67953004cd1adb745d14dfd` 和 PG 后端 PID `1212`。管理员从 DbSphere 的 PG18 存储读取同一 Trace，确认服务父 Span → PG 客户端 Span 共 2 条，均关联受管 PG 资产，客户端 Span 保留实际 PID。Collector 镜像配置验证也通过。此项只证明本机标准 Collector 的 Trace JSON 转发和资产关联；未验证生产 TLS、队列持久化、第三方 SDK 自动埋点或负载下丢包率。[Exporter 配置依据](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlphttpexporter/README.md)。
+
 ## 判定
 
 三种故障均在**一个问题、一个事件 ID**下记录数据库故障、K8S 状态、规则告警和恢复采样。根因输出是带证据与不确定性的候选，不把关联当作已证实的唯一原因。浏览器已查看探针故障的事件时间线、候选与审计；调度故障的 API 证据及同 ID 恢复已核对。
@@ -30,4 +34,4 @@
 
 另用原资产中**已删除的旧 Pod 名**再次注入 OOM，全程不修改资产映射：失败样本 `cb069214-696a-4846-99be-6c98a5be6c56` 只读解析到唯一未就绪的新 Pod，看到 `CrashLoopBackOff`/`OOMKilled`，创建事件 `4b72b565-ebcb-4203-9f03-5069bebc93fa`；恢复资源限制后样本 `6ceb5150-ddb2-4dd5-a4dc-f636ad23b781` 自动解析到健康 Pod，并把同一事件置为 `resolved`。对应的 TLS 模拟 API 回归测试也覆盖唯一未就绪替换 Pod；多 Pod 仍报告映射歧义。
 
-尚未验收多节点和生产集群、PVC 压力等其余故障、第三方 SDK/Collector、持续负载、持久存储故障及完整 PG14–18 × K8S 组合。V1.0 的八类故障和两类应用链路门槛仍未完成独立环境及生产级验收；见[开发任务清单](DEVELOPMENT_TASKS.md)。
+尚未验收多节点和生产集群、PVC 压力等其余故障、第三方 SDK、持续负载、持久存储故障及完整 PG14–18 × K8S 组合。V1.0 的八类故障和两类应用链路门槛仍未完成独立环境及生产级验收；见[开发任务清单](DEVELOPMENT_TASKS.md)。

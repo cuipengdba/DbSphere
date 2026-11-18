@@ -1,0 +1,22 @@
+# OpenTelemetry Collector core 0.165.0 example for DbSphere's OTLP/HTTP JSON input.
+# Set DBSPHERE_OTLP_ENDPOINT to the TLS-protected /v1/traces URL and
+# DBSPHERE_OTLP_TOKEN to a separate write-only token (at least 32 characters).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlp_http/dbsphere:
+    traces_endpoint: ${env:DBSPHERE_OTLP_ENDPOINT}
+    encoding: json
+    compression: none
+    headers:
+      Authorization: Bearer ${env:DBSPHERE_OTLP_TOKEN}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp_http/dbsphere]
