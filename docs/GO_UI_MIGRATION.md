@@ -42,7 +42,7 @@ Go 自动采集调度已实现：Linux 与已映射的 K8S PostgreSQL 资产按�
 
 Go 部署开发路径已落地：`Dockerfile-go` 用静态编译程序与嵌入页面构建最小容器；`scripts/one-click-go.sh` 启动独立 PG18 或外部 PG18 配置；`scripts/build-go-offline-bundle.sh` 将应用和 PG18 镜像打入 Linux x86_64 自解压包，目标机以 `--no-build --pull never` 启动。[21 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44088758026)已验证离线安装和重装。代码与历史 Node 正式部署隔离；Go 升级回滚和功能对等仍须完成。
 
-根因分析迁移补充：Go 已能从同一事件 ID 关联原始样本、应用服务与父子 Span、锁链、SQL 指纹、Linux 和 K8S 拓扑。确定性候选现覆盖历史 Pod OOMKilled 关联、连接数压力、锁阻塞、Linux 内存/磁盘、PgBouncer 等待、K8S Pod 未就绪/OOM/调度、Node 压力与 PVC 高水位；每个候选显示支持证据、时间顺序与局限，管理员确认/驳回写入该事件的证据时间线。PG18 实库验证 PG 连接失败时仍保留同采样的 K8S OOM 候选和同一事件 ID；**复制/WAL、SQL 退化等完整规则矩阵及真实跨层故障仍未完成，证据不足显示“未定位”**。
+根因分析迁移补充：Go 已能从同一事件 ID 关联原始样本、应用服务与父子 Span、锁链、SQL 指纹、Linux 和 K8S 拓扑。确定性候选现覆盖历史 Pod OOMKilled 关联、连接数压力、锁阻塞、Linux 内存/磁盘、PgBouncer 等待、K8S Pod 未就绪/OOM/调度、Node 压力与 PVC 高水位；每个候选显示支持证据、时间顺序与局限，管理员确认/驳回写入该事件的证据时间线。PG18 实库验证 PG 连接失败时仍保留同采样的 K8S OOM 候选和同一事件 ID；同一事件 ID 的 SQL 计划退化候选现须同时有事前基线、新计划和同期慢日志，并在证据图给出三条可打开的来源，支持人工复核；缺任一证据不推断。**复制/WAL、SQL 退化的完整规则矩阵及真实跨层故障仍未完成，证据不足显示“未定位”**。
 
 Go 事件页现在可下载 Markdown/HTML 复盘报告，报告列出同一事件 ID 的状态、资产、应用 Span 覆盖、根因候选及人工结论、信号缺口和最多 500 条证据时间线。报告只输出证据/样本/规则 ID 与受控摘要，不导出原始 SQL 或指标 JSON；达到时间线上限时明确提示。PG18 实库和 API 测试覆盖鉴权、脱敏、事件/样本 ID，真实浏览器完成下载验收。处置操作和恢复验证的完整记录仍待后续版本实现。
 

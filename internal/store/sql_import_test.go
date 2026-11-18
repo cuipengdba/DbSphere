@@ -123,6 +123,43 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 		!strings.Contains(string(listedJSON), `"executionRatio":2`) {
 		t.Fatalf("safe plan comparison missing: %s", listedJSON)
 	}
+	eventStart := time.Now().UTC().Add(-2 * time.Minute)
+	baseline, err := pg.ImportSQLPlan(ctx, asset.ID, "42", eventStart.Add(-time.Hour).Format(time.RFC3339Nano),
+		json.RawMessage(`{"Plan":{"Node Type":"Seq Scan"},"Execution Time":500}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, asset.ID, eventStart).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.pool.Exec(ctx, `DELETE FROM event_keys WHERE id=$1`, eventID)
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+		VALUES($1,$2,'sql_performance','SQL import correlation','open',$3,'latency')`, eventID, asset.ID, eventStart); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailJSON, _ := json.Marshal(detail)
+	baselineJSON, _ := json.Marshal(baseline)
+	var baselineRecord struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(baselineJSON, &baselineRecord); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(detailJSON), `"code":"sql_plan_regression"`) ||
+		!strings.Contains(string(detailJSON), `"plan:`+baselineRecord.ID+`"`) ||
+		!strings.Contains(string(detailJSON), `"relation":"compared_with"`) ||
+		strings.Contains(string(detailJSON), "confidential_value") {
+		t.Fatalf("event did not link safe SQL RCA evidence: %s", detailJSON)
+	}
+	if err := pg.RecordRCADecision(ctx, eventID, "sql_plan_regression", "confirmed", "计划变化与慢日志同窗，已由值班人员核实"); err != nil {
+		t.Fatalf("SQL hypothesis could not be reviewed: %v", err)
+	}
 	var queryID string
 	var count int
 	if err := pg.pool.QueryRow(ctx, `SELECT query_id FROM slow_log_entries WHERE asset_id=$1`, asset.ID).Scan(&queryID); err != nil || queryID != "42" {
@@ -134,5 +171,17 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 	var stored string
 	if err := pg.pool.QueryRow(ctx, `SELECT summary_json::text FROM sql_plan_snapshots WHERE asset_id=$1 ORDER BY observed_at LIMIT 1`, asset.ID).Scan(&stored); err != nil || strings.Contains(stored, "confidential_value") {
 		t.Fatalf("unsafe plan stored: %v", err)
+	}
+	if _, err := pg.pool.Exec(ctx, `DELETE FROM slow_log_entries WHERE asset_id=$1`, asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	withoutLog, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range object(withoutLog.(map[string]any)["analysis"])["candidates"].([]map[string]any) {
+		if candidate["code"] == "sql_plan_regression" {
+			t.Fatal("plan change alone was misrepresented as a corroborated SQL candidate")
+		}
 	}
 }

@@ -141,6 +141,13 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		return nil, err
 	}
 	candidates := analyzeCandidates(event, samples, addNode, &edges)
+	planCandidate, err := s.sqlPlanCandidate(ctx, event, addNode, &edges)
+	if err != nil {
+		return nil, err
+	}
+	if planCandidate != nil {
+		candidates = append(candidates, planCandidate)
+	}
 	traceCount := 0
 	databaseSpans := 0
 	services := []string{}
