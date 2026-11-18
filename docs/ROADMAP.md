@@ -23,6 +23,8 @@ V1.0 完成 PostgreSQL 运维监控闭环：纳管、监控、告警、巡检、
 
 当前 Go 开发版已增加可选 Patroni `GET /cluster` 只读接入：PG14/18 双节点本机验收了拓扑、无 leader 告警及同事件恢复，[PG14–18 五版 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805) 已通过真实故障演练。K8S Patroni 和生产 DCS 尚未进入支持矩阵。此进度不改变 V1.0 的发布门槛，详见[验收记录](PATRONI_ACCEPTANCE.md)。
 
+Go 开发版的在线 Compose 和离线包现固定 PostgreSQL 18.7 Bookworm 镜像摘要；PG18 采样与事件分区在启动及运行期间预建，避免服务跨月长时间运行后缺少写入分区。历史数据保留/卸载、镜像漏洞审查、生产升级回滚与容量验收仍属于 V1.0 门槛，见[任务清单](DEVELOPMENT_TASKS.md)。
+
 ## 三条贯穿版本的交付线
 
 1. **非 AI 主干**：从 V0.1 起，监控与告警使用确定性采集和规则。V0.6 根因候选也是可解释规则。AI 只在 V0.8 加入，且能关闭。

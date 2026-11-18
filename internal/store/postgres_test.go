@@ -124,6 +124,73 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	}
 }
 
+func TestEnsureFutureTimePartitions(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("DBSPHERE_TEST_PG18_URL is not set")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	now := time.Now().UTC()
+	first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	future := first.AddDate(0, 3, 0)
+	for range 2 {
+		if err := pg.EnsureTimePartitions(ctx, future); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, table := range []string{"samples", "events"} {
+		for offset := range 3 {
+			month := future.AddDate(0, offset, 0)
+			name := fmt.Sprintf("%s_%04d%02d", table, month.Year(), month.Month())
+			var attached bool
+			if err := pg.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_inherits
+				WHERE inhrelid=to_regclass($1) AND inhparent=$2::regclass)`, "public."+name, table).
+				Scan(&attached); err != nil || !attached {
+				t.Fatalf("future partition %s is unavailable: %v", name, err)
+			}
+		}
+	}
+	tx, err := pg.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var assetID string
+	if err := tx.QueryRow(ctx, `INSERT INTO assets
+		(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,created_at)
+		VALUES(gen_random_uuid(),'future partition test','127.0.0.1',5432,'postgres',
+		'tester','unused','disable','linux',now()) RETURNING id::text`).Scan(&assetID); err != nil {
+		t.Fatal(err)
+	}
+	at := future.AddDate(0, 0, 10)
+	var samplePartition string
+	if err := tx.QueryRow(ctx, `INSERT INTO samples(id,asset_id,collected_at,status)
+		VALUES(gen_random_uuid(),$1,$2,'ok') RETURNING tableoid::regclass::text`, assetID, at).
+		Scan(&samplePartition); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := tx.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, assetID, at).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	var eventPartition string
+	if err := tx.QueryRow(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at)
+		VALUES($1,$2,'partition_test','future write','resolved',$3)
+		RETURNING tableoid::regclass::text`, eventID, assetID, at).Scan(&eventPartition); err != nil {
+		t.Fatal(err)
+	}
+	if samplePartition != fmt.Sprintf("samples_%04d%02d", future.Year(), future.Month()) ||
+		eventPartition != fmt.Sprintf("events_%04d%02d", future.Year(), future.Month()) {
+		t.Fatalf("future writes used wrong partitions: %s %s", samplePartition, eventPartition)
+	}
+}
+
 func TestViewerPasswordRotationAndDisableOnPostgreSQL18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {

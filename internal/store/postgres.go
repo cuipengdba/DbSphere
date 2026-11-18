@@ -176,29 +176,64 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := seedGoInspections(ctx, tx); err != nil {
 		return fmt.Errorf("seed Go inspection templates: %w", err)
 	}
+	if err := ensureTimePartitions(ctx, tx, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit DbSphere schema migration: %w", err)
+	}
+	return nil
+}
+
+// EnsureTimePartitions keeps writes available when a server stays up across
+// month boundaries. The migration lock also serializes multiple replicas.
+func (s *Postgres) EnsureTimePartitions(ctx context.Context, at time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin partition maintenance: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(1742026)"); err != nil {
+		return fmt.Errorf("lock partition maintenance: %w", err)
+	}
+	if err := ensureTimePartitions(ctx, tx, at); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit partition maintenance: %w", err)
+	}
+	return nil
+}
+
+func ensureTimePartitions(ctx context.Context, tx pgx.Tx, at time.Time) error {
+	at = at.UTC()
+	thisMonth := time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
 	for _, table := range []string{"samples", "events"} {
-		now := time.Now().UTC()
-		thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-		for offset := range 2 {
+		for offset := range 3 {
 			start := thisMonth.AddDate(0, offset, 0)
 			end := start.AddDate(0, 1, 0)
 			name := fmt.Sprintf("%s_%04d%02d", table, start.Year(), int(start.Month()))
 			var present *string
-			if err = tx.QueryRow(ctx, "SELECT to_regclass($1)::text", "public."+name).Scan(&present); err != nil {
+			if err := tx.QueryRow(ctx, "SELECT to_regclass($1)::text", "public."+name).Scan(&present); err != nil {
 				return fmt.Errorf("check %s partition: %w", name, err)
 			}
-			if present != nil {
-				continue
+			if present == nil {
+				query := fmt.Sprintf("CREATE TABLE %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
+					name, table, start.Format(time.RFC3339), end.Format(time.RFC3339))
+				if _, err := tx.Exec(ctx, query); err != nil {
+					return fmt.Errorf("create %s partition: %w", name, err)
+				}
 			}
-			query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
-				name, table, start.Format(time.RFC3339), end.Format(time.RFC3339))
-			if _, err = tx.Exec(ctx, query); err != nil {
-				return fmt.Errorf("create %s partition: %w", name, err)
+			var attached bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_inherits
+				WHERE inhrelid=to_regclass($1) AND inhparent=$2::regclass)`, "public."+name, table).
+				Scan(&attached); err != nil {
+				return fmt.Errorf("verify %s partition: %w", name, err)
+			}
+			if !attached {
+				return fmt.Errorf("partition %s is not attached to %s", name, table)
 			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit DbSphere schema migration: %w", err)
 	}
 	return nil
 }

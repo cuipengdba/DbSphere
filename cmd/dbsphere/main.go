@@ -155,6 +155,11 @@ func run(log *slog.Logger) error {
 		defer close(tracePrunerDone)
 		runTracePruner(ctx, pg, cfg.TraceDays, log)
 	}()
+	partitionDone := make(chan struct{})
+	go func() {
+		defer close(partitionDone)
+		runPartitionMaintainer(ctx, pg, log)
+	}()
 	inspectionDone := make(chan struct{})
 	go func() {
 		defer close(inspectionDone)
@@ -188,6 +193,7 @@ func run(log *slog.Logger) error {
 	}
 	<-notifierDone
 	<-tracePrunerDone
+	<-partitionDone
 	<-inspectionDone
 	if autoAIDone != nil {
 		<-autoAIDone
@@ -310,6 +316,24 @@ func runTracePruner(ctx context.Context, pg *store.Postgres, days int, log *slog
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+func runPartitionMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			maintenanceCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := pg.EnsureTimePartitions(maintenanceCtx, time.Now().UTC())
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Error("Go storage partition maintenance failed", "error", err)
+			}
 		}
 	}
 }
