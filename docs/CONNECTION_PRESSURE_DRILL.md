@@ -12,4 +12,4 @@
 node scripts/connection-pressure-drill-acceptance.mjs http://127.0.0.1:18092 /tmp/dbsphere-replication-credentials.json
 ```
 
-脚本已加入 Linux CI。还需完全耗尽连接、PgBouncer 排队、应用 Trace 到连接池的归因和生产并发规模验收；空闲连接只证明连接槽压力，不证明请求延迟由此导致。
+[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44360581324) 的 29 个作业全部通过，其中隔离主备作业复做了真实连接压力和同事件恢复。还需完全耗尽连接、PgBouncer 排队、应用 Trace 到连接池的归因和生产并发规模验收；空闲连接只证明连接槽压力，不证明请求延迟由此导致。

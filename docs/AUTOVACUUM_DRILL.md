@@ -14,4 +14,4 @@
 node scripts/autovacuum-drill-acceptance.mjs http://127.0.0.1:18092 /tmp/dbsphere-replication-credentials.json
 ```
 
-脚本已接入 Linux CI 的隔离主备作业。真实业务性能影响、长时间关闭后的表膨胀、生产参数变更审批与自动修复仍未验收。
+[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44360581324) 的隔离主备作业已复做 autovacuum 关闭与同事件恢复，整套 29 个作业均通过。真实业务性能影响、长时间关闭后的表膨胀、生产参数变更审批与自动修复仍未验收。

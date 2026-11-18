@@ -2,7 +2,7 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
-[当前事件关联与时间线改动的 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44353066286) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni、复制延迟、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
+[当前故障矩阵扩展的 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44360581324) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni、复制延迟、真实 WAL 归档失败、autovacuum 关闭、默认 120 秒连接压力、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
 
 隔离 PG18 主备夹具新增真实 WAL 归档失败故障：测试命令使 `pg_stat_archiver.failed_count` 从 0 增加，Go 以 `pg_monitor` 只读账号采集后在事件 `8dad5aff-608f-4d86-9cab-3e94bd826cff` 关联 `pg_archive_failures` 告警、`wal_archive_failures` 候选、原始样本与报告；恢复归档命令后新失败数归零，恢复样本关闭原事件。第一次尝试因 PostgreSQL 命令行参数覆盖 `ALTER SYSTEM` 而未注入故障，调整夹具后本机通过。真实仓库、备份恢复和生产告警仍待验收，见[WAL 归档故障演练](WAL_ARCHIVE_DRILL.md)。
 
