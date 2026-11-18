@@ -23,9 +23,11 @@ type eventReportData struct {
 		Status         string   `json:"status"`
 		MissingSignals []string `json:"missingSignals"`
 		TraceCoverage  struct {
-			Spans         int      `json:"spans"`
-			DatabaseSpans int      `json:"databaseSpans"`
-			Services      []string `json:"services"`
+			Spans         int                  `json:"spans"`
+			DatabaseSpans int                  `json:"databaseSpans"`
+			Services      []string             `json:"services"`
+			ServiceImpact []serviceTraceImpact `json:"serviceImpact"`
+			AtLimit       bool                 `json:"atLimit"`
 		} `json:"traceCoverage"`
 		Candidates []struct {
 			Code       string   `json:"code"`
@@ -104,6 +106,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	data.Event.AssetName = "[资产名称已省略]"
 	data.Analysis.TraceCoverage.Services = nil
+	data.Analysis.TraceCoverage.ServiceImpact = nil
 	for i := range data.Analysis.Candidates {
 		if data.Analysis.Candidates[i].Review != nil {
 			data.Analysis.Candidates[i].Review.Reason = "[人工备注已省略]"
@@ -336,6 +339,17 @@ func renderEventMarkdown(data eventReportData) string {
 	fmt.Fprintf(&out, "Span %d 条，其中 PostgreSQL 客户端 Span %d 条；服务：%s。采样率和时钟偏移尚未验证。\n\n",
 		data.Analysis.TraceCoverage.Spans, data.Analysis.TraceCoverage.DatabaseSpans,
 		reportText(strings.Join(data.Analysis.TraceCoverage.Services, "、")))
+	for _, impact := range data.Analysis.TraceCoverage.ServiceImpact {
+		fmt.Fprintf(&out, "- %s：已观测 Span %d 条，数据库调用 %d 条，错误 %d 条；时间 %s 至 %s。\n",
+			reportText(impact.Service), impact.Spans, impact.DatabaseSpans, impact.ErrorSpans,
+			reportTime(&impact.FirstAt), reportTime(&impact.LastAt))
+	}
+	if data.Analysis.TraceCoverage.AtLimit {
+		out.WriteString("Trace 已达到 100 条显示上限，实际影响可能更多。\n")
+	}
+	if len(data.Analysis.TraceCoverage.ServiceImpact) > 0 {
+		out.WriteString("\n")
+	}
 	out.WriteString("## 根因候选与人工结论\n\n")
 	if len(data.Analysis.Candidates) == 0 {
 		out.WriteString("未定位：当前证据不足以支持根因候选。\n\n")

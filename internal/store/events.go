@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +37,15 @@ type eventRecord struct {
 	EndedAt        *time.Time      `json:"endedAt"`
 	AcknowledgedAt *time.Time      `json:"acknowledgedAt"`
 	Evidence       []eventEvidence `json:"evidence"`
+}
+
+type serviceTraceImpact struct {
+	Service       string    `json:"service"`
+	Spans         int       `json:"spans"`
+	DatabaseSpans int       `json:"databaseSpans"`
+	ErrorSpans    int       `json:"errorSpans"`
+	FirstAt       time.Time `json:"firstAt"`
+	LastAt        time.Time `json:"lastAt"`
 }
 
 func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, error) {
@@ -153,6 +163,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	traceCount := 0
 	databaseSpans := 0
 	services := []string{}
+	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
@@ -177,6 +188,24 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if !serviceSet[service] {
 			serviceSet[service] = true
 			services = append(services, service)
+		}
+		impact := serviceImpacts[service]
+		if impact == nil {
+			impact = &serviceTraceImpact{Service: service, FirstAt: at, LastAt: endedAt}
+			serviceImpacts[service] = impact
+		}
+		impact.Spans++
+		if kind == "postgresql_client" {
+			impact.DatabaseSpans++
+		}
+		if spanStatus == "error" {
+			impact.ErrorSpans++
+		}
+		if at.Before(impact.FirstAt) {
+			impact.FirstAt = at
+		}
+		if endedAt.After(impact.LastAt) {
+			impact.LastAt = endedAt
 		}
 		spanNode := "span:" + traceID + ":" + spanID
 		spanSet[spanNode] = true
@@ -226,6 +255,11 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if traceCount == 0 {
 		missing = append(missing, "应用 Trace 未接入或当前时间窗无可关联 Span")
 	}
+	sort.Strings(services)
+	impactList := make([]serviceTraceImpact, 0, len(services))
+	for _, service := range services {
+		impactList = append(impactList, *serviceImpacts[service])
+	}
 	missing = append(missing, "Go 全量根因规则和自动跨层采集仍在迁移")
 	status := "unlocated"
 	if len(candidates) > 0 {
@@ -234,7 +268,8 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	analysis := map[string]any{
 		"status": status, "graph": map[string]any{"nodes": nodes, "edges": edges},
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
-		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans, "services": services},
+		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
+			"services": services, "serviceImpact": impactList, "atLimit": traceCount == 100},
 	}
 	return map[string]any{"event": event, "analysis": analysis}, nil
 }

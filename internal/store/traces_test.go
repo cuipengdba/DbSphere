@@ -144,6 +144,26 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 		!strings.Contains(string(encoded), "db_client_span") || !strings.Contains(string(encoded), "checkout") {
 		t.Fatalf("existing incident did not include application-to-PG trace: %s", encoded)
 	}
+	var impactView struct {
+		Analysis struct {
+			TraceCoverage struct {
+				ServiceImpact []serviceTraceImpact `json:"serviceImpact"`
+			} `json:"traceCoverage"`
+		} `json:"analysis"`
+	}
+	if err := json.Unmarshal(encoded, &impactView); err != nil || len(impactView.Analysis.TraceCoverage.ServiceImpact) != 1 ||
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].Service != "checkout" ||
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].Spans != 2 ||
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].DatabaseSpans != 1 {
+		t.Fatalf("observed service impact was not counted: %+v %v", impactView, err)
+	}
+	if report, err := pg.EventReport(ctx, eventID, "md"); err != nil ||
+		!strings.Contains(report, "checkout：已观测 Span 2 条，数据库调用 1 条") {
+		t.Fatal("incident report lost observed application impact", err)
+	}
+	if prompt, _, err := pg.EventAIEvidence(ctx, eventID); err != nil || strings.Contains(prompt, "checkout") {
+		t.Fatal("AI evidence exposed application service name", err)
+	}
 }
 
 func TestRealPostgreSQLLockPIDConnectsApplicationTraceToOneEvent(t *testing.T) {

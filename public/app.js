@@ -678,6 +678,13 @@ async function showEvent(id) {
   if (analysis.traceCoverage) diagnosis.append(cell('small', analysis.traceCoverage.spans
     ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
     : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
+  if (analysis.traceCoverage?.serviceImpact?.length) {
+    const impact = document.createElement('details'); impact.append(cell('summary', '查看已观测应用影响面'));
+    for (const service of analysis.traceCoverage.serviceImpact) impact.append(cell('p',
+      `${service.service} · Span ${service.spans} · 数据库调用 ${service.databaseSpans} · 错误 ${service.errorSpans} · ${formatTime(service.firstAt)} 至 ${formatTime(service.lastAt)}`, 'evidence'));
+    if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，实际影响可能更多。'));
+    diagnosis.append(impact);
+  }
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
   const chain = document.createElement('div'); chain.className = 'flow-strip';
   for (const [title, present, available, missing] of [

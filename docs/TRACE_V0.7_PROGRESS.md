@@ -10,6 +10,8 @@ Go 导入进一步按数据库客户端 Span 的父 ID 逐级回溯，只保存�
 
 本机真实 PG14 两会话 advisory lock 演练已从 Go 只读采集得到等待 PID → 阻塞 PID，测试用 OTLP Span 携带同一等待 PID，经独立 PG18 存储后在一个事件 ID 的图中出现 `same_backend_pid`；此项也加入 PG14–18 CI 矩阵。测试埋点由受控用例生成，尚未等同生产应用 SDK 自动埋点验收。
 
+Go 同一事件页现在按服务展示**已观测** Span 数、数据库客户端调用数、错误 Span 数及时间范围，Markdown/HTML 复盘包含相同统计。单次事件最多读取 100 条 Span；达到上限会提示可能不完整。采样率和时钟偏移仍未知，因此不将计数称为全部受影响请求。发送给可选模型的证据包遮蔽服务名和明细影响面。
+
 ## 已实现的首段链路
 
 - 可选 `POST /v1/traces` 接收 **OTLP/HTTP JSON** 的 `resourceSpans`。设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN` 后启用；未设置时接口关闭。请求使用 `Authorization: Bearer <token>`，限制 1 MiB 和 256 个 Span。
