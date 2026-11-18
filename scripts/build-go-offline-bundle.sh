@@ -30,8 +30,14 @@ cleanup() {
 trap cleanup EXIT
 
 app_image="dbsphere/offline-go-app:$version"
+pg_source='postgres:18.7-bookworm@sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f'
+if ! grep -Fq "DBSPHERE_PG18_IMAGE:-$pg_source" "$repo_dir/deploy/compose/compose.go.yaml"; then
+  echo 'Go Compose PostgreSQL image must match the pinned offline source.' >&2
+  exit 1
+fi
 docker build --platform linux/amd64 -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
-docker pull --platform linux/amd64 postgres:18-bookworm
+docker pull --platform linux/amd64 "$pg_source"
+docker image tag "$pg_source" postgres:18-bookworm
 mkdir -p -- "$stage/deploy/compose"
 mkdir -p -- "$stage/licenses"
 cp -- "$repo_dir/LICENSE" "$stage/licenses/DBSphere-LICENSE"
@@ -54,8 +60,8 @@ if [[ ! "$app_image_id" =~ ^sha256:[0-9a-f]{64}$ || ! "$pg_image_id" =~ ^sha256:
   echo 'Cannot identify both Linux images in the offline archive.' >&2
   exit 1
 fi
-printf 'DBSPHERE_GO_OFFLINE_VERSION=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_IMAGE_ID=%s\n' \
-  "$version" "$app_image" "$app_image_id" "$pg_image_id" > "$stage/bundle.env"
+printf 'DBSPHERE_GO_OFFLINE_VERSION=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_SOURCE=%s\n' \
+  "$version" "$app_image" "$app_image_id" "$pg_image_id" "$pg_source" > "$stage/bundle.env"
 (cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$output_dir/DbSphere-go-offline-$version-linux-amd64.run"
 tar -C "$stage" -czf "$payload" .

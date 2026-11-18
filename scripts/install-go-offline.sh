@@ -31,11 +31,13 @@ source "$bundle_dir/bundle.env"
 if [[ ! "${DBSPHERE_GO_OFFLINE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ||
   "${DBSPHERE_GO_OFFLINE_APP_IMAGE:-}" != "dbsphere/offline-go-app:$DBSPHERE_GO_OFFLINE_VERSION" ||
   ! "${DBSPHERE_GO_OFFLINE_APP_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ||
-  ! "${DBSPHERE_GO_OFFLINE_PG_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  ! "${DBSPHERE_GO_OFFLINE_PG_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ||
+  ! "${DBSPHERE_GO_OFFLINE_PG_SOURCE:-}" =~ ^postgres:18\.[0-9]+-bookworm@sha256:[0-9a-f]{64}$ ]]; then
   echo 'Go offline bundle manifest is invalid.' >&2
   exit 1
 fi
 export DBSPHERE_GO_OFFLINE_APP_IMAGE
+export DBSPHERE_PG18_IMAGE=postgres:18-bookworm
 
 config_dir="${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}"
 if [[ "$config_dir" != /* ]]; then echo 'DBSPHERE_GO_CONFIG_DIR must be absolute.' >&2; exit 1; fi

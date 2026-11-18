@@ -2,7 +2,7 @@ name: dbsphere-go-dev
 
 services:
   store:
-    image: postgres:18-bookworm
+    image: ${DBSPHERE_PG18_IMAGE:-postgres:18.7-bookworm@sha256:ece55f7868da684e400f82f1030a050718adbdd65c23aa500c486f6e2950dc0f}
     restart: unless-stopped
     environment:
       POSTGRES_USER: dbsphere
