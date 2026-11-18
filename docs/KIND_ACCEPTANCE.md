@@ -91,3 +91,7 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 加入 Kubernetes `continue` 安全分页后，以提交 `a3660b9` 构建的新 Go 静态镜像在同一只读 ServiceAccount 下重新采样：样本 `ba7f6eda-536a-443e-9a0e-6a9a10507443` 为 `ok`，旧 Pod 名仍解析到当前唯一健康 Pod，`metrics.k8s.io` 与 Service 证据可读。TLS 模拟 API 测试使 Deployment、ReplicaSet 和 Pod 都跨到第二页，验证找到唯一目标并拒绝循环令牌；[22 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44258811967)全部通过。真实 kind 的资源数未超过单页，所以此处只证明新代码在实际集群没有回归，实际千项规模仍待容量验收。
 
 尚未验收多节点和生产集群、PVC 压力等其余故障、第三方 SDK、持续负载、持久存储故障及完整 PG14–18 × K8S 组合。V1.0 的八类故障和两类应用链路门槛仍未完成独立环境及生产级验收；见[开发任务清单](DEVELOPMENT_TASKS.md)。
+
+### 2026-11-19 Go 保留期代码滚动复验
+
+提交 `cedd75c` 新增 Go/PG18 可选历史数据保留期，[31 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44397517514)全部通过。以 `dbsphere/kind-acceptance:retention-cedd75c` 在原单节点 kind Namespace 滚动更新 Go Deployment；新 Pod `dbsphere-go-7bf76986bd-vrdf5` 1/1 Ready、0 次重启，`/readyz` 返回 `ready/postgresql18`。原 OOM 闭环事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍为 `resolved`，读回 8 条证据和 1 条根因候选；事件列表仍有 17 条，PG18 存储状态显示 122 条样本。测试集群未设置样本或事件保留期，控制台 API 两项均为 `null`，本次只证明关闭自动清理时升级不丢已核对数据。清理逻辑另由隔离 PG18 集成测试验证，生产容量与备份恢复仍待验收。
