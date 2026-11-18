@@ -319,9 +319,6 @@ jobs:
   container-vulnerability-inventory:
     needs: go-offline-package
     runs-on: ubuntu-latest
-    env:
-      GRYPE_DB_CACHE_DIR: ${{ runner.temp }}/dbsphere-grype-db
-      GRYPE_CHECK_FOR_APP_UPDATE: 'false'
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -329,6 +326,8 @@ jobs:
           path: ${{ runner.temp }}/dbsphere-image-sboms
       - name: Scan both bundled image SBOMs with pinned Grype
         run: |
+          export GRYPE_DB_CACHE_DIR="$RUNNER_TEMP/dbsphere-grype-db"
+          export GRYPE_CHECK_FOR_APP_UPDATE=false
           mkdir -p "$RUNNER_TEMP/dbsphere-grype"
           curl -fLsS -o "$RUNNER_TEMP/dbsphere-grype/grype.tar.gz" \
             https://github.com/anchore/grype/releases/download/v0.122.1/grype_0.122.1_linux_amd64.tar.gz
