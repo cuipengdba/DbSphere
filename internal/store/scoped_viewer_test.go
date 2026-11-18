@@ -89,6 +89,15 @@ func TestScopedEventOwnershipReadsPG18(t *testing.T) {
 	if err != nil || !found || len(value.(map[string]any)["assets"].([]json.RawMessage)) != 1 {
 		t.Fatalf("asset list was not scoped: %v", err)
 	}
+	for _, path := range []string{"/api/alerts", "/api/silences", "/api/notifications",
+		"/api/inspection-schedules", "/api/inspection-runs"} {
+		if _, found, err := pg.ReadScopedCollection(ctx, path, []string{asset.ID}); err != nil || !found {
+			t.Fatalf("scoped query %s failed: %v", path, err)
+		}
+		if _, found, err := pg.ReadCollection(ctx, path); err != nil || !found {
+			t.Fatalf("global query %s failed: %v", path, err)
+		}
+	}
 	if _, _, err := pg.ReadScopedCollection(ctx, "/api/storage", []string{asset.ID}); err == nil {
 		t.Fatal("global storage query was exposed to scoped viewer")
 	}
