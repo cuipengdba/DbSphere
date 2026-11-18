@@ -131,6 +131,8 @@ func run(log *slog.Logger) error {
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash: viewerHash,
 			ViewerAssetIDs:     cfg.ViewerAssetIDs,
+			AutoCollect:        cfg.AutoCollect,
+			CollectEvery:       cfg.CollectEvery,
 			SecureCookie:       os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:          cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

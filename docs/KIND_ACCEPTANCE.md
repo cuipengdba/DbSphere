@@ -2,6 +2,16 @@
 
 > 2026-11-18，单节点 kind `dbsphere-test`，Namespace `dbsphere-smoke`，PostgreSQL 18 测试数据库。此记录只证明列出的本机故障路径，不是生产 Kubernetes 或 V1.0 正式版验收。
 
+## 最新本机复验：采样时效和探针故障闭环
+
+2026-11-18，复用本机 `dbsphere-test` 集群；首次检查发现 API Server 的 etcd 健康检查失败。重启该测试控制平面后，Node 恢复 `Ready`，PG18 存储完成崩溃恢复并重新就绪。Go 后端新静态镜像 `dbsphere/kind-acceptance:freshness` 在同一 Namespace 滚动部署，`/readyz` 返回 `ready/postgresql18`。关闭自动采集时，浏览器将 4 个历史成功样本显示为“最近一次成功”，不把旧样本称作当前健康。
+
+临时启用自动采集期间，本机 kind API Server 再次超时；4 个 K8S 资产出现“Kubernetes resource collection is unavailable”失败样本和独立的“采样数据陈旧”事件。API 恢复后，自动采集取得 4 个成功 PG18/K8S 样本，4 个陈旧事件均在各自原事件 ID 下转为 `resolved`。自动采集开关随后恢复为关闭。此处证明数据缺口和恢复可见；控制面反复超时使该单节点 kind **不适合作为可靠性或生产容量验收**。
+
+再次在隔离的 `dbsphere-go-fault-pg` Deployment 注入 `/bin/false` readiness probe，缩容再扩容后，真实 PG18 Pod `dbsphere-go-fault-pg-c4fb9749b-wm6cs` 运行但 `Ready=False`，Service 无可用 Endpoint。浏览器手动采样在同一事件 `c1bf6870-274f-4d7b-8386-bde52a648bd3` 中记录 `PostgreSQL connection refused`、Pod 条件、探针 `Unhealthy` Event 与 PG 不可用告警；超过 60 秒的第二次采样增加 `k8s_pod_not_ready` 告警及低置信度“PostgreSQL Pod 未就绪”根因候选，候选注明匹配条件、样本 ID 和因果限制。恢复原探针并完成滚动后，成功采样 `65c2a085-d68b-4827-a67f-aedf2cdf0d39` 把**同一事件 ID**转为 `resolved`，原故障、候选与告警恢复记录仍可查看。此次事件时间窗没有应用 Trace，页面明确标为信号缺口；不能据此声称应用请求链路已在本场景验证。
+
+新镜像的 Go 全量测试、`go vet ./...` 和 `node --check public/app.js` 本机通过。验收后重新轮换 kind 测试管理员密码，新密码仅在 `H:\CodexLS\outputs\DbSphere-kind-admin-password.txt`；新密码登录返回 200。测试存储使用 `emptyDir`，多节点、持久卷恢复、PG14–18 × K8S 矩阵、持续负载和生产集群仍未完成。
+
 ## 环境和边界
 
 - Go 后端与静态前端运行在 Linux 容器中，通过本机 `127.0.0.1:18090` 端口转发访问；采集目标和长期数据存储分别是两个 PG18 Deployment。测试存储用 `emptyDir`，Pod 被替换会丢失数据，不能据此声称持久化验收。

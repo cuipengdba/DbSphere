@@ -1,0 +1,6 @@
+.pill.stale{background:#fff1d6;color:#925b13}
+.pill.manual{background:#e8efff;color:#365d98}
+.health-stale{border-left:3px solid #d99a37}
+.health-error{border-left:3px solid #d87355}
+.health-ok{border-left:3px solid #3ea978}
+.health-manual{border-left:3px solid #7e9dc9}

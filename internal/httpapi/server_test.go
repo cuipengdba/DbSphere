@@ -215,9 +215,32 @@ func TestGoAlertRulePatchRequiresLoginAndCSRF(t *testing.T) {
 	}
 }
 
+func TestCollectorScheduleContract(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		response := httptest.NewRecorder()
+		New(healthStub{}, AuthConfig{AutoCollect: enabled, CollectEvery: 90}).ServeHTTP(response,
+			httptest.NewRequest(http.MethodGet, "/api/version", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("version status: %d", response.Code)
+		}
+		var body struct {
+			CollectorEnabled          bool      `json:"collectorEnabled"`
+			CollectionIntervalSeconds int       `json:"collectionIntervalSeconds"`
+			ServerTime                time.Time `json:"serverTime"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.CollectorEnabled != enabled || body.CollectionIntervalSeconds != 90 ||
+			time.Since(body.ServerTime) > time.Minute {
+			t.Fatalf("invalid schedule response: %+v", body)
+		}
+	}
+}
+
 func TestEmbeddedFrontendAndReadiness(t *testing.T) {
 	handler := New(healthStub{})
-	for _, path := range []string{"/", "/app.js", "/styles.css", "/favicon.svg"} {
+	for _, path := range []string{"/", "/app.js", "/styles.css", "/freshness.css", "/favicon.svg"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK || response.Body.Len() == 0 {

@@ -6,6 +6,7 @@
   <title>DbSphere · 全域数据库智能运维管理平台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/freshness.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -42,7 +43,7 @@
       <div id="notice" role="status" aria-live="polite"></div>
       <section class="summary" aria-label="总览" data-view="overview">
         <div class="stat"><span>纳管实例</span><strong id="asset-count">0</strong></div>
-        <div class="stat"><span>采集正常</span><strong id="healthy-count">0</strong></div>
+        <div class="stat"><span id="healthy-label">采集正常</span><strong id="healthy-count">0</strong></div>
         <div class="stat"><span>开放事件</span><strong id="event-count">0</strong></div>
       </section>
       <div class="grid overview-grid" data-view="overview">

@@ -5,8 +5,20 @@ let selectedAsset = null;
 let selectedEvent = null;
 let editingAsset = null;
 let pg18Store = false;
+let collectorSchedule = { known: false, enabled: false, intervalMs: 60000, clockOffsetMs: 0 };
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
+function assetHealth(asset) {
+  if (!collectorSchedule.known) return asset.lastStatus === 'ok' ? { label: '正常', kind: 'ok' }
+    : asset.lastStatus === 'error' ? { label: '采集失败', kind: 'error' } : { label: '待采集', kind: 'pending' };
+  if (!collectorSchedule.enabled) return asset.lastStatus === 'ok' ? { label: '最近一次成功', kind: 'manual' }
+    : asset.lastStatus === 'error' ? { label: '最近一次失败', kind: 'error' } : { label: '待采集', kind: 'pending' };
+  const sampledAt = Date.parse(asset.lastSampleAt || asset.createdAt);
+  if (!Number.isFinite(sampledAt) || Date.now() + collectorSchedule.clockOffsetMs - sampledAt >= 2 * collectorSchedule.intervalMs)
+    return { label: asset.lastSampleAt ? '数据陈旧' : '采样未到达', kind: 'stale' };
+  return asset.lastStatus === 'ok' ? { label: '近期正常', kind: 'ok' }
+    : asset.lastStatus === 'error' ? { label: '采集失败', kind: 'error' } : { label: '待首采', kind: 'pending' };
+}
 const growthMetric = 'pg.database_growth_bytes_per_day';
 const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
   metric === growthMetric ? `${(Number(value) / (1024 ** 3)).toFixed(2)} GiB/日` : String(value);
@@ -46,7 +58,8 @@ function renderOverview(assets, events) {
   const fleet = $('overview-assets'); fleet.replaceChildren();
   if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
   for (const asset of assets.slice(0, 6)) {
-    const button = cell('button', `${asset.name} · ${asset.runtime === 'k8s' ? 'K8S' : 'Linux'} · ${asset.lastStatus === 'ok' ? '正常' : asset.lastStatus === 'error' ? '采集失败' : '待采集'}`, `event-button ${asset.lastStatus === 'ok' ? 'health-ok' : asset.lastStatus === 'error' ? 'health-failed' : ''}`);
+    const health = assetHealth(asset);
+    const button = cell('button', `${asset.name} · ${asset.runtime === 'k8s' ? 'K8S' : 'Linux'} · ${health.label}`, `event-button health-${health.kind}`);
     button.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     fleet.append(button);
   }
@@ -79,14 +92,24 @@ function cell(tag, text, cls) {
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
-    { templates }, { schedules }, { runs }, audit] = await Promise.all([
+    { templates }, { schedules }, { runs }, audit, runtime] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
     api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
     api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
-    currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null)
+    currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
+    api('/api/version').catch(() => null)
   ]);
+  const interval = Number(runtime?.collectionIntervalSeconds);
+  const serverTime = Date.parse(runtime?.serverTime);
+  collectorSchedule = {
+    known: runtime?.backend === 'go' && typeof runtime.collectorEnabled === 'boolean',
+    enabled: runtime?.collectorEnabled === true,
+    intervalMs: Number.isFinite(interval) && interval > 0 ? interval * 1000 : 60000,
+    clockOffsetMs: Number.isFinite(serverTime) ? serverTime - Date.now() : 0
+  };
   $('asset-count').textContent = assets.length;
-  $('healthy-count').textContent = assets.filter(a => a.lastStatus === 'ok').length;
+  $('healthy-label').textContent = collectorSchedule.known && !collectorSchedule.enabled ? '最近一次成功' : '采集正常';
+  $('healthy-count').textContent = assets.filter(a => assetHealth(a).kind === (collectorSchedule.known && !collectorSchedule.enabled ? 'manual' : 'ok')).length;
   $('event-count').textContent = events.filter(e => e.status === 'open').length;
   $('event-count').closest('.stat').classList.toggle('alerting', events.some(e => e.status === 'open'));
   renderOverview(assets, events);
@@ -215,7 +238,8 @@ function renderAssets(assets) {
     info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${asset.runtime === 'k8s' ? 'K8S / ' + asset.namespace : 'Linux'}`));
     info.append(cell('small', `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
-    actions.append(cell('span', asset.lastStatus === 'ok' ? '正常' : asset.lastStatus === 'error' ? '采集失败' : '待采集', `pill ${asset.lastStatus}`));
+    const health = assetHealth(asset);
+    actions.append(cell('span', health.label, `pill ${health.kind}`));
     const view = cell('button', '查看', 'ghost small-button'); view.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     const edit = cell('button', '编辑', 'ghost small-button write-action'); edit.addEventListener('click', () => editAsset(asset));
     const check = cell('button', '采集', 'ghost small-button write-action'); check.addEventListener('click', async () => {
@@ -247,7 +271,7 @@ async function showAsset(id) {
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}` : asset.linuxHost || 'Linux 主机未关联'}`));
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
-  detail.append(cell('p', `采集状态：${asset.lastStatus} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
+  detail.append(cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
   if (pg18Store) {
     const to = new Date(); const from = new Date(to.getTime() - 24 * 3600 * 1000);
     const { series } = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=1`);

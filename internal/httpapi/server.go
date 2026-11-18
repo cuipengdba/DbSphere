@@ -153,6 +153,8 @@ type AuthConfig struct {
 	PasswordHash       string
 	ViewerPasswordHash string
 	ViewerAssetIDs     []string
+	AutoCollect        bool
+	CollectEvery       int
 	SecureCookie       bool
 	OTLPToken          string
 	AI                 *ai.Client
@@ -193,7 +195,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		respond(w, http.StatusOK, map[string]string{"status": "ready", "storage": "postgresql18"})
 	})
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
-		respond(w, http.StatusOK, map[string]string{"backend": "go", "stage": "migration-foundation"})
+		interval := 60
+		if credentials != nil && credentials.CollectEvery > 0 {
+			interval = credentials.CollectEvery
+		}
+		respond(w, http.StatusOK, map[string]any{"backend": "go", "stage": "migration-foundation",
+			"collectorEnabled": credentials != nil && credentials.AutoCollect,
+			"collectionIntervalSeconds": interval, "serverTime": time.Now().UTC()})
 	})
 	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
 		if credentials == nil || credentials.OTLPToken == "" {
@@ -1091,7 +1099,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" &&
-			r.URL.Path != "/styles.css" && r.URL.Path != "/favicon.svg" {
+			r.URL.Path != "/styles.css" && r.URL.Path != "/freshness.css" && r.URL.Path != "/favicon.svg" {
 			http.NotFound(w, r)
 			return
 		}
