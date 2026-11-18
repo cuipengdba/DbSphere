@@ -138,6 +138,26 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record trace parent lookup migration: %w", err)
 		}
 	}
+	var tracePendingMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=19)").Scan(&tracePendingMigrated); err != nil {
+		return fmt.Errorf("check pending trace migration: %w", err)
+	}
+	if !tracePendingMigrated {
+		if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS trace_pending_spans (
+			trace_id text NOT NULL, span_id text NOT NULL, parent_span_id text,
+			service text NOT NULL, started_at timestamptz NOT NULL,
+			ended_at timestamptz NOT NULL, status text NOT NULL,
+			received_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY(trace_id,span_id))`); err != nil {
+			return fmt.Errorf("create pending trace buffer: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS trace_pending_received ON trace_pending_spans(received_at)"); err != nil {
+			return fmt.Errorf("index pending trace cleanup: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(19) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record pending trace migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

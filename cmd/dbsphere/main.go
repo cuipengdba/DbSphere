@@ -262,15 +262,22 @@ func runInspectionScheduler(ctx context.Context, pg *store.Postgres, key []byte,
 }
 
 func runTracePruner(ctx context.Context, pg *store.Postgres, days int, log *slog.Logger) {
-	ticker := time.NewTicker(time.Hour)
+	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
+	iteration := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if _, err := pg.PruneTraceSpans(ctx, days); err != nil && ctx.Err() == nil {
-			log.Error("Go trace retention scan failed", "error", err)
+		if _, err := pg.PrunePendingTraceSpans(ctx); err != nil && ctx.Err() == nil {
+			log.Error("Go pending trace cleanup failed", "error", err)
 		}
+		if iteration%12 == 0 {
+			if _, err := pg.PruneTraceSpans(ctx, days); err != nil && ctx.Err() == nil {
+				log.Error("Go trace retention scan failed", "error", err)
+			}
+		}
+		iteration++
 		select {
 		case <-ctx.Done():
 			return

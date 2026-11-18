@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,6 +17,15 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
+
+func newTraceID(t *testing.T) string {
+	t.Helper()
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(raw[:])
+}
 
 func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
@@ -109,7 +120,7 @@ func TestGoTraceLinksLateSDKParentAcrossOTLPRequests(t *testing.T) {
 	defer pg.DeleteAsset(ctx, asset.ID)
 	identity := []trace.Asset{{ID: asset.ID, Host: "pg-sdk.internal", Port: 5432, Database: "orders"}}
 	now := time.Now().UTC()
-	traceID := strings.Repeat("f", 32)
+	traceID := newTraceID(t)
 	attr := func(key, value string) map[string]any {
 		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
 	}
@@ -156,6 +167,121 @@ func TestGoTraceLinksLateSDKParentAcrossOTLPRequests(t *testing.T) {
 		strings.Contains(string(encoded), "4444444444444444") ||
 		strings.Contains(string(encoded), "secret") {
 		t.Fatalf("late chain leaked unrelated or sensitive spans: %s", encoded)
+	}
+}
+
+func TestGoTraceLinksEarlySDKParentAndPrunesPendingPG18(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	ctx := context.Background()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "SDK reordered export test",
+		Host: "pg-reordered.internal", Port: 5432, Database: "orders", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	now := time.Now().UTC()
+	traceID := newTraceID(t)
+	parent := trace.Span{TraceID: traceID, SpanID: "1111111111111111", Service: "sdk-checkout",
+		Kind: "service", Start: now.Add(-time.Second), End: now, Status: "ok"}
+	if imported, linked, err := pg.SaveTraceBatch(ctx, nil, []trace.Span{parent}); err != nil || imported != 0 || linked != 0 {
+		t.Fatalf("early parent should only enter the short buffer: %d %d %v", imported, linked, err)
+	}
+	if value, err := pg.RawTrace(ctx, asset.ID, traceID); err != nil ||
+		strings.Contains(fmt.Sprint(value), parent.SpanID) {
+		t.Fatalf("unmapped service span became visible: %v %v", value, err)
+	}
+	child := trace.Span{AssetID: asset.ID, TraceID: traceID, SpanID: "2222222222222222",
+		ParentSpanID: parent.SpanID, Service: "sdk-checkout", Kind: "postgresql_client",
+		Start: now.Add(-time.Second), End: now, Status: "ok"}
+	if imported, linked, err := pg.SaveTraceBatch(ctx, []trace.Span{child}, nil); err != nil || imported != 2 || linked != 0 {
+		t.Fatalf("early parent did not join mapped child: %d %d %v", imported, linked, err)
+	}
+	value, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(value)
+	if !strings.Contains(string(encoded), parent.SpanID) || !strings.Contains(string(encoded), child.SpanID) {
+		t.Fatalf("parent-first SDK trace was incomplete: %s", encoded)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE trace_pending_spans SET received_at=now()-interval '11 minutes'
+		WHERE trace_id=$1 AND span_id=$2`, traceID, parent.SpanID); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := pg.PrunePendingTraceSpans(ctx); err != nil || removed < 1 {
+		t.Fatalf("expired pending span was not removed: %d %v", removed, err)
+	}
+}
+
+func TestGoTraceReconcilesConcurrentCollectorBatchCommits(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	pg, err := Open(context.Background(), storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	ctx := context.Background()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Concurrent Collector batch test",
+		Host: "pg-concurrent.internal", Port: 5432, Database: "orders", Username: "postgres",
+		Password: "test-secret", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	now := time.Now().UTC()
+	traceID := newTraceID(t)
+	parentID, childID := "1111111111111111", "2222222222222222"
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO trace_pending_spans
+		(trace_id,span_id,service,started_at,ended_at,status) VALUES($1,$2,'sdk', $3,$4,'ok')`,
+		traceID, parentID, now.Add(-time.Second), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO trace_spans
+		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status)
+		VALUES($1,$2,$3,$4,'sdk','postgresql_client',$5,$6,'ok')`,
+		asset.ID, traceID, childID, parentID, now.Add(-time.Second), now); err != nil {
+		t.Fatal(err)
+	}
+	// Both rows are committed, as when two Collector exports finish together.
+	// A new request in that trace must reconcile the previously missed edge.
+	unrelated := trace.Span{TraceID: traceID, SpanID: "4444444444444444", Service: "sdk",
+		Kind: "service", Start: now.Add(-time.Second), End: now, Status: "ok"}
+	if imported, linked, err := pg.SaveTraceBatch(ctx, nil, []trace.Span{unrelated}); err != nil || imported != 1 || linked != 0 {
+		t.Fatalf("committed parent/child race was not reconciled: %d %d %v", imported, linked, err)
+	}
+	value, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(value)
+	if !strings.Contains(string(encoded), parentID) || strings.Contains(string(encoded), unrelated.SpanID) {
+		t.Fatalf("reconciliation exposed an unrelated service span: %s", encoded)
 	}
 }
 

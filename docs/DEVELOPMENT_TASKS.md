@@ -81,14 +81,14 @@
 
 ## V0.7：应用到数据库的全链路定位
 
-首段 OTLP/HTTP JSON 接入、PG18 Trace 存储、事件时间窗证据图和敏感字段白名单已实现并通过本地验证；官方 OpenTelemetry Collector 0.165.0 的 JSON Trace 转发也在本机 kind 验证。以下任务仍需 SDK 兼容、精确身份映射、双向下钻和真实故障验收，故暂不勾选。详见[开发记录](TRACE_V0.7_PROGRESS.md)。
+首段 OTLP/HTTP JSON 接入、PG18 Trace 存储、事件时间窗证据图和敏感字段白名单已实现并通过本地验证；官方 OpenTelemetry Collector 0.165.0 和 Go SDK 1.47.0 的分批 Trace 转发也在本机 kind 验证。其余任务仍需其他语言 SDK、精确身份映射、双向下钻和真实故障验收。详见[开发记录](TRACE_V0.7_PROGRESS.md)。
 
-- [ ] **07-01** 接入 OTel 数据库客户端 Span 和服务身份，遵循 PostgreSQL 语义约定并控制 SQL 敏感字段。
+- [x] **07-01** 接入 OTel 数据库客户端 Span 和服务身份，遵循 PostgreSQL 语义约定并控制 SQL 敏感字段。官方 Go SDK → Collector → Go DbSphere → PG18 实测读回同一 Trace 的服务父 Span、数据库客户端子 Span 和真实 PG 后端 PID；分批到达补链、脱敏待关联与失效清理有 PG18 回归测试。其他语言 SDK 留在 V1.0 兼容矩阵继续验收。
 - [ ] **07-02** 连接服务/请求/Trace/连接池/PG 实例/SQL 指纹/Host 或 Pod/Node/PVC 的身份映射与时间关联。
 - [ ] **07-03** 事件页提供双向下钻：慢请求 → SQL/PG/基础设施，以及数据库故障 → 受影响服务和请求。
 - [ ] **07-04** 标示链路断点、采样率与时钟偏移；没有应用 Trace 时保持数据库侧诊断可用。
 - [ ] **07-05** 影响面计算与依赖拓扑，按资产权限控制可见服务和 Trace。
-- [ ] **07-06** 验收场景 A：应用慢请求 → DB Span → SQL 锁等待 → 阻塞会话 → 根因候选；场景 B：应用连接失败 → PG Pod OOMKilled/重启 → K8S 事件和资源证据 → 根因候选。每个场景都必须在**一个事件 ID** 下完成回溯。场景 A 的真实 Go HTTP 应用→Go OTLP→PG18 事件与同 ID 恢复已通过[PG14–18 五版 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)；场景 B 已在[本机单节点 kind](KIND_ACCEPTANCE.md)完成真实应用 OOM 故障闭环。官方 Collector 转发另在本机 kind 验证。两者的独立环境、生产 K8S/Operator 和第三方 SDK 复核仍待完成。
+- [ ] **07-06** 验收场景 A：应用慢请求 → DB Span → SQL 锁等待 → 阻塞会话 → 根因候选；场景 B：应用连接失败 → PG Pod OOMKilled/重启 → K8S 事件和资源证据 → 根因候选。每个场景都必须在**一个事件 ID** 下完成回溯。场景 A 的真实 Go HTTP 应用→Go OTLP→PG18 事件与同 ID 恢复已通过[PG14–18 五版 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)；场景 B 已在[本机单节点 kind](KIND_ACCEPTANCE.md)完成真实应用 OOM 故障闭环。官方 Collector 与 Go SDK 的 Trace 转发另在本机 kind 验证；SDK 探针尚未在故障事件中复做场景 A/B。两者的独立环境、生产 K8S/Operator 和其他语言 SDK 复核仍待完成。
 
 ## V0.8：可选 AI 分析与预警
 

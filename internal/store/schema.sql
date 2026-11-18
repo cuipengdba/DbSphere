@@ -122,4 +122,12 @@
   CREATE INDEX IF NOT EXISTS trace_spans_asset_time ON trace_spans(asset_id,started_at DESC);
   CREATE INDEX IF NOT EXISTS trace_spans_parent_lookup ON trace_spans(trace_id,parent_span_id)
     WHERE parent_span_id IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS trace_pending_spans (
+    trace_id text NOT NULL, span_id text NOT NULL, parent_span_id text,
+    service text NOT NULL, started_at timestamptz NOT NULL,
+    ended_at timestamptz NOT NULL, status text NOT NULL,
+    received_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY(trace_id,span_id)
+  );
+  CREATE INDEX IF NOT EXISTS trace_pending_received ON trace_pending_spans(received_at);
 

@@ -26,6 +26,8 @@
 
 在同一 Namespace 运行官方 `otel/opentelemetry-collector:0.165.0` Linux 镜像。其 OTLP HTTP Receiver 监听 `:4318`，`otlp_http` Exporter 以 JSON、无压缩和独立写入令牌发往 Go DbSphere `/v1/traces`；配置在[无密钥示例](../examples/trace-lock-app/otel-collector.yaml)。将示例应用的 OTLP 目标改成 Collector Service 后，真实 `/checkout` 请求成功，返回 Trace `f331080ca67953004cd1adb745d14dfd` 和 PG 后端 PID `1212`。管理员从 DbSphere 的 PG18 存储读取同一 Trace，确认服务父 Span → PG 客户端 Span 共 2 条，均关联受管 PG 资产，客户端 Span 保留实际 PID。Collector 镜像配置验证也通过。此项只证明本机标准 Collector 的 Trace JSON 转发和资产关联；未验证生产 TLS、队列持久化、第三方 SDK 自动埋点或负载下丢包率。[Exporter 配置依据](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlphttpexporter/README.md)。
 
+另以[官方 Go SDK 验收程序](../examples/otel-sdk-probe/README.md)的 OTLP HTTP/Protobuf Exporter 向 Collector 发送真实 PG18 查询的父子 Span，Collector 再以 JSON 发给 DbSphere。首次实测只保存数据库子 Span，暴露了分批导出时父 Span 先后到达及并发提交的缺口。Go 后端新增脱敏短期待关联表、父链补全和提交后二次关联，PG18 测试分别覆盖“父先子后”“子先父后”及并发提交后的修复。新静态镜像在 kind 内复验：Trace `1cbbd2b6fb9addc7f764b1f7dde1d508` 读回服务父 Span 和 PG 客户端子 Span，后端 PID `6327`；归档到仓库的可复现程序再生成 Trace `5cab080d463f1b775b5c7e7c11c40fd5`，同样读回 2 条父子 Span、唯一受管 PG 资产和实际 PID `6713`。由于本机 controller-manager 失去 Leader Lease 时 Deployment 更新受阻，本项后段验收用管理员直接创建的临时测试 Pod，DbSphere 仍使用原只读 ServiceAccount；这不算生产高可用验收。其他语言 SDK 和跨服务自动传播仍待测试。
+
 ## 判定
 
 三种故障均在**一个问题、一个事件 ID**下记录数据库故障、K8S 状态、规则告警和恢复采样。根因输出是带证据与不确定性的候选，不把关联当作已证实的唯一原因。浏览器已查看探针故障的事件时间线、候选与审计；调度故障的 API 证据及同 ID 恢复已核对。

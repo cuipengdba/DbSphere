@@ -1,6 +1,6 @@
 # Go 应用锁等待演练
 
-此独立测试服务用于 V0.7/V1.0 的“HTTP 请求 → PostgreSQL 等待会话 → 阻塞会话 → 同一事件 ID”验收。它只有两个入口：`GET /healthz` 和 `GET /checkout`。`/checkout` 在目标 PG14–18 上执行一次 advisory lock 查询，并把真实请求和数据库调用的父子 Span 发送到 DbSphere 的 `/v1/traces`。应用用 Go 标准库直接编码 OTLP/HTTP JSON。本机 kind 已另外通过官方 OpenTelemetry Collector 0.165.0 转发同一应用的真实请求 Span；任意第三方 SDK 的兼容性仍需逐项验证。
+此独立测试服务用于 V0.7/V1.0 的“HTTP 请求 → PostgreSQL 等待会话 → 阻塞会话 → 同一事件 ID”验收。它只有两个入口：`GET /healthz` 和 `GET /checkout`。`/checkout` 在目标 PG14–18 上执行一次 advisory lock 查询，并把真实请求和数据库调用的父子 Span 发送到 DbSphere 的 `/v1/traces`。应用用 Go 标准库直接编码 OTLP/HTTP JSON。本机 kind 已另外通过官方 OpenTelemetry Collector 0.165.0 转发同一应用的真实请求 Span；[官方 Go SDK 探针](../otel-sdk-probe/README.md)也已验证经 Collector 的父子 Span，其他语言 SDK 仍需逐项验证。
 
 同一程序也用于受控的 Kubernetes OOM 演练：当 PG Service 因 Pod OOMKilled 而无就绪端点时，`/checkout` 返回 502，并导出 `error` 服务/数据库 Span。`Dockerfile` 从项目根目录构建静态 Linux 容器，例如 `docker build -f examples/trace-lock-app/Dockerfile -t dbsphere/trace-lock-app:local .`。测试详情见[本机 kind 验收记录](../../docs/KIND_ACCEPTANCE.md)。
 

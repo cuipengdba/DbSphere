@@ -22,13 +22,20 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            examples/otel-sdk-probe/go.sum
       - name: Test and vet Go foundation against PostgreSQL 18
         env:
           DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
         run: |
           go test -p 1 ./...
           go vet ./...
+      - name: Build official OpenTelemetry Go SDK acceptance probe
+        run: |
+          cd examples/otel-sdk-probe
+          go test ./...
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/dbsphere-otel-sdk-probe" .
       - name: Build and start Go binary with embedded static pages
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
@@ -211,7 +218,7 @@ jobs:
           done
           docker exec -i dbsphere-go-restore-ci pg_restore -U postgres -d postgres --no-owner --no-acl < "${dump[0]}"
           version="$(docker exec dbsphere-go-restore-ci psql -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
-          test "$version" -ge 18
+          test "$version" -ge 19
 
   go-offline-upgrade-rollback:
     runs-on: ubuntu-latest
