@@ -109,3 +109,13 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 ### 2026-11-19 小批量追赶工作器复验
 
 提交 `7582717` 将 Go 保留期工作器从每日单批改为每小时限时、限批次追赶；固定 PG18.7 的[Linux 容量作业](https://github.com/cuipengdba/DbSphere/actions/runs/44409372242)清理 120000 条样本和 5000 个已结事件。固定工具下载添加有限重试后，[34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44409784854)全部通过，包含四节点 kind/PG14–18 矩阵。本机 kind 更新到镜像 `dbsphere/kind-acceptance:hourly-retention-821f7f6` 后，Pod `dbsphere-go-5596547bcd-grr2c` 1/1 Ready、0 次重启；`/readyz` 仍为 `ready/postgresql18`。配置的样本 90 天、已结事件 180 天策略仍出现在 `/api/storage`；原 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍有 8 条证据和 1 条候选，PG18 仍有 122 条样本、17 个事件、343 条证据和 172 条证据样本引用。kind 无过期数据，因此仅验证启用策略后的滚动更新及现有数据可读；实际追赶吞吐由隔离 PG18 作业验证，生产性能门槛仍未完成。
+
+### 2026-11-19 本机实集群接入与只读凭据复验
+
+用户改为要求在本机搭建并验收。复用已经部署的专用单节点 kind `dbsphere-test`，没有触碰其他项目 Namespace；Node、`dbsphere-go` 和独立 PG18 存储 Deployment 均 Ready，Kubernetes API `/readyz` 与 Go `/readyz` 正常。管理员 kubeconfig 仅保存在 `H:\CodexLS\tmp\dbsphere-local-admin.kubeconfig`，DbSphere Pod 继续使用 `dbsphere-reader` 投射凭据。`kubectl auth can-i` 逐项确认该账号能读 Pod、Event、Node、PVC/PV，不能读 Secret、删除 Pod 或读取 `kube-system` Pod。
+
+首次实时采样发现先前 OOM 演练资产仍用 PostgreSQL 高权限账号，这是测试夹具配置缺口。通过[`kind-readonly-fixture.mjs`](../scripts/kind-readonly-fixture.mjs)在隔离的 `dbsphere-go-oom-pg` 目标中建立 `dbsphere_acceptance_monitor` 登录并授予 `pg_monitor`，更新原资产后重新采样；新样本确认 `monitor_role=true`、`privileged_role=false`。随机密码只保存在本机 `H:\CodexLS\tmp\DbSphere-kind-readonly-monitor-password.txt`，未入库明文或提交。历史 OOM 事件创建时使用的是旧账号，本次只验证修正后的现状，不追溯改写历史采样权限。
+
+[`kind-live-acceptance.mjs`](../scripts/kind-live-acceptance.mjs)在真实 Go B/S API 中再采到 PG18.6、运行中的 Pod、Node 和 Service；另一 PG18 资产的新样本确认 `postgres-data` PVC/PV 均 Bound、Pod/Node CPU/内存指标来自 `metrics.k8s.io`，Event 读取无错误。长期 PG18 存储报告样本保留 90 天、已结事件保留 180 天；AI 状态为 `enabled=false`。原 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 仍为 `resolved`，同一事件有 8 条证据、24 个图节点、47 条关系、6 条 Span（3 条数据库客户端 Span）以及 `pod_oom_correlated` 候选，Markdown 报告包含同一事件 ID 与候选。脱敏 JSON 结果在本机 `H:\CodexLS\outputs\DbSphere-kind-live-acceptance.json`。
+
+Playwright Chromium 实际打开 Go 静态页面和该 OOM 事件：桌面与 390px 窄屏均显示应用服务、数据库调用、PostgreSQL、会话与 SQL、Linux/K8S 五段；无会话证据的段落明确显示缺口，候选注明证据与因果限制。窄屏 `scrollWidth=390`、视口宽 `390`，控制台 0 错误。截图留在本机 `H:\CodexLS\outputs\DbSphere-kind-live-incident.png` 与 `DbSphere-kind-live-incident-mobile.png`。本机集群控制面在验收前已有数百次重启，长期 PG18 测试存储使用 `emptyDir`；本次没有重新注入 OOM，也没有完成生产可靠性、持久卷恢复或 V1.0 正式验收。
