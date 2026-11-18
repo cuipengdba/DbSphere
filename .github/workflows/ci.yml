@@ -40,10 +40,10 @@ jobs:
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
           DBSPHERE_ADMIN_PASSWORD: first-bootstrap-password
-          DBSPHERE_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           DBSPHERE_HOST: 127.0.0.1
           DBSPHERE_PORT: '18085'
         run: |
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/dbsphere-go" ./cmd/dbsphere
           "$RUNNER_TEMP/dbsphere-go" > "$RUNNER_TEMP/dbsphere-go.log" 2>&1 &
           pid=$!

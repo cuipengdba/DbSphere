@@ -60,6 +60,16 @@ func Load() (Config, error) {
 	if err != nil || len(key) != 32 {
 		return Config{}, errors.New("DBSPHERE_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
+	repeated := true
+	for _, value := range key[1:] {
+		if value != key[0] {
+			repeated = false
+			break
+		}
+	}
+	if repeated {
+		return Config{}, errors.New("DBSPHERE_MASTER_KEY must not use a repeated-byte placeholder")
+	}
 	host := os.Getenv("DBSPHERE_HOST")
 	if host == "" {
 		host = "127.0.0.1"

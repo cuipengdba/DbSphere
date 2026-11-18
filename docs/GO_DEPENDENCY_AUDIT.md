@@ -16,4 +16,4 @@ CI 增加固定版本 Grype v0.122.1，对上述两份镜像 SBOM 生成漏洞�
 
 CI 本次镜像扫描的匹配数、Critical 来源和 Debian 安全公告状态记录在[容器镜像漏洞初审](CONTAINER_VULNERABILITY_REVIEW.md)。
 
-Go 代码漏洞扫描已通过；镜像漏洞报告仍待核实。PostgreSQL 18 镜像、构建基础镜像、遗留 Node.js 预览版、密钥和默认配置，以及完整发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
+Go 代码漏洞扫描已通过；镜像漏洞报告仍待核实。Go 启动配置现在拒绝重复字节构成的占位主密钥，CI 启动测试使用临时随机密钥。PostgreSQL 18 镜像、构建基础镜像、遗留 Node.js 预览版、完整密钥生命周期与默认配置，以及发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
