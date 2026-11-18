@@ -29,7 +29,9 @@ if [[ $# -eq 2 ]]; then
 fi
 source "$bundle_dir/bundle.env"
 if [[ ! "${DBSPHERE_GO_OFFLINE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ||
-  "${DBSPHERE_GO_OFFLINE_APP_IMAGE:-}" != "dbsphere/offline-go-app:$DBSPHERE_GO_OFFLINE_VERSION" ]]; then
+  "${DBSPHERE_GO_OFFLINE_APP_IMAGE:-}" != "dbsphere/offline-go-app:$DBSPHERE_GO_OFFLINE_VERSION" ||
+  ! "${DBSPHERE_GO_OFFLINE_APP_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ||
+  ! "${DBSPHERE_GO_OFFLINE_PG_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo 'Go offline bundle manifest is invalid.' >&2
   exit 1
 fi
@@ -70,8 +72,10 @@ if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
 fi
 docker image load --input "$bundle_dir/images.tar.gz" >/dev/null
 docker image inspect "$DBSPHERE_GO_OFFLINE_APP_IMAGE" >/dev/null
-if [[ "$base" == "$bundle_dir/deploy/compose/compose.go.yaml" ]]; then
-  docker image inspect postgres:18-bookworm >/dev/null
+if [[ "$(docker image inspect --format '{{.Id}}' "$DBSPHERE_GO_OFFLINE_APP_IMAGE")" != "$DBSPHERE_GO_OFFLINE_APP_IMAGE_ID" ||
+      "$(docker image inspect --format '{{.Id}}' postgres:18-bookworm)" != "$DBSPHERE_GO_OFFLINE_PG_IMAGE_ID" ]]; then
+  echo 'Loaded Go or PostgreSQL image does not match this offline bundle.' >&2
+  exit 1
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" config -q
