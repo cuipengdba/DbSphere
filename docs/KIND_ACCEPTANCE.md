@@ -22,6 +22,8 @@
 
 将内存限制恢复为 256 MiB 后，新 Pod 就绪；成功采样 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 自动把已删除的旧 Pod 名解析到新 Pod，原事件变为 `resolved`，恢复证据仍挂在该 ID。应用再次请求返回成功。场景 B 目前只在单节点 kind 本机测试，尚无多节点/生产 Operator、真实业务应用或自动 CI 演练；事件时间窗还包含故障前一次健康 Trace，因此影响面数值必须按错误 Span 与时间逐项核对。
 
+更新 Go 静态镜像为 `dbsphere/kind-acceptance:trace-impact` 后，在同一个已恢复 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 上复验：服务 `dbsphere-lock-demo` 的同期观测为 3 条 Trace、6 条 Span，**仅 1 条**带数据库错误的 Trace `e46e8da8d03862799d72df932d5dd51c` 被标为故障信号关联；另 2 条正常同期 Trace 未算入。管理员下钻原始脱敏 Trace 读到 2 条 `error` Span，Markdown 复盘也包含“故障信号关联 1 条”及该 Trace 链接。该分类证明事件页不再把所有同窗请求都称作故障影响；请求错误与 OOM 的因果关系仍须结合事件时间、Pod 状态和人工复核判断。
+
 ### 标准 OpenTelemetry Collector 转发
 
 在同一 Namespace 运行官方 `otel/opentelemetry-collector:0.165.0` Linux 镜像。其 OTLP HTTP Receiver 监听 `:4318`，`otlp_http` Exporter 以 JSON、无压缩和独立写入令牌发往 Go DbSphere `/v1/traces`；配置在[无密钥示例](../examples/trace-lock-app/otel-collector.yaml)。将示例应用的 OTLP 目标改成 Collector Service 后，真实 `/checkout` 请求成功，返回 Trace `f331080ca67953004cd1adb745d14dfd` 和 PG 后端 PID `1212`。管理员从 DbSphere 的 PG18 存储读取同一 Trace，确认服务父 Span → PG 客户端 Span 共 2 条，均关联受管 PG 资产，客户端 Span 保留实际 PID。Collector 镜像配置验证也通过。此项只证明本机标准 Collector 的 Trace JSON 转发和资产关联；未验证生产 TLS、队列持久化、第三方 SDK 自动埋点或负载下丢包率。[Exporter 配置依据](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/otlphttpexporter/README.md)。
@@ -29,6 +31,12 @@
 另以[官方 Go SDK 验收程序](../examples/otel-sdk-probe/README.md)的 OTLP HTTP/Protobuf Exporter 向 Collector 发送真实 PG18 查询的父子 Span，Collector 再以 JSON 发给 DbSphere。首次实测只保存数据库子 Span，暴露了分批导出时父 Span 先后到达及并发提交的缺口。Go 后端新增脱敏短期待关联表、父链补全和提交后二次关联，PG18 测试分别覆盖“父先子后”“子先父后”及并发提交后的修复。新静态镜像在 kind 内复验：Trace `1cbbd2b6fb9addc7f764b1f7dde1d508` 读回服务父 Span 和 PG 客户端子 Span，后端 PID `6327`；归档到仓库的可复现程序再生成 Trace `5cab080d463f1b775b5c7e7c11c40fd5`，同样读回 2 条父子 Span、唯一受管 PG 资产和实际 PID `6713`。由于本机 controller-manager 失去 Leader Lease 时 Deployment 更新受阻，本项后段验收用管理员直接创建的临时测试 Pod，DbSphere 仍使用原只读 ServiceAccount；这不算生产高可用验收。其他语言 SDK 和跨服务自动传播仍待测试。
 
 ## 判定
+
+### 2026-11-18 本机复验
+
+复用本机已运行的单节点 `dbsphere-test` kind 集群，重新导出管理员 kubeconfig，仅用于测试故障注入；DbSphere Go Pod 仍使用 `dbsphere-reader` 的 Pod 内只读凭据，没有签发新 ServiceAccount token。`kubectl auth can-i` 复核该账号可 `get pods`、`list events`、`get nodes`，不可 `get secrets` 或 `delete pods`。Go `/readyz` 返回 `ready/postgresql18`；真实资产新采样 `784ee043-5bb6-4db4-8b2a-4dfc4fbc67eb` 为 `ok`，读到 PG 18.6、就绪 Pod、Service、绑定 PVC/PV、Node 与 `metrics.k8s.io` 的 Pod/Node CPU 和内存。PVC 实际文件系统用量仍未配置 Prometheus，样本明确显示 `not_configured`。
+
+在隔离测试 Deployment `dbsphere-go-fault-pg` 上将 readiness probe 临时改为 `/bin/false`，缩容再扩容使 Service 仅指向未就绪 PG18 Pod。真实 Pod `dbsphere-go-fault-pg-c4fb9749b-phnpv` 变为 `Ready=False`，出现 `Unhealthy` Event；Go 采样 `f2a077df-748e-4989-9ffc-813c9f93b762`、`6aa8a420-02d1-45d1-9b29-3081628902be`、`bca2e808-8560-4baa-b6e7-fd7793a05911` 均报 PG 连接失败。**同一事件** `4f76762c-191f-4fdc-bdad-77cc257b4b4d` 的图关联 PG、Service、Pod、Node 和样本；持续 60 秒后 `k8s.pod_not_ready` 告警生成有证据与阈值的低置信度 `k8s_pod_not_ready` 候选。恢复原探针并完成 Deployment 滚动后，新 Pod 就绪，成功 PG18/K8S 样本 `0f07c67e-eb47-4331-ae7d-6e491267d40e` 将**原事件 ID**置为 `resolved`，同时保留故障、告警恢复及根因候选证据。演练未涉及生产集群，也未验证该场景的应用 Trace；本机控制面曾有较高重启计数，不作为可靠性测试环境。
 
 三种故障均在**一个问题、一个事件 ID**下记录数据库故障、K8S 状态、规则告警和恢复采样。根因输出是带证据与不确定性的候选，不把关联当作已证实的唯一原因。浏览器已查看探针故障的事件时间线、候选与审计；调度故障的 API 证据及同 ID 恢复已核对。
 

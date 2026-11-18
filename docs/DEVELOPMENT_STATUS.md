@@ -4,6 +4,8 @@
 
 ## 当前阶段
 
+2026-11-18 本机 kind 复验：既有 `dbsphere-test` 集群中，Go 服务的 PG18 存储、PG18/K8S/metrics-server 正常采样及只读 ServiceAccount 权限再次核对通过；临时探针故障使 PG 连接失败、Pod `Ready=False`、`Unhealthy` 事件与 `k8s_pod_not_ready` 候选归入事件 `4f76762c-191f-4fdc-bdad-77cc257b4b4d`，恢复后同一事件自动关闭。新 Go 镜像又读取真实 OOM 应用故障事件：3 条同期 Trace 中仅 1 条错误 Trace 被标为故障信号关联，原始 Trace 和复盘报告均可下钻。详见[本机 kind 验收](KIND_ACCEPTANCE.md)。跨服务链路、采样率和生产集群仍待发布门禁。
+
 Go 应用场景 B 已在本机 kind 实测：真实 HTTP 请求在测试 PG18 Pod `OOMKilled` 后返回 502，错误服务/PG Span 经 Go OTLP 接口存入独立 PG18；PG 连接失败、K8S OOM 和中置信度根因候选汇入事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`。恢复内存限制后，自动跟随新 Pod 的成功样本 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 关闭该事件；应用再次请求成功。该演练仅证明单节点 kind 的一条应用故障链，故障前健康 Trace 也落入事件时间窗，影响面需按错误 Span 核对。完整证据及局限见[本机 kind 验收](KIND_ACCEPTANCE.md)。
 
 Go 锁等待示例应用已提供可运行的 HTTP `/checkout` 和直接 OTLP/HTTP JSON 导出。本机 PG14 整链路测试使用真实应用请求、Go DbSphere OTLP 接口和独立 PG18 监控库：请求被 advisory lock 阻塞，数据库采样与锁告警创建一个事件 ID，释放后应用 Span 带实际等待 PID；同一事件图出现服务→PG Span、`same_backend_pid`、等待→阻塞会话，恢复采样关闭原事件。[PG14–18 五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)也通过该测试。官方 OpenTelemetry Collector 0.165.0 已在本机 kind 把同一应用的真实 Trace 以 JSON 转发到 Go 接口；独立[Go SDK 探针](../examples/otel-sdk-probe/README.md)进一步用官方 SDK 1.47.0 发送实际 PG18 查询的分批父子 Span，经 Collector 后在 PG18 存储读回同一资产和实际后端 PID。发现并修复分批并发到达时丢失父 Span 的问题，PG18 短期待关联表、双顺序测试和本机 kind 复验均通过；其他语言 SDK 与生产级场景仍待验收，详见[Trace 开发记录](TRACE_V0.7_PROGRESS.md)。

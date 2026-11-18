@@ -357,7 +357,9 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	if err := json.Unmarshal(encoded, &impactView); err != nil || len(impactView.Analysis.TraceCoverage.ServiceImpact) != 1 ||
 		impactView.Analysis.TraceCoverage.ServiceImpact[0].Service != "checkout" ||
 		impactView.Analysis.TraceCoverage.ServiceImpact[0].Spans != 2 ||
-		impactView.Analysis.TraceCoverage.ServiceImpact[0].DatabaseSpans != 1 {
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].DatabaseSpans != 1 ||
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].ObservedTraces != 1 ||
+		impactView.Analysis.TraceCoverage.ServiceImpact[0].CorrelatedTraces != 0 {
 		t.Fatalf("observed service impact was not counted: %+v %v", impactView, err)
 	}
 	if report, err := pg.EventReport(ctx, eventID, "md"); err != nil ||
@@ -520,7 +522,9 @@ func TestRealPostgreSQLLockPIDConnectsApplicationTraceToOneEvent(t *testing.T) {
 	encoded, _ := json.Marshal(detail)
 	if !strings.Contains(string(encoded), eventID) ||
 		!strings.Contains(string(encoded), `"code":"trace_lock_pid_matched"`) ||
-		!strings.Contains(string(encoded), `"relation":"same_backend_pid"`) {
+		!strings.Contains(string(encoded), `"relation":"same_backend_pid"`) ||
+		!strings.Contains(string(encoded), `"lockWaitTraces":1`) ||
+		!strings.Contains(string(encoded), `"correlatedTraces":1`) {
 		t.Fatalf("real PG lock was not linked to one application event: %s", encoded)
 	}
 	cancel()

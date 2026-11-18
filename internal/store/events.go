@@ -40,12 +40,17 @@ type eventRecord struct {
 }
 
 type serviceTraceImpact struct {
-	Service       string    `json:"service"`
-	Spans         int       `json:"spans"`
-	DatabaseSpans int       `json:"databaseSpans"`
-	ErrorSpans    int       `json:"errorSpans"`
-	FirstAt       time.Time `json:"firstAt"`
-	LastAt        time.Time `json:"lastAt"`
+	Service          string    `json:"service"`
+	Spans            int       `json:"spans"`
+	DatabaseSpans    int       `json:"databaseSpans"`
+	ErrorSpans       int       `json:"errorSpans"`
+	ObservedTraces   int       `json:"observedTraces"`
+	CorrelatedTraces int       `json:"correlatedTraces"`
+	ErrorTraces      int       `json:"errorTraces"`
+	LockWaitTraces   int       `json:"lockWaitTraces"`
+	TraceIDs         []string  `json:"traceIds"`
+	FirstAt          time.Time `json:"firstAt"`
+	LastAt           time.Time `json:"lastAt"`
 }
 
 func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, error) {
@@ -173,6 +178,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	services := []string{}
 	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
+	observedSpans := []observedTraceSpan{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
@@ -193,6 +199,15 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			return nil, err
 		}
 		traceCount++
+		observed := observedTraceSpan{TraceID: traceID, SpanID: spanID, Service: service,
+			Kind: kind, Status: spanStatus, Start: at, End: endedAt}
+		if parentID != nil {
+			observed.ParentSpanID = *parentID
+		}
+		if backendPID != nil {
+			observed.BackendPID = int(*backendPID)
+		}
+		observedSpans = append(observedSpans, observed)
 		if !serviceSet[service] {
 			serviceSet[service] = true
 			services = append(services, service)
@@ -252,6 +267,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		return nil, err
 	}
 	traceRows.Close()
+	classifyTraceImpact(observedSpans, samples, serviceImpacts)
 	for _, edge := range parentEdges {
 		if spanSet[edge["from"]] {
 			edges = append(edges, edge)

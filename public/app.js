@@ -716,10 +716,24 @@ async function showEvent(id) {
     ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
     : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
   if (analysis.traceCoverage?.serviceImpact?.length) {
-    const impact = document.createElement('details'); impact.append(cell('summary', '查看已观测应用影响面'));
-    for (const service of analysis.traceCoverage.serviceImpact) impact.append(cell('p',
-      `${service.service} · Span ${service.spans} · 数据库调用 ${service.databaseSpans} · 错误 ${service.errorSpans} · ${formatTime(service.firstAt)} 至 ${formatTime(service.lastAt)}`, 'evidence'));
-    if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，实际影响可能更多。'));
+    const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
+    for (const service of analysis.traceCoverage.serviceImpact) {
+      const row = document.createElement('div'); row.className = 'evidence';
+      row.append(cell('p', `${service.service} · 同期 Trace ${service.observedTraces ?? 0} 条 · 故障信号关联 ${service.correlatedTraces ?? 0} 条（数据库错误 ${service.errorTraces ?? 0}，锁等待 PID 匹配 ${service.lockWaitTraces ?? 0}）· Span ${service.spans} · 数据库调用 ${service.databaseSpans} · 错误 Span ${service.errorSpans} · ${formatTime(service.firstAt)} 至 ${formatTime(service.lastAt)}`));
+      if (service.traceIds?.length && event.assetId) {
+        const links = document.createElement('p'); links.append(cell('small', '关联 Trace：'));
+        for (const traceId of service.traceIds) {
+          if (!/^[0-9a-f]{32}$/.test(traceId)) continue;
+          const link = document.createElement('a'); link.href = `/api/assets/${event.assetId}/traces/${traceId}`;
+          link.textContent = `${traceId.slice(0, 12)}…`; link.title = traceId;
+          links.append(link, document.createTextNode(' '));
+        }
+        row.append(links);
+      }
+      impact.append(row);
+    }
+    impact.append(cell('small', '故障信号关联指数据库客户端错误或与锁样本精确匹配的后端 PID，并沿父 Span 关联请求；同窗出现与 PID 匹配都不能单独证明根因。'));
+    if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，计数可能不完整。'));
     diagnosis.append(impact);
   }
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));

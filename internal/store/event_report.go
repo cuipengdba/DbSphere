@@ -340,10 +340,16 @@ func renderEventMarkdown(data eventReportData) string {
 		data.Analysis.TraceCoverage.Spans, data.Analysis.TraceCoverage.DatabaseSpans,
 		reportText(strings.Join(data.Analysis.TraceCoverage.Services, "、")))
 	for _, impact := range data.Analysis.TraceCoverage.ServiceImpact {
-		fmt.Fprintf(&out, "- %s：已观测 Span %d 条，数据库调用 %d 条，错误 %d 条；时间 %s 至 %s。\n",
+		fmt.Fprintf(&out, "- %s：已观测 Span %d 条，数据库调用 %d 条，错误 %d 条；时间 %s 至 %s；同期 Trace %d 条，故障信号关联 %d 条（数据库错误 %d，锁等待 PID 匹配 %d）。\n",
 			reportText(impact.Service), impact.Spans, impact.DatabaseSpans, impact.ErrorSpans,
-			reportTime(&impact.FirstAt), reportTime(&impact.LastAt))
+			reportTime(&impact.FirstAt), reportTime(&impact.LastAt), impact.ObservedTraces,
+			impact.CorrelatedTraces, impact.ErrorTraces, impact.LockWaitTraces)
+		for _, traceID := range impact.TraceIDs {
+			fmt.Fprintf(&out, "  - 关联 Trace [%s](/api/assets/%s/traces/%s)\n",
+				traceID, event.AssetID, traceID)
+		}
 	}
+	out.WriteString("故障信号关联指数据库客户端错误或与锁样本精确匹配的后端 PID，并沿父 Span 关联请求；同窗出现与 PID 匹配都不能单独证明根因。\n")
 	if data.Analysis.TraceCoverage.AtLimit {
 		out.WriteString("Trace 已达到 100 条显示上限，实际影响可能更多。\n")
 	}
