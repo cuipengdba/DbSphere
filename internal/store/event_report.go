@@ -24,11 +24,12 @@ type eventReportData struct {
 		Status         string   `json:"status"`
 		MissingSignals []string `json:"missingSignals"`
 		TraceCoverage  struct {
-			Spans         int                  `json:"spans"`
-			DatabaseSpans int                  `json:"databaseSpans"`
-			Services      []string             `json:"services"`
-			ServiceImpact []serviceTraceImpact `json:"serviceImpact"`
-			AtLimit       bool                 `json:"atLimit"`
+			Spans                 int                  `json:"spans"`
+			DatabaseSpans         int                  `json:"databaseSpans"`
+			UnresolvedParentSpans int                  `json:"unresolvedParentSpans"`
+			Services              []string             `json:"services"`
+			ServiceImpact         []serviceTraceImpact `json:"serviceImpact"`
+			AtLimit               bool                 `json:"atLimit"`
 		} `json:"traceCoverage"`
 		Candidates []struct {
 			Code              string   `json:"code"`
@@ -357,6 +358,10 @@ func renderEventMarkdown(data eventReportData) string {
 	fmt.Fprintf(&out, "Span %d 条，其中 PostgreSQL 客户端 Span %d 条；服务：%s。采样率和时钟偏移尚未验证。\n\n",
 		data.Analysis.TraceCoverage.Spans, data.Analysis.TraceCoverage.DatabaseSpans,
 		reportText(strings.Join(data.Analysis.TraceCoverage.Services, "、")))
+	if data.Analysis.TraceCoverage.UnresolvedParentSpans > 0 {
+		fmt.Fprintf(&out, "链路断点：%d 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；原因可能是采样、延迟或时间窗，尚未确认。\n\n",
+			data.Analysis.TraceCoverage.UnresolvedParentSpans)
+	}
 	for _, impact := range data.Analysis.TraceCoverage.ServiceImpact {
 		fmt.Fprintf(&out, "- %s：已观测 Span %d 条，数据库调用 %d 条，错误 %d 条；时间 %s 至 %s；同期 Trace %d 条，故障信号关联 %d 条（数据库错误 %d，锁等待 PID 匹配 %d）。\n",
 			reportText(impact.Service), impact.Spans, impact.DatabaseSpans, impact.ErrorSpans,

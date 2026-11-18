@@ -858,6 +858,8 @@ async function showEvent(id) {
   if (analysis.traceCoverage) diagnosis.append(cell('small', analysis.traceCoverage.spans
     ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
     : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
+  if (analysis.traceCoverage?.unresolvedParentSpans) diagnosis.append(cell('small',
+    `链路断点：${analysis.traceCoverage.unresolvedParentSpans} 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；可能由采样、延迟或时间窗造成。`));
   if (analysis.traceCoverage?.serviceImpact?.length) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
     for (const service of analysis.traceCoverage.serviceImpact) {

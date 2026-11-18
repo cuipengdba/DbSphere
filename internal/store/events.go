@@ -320,9 +320,12 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	}
 	traceRows.Close()
 	classifyTraceImpact(observedSpans, samples, serviceImpacts)
+	unresolvedParentSpans := 0
 	for _, edge := range parentEdges {
 		if spanSet[edge["from"]] {
 			edges = append(edges, edge)
+		} else {
+			unresolvedParentSpans++
 		}
 	}
 	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
@@ -330,6 +333,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	}
 	if traceCount == 0 {
 		missing = append(missing, "应用 Trace 未接入或当前时间窗无可关联 Span")
+	}
+	if unresolvedParentSpans > 0 {
+		missing = append(missing, fmt.Sprintf("%d 条 Span 的父 Span 未在当前事件窗口中找到", unresolvedParentSpans))
 	}
 	sort.Strings(services)
 	impactList := make([]serviceTraceImpact, 0, len(services))
@@ -345,7 +351,8 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		"status": status, "graph": map[string]any{"nodes": nodes, "edges": edges},
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
-			"services": services, "serviceImpact": impactList, "atLimit": traceCount == 100},
+			"unresolvedParentSpans": unresolvedParentSpans,
+			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100},
 	}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related}, nil
 }

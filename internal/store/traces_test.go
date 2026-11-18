@@ -350,7 +350,8 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	var impactView struct {
 		Analysis struct {
 			TraceCoverage struct {
-				ServiceImpact []serviceTraceImpact `json:"serviceImpact"`
+				UnresolvedParentSpans int                  `json:"unresolvedParentSpans"`
+				ServiceImpact         []serviceTraceImpact `json:"serviceImpact"`
 			} `json:"traceCoverage"`
 		} `json:"analysis"`
 	}
@@ -368,6 +369,23 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	}
 	if prompt, _, err := pg.EventAIEvidence(ctx, eventID); err != nil || strings.Contains(prompt, "checkout") {
 		t.Fatal("AI evidence exposed application service name", err)
+	}
+	if _, err := pg.pool.Exec(ctx, `DELETE FROM trace_spans WHERE asset_id=$1 AND span_id=$2`,
+		asset.ID, "1111111111111111"); err != nil {
+		t.Fatal(err)
+	}
+	orphaned, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphanJSON, _ := json.Marshal(orphaned)
+	if err := json.Unmarshal(orphanJSON, &impactView); err != nil ||
+		impactView.Analysis.TraceCoverage.UnresolvedParentSpans != 1 {
+		t.Fatalf("missing parent span was not marked as a chain gap: %s %v", orphanJSON, err)
+	}
+	if report, err := pg.EventReport(ctx, eventID, "md"); err != nil ||
+		!strings.Contains(report, "链路断点：1 条 Span") {
+		t.Fatal("incident report omitted the missing parent span", err)
 	}
 }
 
