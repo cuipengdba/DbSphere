@@ -34,4 +34,6 @@
 
 另用原资产中**已删除的旧 Pod 名**再次注入 OOM，全程不修改资产映射：失败样本 `cb069214-696a-4846-99be-6c98a5be6c56` 只读解析到唯一未就绪的新 Pod，看到 `CrashLoopBackOff`/`OOMKilled`，创建事件 `4b72b565-ebcb-4203-9f03-5069bebc93fa`；恢复资源限制后样本 `6ceb5150-ddb2-4dd5-a4dc-f636ad23b781` 自动解析到健康 Pod，并把同一事件置为 `resolved`。对应的 TLS 模拟 API 回归测试也覆盖唯一未就绪替换 Pod；多 Pod 仍报告映射歧义。
 
+加入 Kubernetes `continue` 安全分页后，以提交 `a3660b9` 构建的新 Go 静态镜像在同一只读 ServiceAccount 下重新采样：样本 `ba7f6eda-536a-443e-9a0e-6a9a10507443` 为 `ok`，旧 Pod 名仍解析到当前唯一健康 Pod，`metrics.k8s.io` 与 Service 证据可读。TLS 模拟 API 测试使 Deployment、ReplicaSet 和 Pod 都跨到第二页，验证找到唯一目标并拒绝循环令牌；[22 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44258811967)全部通过。真实 kind 的资源数未超过单页，所以此处只证明新代码在实际集群没有回归，实际千项规模仍待容量验收。
+
 尚未验收多节点和生产集群、PVC 压力等其余故障、第三方 SDK、持续负载、持久存储故障及完整 PG14–18 × K8S 组合。V1.0 的八类故障和两类应用链路门槛仍未完成独立环境及生产级验收；见[开发任务清单](DEVELOPMENT_TASKS.md)。
