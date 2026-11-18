@@ -27,6 +27,45 @@ func TestDatabaseGrowthSignalRequiresObservedHistory(t *testing.T) {
 	}
 }
 
+func TestDatabaseGrowthRuleGroupUpgradePreservesOperatorSettings(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	tx, err := pg.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE alert_rules SET definition_json=
+		jsonb_set(jsonb_set(jsonb_set(definition_json,'{group}','"capacity"'::jsonb),
+		'{threshold}','123'::jsonb),'{enabled}','false'::jsonb)
+		WHERE id='pg_database_growth_fast'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedGoRules(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT definition_json FROM alert_rules
+		WHERE id='pg_database_growth_fast'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var rule alertRule
+	if err := json.Unmarshal(raw, &rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.Group != "storage" || rule.Threshold != 123 || rule.Enabled {
+		t.Fatalf("preview rule migration lost operator choices: %+v", rule)
+	}
+}
+
 func TestDatabaseGrowthAlertUsesPG18BaselineAndSameEventRecovery(t *testing.T) {
 	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if url == "" {
@@ -52,9 +91,11 @@ func TestDatabaseGrowthAlertUsesPG18BaselineAndSameEventRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.DeleteAsset(ctx, asset.ID)
-	metrics := func(bytes int64) map[string]any {
+	metrics := func(bytes int64, diskPercent float64) map[string]any {
 		return map[string]any{"database_bytes": bytes,
-			"collector": map[string]any{"pgStatus": "ok"}}
+			"collector": map[string]any{"pgStatus": "ok"},
+			"linux": map[string]any{"status": "ok", "filesystems": []any{
+				map[string]any{"mountpoint": "/var/lib/postgresql", "usedPercent": diskPercent}}}}
 	}
 	anchor := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
 	const gib = int64(1024 * 1024 * 1024)
@@ -64,13 +105,14 @@ func TestDatabaseGrowthAlertUsesPG18BaselineAndSameEventRecovery(t *testing.T) {
 	}{
 		{anchor.Add(-24 * time.Hour), gib},
 		{anchor.Add(130*time.Second - 24*time.Hour), gib},
-		{anchor.Add(260*time.Second - 24*time.Hour), 13 * gib},
+		{anchor.Add(310*time.Second - 24*time.Hour), gib},
+		{anchor.Add(600*time.Second - 24*time.Hour), 13 * gib},
 	} {
-		if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(item.bytes), "", "", item.at); err != nil {
+		if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(item.bytes, 40), "", "", item.at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	first, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib), "", "", anchor)
+	first, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib, 95), "", "", anchor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,14 +134,14 @@ func TestDatabaseGrowthAlertUsesPG18BaselineAndSameEventRecovery(t *testing.T) {
 		asset.ID).Scan(&firing); err != nil || firing != 0 {
 		t.Fatalf("trend rule fired before sustained growth: %d %v", firing, err)
 	}
-	second, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib), "", "", anchor.Add(130*time.Second))
+	second, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib, 95), "", "", anchor.Add(130*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var eventID string
 	if err := pg.pool.QueryRow(ctx, `SELECT id::text FROM events WHERE asset_id=$1
-		AND event_group='capacity' AND status='open'`, asset.ID).Scan(&eventID); err != nil {
-		t.Fatalf("sustained growth did not open a capacity incident: %v", err)
+		AND event_group='storage' AND status='open'`, asset.ID).Scan(&eventID); err != nil {
+		t.Fatalf("sustained growth did not open a storage incident: %v", err)
 	}
 	var firingPayload []byte
 	if err := pg.pool.QueryRow(ctx, `SELECT payload_json FROM evidence WHERE event_id=$1
@@ -115,7 +157,48 @@ func TestDatabaseGrowthAlertUsesPG18BaselineAndSameEventRecovery(t *testing.T) {
 		object(payload["detail"])["baselineSampleId"] == "" {
 		t.Fatalf("capacity incident lacks baseline evidence: %+v", payload)
 	}
-	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib), "", "", anchor.Add(260*time.Second)); err != nil {
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib, 95), "", "", anchor.Add(310*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var sameEventRules int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*)::int FROM alert_states WHERE asset_id=$1
+		AND state_json->>'eventId'=$2 AND state_json->>'status'='firing'
+		AND rule_id IN ('pg_database_growth_fast','linux_disk_high')`, asset.ID, eventID).
+		Scan(&sameEventRules); err != nil || sameEventRules != 2 {
+		t.Fatalf("growth and Linux disk pressure did not share one event: %d %v", sameEventRules, err)
+	}
+	result, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineID := stringValue(object(payload["detail"])["baselineSampleId"])
+	graph := object(object(result.(map[string]any)["analysis"])["graph"])
+	baselineLinked := false
+	for _, edge := range graph["edges"].([]map[string]string) {
+		if edge["to"] == "sample:"+baselineID && edge["relation"] == "compared_with" {
+			baselineLinked = true
+		}
+	}
+	if !baselineLinked {
+		t.Fatal("growth baseline sample has no raw-data link in the event graph")
+	}
+	correlated := false
+	for _, candidate := range object(result.(map[string]any)["analysis"])["candidates"].([]map[string]any) {
+		if candidate["code"] == "storage_growth_pressure" && candidate["confidence"] == "low" {
+			correlated = true
+			foundBaseline := false
+			for _, support := range candidate["supports"].([]string) {
+				foundBaseline = foundBaseline || support == "sample:"+baselineID
+			}
+			if !foundBaseline {
+				t.Fatal("storage root-cause candidate lacks baseline sample support")
+			}
+		}
+	}
+	if !correlated {
+		t.Fatal("same-event growth and disk pressure lacked a cautious RCA candidate")
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(13*gib, 40), "", "", anchor.Add(600*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	var status string

@@ -32,7 +32,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
-	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "capacity", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
+	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "storage", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
@@ -63,6 +63,13 @@ func seedGoRules(ctx context.Context, tx pgx.Tx) error {
 			VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, rule.ID, body); err != nil {
 			return err
 		}
+	}
+	// Group is not user-editable. Reconcile the short-lived preview definition
+	// without overwriting operator thresholds, severity or enabled state.
+	if _, err := tx.Exec(ctx, `UPDATE alert_rules SET
+		definition_json=jsonb_set(definition_json,'{group}','"storage"'::jsonb),updated_at=now()
+		WHERE id='pg_database_growth_fast' AND definition_json->>'group'='capacity'`); err != nil {
+		return err
 	}
 	return nil
 }

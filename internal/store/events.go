@@ -112,42 +112,50 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if json.Unmarshal(item.Payload, &payload) != nil {
 			continue
 		}
-		sampleID, _ := payload["sampleId"].(string)
-		if sampleID == "" {
-			continue
+		references := []struct{ id, relation string }{}
+		if sampleID, _ := payload["sampleId"].(string); sampleID != "" {
+			references = append(references, struct{ id, relation string }{sampleID, "observed_in"})
 		}
-		if !evidenceUUID.MatchString(sampleID) {
-			missing = append(missing, "事件中的样本标识无效")
-			continue
+		if stringValue(payload["metric"]) == "pg.database_growth_bytes_per_day" {
+			if baselineID := stringValue(object(payload["detail"])["baselineSampleId"]); baselineID != "" {
+				references = append(references, struct{ id, relation string }{baselineID, "compared_with"})
+			}
 		}
-		if _, exists := samples[sampleID]; exists {
-			edges = append(edges, map[string]string{"from": evidenceNode,
-				"to": "sample:" + sampleID, "relation": "observed_in"})
-			continue
+		for _, reference := range references {
+			sampleID := reference.id
+			if !evidenceUUID.MatchString(sampleID) {
+				missing = append(missing, "事件中的样本标识无效")
+				continue
+			}
+			if _, exists := samples[sampleID]; exists {
+				edges = append(edges, map[string]string{"from": evidenceNode,
+					"to": "sample:" + sampleID, "relation": reference.relation})
+				continue
+			}
+			var sampleAt time.Time
+			var sampleStatus string
+			var metricsJSON []byte
+			err := s.pool.QueryRow(ctx, `SELECT collected_at,status,metrics_json FROM samples
+				WHERE asset_id=$1 AND id=$2 ORDER BY collected_at DESC LIMIT 1`, event.AssetID, sampleID).Scan(&sampleAt, &sampleStatus, &metricsJSON)
+			if errors.Is(err, pgx.ErrNoRows) {
+				missing = append(missing, "样本 "+sampleID+" 已被清理或未迁移")
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			sampleNode := "sample:" + sampleID
+			var metrics map[string]any
+			if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
+				missing = append(missing, "样本 "+sampleID+" 的指标格式无效")
+			}
+			samples[sampleID] = sampleObservation{ID: sampleID, At: sampleAt, Status: sampleStatus, Metrics: metrics}
+			addNode(sampleNode, "sample", sampleStatus,
+				"/api/assets/"+event.AssetID+"/samples/"+sampleID, sampleAt)
+			edges = append(edges, map[string]string{"from": evidenceNode, "to": sampleNode, "relation": reference.relation},
+				map[string]string{"from": sampleNode, "to": assetNode, "relation": "collected_from"})
+			addSampleLayers(event.AssetID, samples[sampleID], addNode, &edges)
 		}
-		var sampleAt time.Time
-		var sampleStatus string
-		var metricsJSON []byte
-		err := s.pool.QueryRow(ctx, `SELECT collected_at,status,metrics_json FROM samples
-			WHERE asset_id=$1 AND id=$2 ORDER BY collected_at DESC LIMIT 1`, event.AssetID, sampleID).Scan(&sampleAt, &sampleStatus, &metricsJSON)
-		if errors.Is(err, pgx.ErrNoRows) {
-			missing = append(missing, "样本 "+sampleID+" 已被清理或未迁移")
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		sampleNode := "sample:" + sampleID
-		var metrics map[string]any
-		if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
-			missing = append(missing, "样本 "+sampleID+" 的指标格式无效")
-		}
-		samples[sampleID] = sampleObservation{ID: sampleID, At: sampleAt, Status: sampleStatus, Metrics: metrics}
-		addNode(sampleNode, "sample", sampleStatus,
-			"/api/assets/"+event.AssetID+"/samples/"+sampleID, sampleAt)
-		edges = append(edges, map[string]string{"from": evidenceNode, "to": sampleNode, "relation": "observed_in"},
-			map[string]string{"from": sampleNode, "to": assetNode, "relation": "collected_from"})
-		addSampleLayers(event.AssetID, samples[sampleID], addNode, &edges)
 	}
 	if err := s.addSQLEvidenceGraph(ctx, event, samples, addNode, &edges); err != nil {
 		return nil, err

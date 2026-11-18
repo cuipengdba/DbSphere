@@ -151,3 +151,49 @@ func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestGoRCARequiresSameWindowGrowthAndStoragePressure(t *testing.T) {
+	now := time.Now().UTC()
+	alert := func(id, metric string, value float64, at time.Time) eventEvidence {
+		body, _ := json.Marshal(map[string]any{"metric": metric, "sampleId": "sample-storage",
+			"value": value, "operator": ">=", "threshold": 1})
+		return eventEvidence{ID: id, Kind: "alert_firing", ObservedAt: at, Payload: body}
+	}
+	event := &eventRecord{ID: "storage-event", StartedAt: now, Evidence: []eventEvidence{
+		alert("growth-evidence", "pg.database_growth_bytes_per_day", 12*1024*1024*1024, now),
+		alert("disk-evidence", "linux.disk_used_percent", 94, now.Add(5*time.Minute))}}
+	sample := sampleObservation{ID: "sample-storage", At: now, Status: "ok",
+		Metrics: map[string]any{"databaseGrowth": map[string]any{"status": "ok",
+			"baselineSampleId": "baseline-1"}, "linux": map[string]any{"status": "ok"}}}
+	check := func() map[string]any {
+		candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-storage": sample},
+			func(string, string, string, string, any) {}, &[]map[string]string{})
+		for _, candidate := range candidates {
+			if candidate["code"] == "storage_growth_pressure" {
+				return candidate
+			}
+		}
+		return nil
+	}
+	candidate := check()
+	if candidate == nil || candidate["confidence"] != "low" ||
+		object(candidate["detail"])["baselineSampleId"] != "baseline-1" ||
+		len(candidate["supports"].([]string)) != 4 || len(candidate["missing"].([]string)) == 0 {
+		t.Fatalf("same-event growth/pressure evidence was not correlated cautiously: %+v", candidate)
+	}
+	event.Evidence[1] = alert("pvc-evidence", "k8s.pvc_used_percent", 90, now.Add(5*time.Minute))
+	sample.Metrics["k8s"] = map[string]any{"status": "ok"}
+	if candidate := check(); candidate == nil ||
+		object(candidate["detail"])["pressureMetric"] != "k8s.pvc_used_percent" {
+		t.Fatalf("Kubernetes PVC pressure was not correlated with the same growth evidence: %+v", candidate)
+	}
+	event.Evidence[1].ObservedAt = now.Add(25 * time.Hour)
+	if candidate := check(); candidate != nil {
+		t.Fatalf("stale pressure became a root-cause correlation: %+v", candidate)
+	}
+	event.Evidence[1].ObservedAt = now.Add(5 * time.Minute)
+	sample.Metrics["databaseGrowth"] = map[string]any{"status": "insufficient"}
+	if candidate := check(); candidate != nil {
+		t.Fatalf("growth without a baseline became a root-cause correlation: %+v", candidate)
+	}
+}

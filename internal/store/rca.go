@@ -228,6 +228,13 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			[]string{"容器日志和探针与数据库故障的先后顺序未完全验证"},
 			stringValue(payload["limitation"]), nil, causeAt, nil)
 	}
+	type storageSignal struct {
+		evidenceID, sampleID, metric string
+		at                           time.Time
+		value                        float64
+		baselineID                   string
+	}
+	var growthAlerts, pressureAlerts []storageSignal
 	for _, item := range event.Evidence {
 		var payload map[string]any
 		if json.Unmarshal(item.Payload, &payload) != nil {
@@ -250,6 +257,14 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			"at": item.ObservedAt, "evidenceId": item.ID}
 		supports := []string{item.ID, "sample:" + sampleID}
 		switch metric {
+		case "pg.database_growth_bytes_per_day":
+			growth := object(sample.Metrics["databaseGrowth"])
+			if sample.Status == "ok" && stringValue(growth["status"]) == "ok" &&
+				stringValue(growth["baselineSampleId"]) != "" && number(payload["value"]) > 0 {
+				growthAlerts = append(growthAlerts, storageSignal{evidenceID: item.ID,
+					sampleID: sampleID, metric: metric, at: item.ObservedAt,
+					value: number(payload["value"]), baselineID: stringValue(growth["baselineSampleId"])})
+			}
 		case "pg.connection_utilization":
 			connections := number(sample.Metrics["connections"])
 			maximum := number(sample.Metrics["max_connections"])
@@ -336,6 +351,8 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			}
 		case "linux.disk_used_percent":
 			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {
+				pressureAlerts = append(pressureAlerts, storageSignal{evidenceID: item.ID,
+					sampleID: sampleID, metric: metric, at: item.ObservedAt, value: number(payload["value"])})
 				addCandidate("linux_disk_pressure", "Linux 文件系统空间压力", "medium", supports,
 					[]string{"PG 数据/WAL 目录与该挂载点映射未验证"},
 					"空间压力与事件同期出现，尚未证明 PostgreSQL 写入已经失败。",
@@ -351,6 +368,8 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			}
 		case "k8s.pvc_used_percent":
 			if stringValue(object(sample.Metrics["k8s"])["status"]) == "ok" && number(payload["value"]) >= 85 {
+				pressureAlerts = append(pressureAlerts, storageSignal{evidenceID: item.ID,
+					sampleID: sampleID, metric: metric, at: item.ObservedAt, value: number(payload["value"])})
 				addCandidate("pvc_pressure", "Kubernetes PVC 容量压力", "medium", supports,
 					[]string{"该 PVC 与 PG 数据/WAL 目录映射未验证"},
 					"PVC 用量高不等于 PostgreSQL 已发生磁盘写入故障。",
@@ -450,6 +469,41 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					map[string]any{"pod": object(k8s["pod"])["name"], "reasons": reasons},
 					item.ObservedAt, condition)
 			}
+		}
+	}
+	for i := len(growthAlerts) - 1; i >= 0 && !seen["storage_growth_pressure"]; i-- {
+		growth := growthAlerts[i]
+		for j := len(pressureAlerts) - 1; j >= 0; j-- {
+			pressure := pressureAlerts[j]
+			gap := growth.at.Sub(pressure.at)
+			if gap < 0 {
+				gap = -gap
+			}
+			if gap > 24*time.Hour {
+				continue
+			}
+			supports := []string{growth.evidenceID, "sample:" + growth.sampleID,
+				"sample:" + growth.baselineID, pressure.evidenceID}
+			if pressure.sampleID != growth.sampleID {
+				supports = append(supports, "sample:"+pressure.sampleID)
+			}
+			first := growth.at
+			if pressure.at.Before(first) {
+				first = pressure.at
+			}
+			addCandidate("storage_growth_pressure", "数据库快速增长与存储空间压力同期出现", "low",
+				supports, []string{"PGDATA/WAL 目录与压力挂载点或 PVC 的映射尚未验证",
+					"尚未证明增长造成 PostgreSQL 写入失败"},
+				"两类信号在同一事件的 24 小时窗口出现；时间相关不能单独证明因果。",
+				map[string]any{"growthBytesPerDay": growth.value, "pressureUsedPercent": pressure.value,
+					"pressureMetric": pressure.metric, "baselineSampleId": growth.baselineID,
+					"gapHours": gap.Hours()}, first,
+				map[string]any{"metric": "pg.database_growth_bytes_per_day + " + pressure.metric,
+					"observed": fmt.Sprintf("%.2f GiB/日 + %.1f%%", growth.value/(1024*1024*1024), pressure.value),
+					"operator": "同窗不超过", "threshold": "24 小时",
+					"growthEvidenceId":   growth.evidenceID,
+					"pressureEvidenceId": pressure.evidenceID, "withinHours": 24})
+			break
 		}
 	}
 	return candidates
