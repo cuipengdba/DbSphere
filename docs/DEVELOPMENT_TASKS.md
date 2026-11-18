@@ -121,6 +121,7 @@
 - [ ] **10-06** 八类数据库/K8S 故障与两类应用全链路演练，报告一个问题从首次告警到根因、处置、恢复的完整证据。本机 kind 已完成探针失败、容器 OOMKilled、Pod 无法调度三类 PG18/K8S 同事件闭环，以及真实 Go 应用连接失败→OOM 的场景 B；场景 A 已通过 PG14–18 五版 CI。[真实 PG18 主从复制延迟同事件闭环](REPLICATION_DRILL.md)已在本机和[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315)通过。[Patroni leader 故障](PATRONI_ACCEPTANCE.md)在本机和[PG14–18 五版 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44339801805)形成一个事件 ID，串联 PG 不可用、无 leader 样本、告警、候选与恢复。其余故障类别和生产环境验收仍待完成；K8S 证据见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
   - 本机 PG14 双节点 Patroni 在单节点 kind 中另完成真实无 leader → 新主选举 → 原节点重入的同一可用性事件闭环；Pod 映射缺口另有遥测事件。此结果尚未覆盖多节点 K8S/Operator 或生产 DCS，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
   - 隔离 PG18 主备夹具新增真实 WAL 归档失败与恢复，`pg_stat_archiver` 的新增失败数、告警、根因候选、原始样本和报告共用一个存储事件 ID；尚未覆盖真实归档仓库/备份链，见[WAL 归档演练](WAL_ARCHIVE_DRILL.md)。
+  - 独立 PG18 夹具新增真实 autovacuum 关闭与恢复，同一维护事件关联参数采样、告警、低置信度候选及报告；尚未验证实际表膨胀和业务性能影响，见[autovacuum 演练](AUTOVACUUM_DRILL.md)。
 - [ ] **10-07** 无 AI 模型的完整回归、模型可选模式回归、已知限制和 PG14 EOL 文案发布。
 - [ ] **10-08** 容器一键部署和外部 PG18 模式的安装/升级/回滚验收；长期数据分区、保留期、备份恢复及存储不可用演练通过。
 - [ ] **10-09** 将一键离线部署列为正式版门槛：Linux x86_64 断网安装/升级/回滚、校验和、镜像及 PG18 数据迁移和 B/S 健康检查通过；Linux arm64 如未验证需在支持矩阵中明确限制。公布容器运行时或 Node.js/外部 PG18 的准确依赖边界。

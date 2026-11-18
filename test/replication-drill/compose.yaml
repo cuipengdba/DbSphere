@@ -49,6 +49,21 @@ services:
       timeout: 3s
       retries: 30
 
+  maintenance:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_MONITOR_PASSWORD: ${DBSPHERE_DRILL_MONITOR_PASSWORD:?Generate the drill env file first}
+    volumes:
+      - maintenance-data:/var/lib/postgresql
+      - ./primary-init.sh:/docker-entrypoint-initdb.d/01-monitor.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   app:
     image: dbsphere/replication-drill:local
     depends_on:
@@ -70,3 +85,4 @@ volumes:
   store-data: {}
   primary-data: {}
   standby-data: {}
+  maintenance-data: {}

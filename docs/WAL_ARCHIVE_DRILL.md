@@ -22,4 +22,4 @@ node scripts/wal-archive-drill-acceptance.mjs http://127.0.0.1:18092 /tmp/dbsphe
 docker compose --env-file /tmp/dbsphere-replication.env -f test/replication-drill/compose.yaml down -v --remove-orphans
 ```
 
-GitHub CI 在复制延迟演练后、清理测试网络前执行同一 WAL 脚本。还需真实归档仓库不可达、磁盘满、备份链恢复和生产告警路由验收；不能由一次 `archive_command=false` 推断生产归档/备份能力。
+[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44356254096) 已在复制延迟演练后、清理测试网络前通过同一 WAL 脚本，整套 29 个作业均通过。还需真实归档仓库不可达、磁盘满、备份链恢复和生产告警路由验收；不能由一次 `archive_command=false` 推断生产归档/备份能力。
