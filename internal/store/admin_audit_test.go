@@ -51,6 +51,25 @@ func TestAdminAuditPersistsOutcomeWithoutSecretsInPG18(t *testing.T) {
 			t.Fatalf("unexpected audit: %s %s %d", actor, outcome, status)
 		}
 	}
+	eventID := "11111111-1111-1111-1111-111111111111"
+	linkedID, err := s.StartAdminAudit(context.Background(), "POST", "/api/events/"+eventID+"/response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAdminAudit(context.Background(), linkedID, 200); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := s.RecentEventAdminAudit(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedJSON, err := json.Marshal(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(linkedJSON), linkedID) || strings.Contains(string(linkedJSON), "/api/inspection-schedules") {
+		t.Fatalf("event operation audit was not isolated: %s", linkedJSON)
+	}
 	value, err := s.RecentAdminAudit(context.Background())
 	if err != nil {
 		t.Fatal(err)

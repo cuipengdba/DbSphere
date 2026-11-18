@@ -8,9 +8,10 @@
   CREATE TABLE IF NOT EXISTS admin_audit (
     id uuid PRIMARY KEY, observed_at timestamptz NOT NULL DEFAULT now(),
     actor text NOT NULL, method text NOT NULL, path text NOT NULL,
-    outcome text NOT NULL, status_code integer
+    outcome text NOT NULL, status_code integer, event_id uuid
   );
   CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(observed_at DESC);
+  CREATE INDEX IF NOT EXISTS admin_audit_event_time ON admin_audit(event_id,observed_at DESC) WHERE event_id IS NOT NULL;
   CREATE TABLE IF NOT EXISTS assets (
     id uuid PRIMARY KEY, name text NOT NULL, host text NOT NULL, port integer NOT NULL,
     database_name text NOT NULL, username text NOT NULL, password_enc text NOT NULL,

@@ -101,8 +101,8 @@ async function refresh() {
   if (selectedAsset) await showAsset(selectedAsset);
 }
 
-function renderAdminAudit(entries) {
-  const target = $('admin-audit-list'); target.replaceChildren();
+function renderAdminAudit(entries, target = $('admin-audit-list')) {
+  target.replaceChildren();
   if (!entries) { target.append(cell('p', '操作记录暂时不可用。', 'empty')); return; }
   if (!entries.length) { target.append(cell('p', '尚无管理员写入操作。', 'empty')); return; }
   for (const item of entries) target.append(cell('p',
@@ -675,6 +675,7 @@ function resetEdit() {
 async function showEvent(id) {
   setView('incidents');
   const { event, analysis } = await api(`/api/events/${id}`);
+  const eventAudit = currentRole === 'admin' ? await api(`/api/events/${id}/audit`).catch(() => null) : null;
   selectedEvent = id;
   for (const button of $('event-list').querySelectorAll('[data-event-id]')) {
     button.classList.toggle('selected', button.dataset.eventId === id);
@@ -761,6 +762,13 @@ async function showEvent(id) {
     reports.append(button);
   }
   target.append(reports);
+  if (currentRole === 'admin') {
+    const auditDetails = document.createElement('details'); auditDetails.className = 'settings-details';
+    auditDetails.append(cell('summary', '查看该事件的管理员操作记录'));
+    const auditList = document.createElement('div'); auditList.className = 'list';
+    renderAdminAudit(eventAudit?.entries, auditList);
+    auditDetails.append(auditList); target.append(auditDetails);
+  }
   const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
   if (aiStatus.enabled) {
     const aiResult = document.createElement('div'); aiResult.className = 'evidence';

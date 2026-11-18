@@ -16,9 +16,14 @@ func (s *Postgres) StartAdminAudit(ctx context.Context, method, path string) (st
 	if !strings.HasPrefix(path, "/api/") || len(path) > 512 || strings.ContainsAny(path, "\r\n") {
 		return "", errors.New("invalid audited path")
 	}
+	var eventID *string
+	segments := strings.Split(path, "/")
+	if len(segments) >= 4 && segments[1] == "api" && segments[2] == "events" && evidenceUUID.MatchString(segments[3]) {
+		eventID = &segments[3]
+	}
 	var id string
-	err := s.pool.QueryRow(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome)
-		VALUES(gen_random_uuid(),'admin',$1,$2,'started') RETURNING id::text`, method, path).Scan(&id)
+	err := s.pool.QueryRow(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome,event_id)
+		VALUES(gen_random_uuid(),'admin',$1,$2,'started',$3) RETURNING id::text`, method, path, eventID).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("start admin audit: %w", err)
 	}
@@ -50,6 +55,24 @@ func (s *Postgres) RecentAdminAudit(ctx context.Context) (any, error) {
 		FROM admin_audit ORDER BY observed_at DESC,id DESC LIMIT 100`)
 	if err != nil {
 		return nil, fmt.Errorf("read admin audit: %w", err)
+	}
+	defer rows.Close()
+	items, err := jsonRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"entries": items}, nil
+}
+
+func (s *Postgres) RecentEventAdminAudit(ctx context.Context, eventID string) (any, error) {
+	if !evidenceUUID.MatchString(eventID) {
+		return nil, errors.New("invalid event audit ID")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT jsonb_build_object('id',id,'observedAt',observed_at,
+		'actor',actor,'method',method,'path',path,'outcome',outcome,'statusCode',status_code)
+		FROM admin_audit WHERE event_id=$1 ORDER BY observed_at DESC,id DESC LIMIT 100`, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("read event admin audit: %w", err)
 	}
 	defer rows.Close()
 	items, err := jsonRows(rows)

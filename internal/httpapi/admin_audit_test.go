@@ -34,6 +34,9 @@ func (s *adminAuditStub) FinishAdminAudit(_ context.Context, _ string, status in
 func (*adminAuditStub) RecentAdminAudit(context.Context) (any, error) {
 	return map[string]any{"entries": []any{}}, nil
 }
+func (*adminAuditStub) RecentEventAdminAudit(context.Context, string) (any, error) {
+	return map[string]any{"entries": []any{}}, nil
+}
 
 func TestAdministratorMutationAuditAndViewerBoundary(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
@@ -65,11 +68,17 @@ func TestAdministratorMutationAuditAndViewerBoundary(t *testing.T) {
 	if got := call(http.MethodGet, "/api/admin/audit", viewerToken); got.Code != http.StatusForbidden {
 		t.Fatalf("viewer read audit: %d", got.Code)
 	}
+	if got := call(http.MethodGet, "/api/events/11111111-1111-1111-1111-111111111111/audit", viewerToken); got.Code != http.StatusForbidden {
+		t.Fatalf("viewer read event audit: %d", got.Code)
+	}
 	if got := call(http.MethodPost, "/api/assets", viewerToken); got.Code != http.StatusForbidden || stub.starts != 0 {
 		t.Fatalf("viewer mutation was audited/run: %d", got.Code)
 	}
 	if got := call(http.MethodGet, "/api/admin/audit", adminToken); got.Code != http.StatusOK {
 		t.Fatalf("admin read audit: %d", got.Code)
+	}
+	if got := call(http.MethodGet, "/api/events/11111111-1111-1111-1111-111111111111/audit", adminToken); got.Code != http.StatusOK {
+		t.Fatalf("admin read event audit: %d", got.Code)
 	}
 	if got := call(http.MethodPut, "/api/inspection-schedules", adminToken); got.Code != http.StatusNotImplemented || stub.starts != 1 || stub.status != http.StatusNotImplemented || stub.method != "PUT" || stub.path != "/api/inspection-schedules" {
 		t.Fatalf("PUT not audited: response=%d starts=%d status=%d method=%s path=%s", got.Code, stub.starts, stub.status, stub.method, stub.path)

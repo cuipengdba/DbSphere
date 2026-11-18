@@ -110,6 +110,21 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record admin audit migration: %w", err)
 		}
 	}
+	var eventAuditMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=17)").Scan(&eventAuditMigrated); err != nil {
+		return fmt.Errorf("check event audit migration: %w", err)
+	}
+	if !eventAuditMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE admin_audit ADD COLUMN IF NOT EXISTS event_id uuid"); err != nil {
+			return fmt.Errorf("migrate event audit: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS admin_audit_event_time ON admin_audit(event_id,observed_at DESC) WHERE event_id IS NOT NULL"); err != nil {
+			return fmt.Errorf("index event audit: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(17) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record event audit migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

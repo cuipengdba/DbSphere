@@ -42,6 +42,7 @@ var rawSamplePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0
 var rawTracePath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/traces/([0-9a-f]{32})$`)
 var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
+var eventAuditPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/audit$`)
 var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-summary$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
@@ -81,6 +82,7 @@ type AdminAuditStore interface {
 	StartAdminAudit(context.Context, string, string) (string, error)
 	FinishAdminAudit(context.Context, string, int) error
 	RecentAdminAudit(context.Context) (any, error)
+	RecentEventAdminAudit(context.Context, string) (any, error)
 }
 
 type auditResponseWriter struct {
@@ -371,6 +373,26 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			respond(w, http.StatusOK, entries)
 			return
+		}
+		if r.Method == http.MethodGet {
+			if match := eventAuditPath.FindStringSubmatch(r.URL.Path); match != nil {
+				if role != "admin" {
+					respond(w, http.StatusForbidden, map[string]string{"error": "Administrator access required"})
+					return
+				}
+				auditor, ok := store.(AdminAuditStore)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Audit unavailable"})
+					return
+				}
+				entries, err := auditor.RecentEventAdminAudit(r.Context(), match[1])
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, entries)
+				return
+			}
 		}
 		if role == "admin" && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
