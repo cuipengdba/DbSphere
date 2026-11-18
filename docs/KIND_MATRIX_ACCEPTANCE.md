@@ -17,6 +17,14 @@
 
 本机脱敏结果保存在 `H:\CodexLS\outputs\DbSphere-matrix-acceptance.json`。仓库脚本：[`kind-matrix-manifest.mjs`](../scripts/kind-matrix-manifest.mjs)、[`kind-matrix-secrets.mjs`](../scripts/kind-matrix-secrets.mjs)、[`kind-matrix-acceptance.mjs`](../scripts/kind-matrix-acceptance.mjs)。验收程序可重复运行，已有资产按名称复用，并写入新的真实样本。
 
+## 独立 Linux CI 复验
+
+[GitHub Actions 运行 44313908935](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 的 `kind-pg14-18-matrix` 作业在全新 Ubuntu runner 上创建四节点 kind 集群、独立 Namespace 和随机测试凭据；Go 服务与长期 PG18 存储分置 control-plane/worker2，PG14/15 在 worker、PG16–18 在 worker3。五版只读 `pg_monitor` 样本均包含对应 Pod、Service 和 Node；PG18 目标与监控存储 PVC 均为 Bound。作业核对 `dbsphere-reader` 仅可读取所需 Namespace 与 Node/PV 资源，不可读取 Secret、删除 Pod 或读取另一 Namespace 的 Pod。
+
+作业先保存五版原始样本，再分别替换 Go Pod 与 PG18 存储 Pod；重启后复跑完整矩阵，逐版确认资产 ID 不变、新样本 ID 与旧样本 ID 不同，且旧样本和新样本均可从 PG18 API 读回、版本与 K8S 证据仍为 `ok`。例如 PG18 资产 `8c37fc8b-e2a1-4fc4-bd9b-a95f6a49c90f` 在替换前后的样本分别为 `bcc6051a-ee3b-4b5a-b984-ee52494837a3` 和 `af42ec22-275d-4b94-b4bf-75c954a0b2da`。验收程序见[`kind-matrix-verify-persistence.mjs`](../scripts/kind-matrix-verify-persistence.mjs)。此前[首轮独立 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44312873082)仅验证重采样和资产 ID，未逐条读回旧样本；上述第二轮补足了这一点。
+
+独立 CI 没有安装 metrics-server，也没有注入 K8S 故障或执行生产规模与高可用测试。这些结果不能代替下方列出的未完成边界。
+
 ## 复现
 
 需要健康的 kind 控制平面、至少三个 worker、`kubectl`、`kind`、Docker、Node.js 及已有的 Go 静态镜像。以下用 PowerShell，`$cluster` 可换成新建的三 worker kind 集群名；脚本默认 `agentsql-v350`。请把临时 kubeconfig 与密钥保存在仓库外。

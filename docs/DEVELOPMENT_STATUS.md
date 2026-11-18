@@ -4,7 +4,7 @@
 
 隔离 Docker Compose 的 PG18 主备演练新增真实复制延迟故障：备库暂停回放、主库产生 WAL 后，DbSphere 用只读账号取得 128 MiB 级延迟；默认规则持续 120 秒触发告警和 `replication_lag` 候选，原始样本、证据图和 Markdown 报告共用事件 `10b01d66-5969-476d-b1b8-f4112a4e7685`。恢复后主库仍有 1 个流复制备库且延迟为 0，告警引用成功样本关闭原事件；当前源码的 Go 镜像替换后数据仍在独立 PG18。收紧恢复样本断言后，最终脚本和当前镜像再次通过同事件闭环（事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc`）。浏览器复验确认时间线已正确显示恢复证据及其样本 ID，根因候选的证据和局限已分行呈现。[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315) 重新执行真实主备故障并在 app 替换后读回同一事件，见[复制故障演练](REPLICATION_DRILL.md)。此结果不覆盖 Patroni、云 PG、生产可靠性或完整八类故障门槛。
 
-本机四节点 kind 隔离 Namespace 已完成 PostgreSQL 14–18 × Kubernetes 实际纳管和只读采样：五版样本关联 Pod、Service 与跨两个 worker 的 Node；独立 PG18 存储 PVC 在 Go Pod 与存储 Pod 替换后保留资产和样本。控制面已有长期重启/超时，故这项只能计入功能矩阵进展，不计入生产可靠性或 V1.0 正式发布验收。复现脚本及波动记录见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
+本机四节点 kind 隔离 Namespace 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 已完成 PostgreSQL 14–18 × Kubernetes 实际纳管和只读采样：五版样本关联 Pod、Service 与跨两个 worker 的 Node；独立 PG18 存储 PVC 在 Go Pod 与存储 Pod 替换后保留资产及五版旧样本，同时新采样成功。本机旧集群控制面已有长期重启/超时；独立 CI 补上了全新集群复验，但仍不计入生产可靠性或 V1.0 正式发布验收。复现脚本及边界见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
 
 Go 控制台现从 `/api/version` 获取自动采集开关、采样周期与服务端时间。关闭自动采集时，历史成功样本显示“最近一次成功”；开启后只有两个周期内的成功样本显示“近期正常”，更旧的样本显示“数据陈旧”。本机 kind 浏览器验证了手动模式；自动采集在控制面超时期间生成独立陈旧事件，随后成功样本使原事件恢复。新镜像在隔离 PG18 探针故障中再次验证一个事件 ID 串联 PG 连接失败、K8S Pod/Service/Event、持续告警、低置信度根因候选及同 ID 恢复；见[本机验收记录](KIND_ACCEPTANCE.md)。单节点 kind 控制面曾多次超时，不能替代 V1.0 的生产级验收。
 
