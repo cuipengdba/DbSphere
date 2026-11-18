@@ -304,6 +304,15 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					"备库已观测接收中断，不能单凭备库侧信号判断主库或网络根因。",
 					map[string]any{"receiver": sample.Metrics["wal_receiver"]}, item.ObservedAt, condition)
 			}
+		case "patroni.leader_count_invalid":
+			cluster := object(sample.Metrics["patroni"])
+			leaders, ok := numeric(cluster["leaderCount"])
+			if stringValue(cluster["status"]) == "ok" && ok && leaders != 1 {
+				addCandidate("patroni_leader_anomaly", "Patroni 集群 leader 数量异常", "medium", supports,
+					[]string{"DCS 仲裁状态和各成员本地 Patroni 状态尚未核对"},
+					"集群拓扑异常已由只读 API 观察到；导致异常的 DCS、节点或网络原因尚未证实。",
+					map[string]any{"leaderCount": leaders, "members": cluster["members"]}, item.ObservedAt, condition)
+			}
 		case "pg.archive_fail_delta":
 			archiver := object(object(sample.Metrics["diagnostics"])["archiver"])
 			if stringValue(archiver["status"]) == "ok" && number(payload["value"]) > 0 {

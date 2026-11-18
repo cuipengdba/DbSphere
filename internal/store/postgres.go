@@ -158,6 +158,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record pending trace migration: %w", err)
 		}
 	}
+	var patroniMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=20)").Scan(&patroniMigrated); err != nil {
+		return fmt.Errorf("check Patroni endpoint migration: %w", err)
+	}
+	if !patroniMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE assets ADD COLUMN IF NOT EXISTS patroni_url_enc text"); err != nil {
+			return fmt.Errorf("migrate Patroni endpoint: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(20) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record Patroni endpoint migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

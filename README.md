@@ -10,8 +10,8 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 | 领域 | 功能 |
 |---|---|
-| 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。Go 开发版可按唯一 Deployment/StatefulSet 自动解析重建后的 Pod，歧义时明确报错。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、备份信息和应用 Trace。 |
-| 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件和连接池状态。缺失或无权限的数据明确标为未知。 |
+| 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。Go 开发版可按唯一 Deployment/StatefulSet 自动解析重建后的 Pod，歧义时明确报错。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni 只读 REST API、备份信息和应用 Trace。 |
+| 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。 |
 | 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；按服务展示已观测的调用与错误 Span，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
 | 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |
 | 巡检与报告 | PostgreSQL、Linux、Kubernetes 和备份模板；手动与定时巡检、阈值版本、异常与未知项、历史差异、Markdown/HTML 报告及关联事件 ID。 |
@@ -23,19 +23,20 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 ### 一个问题的全链路定位
 
 1. 从异常告警或资产进入问题事件，先确认影响范围与事件 ID。
-2. 按时间查看应用 Trace、PostgreSQL 会话/等待/SQL、PgBouncer、Linux 与 Kubernetes 的同窗证据。
+2. 按时间查看应用 Trace、PostgreSQL 会话/等待/SQL、PgBouncer、Patroni、Linux 与 Kubernetes 的同窗证据。
 3. 查看根因候选、支持证据、时间顺序和缺失信号；证据不足时保持“未定位”。
 4. 记录人工结论与处置，再以新样本和恢复证据关闭同一个事件。
 
 ## 当前交付状态
 
-`main` 的开发版本为 **v0.6.0-dev**；[最新正式发布版](https://github.com/cuipengdba/DbSphere/releases/latest)为现有 Node.js 后端实现。V1.0 的交付目标是 **Go 后端 + 内嵌静态前端 + HTTP API + 独立 PG18 存储**。Go 版已能进行 PG14–18 基础采集、Linux/K8S/PgBouncer 只读采集、规则告警、同事件 ID 证据分析和部分巡检，但尚未完成全部功能对等、生产环境验收与正式发布。完整的跨应用根因分析、AI、生产 K8S/通知路径及离线升级回滚仍在开发。具体状态以[开发进度](docs/DEVELOPMENT_STATUS.md)和[Go 迁移清单](docs/GO_UI_MIGRATION.md)为准。
+`main` 的开发版本为 **v0.6.0-dev**；[最新正式发布版](https://github.com/cuipengdba/DbSphere/releases/latest)为现有 Node.js 后端实现。V1.0 的交付目标是 **Go 后端 + 内嵌静态前端 + HTTP API + 独立 PG18 存储**。Go 版已能进行 PG14–18 基础采集、Linux/K8S/PgBouncer/Patroni 只读采集、规则告警、同事件 ID 证据分析和部分巡检，但尚未完成全部功能对等、生产环境验收与正式发布。完整的跨应用根因分析、AI、生产 K8S/通知路径及离线升级回滚仍在开发。具体状态以[开发进度](docs/DEVELOPMENT_STATUS.md)和[Go 迁移清单](docs/GO_UI_MIGRATION.md)为准。
 
 ## 部署与接入
 
 - [部署说明](docs/DEPLOYMENT.md)：容器一键部署、PG18 存储及运行配置。
 - [离线部署](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序与容器离线包的开发验收范围。
 - [Kubernetes 接入](docs/DEPLOYMENT_V0.2.md)：只读 ServiceAccount、Namespace 与指标权限。
+- [Patroni 接入与验收](docs/PATRONI_ACCEPTANCE.md)：只读拓扑、告警、同事件根因候选及本机故障演练。
 - [告警通知](docs/NOTIFICATIONS_V0.3.md)、[巡检报告](docs/INSPECTIONS_V0.4.md)、[SQL 性能](docs/SQL_PERFORMANCE_V0.5.md)：各功能的配置与使用。
 - [可选 AI 诊断](docs/AI_INTEGRATION.md)：Go 版接入方式、脱敏范围与故障回退。
 

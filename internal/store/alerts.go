@@ -31,12 +31,14 @@ var goDefaultRules = []alertRule{
 	{"collector_stale", "采样数据陈旧", "collector.missed_intervals", "collector", "telemetry", "warning", ">=", 2, 0, 1, true},
 	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true},
+	{"patroni_collection_failed", "Patroni 状态采集失败", "collector.patroni_failed", "Patroni REST API", "telemetry", "warning", ">=", 1, 0, 1, true},
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
 	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "storage", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
 	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true},
+	{"patroni_leader_invalid", "Patroni 集群 leader 数量异常", "patroni.leader_count_invalid", "Patroni REST API", "availability", "critical", ">=", 1, 30, 1, true},
 	{"pg_archive_failures", "PostgreSQL WAL 归档失败增加", "pg.archive_fail_delta", "PostgreSQL", "storage", "warning", ">=", 1, 0, 1, true},
 	{"pg_autovacuum_disabled", "PostgreSQL autovacuum 已关闭", "pg.autovacuum_disabled", "PostgreSQL", "maintenance", "critical", ">=", 1, 0, 1, true},
 	{"pg_vacuum_backlog", "PostgreSQL 表死元组积压", "pg.vacuum_backlog_percent", "PostgreSQL", "maintenance", "warning", ">=", 20, 300, 1, true},
@@ -109,9 +111,9 @@ func numeric(value any) (float64, bool) {
 func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
-		"collector.k8s_failed", "collector.linux_failed",
+		"collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed",
 		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.long_transactions",
-		"pg.replication_lag_bytes", "pg.wal_receiver_down", "pg.archive_fail_delta", "pg.autovacuum_disabled",
+		"pg.replication_lag_bytes", "pg.wal_receiver_down", "patroni.leader_count_invalid", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent", "k8s.restart_delta",
@@ -153,10 +155,12 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 		if value, ok := numeric(metrics["collectorMissedIntervals"]); ok && value >= 0 {
 			return alertSignal{Available: true, Value: value, Source: signal.Source}
 		}
-	case "collector.k8s_failed", "collector.linux_failed":
+	case "collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed":
 		section, source := "k8s", "Kubernetes API"
 		if metric == "collector.linux_failed" {
 			section, source = "linux", "node_exporter"
+		} else if metric == "collector.patroni_failed" {
+			section, source = "patroni", "Patroni REST API"
 		}
 		signal.Source = source
 		status := stringValue(object(metrics[section])["status"])
@@ -210,6 +214,19 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 				}
 				return alertSignal{Available: true, Value: value, Source: signal.Source,
 					Detail: map[string]any{"receiver": status}}
+			}
+		}
+	case "patroni.leader_count_invalid":
+		cluster := object(metrics["patroni"])
+		signal.Source = "Patroni REST API"
+		if stringValue(cluster["status"]) == "ok" {
+			if leaders, ok := numeric(cluster["leaderCount"]); ok {
+				value := 1.0
+				if leaders == 1 {
+					value = 0
+				}
+				return alertSignal{Available: true, Value: value, Source: signal.Source,
+					Detail: map[string]any{"leaderCount": leaders, "replicaCount": cluster["replicaCount"]}}
 			}
 		}
 	case "pg.archive_fail_delta":

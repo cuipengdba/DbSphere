@@ -2,6 +2,12 @@
 
 > 2026-11-18，单节点 kind `dbsphere-test`，Namespace `dbsphere-smoke`，PostgreSQL 18 测试数据库。此记录只证明列出的本机故障路径，不是生产 Kubernetes 或 V1.0 正式版验收。PG14–18 多节点矩阵另见[独立验收记录](KIND_MATRIX_ACCEPTANCE.md)。
 
+## 本轮本机集群接入与最终代码复验
+
+用户要求直接在本机搭建并验收 Kubernetes 环境。本机已有专用 `dbsphere-test` kind 集群，本轮复用其隔离的 `dbsphere-smoke` Namespace，没有修改 AgentSQL 集群。重新从 kind 控制平面导出仅供本地故障注入的管理员 kubeconfig，保存在 `H:\CodexLS\tmp\dbsphere-local-admin.kubeconfig`，未签发新的 ServiceAccount token，也未提交凭据。控制平面 Node 为 `Ready`；DbSphere Pod 继续使用已存在的 `dbsphere-reader` 投射凭据。`kubectl auth can-i` 核对该账号能读取目标 Pod，不能读取 Secret 或删除 Pod。
+
+包含本轮 Patroni 采集和 PostgreSQL SQLSTATE 归类修复的 Go Linux 静态镜像 `dbsphere/kind-acceptance:patroni-final` 已加载到本机 kind，并滚动更新 `dbsphere-go` Deployment。新 Pod `dbsphere-go-7bdc759dd-x455k` 为 `Ready 1/1`，`/readyz` 返回 `ready/postgresql18`。B/S API 对真实 PG18/K8S 资产 `44a49ba3-b90f-4b20-afe0-42e6181cb2d7` 取得新样本 `b96058f4-558b-46b6-8a32-8ccc534a0ce9`，状态 `ok`、PG 版本 `180006`，关联实际 Pod `dbsphere-go-schedule-pg-597b745bd9-2r74s`、Node `dbsphere-test-control-plane` 与 Service `dbsphere-go-schedule-pg`。新增 Patroni 告警规则在 API 中可编辑；未配置 Patroni 的既有 K8S 资产继续正常采样。此处是**单节点**开发环境回归，不能代替生产可靠性或多节点验收。
+
 ## 最新本机复验：采样时效和探针故障闭环
 
 2026-11-18，复用本机 `dbsphere-test` 集群；首次检查发现 API Server 的 etcd 健康检查失败。重启该测试控制平面后，Node 恢复 `Ready`，PG18 存储完成崩溃恢复并重新就绪。Go 后端新静态镜像 `dbsphere/kind-acceptance:freshness` 在同一 Namespace 滚动部署，`/readyz` 返回 `ready/postgresql18`。关闭自动采集时，浏览器将 4 个历史成功样本显示为“最近一次成功”，不把旧样本称作当前健康。

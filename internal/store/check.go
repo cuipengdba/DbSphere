@@ -90,6 +90,10 @@ func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time
 func collectionError(err error) (string, string) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
+		if strings.HasPrefix(pgErr.Code, "08") || pgErr.Code == "53300" ||
+			pgErr.Code == "57P01" || pgErr.Code == "57P02" || pgErr.Code == "57P03" {
+			return "availability", "PostgreSQL temporarily unavailable (SQLSTATE " + pgErr.Code + ")"
+		}
 		if strings.HasPrefix(pgErr.Code, "28") {
 			return "telemetry", "PostgreSQL authentication failed (SQLSTATE " + pgErr.Code + ")"
 		}
@@ -117,13 +121,14 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	var linuxHost *string
 	var exporterPort *int
 	var poolerEncrypted *string
+	var patroniEncrypted *string
 	var k8sCluster, k8sNamespace, k8sWorkload, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
-		runtime,linux_host,linux_exporter_port,pooler_url_enc,
+		runtime,linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,
 		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod
 		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
 		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
-		&poolerEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod)
+		&poolerEncrypted, &patroniEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
@@ -144,8 +149,15 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 			return CheckResult{}, fmt.Errorf("decrypt PgBouncer credential: %w", err)
 		}
 	}
-	var metrics, kube, linux, pooler map[string]any
-	var collectErr, linuxErr, poolerErr error
+	patroniURL := ""
+	if patroniEncrypted != nil {
+		patroniURL, err = security.Decrypt(key, *patroniEncrypted)
+		if err != nil {
+			return CheckResult{}, fmt.Errorf("decrypt Patroni credential: %w", err)
+		}
+	}
+	var metrics, kube, linux, pooler, patroni map[string]any
+	var collectErr, linuxErr, poolerErr, patroniErr error
 	var groupWait sync.WaitGroup
 	groupWait.Add(1)
 	go func() {
@@ -171,6 +183,13 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 		go func() {
 			defer groupWait.Done()
 			pooler, poolerErr = collector.PgBouncer(ctx, poolerURL, target.Database)
+		}()
+	}
+	if patroniURL != "" {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			patroni, patroniErr = collector.Patroni(ctx, patroniURL)
 		}()
 	}
 	groupWait.Wait()
@@ -216,6 +235,16 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 			if pooler["status"] != "ok" && collectErr == nil && reason == "" {
 				group, reason = "telemetry", "PgBouncer pool mapping is unavailable"
 			}
+		}
+	}
+	if patroniURL != "" {
+		if patroniErr != nil {
+			metrics["patroni"] = map[string]any{"status": "error", "reason": patroniErr.Error()}
+			if collectErr == nil && reason == "" {
+				group, reason = "telemetry", "Patroni REST API collection failed"
+			}
+		} else {
+			metrics["patroni"] = patroni
 		}
 	}
 	result, err := s.recordCheck(ctx, id, metrics, group, reason)
@@ -372,6 +401,13 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			poolerPayload, _ := json.Marshal(pooler)
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'pgbouncer_state',$2,$3)`, eventID, now, poolerPayload); err != nil {
+				return CheckResult{}, err
+			}
+		}
+		if patroni := object(metrics["patroni"]); len(patroni) != 0 {
+			patroniPayload, _ := json.Marshal(patroni)
+			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'patroni_state',$2,$3)`, eventID, now, patroniPayload); err != nil {
 				return CheckResult{}, err
 			}
 		}

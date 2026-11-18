@@ -187,6 +187,29 @@ func TestGoRCADeepPostgresCandidateEvidence(t *testing.T) {
 	}
 }
 
+func TestGoRCAPatroniLeaderAnomalyKeepsCauseUncertain(t *testing.T) {
+	now := time.Now().UTC()
+	payload, _ := json.Marshal(map[string]any{"metric": "patroni.leader_count_invalid",
+		"sampleId": "sample-patroni", "value": 1, "operator": ">=", "threshold": 1})
+	event := &eventRecord{ID: "event-patroni", StartedAt: now, Evidence: []eventEvidence{{
+		ID: "patroni-alert", Kind: "alert_firing", ObservedAt: now, Payload: payload}}}
+	sample := sampleObservation{ID: "sample-patroni", At: now, Status: "ok", Metrics: map[string]any{
+		"patroni": map[string]any{"status": "ok", "leaderCount": float64(0),
+			"members": []any{map[string]any{"name": "replica-1", "role": "replica"}}}}}
+	candidates := analyzeCandidates(event, map[string]sampleObservation{"sample-patroni": sample},
+		func(string, string, string, string, any) {}, &[]map[string]string{})
+	if len(candidates) != 1 || candidates[0]["code"] != "patroni_leader_anomaly" ||
+		len(candidates[0]["supports"].([]string)) != 2 ||
+		!strings.Contains(candidates[0]["limitation"].(string), "尚未证实") {
+		t.Fatalf("Patroni anomaly lost evidence or uncertainty: %+v", candidates)
+	}
+	sample.Metrics["patroni"] = map[string]any{"status": "error"}
+	if result := analyzeCandidates(event, map[string]sampleObservation{"sample-patroni": sample},
+		func(string, string, string, string, any) {}, &[]map[string]string{}); len(result) != 0 {
+		t.Fatalf("missing Patroni telemetry fabricated a cause: %+v", result)
+	}
+}
+
 func TestGoRCARequiresSameWindowGrowthAndStoragePressure(t *testing.T) {
 	now := time.Now().UTC()
 	alert := func(id, metric string, value float64, at time.Time) eventEvidence {

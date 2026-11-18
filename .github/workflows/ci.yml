@@ -243,7 +243,7 @@ jobs:
           done
           docker exec -i dbsphere-go-restore-ci pg_restore -U postgres -d postgres --no-owner --no-acl < "${dump[0]}"
           version="$(docker exec dbsphere-go-restore-ci psql -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
-          test "$version" -ge 19
+          test "$version" -ge 20
 
   go-offline-upgrade-rollback:
     runs-on: ubuntu-latest

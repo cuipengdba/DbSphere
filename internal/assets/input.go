@@ -54,6 +54,8 @@ type Input struct {
 	LinuxExporterPort OptionalPort `json:"linuxExporterPort"`
 	PoolerURL         string       `json:"poolerUrl"`
 	PoolerClear       bool         `json:"poolerClear"`
+	PatroniURL        string       `json:"patroniUrl"`
+	PatroniClear      bool         `json:"patroniClear"`
 	K8sCluster        string       `json:"k8sCluster"`
 	Namespace         string       `json:"namespace"`
 	Workload          string       `json:"workload"`
@@ -93,6 +95,18 @@ func (a Input) Validate() error {
 		if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
 			parsed.Path != "/pgbouncer" || parsed.User == nil || parsed.User.Username() == "" || parsed.Hostname() == "" {
 			return errors.New("invalid PgBouncer management URL")
+		}
+	}
+	if a.PatroniURL != "" {
+		if len(a.PatroniURL) > 2048 {
+			return errors.New("Patroni REST URL is too long")
+		}
+		parsed, err := url.Parse(a.PatroniURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Hostname() == "" || (parsed.Path != "" && parsed.Path != "/") ||
+			parsed.RawQuery != "" || parsed.Fragment != "" ||
+			(parsed.User != nil && parsed.User.Username() == "") {
+			return errors.New("invalid Patroni REST URL")
 		}
 	}
 	return nil

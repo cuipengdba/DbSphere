@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strconv"
@@ -32,7 +34,7 @@ func TestRealPostgreSQL18Connection(t *testing.T) {
 	}
 	var version, partitions int
 	if err := store.pool.QueryRow(context.Background(),
-		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 19 {
+		"SELECT max(version) FROM dbsphere_schema_migrations").Scan(&version); err != nil || version < 20 {
 		t.Fatalf("Go schema migration absent: %d %v", version, err)
 	}
 	if err := store.pool.QueryRow(context.Background(),
@@ -397,6 +399,81 @@ func TestGoPgBouncerCombinedSampleInPG18(t *testing.T) {
 	if !strings.Contains(string(encoded), `"pgbouncer"`) || !strings.Contains(string(encoded), `"clientWaiting"`) ||
 		strings.Contains(string(encoded), "dbsphere-monitor-test") {
 		t.Fatalf("PgBouncer sample missing or credential leaked: %s", encoded)
+	}
+}
+
+func TestGoPatroniEndpointEncryptionAndCombinedSampleInPG18(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/cluster" {
+			t.Errorf("unexpected Patroni request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"members":[{"name":"pg-a","role":"leader","state":"running","host":"127.0.0.1","port":5432},{"name":"pg-b","role":"replica","state":"streaming","replay_lag":0}]}`))
+	}))
+	defer server.Close()
+	pg, err := Open(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	config := pg.pool.Config().ConnConfig
+	key := []byte("01234567890123456789012345678901")
+	input := assets.Input{Name: "Go Patroni test", Host: config.Host, Port: int(config.Port),
+		Database: config.Database, Username: config.User, Password: config.Password,
+		SSLMode: "disable", Runtime: "linux", PatroniURL: strings.Replace(server.URL,
+			"http://", "http://reader:private-test-password@", 1)}
+	created, err := pg.CreateAsset(context.Background(), input, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID                string `json:"id"`
+		PatroniConfigured bool   `json:"patroniConfigured"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil || !asset.PatroniConfigured {
+		t.Fatalf("Patroni endpoint not configured: %s, %v", created, err)
+	}
+	defer pg.DeleteAsset(context.Background(), asset.ID)
+	if strings.Contains(string(created), "private-test-password") {
+		t.Fatal("Patroni credential leaked in asset response")
+	}
+	var stored string
+	if err := pg.pool.QueryRow(context.Background(), `SELECT patroni_url_enc FROM assets WHERE id=$1`,
+		asset.ID).Scan(&stored); err != nil || strings.Contains(stored, "private-test-password") {
+		t.Fatal("Patroni endpoint was not encrypted", err)
+	}
+	checked, err := pg.CheckAsset(context.Background(), asset.ID, key)
+	if err != nil || checked.Status != "ok" {
+		t.Fatalf("combined PostgreSQL/Patroni collection failed: %+v, %v", checked, err)
+	}
+	sample, err := pg.RawSample(context.Background(), asset.ID, checked.SampleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(sample)
+	if !strings.Contains(string(encoded), `"patroni"`) || !strings.Contains(string(encoded), `"leaderCount":1`) ||
+		strings.Contains(string(encoded), "private-test-password") {
+		t.Fatalf("Patroni sample missing or leaked credentials: %s", encoded)
+	}
+	input.Password = ""
+	input.PatroniURL = ""
+	kept, err := pg.UpdateAsset(context.Background(), asset.ID, input, key)
+	var keptAsset struct {
+		PatroniConfigured bool `json:"patroniConfigured"`
+	}
+	if err != nil || json.Unmarshal(kept, &keptAsset) != nil || !keptAsset.PatroniConfigured {
+		t.Fatalf("asset update lost Patroni endpoint: %s, %v", kept, err)
+	}
+	input.PatroniClear = true
+	cleared, err := pg.UpdateAsset(context.Background(), asset.ID, input, key)
+	var clearedAsset struct {
+		PatroniConfigured bool `json:"patroniConfigured"`
+	}
+	if err != nil || json.Unmarshal(cleared, &clearedAsset) != nil || clearedAsset.PatroniConfigured {
+		t.Fatalf("Patroni endpoint clear failed: %s, %v", cleared, err)
 	}
 }
 

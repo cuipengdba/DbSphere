@@ -113,12 +113,12 @@
 
 - [ ] **10-01** PG14–18 × Linux 裸机/虚机/K8S × 单机/主从/Patroni/至少一种云 PG 的支持矩阵和回归结果。
 
-  本机四节点 kind 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 均完成 PG14–18 五版真实只读纳管、样本与 Pod/Service/Node 关联；独立 PG18 存储的 PVC 及 Go/存储 Pod 替换后，五版旧样本和新样本均可读回。生产集群可靠性、主从/Patroni/云 PG 等组合未验收，故保持未勾选。见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
+  本机四节点 kind 与[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44313908935) 均完成 PG14–18 五版真实只读纳管、样本与 Pod/Service/Node 关联；独立 PG18 存储的 PVC 及 Go/存储 Pod 替换后，五版旧样本和新样本均可读回。PG18 双节点 Patroni 的只读拓扑与故障恢复另在本机通过，见[Patroni 验收](PATRONI_ACCEPTANCE.md)。生产集群可靠性、PG14–17 × Patroni、云 PG 等组合未验收，故保持未勾选。见[多节点矩阵验收](KIND_MATRIX_ACCEPTANCE.md)。
 - [ ] **10-02** B/S 控制台可访问性、中文与英文基础文案、性能与大规模资产分页/保留期测试。
 - [ ] **10-03** Linux 包/容器镜像、部署文档、配置迁移、升级/回滚和备份恢复演练。
 - [ ] **10-04** 采集开销、故障隔离、断点续传、数据新鲜度和自身监控验收。
 - [ ] **10-05** 依赖许可清单、SBOM、安全扫描、密钥与默认配置检查；Apache-2.0 发行边界核实。
-- [ ] **10-06** 八类数据库/K8S 故障与两类应用全链路演练，报告一个问题从首次告警到根因、处置、恢复的完整证据。本机 kind 已完成探针失败、容器 OOMKilled、Pod 无法调度三类 PG18/K8S 同事件闭环，以及真实 Go 应用连接失败→OOM 的场景 B；场景 A 已通过 PG14–18 五版 CI。[真实 PG18 主从复制延迟同事件闭环](REPLICATION_DRILL.md)已在本机和[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315)通过。其余故障类别和生产环境验收仍待完成；K8S 证据见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
+- [ ] **10-06** 八类数据库/K8S 故障与两类应用全链路演练，报告一个问题从首次告警到根因、处置、恢复的完整证据。本机 kind 已完成探针失败、容器 OOMKilled、Pod 无法调度三类 PG18/K8S 同事件闭环，以及真实 Go 应用连接失败→OOM 的场景 B；场景 A 已通过 PG14–18 五版 CI。[真实 PG18 主从复制延迟同事件闭环](REPLICATION_DRILL.md)已在本机和[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315)通过。[Patroni leader 故障](PATRONI_ACCEPTANCE.md)也在本机形成一个事件 ID 串联 PG 不可用、无 leader 样本、告警、候选与恢复。其余故障类别和生产环境验收仍待完成；K8S 证据见[本机 kind 验收记录](KIND_ACCEPTANCE.md)。
 - [ ] **10-07** 无 AI 模型的完整回归、模型可选模式回归、已知限制和 PG14 EOL 文案发布。
 - [ ] **10-08** 容器一键部署和外部 PG18 模式的安装/升级/回滚验收；长期数据分区、保留期、备份恢复及存储不可用演练通过。
 - [ ] **10-09** 将一键离线部署列为正式版门槛：Linux x86_64 断网安装/升级/回滚、校验和、镜像及 PG18 数据迁移和 B/S 健康检查通过；Linux arm64 如未验证需在支持矩阵中明确限制。公布容器运行时或 Node.js/外部 PG18 的准确依赖边界。

@@ -5,7 +5,7 @@
 ## 强制架构
 
 - V1.0 后端使用 Go。入口为 Linux `dbsphere` 可执行文件，优先 `CGO_ENABLED=0` 编译；静态前端资源编入同一程序，通过 HTTP API 与服务端交互。浏览器不需要 Node.js。
-- DbSphere 的长期监控存储仍为独立 PostgreSQL 18；被监控实例兼容 PG14–18。Linux 主机、Kubernetes PostgreSQL、PgBouncer、备份和 OTel Trace 由只读或明确授权的适配器采集。
+- DbSphere 的长期监控存储仍为独立 PostgreSQL 18；被监控实例兼容 PG14–18。Linux 主机、Kubernetes PostgreSQL、PgBouncer、Patroni 只读集群拓扑、备份和 OTel Trace 由只读或明确授权的适配器采集。Patroni 当前仅完成 PG18 双节点本机故障验收，完整支持矩阵仍待验证。
 - Docker Compose 一键部署和 Linux x86_64 一键离线包以 Go 程序 + PG18 镜像为交付物。Go 单文件原生运行模式允许连接已有独立 PG18。离线目标机不需要 Node.js、Go 编译器或包管理器；容器模式仍需预装 Docker Engine/Compose。
 - 已发布的 V0.1–V0.5 和 V0.6 开发预览使用 Node.js 后端，是迁移前历史产物。新架构达到对应功能对等和升级/回滚验证前，不发布 Go 版正式版本，更不将现有 Node 预览称为 Go 交付。
 

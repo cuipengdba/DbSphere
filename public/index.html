@@ -70,6 +70,8 @@
             <label class="linux-field wide">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <label class="wide">PgBouncer 管理连接 URL（可选）<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
             <label class="wide"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 连接</label>
+            <label class="wide">Patroni REST 地址（可选）<input name="patroniUrl" type="password" autocomplete="off" placeholder="https://监控用户:密码@patroni.internal:8008"></label>
+            <label class="wide"><input name="patroniClear" type="checkbox">清除已保存的 Patroni 连接</label>
             <div id="k8s-fields" class="nested wide" hidden>
               <label>K8S 集群<input name="k8sCluster" placeholder="production"></label>
               <label>Namespace<input name="namespace" placeholder="database"></label>

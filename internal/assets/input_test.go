@@ -31,4 +31,17 @@ func TestAssetInputValidationAndBrowserPort(t *testing.T) {
 	if bad.Validate() == nil {
 		t.Fatal("unrelated pooler URL accepted")
 	}
+	withPatroni := input
+	withPatroni.PatroniURL = "https://reader:secret@patroni.internal:8008"
+	if err := withPatroni.Validate(); err != nil {
+		t.Fatalf("valid read-only Patroni endpoint rejected: %v", err)
+	}
+	for _, endpoint := range []string{"file:///etc/passwd", "http://patroni:8008/failover",
+		"http://patroni:8008?token=secret", "https://:secret@patroni:8008"} {
+		bad = input
+		bad.PatroniURL = endpoint
+		if bad.Validate() == nil {
+			t.Fatalf("unsafe Patroni endpoint accepted: %s", endpoint)
+		}
+	}
 }

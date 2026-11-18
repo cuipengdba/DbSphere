@@ -15,7 +15,8 @@
   CREATE TABLE IF NOT EXISTS assets (
     id uuid PRIMARY KEY, name text NOT NULL, host text NOT NULL, port integer NOT NULL,
     database_name text NOT NULL, username text NOT NULL, password_enc text NOT NULL,
-    ssl_mode text NOT NULL, runtime text NOT NULL, linux_host text, linux_exporter_port integer, pooler_url_enc text, k8s_cluster text,
+    ssl_mode text NOT NULL, runtime text NOT NULL, linux_host text, linux_exporter_port integer,
+    pooler_url_enc text, patroni_url_enc text, k8s_cluster text,
     k8s_namespace text, k8s_workload text, k8s_pod text, k8s_node text,
     created_at timestamptz NOT NULL, last_sample_at timestamptz,
     last_status text NOT NULL DEFAULT 'pending', last_error text, version_num integer, role text

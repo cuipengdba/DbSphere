@@ -12,8 +12,19 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/assets"
 )
 
+func defaultGoRuleForTest(t *testing.T, id string) alertRule {
+	t.Helper()
+	for _, rule := range goDefaultRules {
+		if rule.ID == id {
+			return rule
+		}
+	}
+	t.Fatalf("missing default Go alert rule %s", id)
+	return alertRule{}
+}
+
 func TestGoAlertPendingFiringMissingAndRecovery(t *testing.T) {
-	rule := goDefaultRules[5]
+	rule := defaultGoRuleForTest(t, "pg_connections_high")
 	start := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
 	breach := alertSignal{Available: true, Value: 90}
 	state, transition := nextGoAlert(rule, breach, nil, start)
@@ -75,6 +86,25 @@ func TestGoCollectorFailureSignalsDoNotClaimAvailability(t *testing.T) {
 	delete(metrics, "k8s")
 	if readGoSignal("collector.k8s_failed", metrics, now).Available {
 		t.Fatal("unconfigured Kubernetes was treated as healthy")
+	}
+}
+
+func TestGoPatroniSignalsDistinguishNoLeaderFromMissingTelemetry(t *testing.T) {
+	now := time.Now().UTC()
+	for _, leaders := range []float64{0, 1, 2} {
+		metrics := map[string]any{"patroni": map[string]any{"status": "ok", "leaderCount": leaders,
+			"replicaCount": float64(2)}}
+		signal := readGoSignal("patroni.leader_count_invalid", metrics, now)
+		if !signal.Available || signal.Value != map[bool]float64{true: 0, false: 1}[leaders == 1] {
+			t.Fatalf("Patroni leader signal incorrect for %.0f leaders: %+v", leaders, signal)
+		}
+	}
+	failed := map[string]any{"patroni": map[string]any{"status": "error", "reason": "unavailable"}}
+	if readGoSignal("patroni.leader_count_invalid", failed, now).Available {
+		t.Fatal("Patroni API failure was treated as a zero-leader cluster")
+	}
+	if signal := readGoSignal("collector.patroni_failed", failed, now); !signal.Available || signal.Value != 1 {
+		t.Fatalf("Patroni collection failure signal missing: %+v", signal)
 	}
 }
 
@@ -495,7 +525,7 @@ func TestUpdateGoAlertRulePersistsAndRejectsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.Close()
-	rule := goDefaultRules[5]
+	rule := defaultGoRuleForTest(t, "pg_connections_high")
 	rule.ID = "go_rule_update_test"
 	seed, _ := json.Marshal(rule)
 	if _, err := pg.pool.Exec(context.Background(), `INSERT INTO alert_rules(id,definition_json) VALUES($1,$2)
@@ -672,5 +702,70 @@ func TestGoKubernetesOOMAndPGFailureShareEventID(t *testing.T) {
 	}
 	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("Kubernetes incident did not recover under original ID: %s %v", status, err)
+	}
+}
+
+func TestGoPatroniLeaderAnomalyUsesOneEventThroughRecovery(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if url == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Patroni leader event test", Host: "127.0.0.1",
+		Port: 5432, Database: "postgres", Username: "monitor", SSLMode: "disable", Runtime: "linux"},
+		[]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	metrics := func(leaders int) map[string]any {
+		role := "replica"
+		if leaders == 1 {
+			role = "leader"
+		}
+		return map[string]any{"version_num": 180000, "connections": 1, "max_connections": 100,
+			"collector": map[string]any{"pgStatus": "ok"},
+			"patroni": map[string]any{"status": "ok", "leaderCount": leaders,
+				"replicaCount": 1, "members": []any{map[string]any{"name": "pg-a", "role": role}}}}
+	}
+	now := time.Now().UTC()
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(0), "", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(0), "", "", now.Add(35*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `SELECT id::text FROM events WHERE asset_id=$1
+		AND event_group='availability' AND status='open'`, asset.ID).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	if !strings.Contains(string(encoded), "patroni_leader_anomaly") ||
+		!strings.Contains(string(encoded), "patroni.leader_count_invalid") ||
+		!strings.Contains(string(encoded), "supported_by") {
+		t.Fatalf("Patroni alert and root cause evidence did not join one event: %s", encoded)
+	}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics(1), "", "", now.Add(70*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := pg.pool.QueryRow(ctx, `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
+		t.Fatalf("Patroni event did not recover under original ID: %s %v", status, err)
 	}
 }
