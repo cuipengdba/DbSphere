@@ -19,3 +19,5 @@ Go 版现支持可选的 `DBSPHERE_RETENTION_DAYS`（样本）与 `DBSPHERE_EVEN
 新索引消除了日常全表证据扫描。启用相应保留期后，每小时清理会在逐行删除后尝试移除最多 4 个**完全早于保留时间且已无存活数据**的旧 UTC 月分区；先核对分区名称和范围，取得父表及子表锁后再次确认分区为空。仍有证据或巡检保护的数据会使整个分区留存，未启用事件保留期时不清理事件分区。此操作会短暂锁定相应分区父表，必须通过生产负载验收。[本机 kind 现有库迁移](KIND_ACCEPTANCE.md#2026-11-19-证据引用索引迁移)及[33 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44403758760)验证小规模回填与 Go 包升级回滚；[空分区清理的 33 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44406742952)和[本机运行复验](KIND_ACCEPTANCE.md#2026-11-19-保留期与空分区运行复验)通过。大数据量删除、迁移回填、索引体积和分区清理锁耗时仍未完成容量基线和生产规模验收。正式版的备份恢复、PG18 数据库升级和生产存储故障演练仍是 V1.0 门槛。
 
 Go schema 22 给分区事件表新增 `(started_at DESC,id DESC)` 与 `(status,started_at DESC,id DESC)` 索引，用于事件页服务端稳定游标分页。旧库升级在启动迁移事务中建索引；本机 kind 的 17 条事件顺利迁移并保留原证据。大型历史分区的首次建索引时间、锁等待、文本搜索开销和磁盘增长尚未测量，升级前应备份并安排维护窗口；不能将小库迁移结果推广为生产容量验收。
+
+Go schema 23 再给分区事件表新增 `(asset_id,started_at DESC,id DESC)` 与 `(asset_id,status,started_at DESC,id DESC)`，服务按资产范围查询时可利用排序索引。[10 万事件容量初测](EVENT_SCALE_ACCEPTANCE.md)显示批量插入后统计信息过期会让首页及总览暂时变慢；执行 `ANALYZE events` 后平均分别为 2.7 ms 和 42 ms。此项仍是迁移事务内建索引，真实大库的锁等待、临时空间及回滚耗时未测；不能仅凭小库或单资产结果确定生产升级窗口。

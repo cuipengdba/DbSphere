@@ -79,6 +79,9 @@ func TestEventPageFindsOlderHistoryWithoutLeakingScopedAssets(t *testing.T) {
 	if err := pg.pool.QueryRow(ctx, "SELECT to_regclass('events_page_order') IS NOT NULL").Scan(&indexed); err != nil || !indexed {
 		t.Fatal("event page index missing", err)
 	}
+	if err := pg.pool.QueryRow(ctx, "SELECT to_regclass('events_asset_page_order') IS NOT NULL AND to_regclass('events_asset_status_page_order') IS NOT NULL").Scan(&indexed); err != nil || !indexed {
+		t.Fatal("asset event page indexes missing", err)
+	}
 
 	seen := map[string]bool{}
 	cursor := ""

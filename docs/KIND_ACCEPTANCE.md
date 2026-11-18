@@ -131,3 +131,5 @@ Playwright Chromium 在恢复库 B/S 页面按 `Kind OOM PG18` 搜到 4 条；�
 事件总览修复后，再次只更新隔离的 `dbsphere-go-restore` Go 镜像。Deployment 完成滚动升级，`/readyz` 报告 `postgresql18`；管理员登录后 `/api/events/overview` 返回 `openCount=0`、`latestOpen=0`，分页接口仍返回原有 17 条事件。独立 PG18 实库回归将同一受限资产的 205 条事件设为未结，验证总览精确计数 205、只返回最近 5 条，以及其他资产不可见。此处的 kind 库原本无未结事件，因此大于 200 条的计数依据实库回归，不能解释为在 kind 中注入了 205 条故障。
 
 同版静态页面在 Playwright Chromium 390px 视口实测：总览待处理数为 0，输入旧 OOM 事件完整 ID 后返回 1 条历史事件，打开详情显示 5 段全链路；页面无横向溢出，控制台 0 错误。后端再次读到该事件 `resolved`、8 条证据、24 个图节点、47 条关系和 OOM 候选。
+
+schema 23 的资产分页索引镜像继续只升级隔离 `dbsphere-go-restore`。Go Deployment 滚动升级成功，恢复 PG18 库的最高迁移版本为 23、`events_asset_page_order` 存在、原 17 条事件仍在。390px Chromium 再次验证总览待处理数为 0、旧 OOM 事件完整 ID 返回 1 条、详情 5 段全链路、无横向溢出及控制台错误。大批量查询耗时见[独立 PG18 容量初测](EVENT_SCALE_ACCEPTANCE.md)；kind 的 17 条事件仅验证升级兼容性。
