@@ -33,6 +33,8 @@ services:
     build:
       context: ../..
       dockerfile: test/patroni-drill/Dockerfile
+      args:
+        PG_MAJOR: ${DBSPHERE_DRILL_PG_MAJOR:-18}
     depends_on: [etcd]
     environment:
       PATRONI_NAME: patroni1

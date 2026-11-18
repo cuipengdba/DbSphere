@@ -1,4 +1,6 @@
-FROM postgres:18-bookworm
+ARG PG_MAJOR=18
+FROM postgres:${PG_MAJOR}-bookworm
+ARG PG_MAJOR
 
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
     && python3 -m venv /opt/patroni \
@@ -12,5 +14,6 @@ COPY test/patroni-drill/entrypoint.sh /usr/local/bin/dbsphere-patroni-entrypoint
 RUN chmod +x /usr/local/bin/dbsphere-patroni-entrypoint.sh
 
 USER postgres
-ENV PATH=/opt/patroni/bin:/usr/lib/postgresql/18/bin:$PATH
+ENV PATH=/opt/patroni/bin:/usr/lib/postgresql/${PG_MAJOR}/bin:$PATH \
+    PATRONI_PG_MAJOR=${PG_MAJOR}
 ENTRYPOINT ["/usr/local/bin/dbsphere-patroni-entrypoint.sh"]

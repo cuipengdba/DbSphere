@@ -2,9 +2,9 @@
 
 > 更新于 2026-11-18。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
-Patroni 可选只读采集现已接入 Go 资产、PG18 加密配置、采样、默认告警、事件证据图与静态前端。真实 PG18 双节点 Patroni/etcd 故障演练中，第二轮在修正 PostgreSQL `57P03` 等连接类 SQLSTATE 分类后，原 leader 故障、两次无 leader 样本、两个告警、`patroni_leader_anomaly` 候选及成功恢复只产生**一个**可用性事件 `7410d94d-0e99-45dd-ad08-8f961c2952df`；浏览器核对了候选、证据和恢复时间线。PG18 实库测试另验证接入 URL 加密、更新保留与清除及同事件生命周期。仅测试 PG18 双节点和单节点 DCS，PG14–17、生产 Patroni/K8S 组合及 DCS 故障推断尚未验收；详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
+Patroni 可选只读采集现已接入 Go 资产、PG18 加密配置、采样、默认告警、事件证据图与静态前端。真实 PG18 双节点 Patroni/etcd 故障演练中，第二轮在修正 PostgreSQL `57P03` 等连接类 SQLSTATE 分类后，原 leader 故障、两次无 leader 样本、两个告警、`patroni_leader_anomaly` 候选及成功恢复只产生**一个**可用性事件 `7410d94d-0e99-45dd-ad08-8f961c2952df`；浏览器核对了候选、证据和恢复时间线。PG18 实库测试另验证接入 URL 加密、更新保留与清除及同事件生命周期。该早期 PG18 演练只覆盖单节点 DCS；生产 Patroni/K8S 组合及 DCS 故障推断尚未验收，详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
 
-可重复的 PG18 双节点 Patroni 故障演练已加入独立 Docker Compose 测试夹具与 GitHub CI。本机自动复跑通过：动态找出 leader、停止并等待另一节点晋升，采集到真实无 leader 样本，旧节点重入后仅关闭一个可用性事件 `520f45e8-48ea-4599-8176-bf8eeba79fa6`，证据图和报告均引用同一事件。GitHub runner 的新增作业仍待复核，详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
+可重复的 Patroni 故障演练已加入独立 Docker Compose 测试夹具：本机 PG18 自动切换演练形成一个已恢复的可用性事件 `520f45e8-48ea-4599-8176-bf8eeba79fa6`。首次 GitHub CI 自动选主太快而未采到短暂的无 leader 窗口，因此该作业失败；测试夹具现通过先暂停再恢复自动选主，使无 leader 样本可重复采集。本机 PG14 双节点使用新流程通过，形成单事件 `17df8d8a-31b6-4a88-a4fc-67a24724aa4b`，目标库版本 14，监控库仍为 PG18。PG14–18 五版独立 CI 结果待复核，详见[Patroni 验收](PATRONI_ACCEPTANCE.md)。
 
 隔离 Docker Compose 的 PG18 主备演练新增真实复制延迟故障：备库暂停回放、主库产生 WAL 后，DbSphere 用只读账号取得 128 MiB 级延迟；默认规则持续 120 秒触发告警和 `replication_lag` 候选，原始样本、证据图和 Markdown 报告共用事件 `10b01d66-5969-476d-b1b8-f4112a4e7685`。恢复后主库仍有 1 个流复制备库且延迟为 0，告警引用成功样本关闭原事件；当前源码的 Go 镜像替换后数据仍在独立 PG18。收紧恢复样本断言后，最终脚本和当前镜像再次通过同事件闭环（事件 `fec27a88-e4b5-4644-bd12-291f55af4ccc`）。浏览器复验确认时间线已正确显示恢复证据及其样本 ID，根因候选的证据和局限已分行呈现。[独立 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44310624315) 重新执行真实主备故障并在 app 替换后读回同一事件，见[复制故障演练](REPLICATION_DRILL.md)。此结果不覆盖 Patroni、云 PG、生产可靠性或完整八类故障门槛。
 

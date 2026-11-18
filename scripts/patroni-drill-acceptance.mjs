@@ -6,9 +6,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const [baseURL, credentialsPath, envPath, resultPath] = process.argv.slice(2);
+const [baseURL, credentialsPath, envPath, resultPath, major = '18'] = process.argv.slice(2);
 if (!baseURL || !credentialsPath || !envPath || !resultPath) {
-  console.error('usage: node scripts/patroni-drill-acceptance.mjs BASE_URL CREDENTIALS_PATH ENV_PATH RESULT_PATH');
+  console.error('usage: node scripts/patroni-drill-acceptance.mjs BASE_URL CREDENTIALS_PATH ENV_PATH RESULT_PATH [PG_MAJOR]');
   process.exit(2);
 }
 const base = baseURL.replace(/\/$/, '');
@@ -37,7 +37,11 @@ function container(service) {
   return id;
 }
 function docker(...args) {
-  return execFileSync('docker', args, { encoding: 'utf8', timeout: 30000 }).trim();
+  return execFileSync('docker', args, { encoding: 'utf8', timeout: 60000 }).trim();
+}
+function maintenance(service, action) {
+  return docker('exec', container(service), 'patronictl', '-c', '/tmp/dbsphere-patroni.yml',
+    action, 'dbsphere-ci-patroni', ...(action === 'pause' ? ['--wait'] : []));
 }
 async function cluster() {
   const response = await fetch('http://127.0.0.1:18018/cluster', { signal: AbortSignal.timeout(10000) });
@@ -95,21 +99,27 @@ const asset = (await api('/api/assets', 'POST', {
 assert.ok(asset.id && asset.patroniConfigured);
 const baseline = await sample(asset.id);
 assert.equal(baseline.status, 'ok');
+assert.equal(Math.floor(baseline.metrics.version_num / 10000), Number(major));
 assert.equal(baseline.metrics.patroni?.leaderCount, 1);
 assert.equal(baseline.metrics.patroni?.replicaCount, 1);
 assert.equal(baseline.metrics.monitor_role, true);
 assert.equal(baseline.metrics.privileged_role, false);
 assert.ok(!JSON.stringify(baseline).includes(credentials.monitorPassword));
+console.log(JSON.stringify({ phase: 'baseline', targetPGMajor: Number(major), leader, survivor,
+  sampleId: baseline.id }));
 
 const leaderContainer = container(leader);
 let stopped = false;
 let ruleChanged = false;
+let paused = false;
 let noLeaderSample;
 let unavailableSample;
 let recovery;
 try {
   await api('/api/alert-rules/patroni_leader_invalid', 'PATCH', { durationSeconds: 0 });
   ruleChanged = true;
+  maintenance(survivor, 'pause');
+  paused = true;
   docker('kill', leaderContainer);
   stopped = true;
   const until = Date.now() + 120000;
@@ -122,16 +132,32 @@ try {
       continue;
     }
     if (observed.metrics.patroni?.status === 'ok' && observed.metrics.patroni.leaderCount === 0) {
-      noLeaderSample ??= observed;
+      if (!noLeaderSample) {
+        noLeaderSample = observed;
+        console.log(JSON.stringify({ phase: 'no-leader', sampleId: observed.id }));
+      }
     }
     if (observed.status === 'error' && observed.metrics.collector?.pgStatus === 'availability') {
-      unavailableSample ??= observed;
+      if (!unavailableSample) {
+        unavailableSample = observed;
+        console.log(JSON.stringify({ phase: 'pg-unavailable', sampleId: observed.id }));
+      }
     }
-    if (noLeaderSample && unavailableSample && observed.metrics.patroni?.leaderCount === 1) break;
+    if (noLeaderSample && unavailableSample) break;
     await delay(2500);
   }
   assert.ok(noLeaderSample, 'real leader election did not yield a no-leader sample');
   assert.ok(unavailableSample, 'stopped leader did not yield a PostgreSQL availability sample');
+  maintenance(survivor, 'resume');
+  paused = false;
+  await waitUntil('surviving replica promotion', async () => {
+    try {
+      const observed = await sample(asset.id);
+      return observed.metrics.patroni?.leaderCount === 1 &&
+        observed.metrics.patroni?.members?.some(item => item.name === survivor &&
+          item.role === 'leader' && item.state === 'running');
+    } catch { return false; }
+  }, 90000);
   docker('start', leaderContainer);
   stopped = false;
   recovery = await waitUntil('old leader rejoin as streaming replica', async () => {
@@ -142,7 +168,9 @@ try {
           item.role === 'replica' && item.state === 'streaming') ? observed : null;
     } catch { return null; }
   }, 180000);
+  console.log(JSON.stringify({ phase: 'rejoined', sampleId: recovery.id }));
 } finally {
+  if (paused) maintenance(survivor, 'resume');
   if (stopped) docker('start', leaderContainer);
   if (ruleChanged) await api('/api/alert-rules/patroni_leader_invalid', 'PATCH', { durationSeconds: 30 });
 }
@@ -156,13 +184,21 @@ assert.equal(detail.event.eventGroup, 'availability');
 assert.ok(detail.event.evidence.some(item => item.kind === 'alert_firing' &&
   item.payload?.ruleId === 'patroni_leader_invalid'));
 assert.ok(detail.event.evidence.some(item => item.kind === 'alert_recovered' &&
-  item.payload?.sampleId === recovery.id));
+  item.payload?.ruleId === 'patroni_leader_invalid'));
+const closure = detail.event.evidence.find(item => item.kind === 'collection_recovered');
+assert.ok(closure?.payload?.sampleId, 'availability event lacks its closing sample');
+const closureSampleId = closure.payload.sampleId;
+const closureSample = (await api(`/api/assets/${asset.id}/samples/${closureSampleId}`)).body.sample;
+assert.equal(closureSample.status, 'ok');
+assert.equal(closureSample.metrics.patroni?.leaderCount, 1);
+assert.ok(detail.event.evidence.some(item => item.kind === 'alert_recovered' &&
+  item.payload?.ruleId === 'pg_unavailable' && item.payload?.sampleId === closureSampleId));
 assert.ok(detail.event.evidence.some(item => item.kind === 'patroni_state'));
 const candidate = detail.analysis.candidates.find(item => item.code === 'patroni_leader_anomaly');
 assert.ok(candidate, 'Patroni topology root-cause candidate missing');
 assert.ok(candidate.supports.includes(`sample:${noLeaderSample.id}`));
 assert.ok(detail.analysis.graph.nodes.some(item => item.id === `sample:${noLeaderSample.id}`));
-assert.ok(detail.analysis.graph.nodes.some(item => item.id === `sample:${recovery.id}`));
+assert.ok(detail.analysis.graph.nodes.some(item => item.id === `sample:${closureSampleId}`));
 const reportResponse = await fetch(`${base}/api/events/${eventId}/report?format=md`,
   { headers: { Cookie: cookie }, signal: AbortSignal.timeout(20000) });
 assert.equal(reportResponse.status, 200);
@@ -170,8 +206,9 @@ const report = await reportResponse.text();
 assert.ok(report.includes(eventId) && report.includes('patroni_leader_anomaly') &&
   report.includes(noLeaderSample.id));
 
-const result = { eventId, assetId: asset.id, leader, survivor, noLeaderSampleId: noLeaderSample.id,
-  unavailableSampleId: unavailableSample.id, recoverySampleId: recovery.id, status: detail.event.status,
+const result = { eventId, assetId: asset.id, targetPGMajor: Number(major), leader, survivor, noLeaderSampleId: noLeaderSample.id,
+  unavailableSampleId: unavailableSample.id, recoverySampleId: closureSampleId,
+  rejoinSampleId: recovery.id, status: detail.event.status,
   candidate: candidate.code, storage: 'postgresql18' };
 writeFileSync(resultPath, JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

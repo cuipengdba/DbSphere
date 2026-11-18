@@ -2,6 +2,7 @@
 set -euo pipefail
 
 : "${PATRONI_NAME:?missing Patroni member name}"
+: "${PATRONI_PG_MAJOR:?missing PostgreSQL major version}"
 : "${DBSPHERE_DRILL_PG_PASSWORD:?missing test PostgreSQL password}"
 : "${DBSPHERE_DRILL_REPL_PASSWORD:?missing test replication password}"
 
@@ -32,7 +33,7 @@ postgresql:
   listen: 0.0.0.0:5432
   connect_address: ${PATRONI_NAME}:5432
   data_dir: /var/lib/postgresql/patroni
-  bin_dir: /usr/lib/postgresql/18/bin
+  bin_dir: /usr/lib/postgresql/${PATRONI_PG_MAJOR}/bin
   authentication:
     superuser:
       username: postgres

@@ -539,6 +539,10 @@ jobs:
   patroni-failover-drill:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['14', '15', '16', '17', '18']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -550,9 +554,11 @@ jobs:
           node --check scripts/patroni-drill-acceptance.mjs
           node scripts/replication-drill-secrets.mjs \
             "$RUNNER_TEMP/dbsphere-patroni.env" "$RUNNER_TEMP/dbsphere-patroni-credentials.json"
+          printf 'DBSPHERE_DRILL_PG_MAJOR=%s\n' '${{ matrix.pg }}' >> "$RUNNER_TEMP/dbsphere-patroni.env"
           docker compose --env-file "$RUNNER_TEMP/dbsphere-patroni.env" \
             -f test/patroni-drill/compose.yaml config --quiet
-          docker build -f test/patroni-drill/Dockerfile -t dbsphere/patroni-drill:local .
+          docker build --build-arg PG_MAJOR=${{ matrix.pg }} \
+            -f test/patroni-drill/Dockerfile -t dbsphere/patroni-drill:local .
           docker build -f Dockerfile-go -t dbsphere/patroni-app-drill:local .
       - name: Start PG18 store and real Patroni election cluster
         run: |
@@ -569,7 +575,7 @@ jobs:
           node scripts/patroni-drill-acceptance.mjs http://127.0.0.1:18097 \
             "$RUNNER_TEMP/dbsphere-patroni-credentials.json" \
             "$RUNNER_TEMP/dbsphere-patroni.env" \
-            "$RUNNER_TEMP/dbsphere-patroni-result.json"
+            "$RUNNER_TEMP/dbsphere-patroni-result.json" '${{ matrix.pg }}'
           cat "$RUNNER_TEMP/dbsphere-patroni-result.json"
       - name: Remove isolated Patroni drill
         if: always()
