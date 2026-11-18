@@ -21,3 +21,5 @@ Docker 多平台标签导出成单平台归档后可能更换本地报告的镜�
 CI 本次镜像扫描的匹配数、Critical 来源和 Debian 安全公告状态记录在[容器镜像漏洞初审](CONTAINER_VULNERABILITY_REVIEW.md)。
 
 Go 代码漏洞扫描已通过；镜像漏洞报告仍待核实。Go 启动配置现在拒绝重复字节构成的占位主密钥，CI 启动测试使用临时随机密钥。PostgreSQL 18 镜像、构建基础镜像、遗留 Node.js 预览版、完整密钥生命周期与默认配置，以及发行包的 Apache-2.0 兼容性仍须单独审查。因此 [V1.0 安全发布任务](DEVELOPMENT_TASKS.md)中的 10-05 尚未完成。
+
+[固定 PG18 摘要后的 31 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44392912716)已通过，包含实际固定摘要拉取、离线镜像安装/轮换/恢复、SBOM 和漏洞报告。该结果验证打包路径，没有消除[已记录的镜像漏洞匹配](CONTAINER_VULNERABILITY_REVIEW.md)。

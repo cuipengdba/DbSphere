@@ -8,6 +8,6 @@
 
 ## Go 开发版的长期分区维护
 
-Go/PG18 架构在启动迁移时创建采样和事件的当月及未来两个月 UTC 分区，并在服务运行期间每小时检查和预建；即使自动采集关闭，分区维护也运行。多个 Go 副本使用与 schema 迁移相同的 PostgreSQL advisory transaction lock，避免同时建表；如果同名表存在但未挂到正确父表，维护返回错误并记录日志。独立 PG18 实库测试把时间推进三个月，重复维护两次后确认两类分区均已挂载，实际未来采样和事件写入分别落到对应月分区。
+Go/PG18 架构在启动迁移时创建采样和事件的当月及未来两个月 UTC 分区，并在服务运行期间每小时检查和预建；即使自动采集关闭，分区维护也运行。多个 Go 副本使用与 schema 迁移相同的 PostgreSQL advisory transaction lock，避免同时建表；如果同名表存在但未挂到正确父表，维护返回错误并记录日志。独立 PG18 实库测试把时间推进三个月，重复维护两次后确认两类分区均已挂载，实际未来采样和事件写入分别落到对应月分区。[31 项 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44394389901)通过，单节点 kind 滚动更新后的数据读回见[本机记录](KIND_ACCEPTANCE.md)。
 
 本节只覆盖 Go 版分区持续创建。上文的 `DBSPHERE_RETENTION_DAYS` 和 `DBSPHERE_EVENT_RETENTION_DAYS` 清理策略属于早期 Node 版，Go 后端尚未实现同等历史保留期和旧分区卸载；控制台对 Go 存储仍显示保留期未知。V1.0 的长期保留、备份恢复、存储故障和容量门槛保持未完成。
