@@ -316,6 +316,15 @@ jobs:
             psql -h 127.0.0.1 -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
           test "$version" -ge 20
 
+  go-external-store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify external PostgreSQL 18 offline deployment and outage recovery
+        run: |
+          bash -n scripts/go-external-store-smoke.sh
+          bash scripts/go-external-store-smoke.sh "$RUNNER_TEMP/dbsphere-go-external"
+
   container-vulnerability-inventory:
     needs: go-offline-package
     runs-on: ubuntu-latest
