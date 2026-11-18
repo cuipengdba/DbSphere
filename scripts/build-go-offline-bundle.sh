@@ -32,12 +32,6 @@ trap cleanup EXIT
 app_image="dbsphere/offline-go-app:$version"
 docker build --platform linux/amd64 -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
 docker pull --platform linux/amd64 postgres:18-bookworm
-app_image_id="$(docker image inspect --format '{{.Id}}' "$app_image")"
-pg_image_id="$(docker image inspect --format '{{.Id}}' postgres:18-bookworm)"
-if [[ ! "$app_image_id" =~ ^sha256:[0-9a-f]{64}$ || ! "$pg_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo 'Cannot identify both Linux images for the offline bundle.' >&2
-  exit 1
-fi
 mkdir -p -- "$stage/deploy/compose"
 mkdir -p -- "$stage/licenses"
 cp -- "$repo_dir/LICENSE" "$stage/licenses/DBSphere-LICENSE"
@@ -50,9 +44,18 @@ cp -- "$repo_dir/scripts/install-go-offline.sh" "$stage/install.sh"
 cp -- "$repo_dir/scripts/backup-go-store.sh" "$stage/backup.sh"
 chmod 0755 "$stage/install.sh"
 chmod 0755 "$stage/backup.sh"
+docker image save --platform linux/amd64 "$app_image" postgres:18-bookworm | gzip -n > "$stage/images.tar.gz"
+# Docker may change an image's reported ID when a multi-platform tag is
+# exported as one platform. Reload the exact archive before recording IDs.
+docker image load --input "$stage/images.tar.gz" >/dev/null
+app_image_id="$(docker image inspect --format '{{.Id}}' "$app_image")"
+pg_image_id="$(docker image inspect --format '{{.Id}}' postgres:18-bookworm)"
+if [[ ! "$app_image_id" =~ ^sha256:[0-9a-f]{64}$ || ! "$pg_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo 'Cannot identify both Linux images in the offline archive.' >&2
+  exit 1
+fi
 printf 'DBSPHERE_GO_OFFLINE_VERSION=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_IMAGE_ID=%s\n' \
   "$version" "$app_image" "$app_image_id" "$pg_image_id" > "$stage/bundle.env"
-docker image save --platform linux/amd64 "$app_image" postgres:18-bookworm | gzip -n > "$stage/images.tar.gz"
 (cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$output_dir/DbSphere-go-offline-$version-linux-amd64.run"
 tar -C "$stage" -czf "$payload" .
