@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,9 @@ type CollectionReader interface {
 }
 type ScopedCollectionReader interface {
 	ReadScopedCollection(context.Context, string, []string) (any, bool, error)
+}
+type EventPager interface {
+	EventPage(context.Context, storepkg.EventPageQuery, []string) (any, error)
 }
 type AssetStore interface {
 	AssetByID(context.Context, string) (json.RawMessage, error)
@@ -200,7 +204,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			interval = credentials.CollectEvery
 		}
 		respond(w, http.StatusOK, map[string]any{"backend": "go", "stage": "migration-foundation",
-			"collectorEnabled": credentials != nil && credentials.AutoCollect,
+			"collectorEnabled":          credentials != nil && credentials.AutoCollect,
 			"collectionIntervalSeconds": interval, "serverTime": time.Now().UTC()})
 	})
 	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
@@ -1060,6 +1064,38 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/events/page" {
+				pager, ok := store.(EventPager)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Event pagination unavailable"})
+					return
+				}
+				options := storepkg.EventPageQuery{Status: r.URL.Query().Get("status"),
+					Search: r.URL.Query().Get("q"), Cursor: r.URL.Query().Get("cursor"), Limit: 50}
+				if raw := r.URL.Query().Get("limit"); raw != "" {
+					var err error
+					options.Limit, err = strconv.Atoi(raw)
+					if err != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid event page query"})
+						return
+					}
+				}
+				var scopedIDs []string
+				if viewerScope != nil {
+					scopedIDs = credentials.ViewerAssetIDs
+				}
+				page, err := pager.EventPage(r.Context(), options, scopedIDs)
+				if errors.Is(err, storepkg.ErrInvalidEventPage) {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid event page query"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event page unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, page)
+				return
+			}
 			if reader, ok := store.(CollectionReader); ok {
 				var value any
 				var found bool

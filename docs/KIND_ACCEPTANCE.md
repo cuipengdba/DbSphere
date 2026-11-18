@@ -121,3 +121,9 @@ Playwright 实际浏览器登录同一 Go B/S 页面，从“问题事件”打�
 Playwright Chromium 实际打开 Go 静态页面和该 OOM 事件：桌面与 390px 窄屏均显示应用服务、数据库调用、PostgreSQL、会话与 SQL、Linux/K8S 五段；无会话证据的段落明确显示缺口，候选注明证据与因果限制。窄屏 `scrollWidth=390`、视口宽 `390`，控制台 0 错误。截图留在本机 `H:\CodexLS\outputs\DbSphere-kind-live-incident.png` 与 `DbSphere-kind-live-incident-mobile.png`。本机集群控制面在验收前已有数百次重启，长期 PG18 测试存储使用 `emptyDir`；本次没有重新注入 OOM，也没有完成生产可靠性、持久卷恢复或 V1.0 正式验收。
 
 同一集群随后新增**隔离的 PVC 恢复实例**，完成 PG18 归档恢复、存储 Pod 两次替换及 Go 服务读取同一事件后的继续采样，详见[本机 PG18 恢复验收](KIND_PG18_RESTORE_ACCEPTANCE.md)。原 `emptyDir` 存储仍在，没有将原 Service 切换到恢复实例。
+
+### 2026-11-19 Go 事件历史搜索与分页验收
+
+在上述隔离 PVC 恢复库的 `dbsphere-go-restore` Deployment 更新 Go 静态镜像后，PG18 从 schema 21 迁到 22，建立事件时间/ID 和状态/时间/ID 分页索引；新 Pod `dbsphere-go-restore-67b697dc48-n4cqj` 1/1 Ready、零重启。原 OOM 事件仍有 8 条证据、24 个图节点、47 条关系、6 条 Span 和原根因候选，新 PG18/K8S 采样成功。Go 实库回归另创建 205 个事件，验证超过旧版最近 200 条窗口后的搜索、五页游标无重复，以及受限查看账号的资产过滤发生在分页前。
+
+Playwright Chromium 在恢复库 B/S 页面按 `Kind OOM PG18` 搜到 4 条；筛选“处理中”后为 0 条，输入完整 OOM 事件 ID 仍能打开原证据详情。仅在隔离恢复库中临时增加 60 个测试事件，页面第 1 页显示 50 条、第 2 页显示 27 条，点击“上一页”返回 50 条；随后删除全部 60 条测试事件，库中恢复原有 17 条。390px 视口 `scrollWidth=390`，浏览器控制台无错误，截图存于本机 `H:\CodexLS\outputs\DbSphere-event-page-mobile.png`。该测试覆盖小型真实浏览器翻页，不等于百万级历史搜索性能或完整无障碍验收。

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cuipengdba/dbsphere/internal/security"
+	storepkg "github.com/cuipengdba/dbsphere/internal/store"
 )
 
 const scopeAssetA = "11111111-1111-1111-1111-111111111111"
@@ -16,7 +17,10 @@ const scopeAssetB = "22222222-2222-2222-2222-222222222222"
 const scopeEventA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 const scopeEventB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
-type scopedViewerStub struct{ collections map[string]any }
+type scopedViewerStub struct {
+	collections map[string]any
+	pageScope   []string
+}
 
 func (*scopedViewerStub) Health(context.Context) error { return nil }
 
@@ -27,6 +31,11 @@ func (s *scopedViewerStub) ReadCollection(_ context.Context, path string) (any, 
 
 func (s *scopedViewerStub) ReadScopedCollection(ctx context.Context, path string, _ []string) (any, bool, error) {
 	return s.ReadCollection(ctx, path)
+}
+func (s *scopedViewerStub) EventPage(_ context.Context, query storepkg.EventPageQuery, assetIDs []string) (any, error) {
+	s.pageScope = append([]string(nil), assetIDs...)
+	return map[string]any{"events": []any{map[string]any{"id": scopeEventA,
+		"assetId": scopeAssetA}}, "hasMore": false, "nextCursor": ""}, nil
 }
 
 func (*scopedViewerStub) AssetIDForResource(_ context.Context, kind, id string) (string, error) {
@@ -88,6 +97,14 @@ func TestScopedViewerCannotReadOtherAssetsOrAggregates(t *testing.T) {
 			!strings.Contains(got.Body.String(), scopeAssetA) {
 			t.Fatalf("scope leaked through %s: %d %s", path, got.Code, got.Body.String())
 		}
+	}
+	if got := get("/api/events/page?limit=20"); got.Code != http.StatusOK ||
+		strings.Contains(got.Body.String(), scopeAssetB) || !strings.Contains(got.Body.String(), scopeAssetA) ||
+		len(stub.pageScope) != 1 || stub.pageScope[0] != scopeAssetA {
+		t.Fatalf("event page scope missing: %d %s %+v", got.Code, got.Body.String(), stub.pageScope)
+	}
+	if got := get("/api/events/page?limit=invalid"); got.Code != http.StatusBadRequest {
+		t.Fatalf("invalid page limit accepted: %d", got.Code)
 	}
 	if got := get("/api/notifications"); got.Code != http.StatusOK || strings.Contains(got.Body.String(), "private") {
 		t.Fatalf("notification leaked: %d %s", got.Code, got.Body.String())

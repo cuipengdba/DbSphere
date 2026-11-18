@@ -5,6 +5,11 @@ let selectedAsset = null;
 let selectedAssetLayer = null;
 let selectedEvent = null;
 let recentEvents = [];
+let eventServerPaging = false;
+let eventCursors = [''];
+let eventPageIndex = 0;
+let eventPageRequest = 0;
+let eventSearchTimer = null;
 let editingAsset = null;
 let pg18Store = false;
 let collectorSchedule = { known: false, enabled: false, intervalMs: 60000, clockOffsetMs: 0 };
@@ -121,7 +126,10 @@ async function refresh() {
   $('event-count').closest('.stat').classList.toggle('alerting', events.some(e => e.status === 'open'));
   renderOverview(assets, events);
   renderAssets(assets);
-  renderEvents(events);
+  eventServerPaging = runtime?.backend === 'go';
+  $('event-page-controls').hidden = !eventServerPaging;
+  if (eventServerPaging) await loadEventPage();
+  else renderLegacyEvents(events);
   renderAlerts(alerts);
   renderSilenceOptions(assets, rules);
   renderSilences(silences, assets, rules);
@@ -636,17 +644,48 @@ function renderSqlPlans(target, asset, plans) {
   }
 }
 
-function renderEvents(events) {
+function eventPagePath() {
+  const query = new URLSearchParams({ limit: '50', status: $('event-status').value,
+    q: $('event-search').value.trim() });
+  if (eventCursors[eventPageIndex]) query.set('cursor', eventCursors[eventPageIndex]);
+  return `/api/events/page?${query}`;
+}
+
+async function loadEventPage() {
+  const request = ++eventPageRequest;
+  const page = await api(eventPagePath());
+  if (request !== eventPageRequest) return;
+  eventCursors = eventCursors.slice(0, eventPageIndex + 1);
+  if (page.nextCursor) eventCursors.push(page.nextCursor);
+  renderEvents(page.events, page.hasMore);
+}
+
+function resetEventPage() {
+  if (!eventServerPaging) { renderLegacyEvents(recentEvents); return; }
+  eventCursors = [''];
+  eventPageIndex = 0;
+  clearTimeout(eventSearchTimer);
+  eventSearchTimer = setTimeout(() => loadEventPage().catch(error => notice(error.message, true)), 250);
+}
+
+function renderLegacyEvents(events) {
   recentEvents = events;
-  const list = $('event-list'); list.replaceChildren();
   const query = $('event-search').value.trim().toLocaleLowerCase('zh-CN');
   const status = $('event-status').value;
   const filtered = events.filter(event => (status === 'all' || event.status === status) &&
     (!query || [event.id, event.title, event.assetName || ''].some(value =>
       value.toLocaleLowerCase('zh-CN').includes(query))));
-  $('event-filter-summary').textContent = `显示 ${filtered.length} / ${events.length} 条最近事件；列表最多包含 200 条。完整事件 ID 可按回车直接打开。`;
-  if (!filtered.length) { list.append(cell('p', events.length ? '当前筛选没有匹配事件。' : '暂无问题事件。', 'empty')); return; }
-  for (const event of filtered) {
+  renderEvents(filtered, false,
+    `显示 ${filtered.length} / ${events.length} 条最近事件；列表最多包含 200 条。完整事件 ID 可按回车直达。`);
+}
+
+function renderEvents(events, hasMore, summary) {
+  const list = $('event-list'); list.replaceChildren();
+  $('event-filter-summary').textContent = summary || `第 ${eventPageIndex + 1} 页 · 显示 ${events.length} 条${hasMore ? '，还有更多' : ''}；搜索覆盖已保留的历史事件。完整事件 ID 可按回车直达。`;
+  $('event-prev').disabled = eventPageIndex === 0;
+  $('event-next').disabled = !hasMore;
+  if (!events.length) { list.append(cell('p', '当前筛选没有匹配事件。', 'empty')); return; }
+  for (const event of events) {
     const button = cell('button', '', 'event-button incident-card');
     button.dataset.eventId = event.id;
     button.append(cell('strong', event.title, 'incident-card-title'));
@@ -1118,8 +1157,16 @@ async function boot() {
 
 for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click', () => setView(button.dataset.nav));
 for (const button of document.querySelectorAll('[data-open-view]')) button.addEventListener('click', () => setView(button.dataset.openView));
-$('event-search').addEventListener('input', () => renderEvents(recentEvents));
-$('event-status').addEventListener('change', () => renderEvents(recentEvents));
+$('event-search').addEventListener('input', resetEventPage);
+$('event-status').addEventListener('change', resetEventPage);
+$('event-prev').addEventListener('click', () => {
+  if (eventPageIndex > 0) { eventPageIndex--; loadEventPage().catch(error => notice(error.message, true)); }
+});
+$('event-next').addEventListener('click', () => {
+  if (eventCursors[eventPageIndex + 1]) {
+    eventPageIndex++; loadEventPage().catch(error => notice(error.message, true));
+  }
+});
 $('event-search').addEventListener('keydown', event => {
   const id = event.currentTarget.value.trim().toLowerCase();
   if (event.key !== 'Enter' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)) return;
