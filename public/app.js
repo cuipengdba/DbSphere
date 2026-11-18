@@ -880,14 +880,16 @@ async function showEvent(id) {
     diagnosis.append(impact);
   }
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
+  const hasTrace = (analysis.traceCoverage?.spans ?? 0) > 0;
   const chain = document.createElement('div'); chain.className = 'flow-strip';
   for (const [title, present, available, missing] of [
-    ['应用请求', graphTypes.has('db_client_span'), '有数据库调用 Span', '未接入 Trace'],
+    ['应用服务', graphTypes.has('service_span'), '有上游服务 Span', hasTrace ? '缺少上游服务 Span' : '未接入 Trace'],
+    ['数据库调用', graphTypes.has('db_client_span'), '有 PostgreSQL 客户端 Span', hasTrace ? '缺少数据库客户端 Span' : '未接入 Trace'],
     ['PostgreSQL', graphTypes.has('sample'), '有采样证据', '样本缺失'],
     ['会话与 SQL', ['wait', 'session', 'sql_fingerprint', 'slow_log', 'plan'].some(type => graphTypes.has(type)),
       '有等待、锁或 SQL 证据', '尚无会话或 SQL 证据'],
     ['Linux / K8S', ['linux', 'pod', 'pvc', 'k8s_node'].some(type => graphTypes.has(type)),
-      '有主机或容器证据', '基础设施信号缺失']
+      '有主机或容器证据', '未采集或不适用']
   ]) {
     const step = document.createElement('div'); step.className = `flow-step ${present ? 'present' : 'missing'}`;
     step.append(cell('strong', title), cell('span', present ? available : missing));

@@ -88,7 +88,7 @@
 - [x] **07-01** 接入 OTel 数据库客户端 Span 和服务身份，遵循 PostgreSQL 语义约定并控制 SQL 敏感字段。官方 Go SDK → Collector → Go DbSphere → PG18 实测读回同一 Trace 的服务父 Span、数据库客户端子 Span 和真实 PG 后端 PID；分批到达补链、脱敏待关联与失效清理有 PG18 回归测试。其他语言 SDK 留在 V1.0 兼容矩阵继续验收。
 - [ ] **07-02** 连接服务/请求/Trace/连接池/PG 实例/SQL 指纹/Host 或 Pod/Node/PVC 的身份映射与时间关联。
 - [ ] **07-03** 事件页提供双向下钻：慢请求 → SQL/PG/基础设施，以及数据库故障 → 受影响服务和请求。Go 事件页现把同期 Trace 与有数据库客户端错误或精确锁等待 PID 信号的 Trace 分开，并提供后者的脱敏原始链路链接；本机 kind 的真实 OOM 事件 3 条同期 Trace 中仅 1 条错误 Trace 被关联。跨服务依赖和 SQL 指纹精确回溯仍未完成。
-- [ ] **07-04** 标示链路断点、采样率与时钟偏移；没有应用 Trace 时保持数据库侧诊断可用。
+- [ ] **07-04** 标示链路断点、采样率与时钟偏移；没有应用 Trace 时保持数据库侧诊断可用。事件页已将应用服务 Span 和 PostgreSQL 客户端 Span 分开显示，明确指出缺少上游 Span、数据库调用 Span、PG 样本及基础设施证据；无 Trace 时仍可查看数据库侧证据。实际采样率与端到端时钟偏移尚未采集，当前明确标为未知。
 - [ ] **07-05** 影响面计算与依赖拓扑，按资产权限控制可见服务和 Trace。
 - [ ] **07-06** 验收场景 A：应用慢请求 → DB Span → SQL 锁等待 → 阻塞会话 → 根因候选；场景 B：应用连接失败 → PG Pod OOMKilled/重启 → K8S 事件和资源证据 → 根因候选。每个场景都必须在**一个事件 ID** 下完成回溯。场景 A 的真实 Go HTTP 应用→Go OTLP→PG18 事件与同 ID 恢复已通过[PG14–18 五版 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)；场景 B 已在[本机单节点 kind](KIND_ACCEPTANCE.md)完成真实应用 OOM 故障闭环。官方 Collector 与 Go SDK 的 Trace 转发另在本机 kind 验证；SDK 探针尚未在故障事件中复做场景 A/B。两者的独立环境、生产 K8S/Operator 和其他语言 SDK 复核仍待完成。
 

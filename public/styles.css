@@ -71,7 +71,7 @@ button{background:#245ea7}
 .health-ok{border-left-color:#3ea978}
 .evidence{background:#f4f7fc;border-left-color:#8daed9}
 .settings-details>summary{color:#1e568f}
-.flow-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}
+.flow-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin:14px 0}
 .flow-step{border:1px solid #dbe6f2;border-radius:9px;padding:9px 10px;background:#fff;font-size:12px;color:#526b80}
 .flow-step strong,.flow-step span{display:block}
 .flow-step strong{font-size:13px;color:#244a73;margin-bottom:4px}
