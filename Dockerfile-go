@@ -4,6 +4,7 @@ ARG TARGETARCH=amd64
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+COPY package.json ./
 COPY assets.go ./
 COPY public ./public
 COPY cmd ./cmd

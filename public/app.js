@@ -119,6 +119,7 @@ async function refresh() {
   ]);
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
+  if (runtime?.version) $('release-label').textContent = `V${runtime.version} · ${runtime.backend === 'go' ? 'Go 预览版' : '开发预览版'}`;
   collectorSchedule = {
     known: runtime?.backend === 'go' && typeof runtime.collectorEnabled === 'boolean',
     enabled: runtime?.collectorEnabled === true,

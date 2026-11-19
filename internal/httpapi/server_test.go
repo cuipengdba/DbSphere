@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cuipengdba/dbsphere"
 	"github.com/cuipengdba/dbsphere/internal/ai"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/store"
@@ -224,6 +225,7 @@ func TestCollectorScheduleContract(t *testing.T) {
 			t.Fatalf("version status: %d", response.Code)
 		}
 		var body struct {
+			Version                   string    `json:"version"`
 			CollectorEnabled          bool      `json:"collectorEnabled"`
 			CollectionIntervalSeconds int       `json:"collectionIntervalSeconds"`
 			ServerTime                time.Time `json:"serverTime"`
@@ -231,7 +233,7 @@ func TestCollectorScheduleContract(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.CollectorEnabled != enabled || body.CollectionIntervalSeconds != 90 ||
+		if body.Version != dbsphere.Version || body.CollectorEnabled != enabled || body.CollectionIntervalSeconds != 90 ||
 			time.Since(body.ServerTime) > time.Minute {
 			t.Fatalf("invalid schedule response: %+v", body)
 		}

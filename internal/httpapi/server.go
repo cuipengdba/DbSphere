@@ -209,7 +209,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if credentials != nil && credentials.CollectEvery > 0 {
 			interval = credentials.CollectEvery
 		}
-		respond(w, http.StatusOK, map[string]any{"backend": "go", "stage": "migration-foundation",
+		respond(w, http.StatusOK, map[string]any{"backend": "go", "version": dbsphere.Version,
 			"collectorEnabled":          credentials != nil && credentials.AutoCollect,
 			"collectionIntervalSeconds": interval, "serverTime": time.Now().UTC()})
 	})
