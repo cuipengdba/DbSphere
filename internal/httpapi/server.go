@@ -57,6 +57,7 @@ var eventPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-
 var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
 var eventAuditPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/audit$`)
 var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-summary$`)
+var eventAIQuestionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-question$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var eventResponsePath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/response$`)
@@ -89,6 +90,7 @@ type EventResponseStore interface {
 type EventAIStore interface {
 	EventAIEvidence(context.Context, string) (string, []string, error)
 	ReserveAIInvocation(context.Context, string, string, int) (string, error)
+	ReserveAIQuestionInvocation(context.Context, string, string, int) (string, error)
 	CompleteAIInvocation(context.Context, string, string, string, []string) error
 }
 type AdminAuditStore interface {
@@ -531,7 +533,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.Method == http.MethodPost {
-			if match := eventAIPath.FindStringSubmatch(r.URL.Path); match != nil {
+			match := eventAIPath.FindStringSubmatch(r.URL.Path)
+			questionMode := false
+			if match == nil {
+				match = eventAIQuestionPath.FindStringSubmatch(r.URL.Path)
+				questionMode = match != nil
+			}
+			if match != nil {
 				if credentials.AI == nil {
 					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI model is not configured"})
 					return
@@ -540,6 +548,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				if !ok {
 					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI evidence unavailable"})
 					return
+				}
+				var question string
+				if questionMode {
+					var input struct {
+						Question string `json:"question"`
+					}
+					if readJSONLimit(w, r, &input, 2048) != nil ||
+						len([]rune(strings.TrimSpace(input.Question))) < 5 ||
+						len([]rune(input.Question)) > 400 || strings.ContainsAny(input.Question, "\x00\r") {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Question must be 5–400 characters"})
+						return
+					}
+					question = input.Question
 				}
 				prompt, ids, err := aiStore.EventAIEvidence(r.Context(), match[1])
 				if errors.Is(err, storepkg.ErrEventNotFound) {
@@ -559,8 +580,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				aiAttempts[match[1]] = time.Now()
 				aiAttemptsMu.Unlock()
-				invocationID, err := aiStore.ReserveAIInvocation(r.Context(), match[1],
-					credentials.AI.Model(), credentials.AIDailyLimit)
+				var invocationID string
+				if questionMode {
+					invocationID, err = aiStore.ReserveAIQuestionInvocation(r.Context(), match[1],
+						credentials.AI.Model(), credentials.AIDailyLimit)
+				} else {
+					invocationID, err = aiStore.ReserveAIInvocation(r.Context(), match[1],
+						credentials.AI.Model(), credentials.AIDailyLimit)
+				}
 				if errors.Is(err, storepkg.ErrAIBudgetExceeded) {
 					respond(w, http.StatusTooManyRequests, map[string]string{"error": "Daily AI analysis limit reached; rule-based diagnosis remains available"})
 					return
@@ -569,7 +596,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "AI budget audit unavailable"})
 					return
 				}
-				result, modelErr := credentials.AI.Analyze(r.Context(), prompt, ids)
+				var result ai.Result
+				var modelErr error
+				if questionMode {
+					result, modelErr = credentials.AI.Answer(r.Context(), prompt, question, ids)
+				} else {
+					result, modelErr = credentials.AI.Analyze(r.Context(), prompt, ids)
+				}
 				status := "success"
 				cited := result.EvidenceIDs
 				if modelErr != nil {

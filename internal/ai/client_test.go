@@ -95,3 +95,32 @@ func TestAIProviderTimeout(t *testing.T) {
 		t.Fatalf("AI timeout did not fail safely: %v", err)
 	}
 }
+
+func TestAIQuestionUsesBoundedEvidenceAndChecksCitations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil || len(input.Messages) != 2 ||
+			!strings.Contains(input.Messages[1].Content, "证据-1") ||
+			!strings.Contains(input.Messages[1].Content, "哪些信号缺失") {
+			t.Error("question was not grounded in the same evidence packet")
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"summary\":\"目前缺少节点证据。\",\"evidenceIds\":[\"证据-1\"],\"uncertainty\":\"节点指标未接入。\",\"suggestedChecks\":[\"检查节点状态\"]}"}}]}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{URL: server.URL + "/v1/chat/completions", Model: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Answer(context.Background(), "证据-1", "哪些信号缺失？", []string{"证据-1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, question := range []string{"太短", strings.Repeat("问", 401)} {
+		if _, err := client.Answer(context.Background(), "证据-1", question, []string{"证据-1"}); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("invalid question accepted: %q", question)
+		}
+	}
+}

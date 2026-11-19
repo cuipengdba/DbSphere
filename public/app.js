@@ -1099,23 +1099,43 @@ async function showEvent(id) {
     auditDetails.append(auditList); target.append(auditDetails);
   }
   const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
-  if (aiStatus.enabled) {
+  if (aiStatus.enabled && currentRole === 'admin') {
     const aiResult = document.createElement('div'); aiResult.className = 'evidence';
+    const showAIResult = result => {
+      aiResult.replaceChildren(cell('h4', 'AI 建议 · 待人工核验'),
+        cell('p', result.summary), cell('p', `证据 ID：${result.evidenceIds.join('、') || '未引用'}`),
+        cell('p', `不确定性：${result.uncertainty || '模型未提供'}`));
+      for (const check of result.suggestedChecks) aiResult.append(cell('p', `待检查：${check}`));
+      aiResult.append(cell('small', result.notice));
+    };
     const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model} · 每日最多 ${aiStatus.dailyLimit ?? 20} 次`, 'ghost small-button write-action');
     analyze.addEventListener('click', async () => {
       analyze.disabled = true;
       aiResult.replaceChildren(cell('p', '正在分析当前事件的脱敏证据…'));
       try {
         const { result } = await api(`/api/events/${event.id}/ai-summary`, 'POST');
-        aiResult.replaceChildren(cell('h4', 'AI 建议 · 待人工核验'),
-          cell('p', result.summary), cell('p', `证据 ID：${result.evidenceIds.join('、') || '未引用'}`),
-          cell('p', `不确定性：${result.uncertainty || '模型未提供'}`));
-        for (const check of result.suggestedChecks) aiResult.append(cell('p', `待检查：${check}`));
-        aiResult.append(cell('small', result.notice));
+        showAIResult(result);
       } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
       finally { analyze.disabled = false; }
     });
-    target.append(analyze, aiResult);
+    const questionForm = document.createElement('form'); questionForm.className = 'response-form';
+    const questionLabel = cell('label', '向 AI 询问当前事件（仅发送脱敏证据，5–400 字）');
+    const question = document.createElement('textarea'); question.required = true;
+    question.minLength = 5; question.maxLength = 400; question.rows = 2;
+    question.placeholder = '例如：哪些证据支持锁等待，哪些信号仍缺失？';
+    questionLabel.append(question);
+    const ask = cell('button', '基于证据提问', 'ghost small-button write-action'); ask.type = 'submit';
+    questionForm.append(questionLabel, ask);
+    questionForm.addEventListener('submit', async e => {
+      e.preventDefault(); ask.disabled = true;
+      aiResult.replaceChildren(cell('p', '正在根据当前事件的脱敏证据回答…'));
+      try {
+        const { result } = await api(`/api/events/${event.id}/ai-question`, 'POST', { question: question.value.trim() });
+        showAIResult(result);
+      } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
+      finally { ask.disabled = false; }
+    });
+    target.append(analyze, questionForm, aiResult);
   }
   if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
@@ -1202,7 +1222,7 @@ async function showEvent(id) {
     }
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
-    if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
+    if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') text =
       `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;

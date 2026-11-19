@@ -113,6 +113,9 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 			ids = append(ids, item.ID)
 		}
 	}
+	if data.Event.AssetName != "" {
+		data.Event.Title = strings.ReplaceAll(data.Event.Title, data.Event.AssetName, "[资产名称已省略]")
+	}
 	data.Event.AssetName = "[资产名称已省略]"
 	data.RelatedEvents = nil
 	data.Analysis.TraceCoverage.Services = nil
@@ -148,20 +151,30 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 		}
 		prompt = prompt[:cut] + "\n[后续证据已省略]"
 	}
-	return prompt, ids, nil
+	visibleIDs := make([]string, 0, len(ids))
+	for _, evidenceID := range ids {
+		if strings.Contains(prompt, evidenceID) {
+			visibleIDs = append(visibleIDs, evidenceID)
+		}
+	}
+	return prompt, visibleIDs, nil
 }
 
 // ReserveAIInvocation counts both successful and failed external calls. The
 // PostgreSQL transaction lock makes the daily cap shared across Go replicas.
 func (s *Postgres) ReserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
-	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "admin")
+	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "admin", "summary")
+}
+
+func (s *Postgres) ReserveAIQuestionInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
+	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "admin", "question")
 }
 
 func (s *Postgres) ReserveAutomaticAIInvocation(ctx context.Context, eventID, model string, dailyLimit int) (string, error) {
-	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "auto")
+	return s.reserveAIInvocation(ctx, eventID, model, dailyLimit, "auto", "summary")
 }
 
-func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int, actor string) (string, error) {
+func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model string, dailyLimit int, actor, purpose string) (string, error) {
 	if dailyLimit < 1 || dailyLimit > 1000 || model == "" {
 		return "", fmt.Errorf("invalid AI daily limit or model")
 	}
@@ -207,7 +220,7 @@ func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model strin
 	if used >= dailyLimit {
 		return "", ErrAIBudgetExceeded
 	}
-	payload, err := json.Marshal(map[string]any{"model": model, "status": "pending", "actor": actor,
+	payload, err := json.Marshal(map[string]any{"model": model, "status": "pending", "actor": actor, "purpose": purpose,
 		"evidenceIds": []string{}})
 	if err != nil {
 		return "", err

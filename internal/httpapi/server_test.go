@@ -498,6 +498,36 @@ func TestAuthenticatedDashboardReadsRealPG18(t *testing.T) {
 	if aiResult.Code != http.StatusOK || !strings.Contains(aiResult.Body.String(), evidenceIDs[0]) {
 		t.Fatalf("AI response did not cite same-event evidence: %d %s", aiResult.Code, aiResult.Body.String())
 	}
+	questionHandler := New(pg, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"),
+		PasswordHash: hash, AI: aiClient})
+	questionPath := "/api/events/" + eventID + "/ai-question"
+	badQuestion := httptest.NewRequest(http.MethodPost, questionPath, strings.NewReader(`{"question":"abc"}`))
+	badQuestion.Header.Set("Content-Type", "application/json")
+	badQuestion.Header.Set("X-CSRF-Token", credentials.CSRF)
+	badQuestion.AddCookie(login.Result().Cookies()[0])
+	badResult := httptest.NewRecorder()
+	questionHandler.ServeHTTP(badResult, badQuestion)
+	if badResult.Code != http.StatusBadRequest {
+		t.Fatalf("short AI question accepted: %d %s", badResult.Code, badResult.Body.String())
+	}
+	questionRequest := httptest.NewRequest(http.MethodPost, questionPath,
+		strings.NewReader(`{"question":"哪些证据支持当前故障？"}`))
+	questionRequest.Header.Set("Content-Type", "application/json")
+	questionRequest.Header.Set("X-CSRF-Token", credentials.CSRF)
+	questionRequest.AddCookie(login.Result().Cookies()[0])
+	questionResult := httptest.NewRecorder()
+	questionHandler.ServeHTTP(questionResult, questionRequest)
+	if questionResult.Code != http.StatusOK || !strings.Contains(questionResult.Body.String(), evidenceIDs[0]) {
+		t.Fatalf("grounded AI question failed: %d %s", questionResult.Code, questionResult.Body.String())
+	}
+	storedEvent, err := pg.EventByID(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedEvent, err := json.Marshal(storedEvent)
+	if err != nil || strings.Contains(string(encodedEvent), "哪些证据支持当前故障") {
+		t.Fatalf("AI question text was persisted in event evidence: %v", err)
+	}
 	budgetHandler := New(pg, AuthConfig{MasterKey: []byte("01234567890123456789012345678901"),
 		PasswordHash: hash, AI: aiClient, AIDailyLimit: 1})
 	budgetRequest := httptest.NewRequest(http.MethodPost, aiPath, nil)
