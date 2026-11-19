@@ -88,17 +88,18 @@ func (s *Postgres) relatedEvents(ctx context.Context, event *eventRecord) ([]rel
 }
 
 type serviceTraceImpact struct {
-	Service          string    `json:"service"`
-	Spans            int       `json:"spans"`
-	DatabaseSpans    int       `json:"databaseSpans"`
-	ErrorSpans       int       `json:"errorSpans"`
-	ObservedTraces   int       `json:"observedTraces"`
-	CorrelatedTraces int       `json:"correlatedTraces"`
-	ErrorTraces      int       `json:"errorTraces"`
-	LockWaitTraces   int       `json:"lockWaitTraces"`
-	TraceIDs         []string  `json:"traceIds"`
-	FirstAt          time.Time `json:"firstAt"`
-	LastAt           time.Time `json:"lastAt"`
+	Service             string    `json:"service"`
+	Spans               int       `json:"spans"`
+	DatabaseSpans       int       `json:"databaseSpans"`
+	ErrorSpans          int       `json:"errorSpans"`
+	ObservedTraces      int       `json:"observedTraces"`
+	CorrelatedTraces    int       `json:"correlatedTraces"`
+	ErrorTraces         int       `json:"errorTraces"`
+	LockWaitTraces      int       `json:"lockWaitTraces"`
+	SQLRegressionTraces int       `json:"sqlRegressionTraces"`
+	TraceIDs            []string  `json:"traceIds"`
+	FirstAt             time.Time `json:"firstAt"`
+	LastAt              time.Time `json:"lastAt"`
 }
 
 func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, error) {
@@ -268,6 +269,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if backendPID != nil {
 			observed.BackendPID = int(*backendPID)
 		}
+		if queryID != nil {
+			observed.QueryID = *queryID
+		}
 		observedSpans = append(observedSpans, observed)
 		if !serviceSet[service] {
 			serviceSet[service] = true
@@ -336,7 +340,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		return nil, err
 	}
 	traceRows.Close()
-	classifyTraceImpact(observedSpans, samples, serviceImpacts)
+	classifyTraceImpact(observedSpans, samples, serviceImpacts, sqlRegressionForEvent(event))
 	unresolvedParentSpans := addTraceParentAndServiceEdges(parentEdges, spanServices, &edges)
 	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
 		candidates = append(candidates, candidate)

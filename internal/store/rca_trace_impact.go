@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"time"
@@ -10,18 +11,47 @@ type observedTraceSpan struct {
 	TraceID, SpanID, ParentSpanID, Service, Kind, Status string
 	Start, End                                           time.Time
 	BackendPID                                           int
+	QueryID                                              string
 }
 
 const (
 	traceErrorSignal uint8 = 1 << iota
 	traceLockWaitSignal
+	traceSQLRegressionSignal
 )
+
+type traceSQLRegression struct {
+	QueryID, Fingerprint string
+	PreviousAverageMs    float64
+}
+
+func sqlRegressionForEvent(event *eventRecord) *traceSQLRegression {
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "alert_firing" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(evidence.Payload, &payload) != nil ||
+			stringValue(payload["metric"]) != "pg.sql_regression_ratio" {
+			continue
+		}
+		worst := object(object(payload["detail"])["worst"])
+		previous := number(worst["previousAverageExecMs"])
+		current := number(worst["currentAverageExecMs"])
+		if queryID, fingerprint := stringValue(worst["queryId"]), stringValue(worst["fingerprint"]); queryID != "" && fingerprint != "" && previous > 0 &&
+			current >= 2*previous && current-previous >= 50 {
+			return &traceSQLRegression{QueryID: queryID, Fingerprint: fingerprint,
+				PreviousAverageMs: previous}
+		}
+	}
+	return nil
+}
 
 // classifyTraceImpact separates nearby traffic from requests with a concrete
 // database error or an exact PG backend PID match. A match is still evidence,
 // not proof that this event caused the request failure.
 func classifyTraceImpact(spans []observedTraceSpan, samples map[string]sampleObservation,
-	impacts map[string]*serviceTraceImpact) {
+	impacts map[string]*serviceTraceImpact, regression *traceSQLRegression) {
 	byTrace := make(map[string]map[string]observedTraceSpan)
 	observed := make(map[string]map[string]bool)
 	signals := make(map[string]map[string]uint8)
@@ -50,6 +80,11 @@ func classifyTraceImpact(spans []observedTraceSpan, samples map[string]sampleObs
 					break
 				}
 			}
+		}
+		if regression != nil && span.QueryID == regression.QueryID &&
+			float64(span.End.Sub(span.Start))/float64(time.Millisecond) >= regression.PreviousAverageMs+50 &&
+			traceSQLFingerprint(samples, span.QueryID, span.Start, span.End) == regression.Fingerprint {
+			flags |= traceSQLRegressionSignal
 		}
 		if flags == 0 {
 			continue
@@ -82,6 +117,9 @@ func classifyTraceImpact(spans []observedTraceSpan, samples map[string]sampleObs
 			}
 			if flags&traceLockWaitSignal != 0 {
 				impact.LockWaitTraces++
+			}
+			if flags&traceSQLRegressionSignal != 0 {
+				impact.SQLRegressionTraces++
 			}
 		}
 		sort.Strings(ids)

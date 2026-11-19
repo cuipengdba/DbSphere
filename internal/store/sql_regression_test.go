@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
+	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -156,6 +157,22 @@ func TestRealPG18SQLRegressionOpensAndRecoversOneIncident(t *testing.T) {
 		stringValue(object(regression["worst"])["queryId"]) == "" {
 		t.Fatalf("real SQL regression lost Query ID or sample provenance: %v", regression)
 	}
+	queryID := stringValue(object(regression["worst"])["queryId"])
+	traceID := newTraceID(t)
+	callStart := time.Now().UTC()
+	if _, err := target.Exec(ctx, query, 1.2); err != nil {
+		t.Fatal(err)
+	}
+	callEnd := time.Now().UTC()
+	if imported, err := pg.SaveTraceSpans(ctx, []trace.Span{
+		{AssetID: asset.ID, TraceID: traceID, SpanID: "1111111111111111",
+			Service: "api", Kind: "service", Start: callStart, End: callEnd, Status: "ok"},
+		{AssetID: asset.ID, TraceID: traceID, SpanID: "2222222222222222",
+			ParentSpanID: "1111111111111111", Service: "checkout", Kind: "postgresql_client",
+			QueryID: queryID, Start: callStart, End: callEnd, Status: "ok"},
+	}); err != nil || imported != 2 {
+		t.Fatalf("real slow call Trace did not import: %d %v", imported, err)
+	}
 	detail, err := pg.EventByID(ctx, eventID)
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +180,8 @@ func TestRealPG18SQLRegressionOpensAndRecoversOneIncident(t *testing.T) {
 	encoded, _ := json.Marshal(detail)
 	for _, expected := range []string{eventID, fault.SampleID, baseline.SampleID, initial.SampleID,
 		`"ruleId":"pg_sql_regression"`, `"type":"sql_fingerprint"`,
-		`"relation":"compared_with"`} {
+		`"relation":"compared_with"`, `"relation":"calls_service"`,
+		`"relation":"query_id_matches"`, `"sqlRegressionTraces":1`} {
 		if !strings.Contains(string(encoded), expected) {
 			t.Fatalf("real SQL incident lacks %q: %s", expected, encoded)
 		}

@@ -971,7 +971,13 @@ async function showEvent(id) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
     for (const service of analysis.traceCoverage.serviceImpact) {
       const row = document.createElement('div'); row.className = 'evidence';
-      row.append(cell('p', `${service.service} · 同期 Trace ${service.observedTraces ?? 0} 条 · 故障信号关联 ${service.correlatedTraces ?? 0} 条（数据库错误 ${service.errorTraces ?? 0}，锁等待 PID 匹配 ${service.lockWaitTraces ?? 0}）· Span ${service.spans} · 数据库调用 ${service.databaseSpans} · 错误 Span ${service.errorSpans} · ${formatTime(service.firstAt)} 至 ${formatTime(service.lastAt)}`));
+      const signals = [
+        ['数据库错误', service.errorTraces],
+        ['锁等待 PID 匹配', service.lockWaitTraces],
+        ['SQL 退化同指纹慢调用', service.sqlRegressionTraces]
+      ].filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count}`);
+      row.append(cell('p', `${service.service} · 同期 Trace ${service.observedTraces ?? 0} 条 · 故障信号关联 ${service.correlatedTraces ?? 0} 条`));
+      row.append(cell('small', `${signals.join(' / ') || '无明确故障信号'} · Span ${service.spans} · 数据库调用 ${service.databaseSpans} · 错误 Span ${service.errorSpans} · ${formatTime(service.firstAt)} 至 ${formatTime(service.lastAt)}`));
       if (service.traceIds?.length && event.assetId) {
         const links = document.createElement('p'); links.append(cell('small', '关联 Trace：'));
         for (const traceId of service.traceIds) {
@@ -984,7 +990,7 @@ async function showEvent(id) {
       }
       impact.append(row);
     }
-    impact.append(cell('small', '故障信号关联指数据库客户端错误或与锁样本精确匹配的后端 PID，并沿父 Span 关联请求；同窗出现与 PID 匹配都不能单独证明根因。'));
+    impact.append(cell('small', '故障信号关联指数据库客户端错误、与锁样本精确匹配的后端 PID，或 SQL 退化事件中 Query ID 与唯一指纹匹配的慢调用；沿父 Span 关联请求。这些线索不能单独证明根因。'));
     if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，计数可能不完整。'));
     diagnosis.append(impact);
   }
