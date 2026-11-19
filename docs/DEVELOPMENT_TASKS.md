@@ -85,7 +85,7 @@ V0.6.0 正式版交付证据图、规则候选和 Go 离线包，已验证的故
 
 ## V0.7：应用到数据库的全链路定位
 
-首段 OTLP/HTTP JSON 接入、PG18 Trace 存储、事件时间窗证据图和敏感字段白名单已实现并通过本地验证；官方 OpenTelemetry Collector 0.165.0 和 Go SDK 1.47.0 的分批 Trace 转发也在本机 kind 验证。其余任务仍需其他语言 SDK、精确身份映射、双向下钻和真实故障验收。详见[开发记录](TRACE_V0.7_PROGRESS.md)。
+V0.7.0 正式版交付可选 OTLP/HTTP JSON 接入、PG18 Trace 存储、同一事件 ID 的服务→PG→SQL/锁或 K8S 链路；官方 OpenTelemetry Collector 0.165.0 和 Go SDK 1.47.0 的分批转发已在本机 kind 验证。范围及未完成任务见[发布验收](V0.7_RELEASE_GATE.md)和[开发记录](TRACE_V0.7_PROGRESS.md)。
 
 - [x] **07-01** 接入 OTel 数据库客户端 Span 和服务身份，遵循 PostgreSQL 语义约定并控制 SQL 敏感字段。官方 Go SDK → Collector → Go DbSphere → PG18 实测读回同一 Trace 的服务父 Span、数据库客户端子 Span 和真实 PG 后端 PID；分批到达补链、脱敏待关联与失效清理有 PG18 回归测试。其他语言 SDK 留在 V1.0 兼容矩阵继续验收。
 - [ ] **07-02** 连接服务/请求/Trace/连接池/PG 实例/SQL 指纹/Host 或 Pod/Node/PVC 的身份映射与时间关联。Go 现在支持自定义 `dbsphere.pg.query_id`，在事件已引用的同期 SQL 样本中唯一对应一个指纹时建立 DB Span → SQL 指纹连线；本机 PG18 升级和同事件图已验证。连接池、代理地址、Pod/Node/PVC 应用身份映射仍待完成。

@@ -1,4 +1,4 @@
-# V0.6.0 支持与验收矩阵
+# V0.7.0 支持与验收矩阵
 
 > 截至 2026-11-19。这是已执行测试的边界，不是 V1.0 正式支持声明。长期监控存储在以下测试中均为独立 PostgreSQL 18，业务目标 PostgreSQL 版本另列。
 
@@ -16,3 +16,5 @@
 Go 后端与静态前端已在 Linux 容器和本机开发环境运行。Go 离线包面向 **Linux x86_64**，目标机仍需 Docker Engine 与 Compose v2；Node.js 不参与 Go 包的运行。Linux arm64、跨发行版裸机和生产断网升级/恢复尚无正式发布验收。详见[离线部署](OFFLINE_DEPLOYMENT.md)及[V1.0 发布任务](DEVELOPMENT_TASKS.md#v10正式版发布门槛)。
 
 一个问题的全链路能力以同一事件 ID 的原始样本、告警、Trace（如已接入）、基础设施或 Patroni 信号、根因候选及恢复证据为准。缺少应用 Trace、K8S API、主机 exporter 或云服务视图时，页面显示缺口；时间相关的候选需人工复核，不能视为已证实根因。
+
+V0.7.0 的应用链路支持范围与已知限制见[Trace 发布验收](V0.7_RELEASE_GATE.md)。官方 Go SDK 经 Collector JSON 转发与本机 PG18 存储已验证；其他语言 SDK、生产跨服务采样覆盖和自定义 Query ID 自动埋点尚未验收。

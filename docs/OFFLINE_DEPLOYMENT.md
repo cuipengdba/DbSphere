@@ -1,18 +1,18 @@
 # Linux 一键离线部署
 
-> [V0.6.0 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0)提供 Go 一键离线包和静态 Go 程序。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
+> [V0.7.0 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.7.0)提供 Go 一键离线包和静态 Go 程序。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 
-V0.6.0 的安装器支持 Docker Engine 27 导入镜像后的 ID 规范化。[无外网 Docker 守护进程验收](https://github.com/cuipengdba/DbSphere/actions/runs/44451086412)确认 `/readyz`、PG18 存储和重复安装后的数据保留；物理断网服务器仍待验收。
+V0.7.0 的安装器支持 Docker Engine 27 导入镜像后的 ID 规范化。[无外网 Docker 守护进程验收](https://github.com/cuipengdba/DbSphere/actions/runs/44451086412)确认 `/readyz`、PG18 存储和重复安装后的数据保留；物理断网服务器仍待验收。
 
-## Go 架构 V0.6.0 部署
+## Go 架构 V0.7.0 部署
 
-从[V0.6.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0)下载 `DbSphere-go-offline-0.6.0-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
+从[V0.7.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.7.0)下载 `DbSphere-go-offline-0.7.0-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
 
 ```bash
-bash DbSphere-go-offline-0.6.0-linux-amd64.run
+bash DbSphere-go-offline-0.7.0-linux-amd64.run
 ```
 
-无 Docker 环境可下载同页的 `DbSphere-go-0.6.0-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-0.6.0-linux-amd64 && ./DbSphere-go-0.6.0-linux-amd64`。三个发布产物及对应 SHA-256 文件均来自同一发布提交的验收构建。
+无 Docker 环境可下载同页的 `DbSphere-go-0.7.0-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-0.7.0-linux-amd64 && ./DbSphere-go-0.7.0-linux-amd64`。三个发布产物及对应 SHA-256 文件均来自同一发布提交的验收构建。
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
 
@@ -44,7 +44,7 @@ Go 告警通知也是可选配置。在同一配置文件设置 `DBSPHERE_WEBHOO
 
 ## 历史 Node.js 开发预览包
 
-早期 [V0.6 Node.js 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)提供了两种 Linux x86_64 安装包及各自的 SHA-256 文件。新部署请使用上面的 Go V0.6.0 正式版产物。
+早期 [V0.6 Node.js 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)提供了两种 Linux x86_64 安装包及各自的 SHA-256 文件。新部署请使用上面的 Go V0.7.0 正式版产物。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。
 
