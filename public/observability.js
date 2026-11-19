@@ -249,7 +249,8 @@
       .filter(point => Number.isFinite(point.at));
     if (!points.length) { section.append(make('p', 'empty', '事件记录没有可用时间戳。')); return section; }
     const min = Math.min(Date.parse(event.startedAt) || points[0].at, ...points.map(point => point.at));
-    const max = Math.max(Date.parse(event.endedAt) || min, ...points.map(point => point.at), min + 1000);
+    const max = Math.max(Date.parse(event.endedAt) || min, ...points.map(point => point.at));
+    const span = Math.max(1000, max - min);
     const width = 550; const height = 202; const left = 70; const right = 16;
     const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width,
       role: 'img', 'aria-label': `事件时间轴：${points.length} 条记录` });
@@ -264,7 +265,7 @@
     }
     const overlaps = new Map();
     for (const point of points) {
-      const position = left + (point.at - min) / (max - min) * (width - left - right);
+      const position = left + (point.at - min) / span * (width - left - right);
       const key = `${point.lane}:${Math.round(position / 12)}`;
       const overlap = overlaps.get(key) || 0; overlaps.set(key, overlap + 1);
       const x = position + Math.floor(overlap / 3) * 8;
