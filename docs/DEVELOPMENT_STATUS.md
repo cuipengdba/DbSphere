@@ -2,7 +2,7 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
-[V0.6.0 RC2 Go 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.2)已发布，包含静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。发布提交 `b466caf` 的[完整 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877)通过，发布产物均来自该次验收构建；V0.6.0 正式版的八类故障矩阵与物理断网主机验收仍未完成。
+[V0.6.0 RC3 Go 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)包含静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。RC3 新增真实 SQL 退化告警与同事件恢复，修正 PVC 实际容量计算；V0.6.0 正式版的八类故障矩阵与物理断网主机验收仍未完成。
 
 RC1 的跨引擎离线部署补充验收发现：无外网 Docker 27 守护进程成功从包中加载 Go 与 PG18 镜像，但导入后的本地镜像 ID 与构建机不同，旧安装器因此拒绝继续。RC2 先核对外层及内部 SHA-256、`docker image load` 的两个预期标签，允许 Docker 规范化导致的 ID 差异；[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877/job/135277415238) 对**完整 RC2 包**执行 `--network none` 嵌套守护进程安装，验证 `ready/postgresql18`、内嵌 RC2 版本和重复安装后 PG18 测试记录仍在。这不等于物理断网主机验收。
 

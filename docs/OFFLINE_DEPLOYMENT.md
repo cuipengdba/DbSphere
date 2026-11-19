@@ -1,18 +1,18 @@
 # Linux 一键离线部署
 
-> [V0.6.0 RC2 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.2)已提供 Go 一键离线包和静态 Go 程序。V0.6.0 正式版仍在验收。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
+> [V0.6.0 RC3 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)提供 Go 一键离线包和静态 Go 程序。V0.6.0 正式版仍在验收。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 
 RC2 修复了 RC1 离线包在 Docker Engine 27 中因导入镜像 ID 规范化而误拒绝安装的问题。[RC2 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877)让安装器和嵌套 Docker 27 守护进程同时处于无外网环境，确认 `/readyz`、PG18 存储和重复安装后的数据保留；这仍不是物理断网服务器验收。使用 Docker 27 的目标机请下载 RC2。
 
 ## Go 架构 RC2 预发布部署
 
-从[RC2 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.2)下载 `DbSphere-go-offline-0.6.0-rc.2-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
+从[RC3 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)下载 `DbSphere-go-offline-0.6.0-rc.3-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
 
 ```bash
-bash DbSphere-go-offline-0.6.0-rc.2-linux-amd64.run
+bash DbSphere-go-offline-0.6.0-rc.3-linux-amd64.run
 ```
 
-无 Docker 环境可下载同页的 `DbSphere-go-0.6.0-rc.2-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-0.6.0-rc.2-linux-amd64 && ./DbSphere-go-0.6.0-rc.2-linux-amd64`。RC2 的[完整 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877)通过；三个发布产物及对应 SHA-256 文件均来自该次验收构建。
+无 Docker 环境可下载同页的 `DbSphere-go-0.6.0-rc.3-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-0.6.0-rc.3-linux-amd64 && ./DbSphere-go-0.6.0-rc.3-linux-amd64`。三个发布产物及对应 SHA-256 文件均来自同一发布提交的验收构建。
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
 
