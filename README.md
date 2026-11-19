@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v1.0.11](https://img.shields.io/badge/当前版本-v1.0.11-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.11) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v1.0.12](https://img.shields.io/badge/当前版本-v1.0.12-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.12) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。第一阶段支持 PostgreSQL 14–18；“全域”是产品方向，不表示当前支持所有数据库。
 
@@ -29,7 +29,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V1.0.11** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.11)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[发布验收](docs/V1_RELEASE_GATE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
+当前正式版 **V1.0.12** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.12)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[发布验收](docs/V1_RELEASE_GATE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
 
 ## 部署与接入
 

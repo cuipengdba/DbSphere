@@ -1027,6 +1027,23 @@ jobs:
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" \
             "$RUNNER_TEMP/dbsphere-kind-oom-result.json"
           cat "$RUNNER_TEMP/dbsphere-kind-oom-result.json"
+      - name: Verify PG14-17 Pod OOM incidents and same-event recovery
+        run: |
+          node --check scripts/kind-matrix-version-oom.mjs
+          kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18091:8080 \
+            > "$RUNNER_TEMP/dbsphere-version-oom-forward.log" 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:18091/readyz 2>/dev/null |
+              jq -e '.storage=="postgresql18"' >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18091/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+          node scripts/kind-matrix-version-oom.mjs http://127.0.0.1:18091 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" \
+            "$RUNNER_TEMP/dbsphere-kind-version-oom-result.json"
+          cat "$RUNNER_TEMP/dbsphere-kind-version-oom-result.json"
       - name: Remove isolated Kubernetes cluster
         if: always()
         run: |
