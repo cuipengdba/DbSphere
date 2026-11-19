@@ -1029,7 +1029,7 @@ async function showEvent(id) {
     const facts = cell('div', '', 'rca-facts');
     facts.append(cell('p', `支持证据：${candidate.supports.join('、')}`));
     if (candidate.matchedConditions?.length) facts.append(cell('p', `匹配条件：${candidate.matchedConditions.map(item =>
-      `${item.metric}：${item.observed ?? '未知'} ${item.operator ?? ''} ${item.threshold ?? ''}`).join('；')}`));
+      typeof item === 'string' ? item : `${item.metric ?? '条件'}：${item.observed ?? '未知'} ${item.operator ?? ''} ${item.threshold ?? ''}`).join('；')}`));
     if (candidate.against?.length) facts.append(cell('p', `反证：${candidate.against.join('；')}`));
     if (candidate.timeOrder) facts.append(cell('p', `时间顺序：${candidate.timeOrder.firstObservedAt
       ? formatTime(candidate.timeOrder.firstObservedAt) : '未知'} · ${candidate.timeOrder.relation} · 事件开始 ${formatTime(candidate.timeOrder.eventStartedAt)}`));

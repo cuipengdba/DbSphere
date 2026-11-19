@@ -4,6 +4,8 @@
 
 V0.6.0 正式版之后的 Go 开发增量：数据库客户端 Span 可选择携带 `dbsphere.pg.query_id`（PostgreSQL 有符号 64 位 Query ID）。Go 只保留规范化整数，不保存 SQL 文本；PG18 schema 25 迁移保存该字段。事件页在同一资产、请求前后五分钟的已引用 `pg_stat_statements` 样本中，只有该 Query ID 唯一对应一个 SQL 指纹时，才把数据库 Span 连到 SQL 指纹节点。不同角色或数据库 OID 产生的多个指纹视为歧义，不建立连线。原始脱敏 Trace API 显示 Query ID。本机 PG18 实库验证了旧库升级、Span 存储及一个事件 ID 下的精确连线；此属性需要应用能够可靠取得，普通 SDK 不会自动产生，连线只表示同一语句身份，不证明单次请求造成性能退化。
 
+同一 Trace 中已观测到跨服务父子 Span 时，事件证据图增加服务间 `calls_service` 关系；重复调用只显示一条服务关系，父 Span 缺失时不推断依赖。这反映了已上报的调用拓扑，不能推断未采样服务或故障传播方向。事件页面同时修正了字符串型根因匹配条件显示为 `undefined` 的问题。
+
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。官方 OpenTelemetry Collector 0.165.0 与 Go SDK 1.47.0 的分批 Trace 转发已在本机 kind 验证；其他 SDK 与完整应用故障矩阵仍待验收。
 
 新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14–18 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机 PG14 与[五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)均通过。场景 B 在本机 kind 用真实 Go 应用请求连接实际 OOMKilled 的 PG18 Pod，错误 Span、PG 连接失败和 K8S OOM 候选进入同一事件 ID，恢复后原事件关闭；详见[本机 kind 验收](KIND_ACCEPTANCE.md)。官方 Collector 与 Go SDK 的 Trace 转发已实测；生产 K8S 与独立环境复核仍待验收。

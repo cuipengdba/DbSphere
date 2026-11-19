@@ -247,6 +247,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	}
 	serviceSet := map[string]bool{}
 	spanSet := map[string]bool{}
+	spanServices := map[string]string{}
 	parentEdges := []map[string]string{}
 	for traceRows.Next() {
 		var traceID, spanID, service, kind, spanStatus string
@@ -292,6 +293,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		}
 		spanNode := "span:" + traceID + ":" + spanID
 		spanSet[spanNode] = true
+		spanServices[spanNode] = service
 		serviceNode := "service:" + service
 		addNode(serviceNode, "service", service,
 			"/api/assets/"+event.AssetID+"/traces/"+traceID, at)
@@ -335,14 +337,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	}
 	traceRows.Close()
 	classifyTraceImpact(observedSpans, samples, serviceImpacts)
-	unresolvedParentSpans := 0
-	for _, edge := range parentEdges {
-		if spanSet[edge["from"]] {
-			edges = append(edges, edge)
-		} else {
-			unresolvedParentSpans++
-		}
-	}
+	unresolvedParentSpans := addTraceParentAndServiceEdges(parentEdges, spanServices, &edges)
 	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
 		candidates = append(candidates, candidate)
 	}
