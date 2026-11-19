@@ -244,6 +244,23 @@ jobs:
         run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh scripts/offline-self-extract.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
+      - name: Extract static Linux Go binary for external PostgreSQL 18
+        run: |
+          version="$(jq -r .version package.json)"
+          mkdir -p "$RUNNER_TEMP/dbsphere-go-native"
+          binary="$RUNNER_TEMP/dbsphere-go-native/DbSphere-go-$version-linux-amd64"
+          container="$(docker create "dbsphere/offline-go-app:$version")"
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/dbsphere" "$binary"
+          chmod 0755 "$binary"
+          file -b "$binary" | grep -Fq 'statically linked'
+          (cd "$RUNNER_TEMP/dbsphere-go-native" && sha256sum "$(basename "$binary")" > "$(basename "$binary").sha256")
+          mkdir -p "$RUNNER_TEMP/dbsphere-go-native/licenses"
+          cp LICENSE "$RUNNER_TEMP/dbsphere-go-native/licenses/DBSphere-LICENSE"
+          cp -R third_party/licenses/go "$RUNNER_TEMP/dbsphere-go-native/licenses/go"
+          licenses="$RUNNER_TEMP/dbsphere-go-native/DbSphere-go-licenses-$version.tar.gz"
+          tar -C "$RUNNER_TEMP/dbsphere-go-native" -czf "$licenses" licenses
+          (cd "$RUNNER_TEMP/dbsphere-go-native" && sha256sum "$(basename "$licenses")" > "$(basename "$licenses").sha256")
       - name: Reject missing and altered offline checksums
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
@@ -357,6 +374,19 @@ jobs:
           version="$(docker exec -e PGPASSWORD=restore-ci-password dbsphere-go-restore-ci \
             psql -h 127.0.0.1 -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
           test "$version" -ge 20
+      - name: Preserve tested Go offline and native packages
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-go-tested-packages
+          path: |
+            ${{ runner.temp }}/dbsphere-go-offline-output/DbSphere-go-offline-*.run
+            ${{ runner.temp }}/dbsphere-go-offline-output/DbSphere-go-offline-*.run.sha256
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-*-linux-amd64
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-*-linux-amd64.sha256
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-licenses-*.tar.gz
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-licenses-*.tar.gz.sha256
+          if-no-files-found: error
 
   go-external-store:
     runs-on: ubuntu-latest
