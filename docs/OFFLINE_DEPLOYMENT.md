@@ -1,8 +1,16 @@
 # Linux 一键离线部署
 
-> Go 后端与静态前端是正式版交付方向。文末保留早期 Node.js 预览包说明，不能把它当作 Go 版或 V1.0 正式发行包。详见[迁移清单](GO_UI_MIGRATION.md)。
+> [V0.6.0 RC1 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)已提供 Go 一键离线包和静态 Go 程序。V0.6.0 正式版仍在验收。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 
-## Go 架构开发版部署
+## Go 架构 RC1 预发布部署
+
+从[RC1 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)下载 `DbSphere-go-offline-0.6.0-rc.1-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
+
+```bash
+bash DbSphere-go-offline-0.6.0-rc.1-linux-amd64.run
+```
+
+无 Docker 环境可下载同页的 `DbSphere-go-0.6.0-rc.1-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-0.6.0-rc.1-linux-amd64 && ./DbSphere-go-0.6.0-rc.1-linux-amd64`。RC1 的[完整 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44433132016)通过；三个发布产物及对应 SHA-256 文件均来自该次验收构建。
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
 
@@ -32,7 +40,9 @@ Go 告警通知也是可选配置。在同一配置文件设置 `DBSPHERE_WEBHOO
 
 应用 Trace 接入默认关闭。需要时在同一配置文件设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN`，重启后将应用或 OpenTelemetry Collector 的 OTLP/HTTP JSON Trace 发送到 `POST /v1/traces`，使用 `Authorization: Bearer <token>`。仅与唯一纳管 PG 资产匹配的 Trace 入库，不保存 SQL、参数、URL 或任意 Span 属性。`DBSPHERE_TRACE_RETENTION_DAYS` 默认 7 天，Go 工作器每小时最多清理 10000 条过期 Span；生产入口应使用 TLS。不同 SDK 的 `http/json` 支持仍需分别验证。
 
-当前可从 [V0.6 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev) 下载两种 Linux x86_64 安装包及各自的 SHA-256 文件。V0.6 的跨层根因分析仍在开发中。
+## 历史 Node.js 开发预览包
+
+早期 [V0.6 Node.js 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)提供了两种 Linux x86_64 安装包及各自的 SHA-256 文件。新部署请使用上面的 Go RC1 产物。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。
 
