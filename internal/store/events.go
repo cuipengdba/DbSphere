@@ -242,6 +242,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	appPodReported, appPodVerified := 0, 0
 	appPodEdges := map[string]bool{}
 	appPVCStatusNodes := map[string]bool{}
+	appPVCStatusOmitted := false
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,
 		app_pod_reported,app_pod_verified FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
@@ -401,9 +402,12 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 								if state.Status == "ok" {
 									label = name + " · " + state.Phase
 								}
+								label += " · 观测于 " + pod.ObservedAt.UTC().Format(time.RFC3339)
 								addNode(statusNode, "pvc_status", label, source, pod.ObservedAt)
 								edges = append(edges, map[string]string{"from": statusNode, "to": pvcID,
 									"relation": "observed_pvc_status"})
+							} else if !appPVCStatusNodes[statusNode] {
+								appPVCStatusOmitted = true
 							}
 						}
 					}
@@ -434,6 +438,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if appPodReported > appPodVerified {
 		missing = append(missing, fmt.Sprintf("%d 条应用 Pod 身份仅由 OTel 上报，未通过 Kubernetes API 核对",
 			appPodReported-appPodVerified))
+	}
+	if appPVCStatusOmitted {
+		missing = append(missing, "应用 PVC 状态快照超过事件图 20 个节点上限；原始 Trace 仍可查看完整快照")
 	}
 	sort.Strings(services)
 	impactList := make([]serviceTraceImpact, 0, len(services))
