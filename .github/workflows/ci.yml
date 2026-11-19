@@ -241,7 +241,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate Go deployment scripts
-        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh
+        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
       - name: Generate SBOMs for the exact bundled container images
@@ -274,6 +274,11 @@ jobs:
             ${{ runner.temp }}/dbsphere-postgres18-image.cdx.json
             ${{ runner.temp }}/dbsphere-image-ids.txt
           if-no-files-found: warn
+      - name: Install Go bundle from a network-disabled CLI container
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          bash scripts/go-offline-airgap-smoke.sh "${archive[0]}" "$RUNNER_TEMP/dbsphere-go-airgap"
       - name: Install Go container twice from local images
         env:
           DBSPHERE_NO_PRINT_PASSWORD: 'true'
