@@ -13,9 +13,10 @@ if (!manifestPath || !credentialsPath) {
 const random = () => randomBytes(32).toString('base64url');
 const credentials = {
   postgresPassword: random(), monitorPassword: random(), storePassword: random(),
-  adminPassword: random(), masterKey: randomBytes(32).toString('base64')
+  adminPassword: random(), traceToken: random(), masterKey: randomBytes(32).toString('base64')
 };
 credentials.databaseURL = `postgres://dbsphere:${encodeURIComponent(credentials.storePassword)}@dbsphere-store:5432/dbsphere?sslmode=disable`;
+credentials.demoPGURL = `postgres://dbsphere_monitor:${encodeURIComponent(credentials.monitorPassword)}@pg18:5432/postgres?sslmode=disable`;
 const secret = {
   apiVersion: 'v1', kind: 'Secret', type: 'Opaque',
   metadata: { name: 'dbsphere-matrix-credentials', namespace: 'dbsphere-matrix' },

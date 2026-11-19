@@ -922,7 +922,9 @@ jobs:
       - name: Deploy Go console, PostgreSQL 18 store and five target versions
         run: |
           docker build -f Dockerfile-go -t dbsphere/kind-matrix:local .
+          docker build -f examples/trace-lock-app/Dockerfile -t dbsphere/trace-lock-app:kind-oom .
           kind load docker-image dbsphere/kind-matrix:local --name dbsphere-ci
+          kind load docker-image dbsphere/trace-lock-app:kind-oom --name dbsphere-ci
           node scripts/kind-matrix-manifest.mjs dbsphere-ci "$RUNNER_TEMP/dbsphere-kind-manifest.json"
           node scripts/kind-matrix-secrets.mjs \
             "$RUNNER_TEMP/dbsphere-kind-secret.json" "$RUNNER_TEMP/dbsphere-kind-credentials.json"
@@ -992,6 +994,28 @@ jobs:
           node scripts/kind-matrix-verify-persistence.mjs http://127.0.0.1:18091 \
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" \
             "$RUNNER_TEMP/dbsphere-kind-before.json" "$RUNNER_TEMP/dbsphere-kind-after.json"
+      - name: Verify one real application incident across PostgreSQL Pod OOM and recovery
+        run: |
+          node --check scripts/kind-matrix-app-oom.mjs
+          kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18091:8080 \
+            > "$RUNNER_TEMP/dbsphere-oom-go-forward.log" 2>&1 &
+          go_forward=$!
+          kubectl -n dbsphere-matrix port-forward svc/dbsphere-oom-app 18092:18092 \
+            > "$RUNNER_TEMP/dbsphere-oom-app-forward.log" 2>&1 &
+          app_forward=$!
+          trap 'kill "$go_forward" "$app_forward" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:18091/readyz >/dev/null 2>&1 &&
+              curl -fsS http://127.0.0.1:18092/healthz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18091/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+          curl -fsS http://127.0.0.1:18092/healthz >/dev/null
+          node scripts/kind-matrix-app-oom.mjs \
+            http://127.0.0.1:18091 http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" \
+            "$RUNNER_TEMP/dbsphere-kind-oom-result.json"
+          cat "$RUNNER_TEMP/dbsphere-kind-oom-result.json"
       - name: Remove isolated Kubernetes cluster
         if: always()
         run: |

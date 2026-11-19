@@ -110,8 +110,8 @@ SQL
       spec: { ...placement(controlPlane), serviceAccountName: 'dbsphere-reader', containers: [{
         name: 'dbsphere', image: 'dbsphere/kind-matrix:local', imagePullPolicy: 'Never',
         ports: [{ containerPort: 8080 }],
-        env: [secret('databaseURL'), secret('adminPassword'), secret('masterKey')].map((value, index) => ({
-          ...value, name: ['DBSPHERE_DATABASE_URL', 'DBSPHERE_ADMIN_PASSWORD', 'DBSPHERE_MASTER_KEY'][index]
+        env: [secret('databaseURL'), secret('adminPassword'), secret('masterKey'), secret('traceToken')].map((value, index) => ({
+          ...value, name: ['DBSPHERE_DATABASE_URL', 'DBSPHERE_ADMIN_PASSWORD', 'DBSPHERE_MASTER_KEY', 'DBSPHERE_OTLP_TOKEN'][index]
         })).concat([
           { name: 'DBSPHERE_HOST', value: '0.0.0.0' }, { name: 'DBSPHERE_PORT', value: '8080' },
           { name: 'DBSPHERE_ENABLE_GO_COLLECTOR', value: 'false' }
@@ -120,7 +120,27 @@ SQL
         resources: { requests: { cpu: '50m', memory: '64Mi' }, limits: { memory: '512Mi' } }
       }] } } }
   },
-  service('dbsphere-go', 8080)
+  service('dbsphere-go', 8080),
+  {
+    apiVersion: 'apps/v1', kind: 'Deployment', metadata: metadata('dbsphere-oom-app'),
+    spec: { replicas: 1, selector: selector('dbsphere-oom-app'), template: {
+      metadata: { labels: { app: 'dbsphere-oom-app' } }, spec: {
+        ...placement(workers[0]), containers: [{
+          name: 'app', image: 'dbsphere/trace-lock-app:kind-oom', imagePullPolicy: 'Never',
+          ports: [{ containerPort: 18092 }],
+          env: [
+            { ...secret('demoPGURL'), name: 'DBSPHERE_DEMO_PG_URL' },
+            { ...secret('traceToken'), name: 'DBSPHERE_DEMO_OTLP_TOKEN' },
+            { name: 'DBSPHERE_DEMO_OTLP_ENDPOINT', value: 'http://dbsphere-go:8080/v1/traces' },
+            { name: 'DBSPHERE_DEMO_LISTEN', value: '0.0.0.0:18092' }
+          ],
+          readinessProbe: { httpGet: { path: '/healthz', port: 18092 }, periodSeconds: 5 },
+          resources: { requests: { cpu: '25m', memory: '16Mi' }, limits: { memory: '128Mi' } }
+        }]
+      }
+    } }
+  },
+  service('dbsphere-oom-app', 18092)
 ];
 
 const manifest = JSON.stringify({ apiVersion: 'v1', kind: 'List', items });
