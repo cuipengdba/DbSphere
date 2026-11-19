@@ -4,6 +4,7 @@ let approvalEnabled = false;
 let viewerScoped = false;
 let selectedAsset = null;
 let selectedAssetLayer = null;
+let selectedAssetTrendHours = 24;
 let selectedEvent = null;
 let recentEvents = [];
 let allAssets = [];
@@ -381,11 +382,11 @@ async function showAsset(id) {
     };
     for (const [label, hours, bucketHours] of [['24 小时', 24, 1], ['7 天', 168, 6]]) {
       const button = cell('button', label, 'ghost small-button'); button.type = 'button';
-      button.dataset.hours = String(hours); button.setAttribute('aria-pressed', String(hours === 24));
-      button.addEventListener('click', () => void loadTrend(hours, bucketHours)); periods.append(button);
+      button.dataset.hours = String(hours); button.setAttribute('aria-pressed', String(hours === selectedAssetTrendHours));
+      button.addEventListener('click', () => { selectedAssetTrendHours = hours; void loadTrend(hours, bucketHours); }); periods.append(button);
     }
     trendHead.append(periods); detail.append(trendHead, trend);
-    await loadTrend(24, 1);
+    await loadTrend(selectedAssetTrendHours, selectedAssetTrendHours === 168 ? 6 : 1);
   }
   if (currentSample?.status === 'ok' && currentSample.metrics) {
     const metrics = currentSample.metrics;
