@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -426,9 +425,9 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 				if stringValue(usage["status"]) != "ok" {
 					return signal
 				}
-				used, valid := numeric(usage["usedBytes"])
-				capacity, err := collector.KubernetesQuantityBytes(stringValue(pvc["capacity"]))
-				if !valid || err != nil || used < 0 {
+				used, usedValid := numeric(usage["usedBytes"])
+				capacity, capacityValid := numeric(usage["capacityBytes"])
+				if !usedValid || !capacityValid || used < 0 || capacity <= 0 {
 					return signal
 				}
 				percentage := used / capacity * 100

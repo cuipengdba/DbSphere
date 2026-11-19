@@ -246,8 +246,9 @@ func TestGoPgBouncerWaitingSignal(t *testing.T) {
 func TestGoPVCUsageAlertRequiresRealUsedBytes(t *testing.T) {
 	now := time.Now().UTC()
 	metrics := map[string]any{"k8s": map[string]any{"status": "ok", "pvcs": []any{
-		map[string]any{"name": "pg-data", "capacity": "10Gi",
-			"usage": map[string]any{"status": "ok", "usedBytes": float64(9 * 1024 * 1024 * 1024)}}}}}
+		map[string]any{"name": "pg-data", "capacity": "1Gi",
+			"usage": map[string]any{"status": "ok", "usedBytes": float64(9 * 1024 * 1024 * 1024),
+				"capacityBytes": float64(10 * 1024 * 1024 * 1024)}}}}}
 	signal := readGoSignal("k8s.pvc_used_percent", metrics, now)
 	if !signal.Available || signal.Value != 90 || object(signal.Detail)["pvc"] != "pg-data" {
 		t.Fatalf("PVC usage signal missing: %+v", signal)
@@ -256,7 +257,8 @@ func TestGoPVCUsageAlertRequiresRealUsedBytes(t *testing.T) {
 	if readGoSignal("k8s.pvc_used_percent", metrics, now).Available {
 		t.Fatal("missing PVC used bytes treated as a healthy zero")
 	}
-	object(list(object(metrics["k8s"])["pvcs"])[0])["usage"] = map[string]any{"status": "ok", "usedBytes": float64(1024)}
+	object(list(object(metrics["k8s"])["pvcs"])[0])["usage"] = map[string]any{"status": "ok", "usedBytes": float64(1024),
+		"capacityBytes": float64(10 * 1024 * 1024 * 1024)}
 	object(metrics["k8s"])["pvcs"] = append(list(object(metrics["k8s"])["pvcs"]),
 		map[string]any{"name": "missing-data", "capacity": "10Gi", "usage": map[string]any{"status": "unavailable"}})
 	if readGoSignal("k8s.pvc_used_percent", metrics, now).Available {

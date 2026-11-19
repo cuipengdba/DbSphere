@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeKubeConfig(t *testing.T, server, ca, user string) {
@@ -76,10 +77,18 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
 	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
 	prometheus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("query") != `kubelet_volume_stats_used_bytes{namespace="db",persistentvolumeclaim="pg-data"}` {
+		query := r.URL.Query().Get("query")
+		usedQuery := `kubelet_volume_stats_used_bytes{namespace="db",persistentvolumeclaim="pg-data"}`
+		capacityQuery := `kubelet_volume_stats_capacity_bytes{namespace="db",persistentvolumeclaim="pg-data"}`
+		if query != usedQuery && query != capacityQuery {
 			t.Errorf("PVC Prometheus query was not scoped: %s", r.URL.RawQuery)
 		}
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"value":[1794921600,"4294967296"]}]}}`)
+		value := "4294967296"
+		if query == capacityQuery {
+			value = "8589934592"
+		}
+		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"db","persistentvolumeclaim":"pg-data","instance":"node-a"},"value":[%d,%q]}]}}`,
+			time.Now().Unix(), value)
 	}))
 	defer prometheus.Close()
 	t.Setenv("DBSPHERE_PROMETHEUS_URL", prometheus.URL)
@@ -97,7 +106,7 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		t.Fatal("bound PersistentVolume was not linked to its PVC")
 	}
 	if usage := kubeObject(kubeObject(kubeList(value["pvcs"])[0])["usage"]); usage["status"] != "ok" ||
-		usage["usedBytes"] != float64(4294967296) {
+		usage["usedBytes"] != float64(4294967296) || usage["capacityBytes"] != float64(8589934592) {
 		t.Fatalf("Prometheus PVC usage was not attached to its claim: %+v", usage)
 	}
 	if services := kubeList(value["services"]); len(services) != 1 || kubeObject(services[0])["name"] != "pg-service" {
