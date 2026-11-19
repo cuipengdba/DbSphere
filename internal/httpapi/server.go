@@ -228,6 +228,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			"collectionIntervalSeconds": interval, "serverTime": time.Now().UTC()})
 	})
 	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
+		ingressAt := time.Now().UTC()
 		if credentials == nil || credentials.OTLPToken == "" {
 			respond(w, http.StatusNotFound, map[string]string{"error": "Trace intake disabled"})
 			return
@@ -260,7 +261,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace asset mapping unavailable"})
 			return
 		}
-		parsed, err := trace.Decode(body, assets, time.Now().UTC())
+		parsed, err := trace.Decode(body, assets, ingressAt)
 		switch {
 		case errors.Is(err, trace.ErrTooMany):
 			respond(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Too many spans or scopes"})
