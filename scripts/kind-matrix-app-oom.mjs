@@ -71,7 +71,7 @@ function faultCommand(enabled) {
   // This is a test-only Deployment patch, restored before PostgreSQL recovery.
   const container = enabled
     ? { name: 'postgres', command: ['/usr/bin/perl'],
-        args: ['-e', 'my @blocks; my $chunk=4*1024*1024; sleep 5; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
+        args: ['-e', 'my @blocks; my $chunk=1024*1024; sleep 15; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
     : { name: 'postgres', command: null, args: null };
   kube(['patch', 'deployment/pg18', '--type=strategic', '-p',
     JSON.stringify({ spec: { template: { spec: { containers: [container] } } } })]);
@@ -135,6 +135,7 @@ try {
   try {
     failedPod = await until('real OOMKilled PostgreSQL container', 120, 1000, () =>
       pods('pg18').find(pod => pod.status?.containerStatuses?.some(status =>
+        status.state?.terminated?.reason === 'OOMKilled' ||
         status.lastState?.terminated?.reason === 'OOMKilled')));
   } catch (error) {
     console.error(JSON.stringify(pods('pg18').map(pod => ({ name: pod.metadata.name,

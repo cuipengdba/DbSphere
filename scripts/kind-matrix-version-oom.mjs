@@ -57,7 +57,7 @@ function faultCommand(app, enabled) {
   // to install its OOM event watcher before the cgroup limit is exceeded.
   const container = enabled
     ? { name: 'postgres', command: ['/usr/bin/perl'],
-        args: ['-e', 'my @blocks; my $chunk=4*1024*1024; sleep 5; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
+        args: ['-e', 'my @blocks; my $chunk=1024*1024; sleep 15; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
     : { name: 'postgres', command: null, args: null };
   kube(['patch', `deployment/${app}`, '--type=strategic', '-p',
     JSON.stringify({ spec: { template: { spec: { containers: [container] } } } })]);

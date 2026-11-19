@@ -153,8 +153,12 @@
         .sort((a, b) => Number(important.has(b.relation)) - Number(important.has(a.relation))).slice(0, 90);
       const buckets = stages.map(() => []);
       for (const node of selectedNodes) buckets[nodeStage[node.type] ?? 4].push(node);
-      const width = 1190; const laneWidth = 238; const rowHeight = 78;
-      const height = Math.max(245, 78 + Math.max(...buckets.map(bucket => bucket.length)) * rowHeight);
+      const activeLanes = buckets.map((bucket, index) => ({ bucket, index }))
+        .filter(lane => lane.bucket.length);
+      legend.textContent = activeLanes.map(lane => stages[lane.index]).join(' → ') || '当前筛选下没有节点';
+      const laneWidth = 238; const rowHeight = 78;
+      const width = Math.max(300, activeLanes.length * laneWidth);
+      const height = Math.max(245, 78 + Math.max(0, ...activeLanes.map(lane => lane.bucket.length)) * rowHeight);
       const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width, height,
         role: 'img', 'aria-label': `${selectedNodes.length} 个证据节点、${edges.length} 条已观测关系` });
       const markerID = `obs-arrow-${String(event?.id || 'incident').replace(/[^a-z0-9_-]/gi, '')}`;
@@ -164,13 +168,14 @@
       marker.append(svg('path', { d: 'M 0 0 L 7 3.5 L 0 7 z', fill: '#8e9ebb' }));
       defs.append(marker); canvas.append(defs);
       const positions = new Map();
-      for (let lane = 0; lane < buckets.length; lane++) {
+      for (let lane = 0; lane < activeLanes.length; lane++) {
+        const { bucket, index: stageIndex } = activeLanes[lane];
         canvas.append(svg('rect', { x: lane * laneWidth + 3, y: 4, width: laneWidth - 6,
           height: height - 8, rx: 12, fill: lane % 2 ? '#f8faff' : '#f1f6fb' }));
         const title = svg('text', { x: lane * laneWidth + 17, y: 30, class: 'obs-lane-title' });
-        title.textContent = stages[lane]; canvas.append(title);
-        buckets[lane].forEach((node, index) => positions.set(node.id,
-          { x: lane * laneWidth + 15, y: 49 + index * rowHeight, lane }));
+        title.textContent = stages[stageIndex]; canvas.append(title);
+        bucket.forEach((node, row) => positions.set(node.id,
+          { x: lane * laneWidth + 15, y: 49 + row * rowHeight, stageIndex }));
       }
       for (const edge of edges) {
         const from = positions.get(edge.from); const to = positions.get(edge.to);
@@ -190,7 +195,7 @@
         const group = svg('g', { class: `obs-graph-node${selected === node.id ? ' is-selected' : ''}`,
           role: 'button', tabindex: 0, 'aria-label': `${typeLabel[node.type] || node.type} ${node.label}` });
         group.append(svg('rect', { x: at.x, y: at.y, width: 208, height: 52, rx: 9,
-          fill: selected === node.id ? '#e8efff' : '#fff', stroke: accent[at.lane], 'stroke-width': selected === node.id ? 2.7 : 1.3 }));
+          fill: selected === node.id ? '#e8efff' : '#fff', stroke: accent[at.stageIndex], 'stroke-width': selected === node.id ? 2.7 : 1.3 }));
         const label = svg('text', { x: at.x + 11, y: at.y + 20, class: 'obs-node-label' });
         label.textContent = short(node.label, 24); group.append(label);
         const kind = svg('text', { x: at.x + 11, y: at.y + 39, class: 'obs-node-kind' });
@@ -229,7 +234,7 @@
     if (!points.length) { section.append(make('p', 'empty', '事件记录没有可用时间戳。')); return section; }
     const min = Math.min(Date.parse(event.startedAt) || points[0].at, ...points.map(point => point.at));
     const max = Math.max(Date.parse(event.endedAt) || min, ...points.map(point => point.at), min + 1000);
-    const width = 900; const height = 202; const left = 104; const right = 30;
+    const width = 550; const height = 202; const left = 70; const right = 16;
     const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width,
       role: 'img', 'aria-label': `事件时间轴：${points.length} 条记录` });
     const detail = make('div', 'obs-node-detail', '选择时间线上的标记，查看事件记录。');
@@ -241,9 +246,13 @@
       canvas.append(svg('line', { x1: left, x2: width - right, y1: y, y2: y,
         stroke: '#d5dfeb', 'stroke-width': 1 }));
     }
+    const overlaps = new Map();
     for (const point of points) {
-      const x = left + (point.at - min) / (max - min) * (width - left - right);
-      const y = 36 + point.lane * 41;
+      const position = left + (point.at - min) / (max - min) * (width - left - right);
+      const key = `${point.lane}:${Math.round(position / 12)}`;
+      const overlap = overlaps.get(key) || 0; overlaps.set(key, overlap + 1);
+      const x = position + Math.floor(overlap / 3) * 8;
+      const y = 36 + point.lane * 41 + (overlap % 3 - 1) * 8;
       const marker = svg('circle', { cx: x, cy: y, r: 6.5,
         fill: point.item.kind.includes('recovered') ? '#2f9874' :
           point.item.kind.includes('error') || point.item.kind.includes('firing') ? '#db6c47' : '#426fb3' });
