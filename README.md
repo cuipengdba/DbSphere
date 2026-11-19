@@ -33,8 +33,8 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 部署与接入
 
-- [部署说明](docs/DEPLOYMENT.md)：容器一键部署、PG18 存储及运行配置。
-- [离线部署](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序与容器离线包的开发验收范围。
+- [Go 一键部署与离线包](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序、容器离线包及当前验收范围。
+- [PG18 存储](docs/STORAGE_V0.3.md)：长期数据、保留策略与备份恢复。
 - [Kubernetes 接入](docs/DEPLOYMENT_V0.2.md)：只读 ServiceAccount、Namespace 与指标权限。
 - [Patroni 接入与验收](docs/PATRONI_ACCEPTANCE.md)：只读拓扑、告警、同事件根因候选及本机故障演练。
 - [告警通知](docs/NOTIFICATIONS_V0.3.md)、[巡检报告](docs/INSPECTIONS_V0.4.md)、[SQL 性能](docs/SQL_PERFORMANCE_V0.5.md)：各功能的配置与使用。
