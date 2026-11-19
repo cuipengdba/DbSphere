@@ -1,5 +1,11 @@
 # 本机 Kubernetes 验收记录（开发版）
 
+## 2026-11-19 V1.0.6 应用 Pod 与 PVC 只读核对
+
+在既有单节点 `dbsphere-test` 的 `dbsphere-smoke` Namespace，使用项目当前 Go 代码交叉编译一次性 Linux 测试程序，镜像仅包含测试二进制。测试 Pod 使用已经存在的 `dbsphere-reader` ServiceAccount 投射凭据；`kubectl auth can-i` 核对它能读取 PVC、不能读取 Secret。目标 `postgres-dcd87c467-wcvkg` Pod 的 UID 与 `postgres-data` PVC 阶段 `Bound` 由真实 Kubernetes API 返回。测试 Pod 初次因未容忍控制平面污点而 Pending，补充该 Pod 的容忍规则后运行成功；`TestRealKubernetesApplicationPodIdentity PASS`、Pod `Succeeded`、退出码 0。测试 Pod 已删除，未修改 PostgreSQL Pod 或 PVC；脱敏结果在本机 `H:\CodexLS\outputs\DbSphere\v1.0.6-local-kind-acceptance.json`。
+
+[四节点 kind CI](https://github.com/cuipengdba/DbSphere/actions/runs/44507685727)另在独立集群核对 PG18 Pod UID、Bound PVC 与只读凭据边界，38/38 作业通过。PG18 实库集成测试核对同一事件图的 PVC 状态节点、关系和原始 Trace 脱敏；本机 kind 测试只运行身份/PVC API 路径，没有完整应用故障 Trace 注入。PVC 阶段是 API 读取时的快照，仍未验收挂载状态、实际容量和生产 K8S 稳定性。
+
 ## 2026-11-19 V0.6 真实 PVC 压力与同事件恢复
 
 旧 kind 集群的 CSI hostpath 测试驱动最终达到 `7/7 Running`，专用 Namespace `dbsphere-pvc-smoke` 的 64 MiB PVC 绑定到实际 PV。将该驱动数据目录限制在节点内 64 MiB tmpfs；运行于该 PVC 的 PostgreSQL 18.6 Pod 使用 `/data/pgdata`，`1/1 Running`。kubelet 原始指标真实返回 `kubelet_volume_stats_capacity_bytes=67108864` 和随受控填充文件变化的 `used_bytes`。本机可选 Go 实库测试读取真实 Pod/PVC 对象与 kubelet 指标，使用一个仅包装真实抓取结果的本地 Prometheus API 适配器，并从实际 PG18 Pod 采集数据库指标；未人工编造容量数据。该测试将 `k8s_pvc_high` 持续时间临时设为 0 秒，结束时恢复原值。
