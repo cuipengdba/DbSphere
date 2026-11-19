@@ -116,7 +116,7 @@
   CREATE TABLE IF NOT EXISTS trace_spans (
     asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     trace_id text NOT NULL, span_id text NOT NULL, parent_span_id text, backend_pid integer, query_id text,
-    route text NOT NULL DEFAULT 'direct',
+    route text NOT NULL DEFAULT 'direct', app_pod_reported jsonb, app_pod_verified jsonb,
     service text NOT NULL, kind text NOT NULL, started_at timestamptz NOT NULL,
     ended_at timestamptz NOT NULL, status text NOT NULL,
     PRIMARY KEY(asset_id,trace_id,span_id)

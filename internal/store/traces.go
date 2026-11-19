@@ -2,11 +2,14 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
@@ -72,12 +75,22 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 	if span.QueryID != "" {
 		queryID = span.QueryID
 	}
+	var appPod any
+	if span.Kind == "postgresql_client" && span.AppPodNamespace != "" &&
+		span.AppPodName != "" && span.AppPodUID != "" {
+		value, err := json.Marshal(map[string]string{"namespace": span.AppPodNamespace,
+			"name": span.AppPodName, "uid": span.AppPodUID})
+		if err != nil {
+			return 0, fmt.Errorf("encode OTLP application Pod identity: %w", err)
+		}
+		appPod = string(value)
+	}
 	result, err := tx.Exec(ctx, `INSERT INTO trace_spans
-		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,app_pod_reported)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 		span.TraceID, span.SpanID, parent, span.Service, span.Kind,
-		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route)
+		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route, appPod)
 	if err != nil {
 		return 0, fmt.Errorf("save OTLP span: %w", err)
 	}
@@ -87,7 +100,136 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 // SaveTraceBatch attaches service ancestors only to a mapped database chain.
 // A short-lived sanitized buffer covers Collector batches arriving out of order.
 func (s *Postgres) SaveTraceBatch(ctx context.Context, spans, candidates []trace.Span) (int, int, error) {
-	return s.saveTraceBatch(ctx, spans, candidates, true)
+	imported, linked, err := s.saveTraceBatch(ctx, spans, candidates, true)
+	if err == nil {
+		s.verifyTracePods(ctx, spans)
+	}
+	return imported, linked, err
+}
+
+type tracePodCacheEntry struct {
+	identity   collector.KubernetesPodIdentity
+	observedAt time.Time
+	verified   bool
+}
+
+func (s *Postgres) cachedTracePod(key string, now time.Time) (tracePodCacheEntry, bool) {
+	s.tracePodMu.Lock()
+	defer s.tracePodMu.Unlock()
+	entry, ok := s.tracePodCache[key]
+	if !ok {
+		return tracePodCacheEntry{}, false
+	}
+	ttl := 30 * time.Second
+	if entry.verified {
+		ttl = 10 * time.Minute
+	}
+	if now.Sub(entry.observedAt) > ttl {
+		delete(s.tracePodCache, key)
+		return tracePodCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (s *Postgres) rememberTracePod(key string, entry tracePodCacheEntry) {
+	s.tracePodMu.Lock()
+	defer s.tracePodMu.Unlock()
+	if s.tracePodCache == nil || len(s.tracePodCache) >= 1000 {
+		s.tracePodCache = map[string]tracePodCacheEntry{}
+	}
+	s.tracePodCache[key] = entry
+}
+
+// verifyTracePods is best effort: a missing or denied Kubernetes API must not
+// interrupt OTLP ingestion, and unverified metadata is never drawn as a link.
+func (s *Postgres) verifyTracePods(ctx context.Context, spans []trace.Span) {
+	if len(spans) == 0 {
+		return
+	}
+	type podLookup struct {
+		cluster, namespace, name, uid string
+		spans                         []trace.Span
+	}
+	groups := map[string]*podLookup{}
+	clusters := map[string]string{}
+	now := time.Now().UTC()
+	for _, span := range spans {
+		if span.Kind != "postgresql_client" || span.AssetID == "" ||
+			span.AppPodNamespace == "" || span.AppPodName == "" || span.AppPodUID == "" ||
+			span.End.Before(now.Add(-2*time.Minute)) || span.End.After(now.Add(5*time.Second)) {
+			continue
+		}
+		cluster, known := clusters[span.AssetID]
+		if !known {
+			var runtime string
+			var contextName *string
+			if err := s.pool.QueryRow(ctx, `SELECT runtime,k8s_cluster FROM assets WHERE id=$1`,
+				span.AssetID).Scan(&runtime, &contextName); err != nil || runtime != "k8s" || contextName == nil {
+				clusters[span.AssetID] = ""
+				continue
+			}
+			cluster = *contextName
+			clusters[span.AssetID] = cluster
+		}
+		if cluster == "" {
+			continue
+		}
+		key := span.AssetID + ":" + cluster + ":" + span.AppPodNamespace + ":" +
+			span.AppPodName + ":" + span.AppPodUID
+		group := groups[key]
+		if group == nil {
+			if len(groups) >= 8 {
+				continue
+			}
+			group = &podLookup{cluster: cluster, namespace: span.AppPodNamespace,
+				name: span.AppPodName, uid: span.AppPodUID}
+			groups[key] = group
+		}
+		group.spans = append(group.spans, span)
+	}
+	var workers sync.WaitGroup
+	semaphore := make(chan struct{}, 4)
+	for key, group := range groups {
+		workers.Add(1)
+		go func(key string, group *podLookup) {
+			defer workers.Done()
+			select {
+			case semaphore <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-semaphore }()
+			entry, cached := s.cachedTracePod(key, time.Now().UTC())
+			if !cached {
+				identity, err := collector.VerifyKubernetesPodIdentity(ctx,
+					collector.KubernetesTarget{Cluster: group.cluster, Namespace: group.namespace,
+						Pod: group.name}, group.uid)
+				entry = tracePodCacheEntry{identity: identity, observedAt: time.Now().UTC(), verified: err == nil}
+				s.rememberTracePod(key, entry)
+			}
+			if !entry.verified {
+				return
+			}
+			verified, err := json.Marshal(map[string]any{"namespace": entry.identity.Namespace,
+				"name": entry.identity.Name, "uid": entry.identity.UID, "node": entry.identity.Node,
+				"pvcs": entry.identity.PVCs, "createdAt": entry.identity.CreatedAt,
+				"observedAt": entry.observedAt})
+			if err != nil {
+				return
+			}
+			for _, span := range group.spans {
+				if entry.identity.CreatedAt.After(span.End.Add(5 * time.Second)) {
+					continue
+				}
+				_, _ = s.pool.Exec(ctx, `UPDATE trace_spans SET app_pod_verified=$1::jsonb
+					WHERE asset_id=$2 AND trace_id=$3 AND span_id=$4
+					AND app_pod_reported->>'namespace'=$5 AND app_pod_reported->>'name'=$6
+					AND app_pod_reported->>'uid'=$7`, string(verified), span.AssetID, span.TraceID,
+					span.SpanID, group.namespace, group.name, group.uid)
+			}
+		}(key, group)
+	}
+	workers.Wait()
 }
 
 func (s *Postgres) saveTraceBatch(ctx context.Context, spans, candidates []trace.Span, reconcile bool) (int, int, error) {

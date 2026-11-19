@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/security"
@@ -16,6 +17,8 @@ type Postgres struct {
 	pool                *pgxpool.Pool
 	sampleRetentionDays int
 	eventRetentionDays  int
+	tracePodMu          sync.Mutex
+	tracePodCache       map[string]tracePodCacheEntry
 }
 
 // ConfigureRetention is called once before the HTTP server starts. Zero means
@@ -326,6 +329,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 		}
 		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(27) ON CONFLICT DO NOTHING"); err != nil {
 			return fmt.Errorf("record trace route migration: %w", err)
+		}
+	}
+	var appPodMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=28)").Scan(&appPodMigrated); err != nil {
+		return fmt.Errorf("check trace application Pod migration: %w", err)
+	}
+	if !appPodMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE trace_spans ADD COLUMN IF NOT EXISTS app_pod_reported jsonb, ADD COLUMN IF NOT EXISTS app_pod_verified jsonb"); err != nil {
+			return fmt.Errorf("migrate trace application Pod identity: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(28) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace application Pod migration: %w", err)
 		}
 	}
 	if err := seedGoRules(ctx, tx); err != nil {

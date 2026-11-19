@@ -38,6 +38,62 @@ current-context: test-context
 	t.Setenv("DBSPHERE_KUBECONFIG", path)
 }
 
+func TestVerifyKubernetesApplicationPodUsesOneReadOnlyUIDCheckedRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/namespaces/apps/pods/checkout-0" ||
+			r.Header.Get("Authorization") != "Bearer read-only-token" {
+			t.Errorf("unexpected application Pod lookup: %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1","creationTimestamp":"2026-11-19T00:00:00Z"},`+
+			`"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}},`+
+			`{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+	}))
+	defer server.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	target := KubernetesTarget{Cluster: "test-context", Namespace: "apps", Pod: "checkout-0"}
+	got, err := VerifyKubernetesPodIdentity(context.Background(), target, "pod-uid-1")
+	if err != nil || got.UID != "pod-uid-1" || got.Node != "worker-1" ||
+		len(got.PVCs) != 1 || got.PVCs[0] != "checkout-data" {
+		t.Fatalf("application Pod identity was not verified: %+v %v", got, err)
+	}
+	if _, err := VerifyKubernetesPodIdentity(context.Background(), target, "replaced-uid"); err == nil {
+		t.Fatal("recreated Pod name was accepted without matching UID")
+	}
+	if _, err := VerifyKubernetesPodIdentity(context.Background(), KubernetesTarget{
+		Cluster: "test-context", Namespace: "../other", Pod: "checkout-0"}, "pod-uid-1"); err == nil {
+		t.Fatal("invalid namespace was sent to Kubernetes API")
+	}
+	if requests != 2 {
+		t.Fatalf("expected only two scoped GET requests, got %d", requests)
+	}
+}
+
+func TestRealKubernetesApplicationPodIdentity(t *testing.T) {
+	namespace := os.Getenv("DBSPHERE_TEST_K8S_APP_NAMESPACE")
+	name := os.Getenv("DBSPHERE_TEST_K8S_APP_POD")
+	uid := os.Getenv("DBSPHERE_TEST_K8S_APP_UID")
+	if namespace == "" || name == "" || uid == "" ||
+		(os.Getenv("DBSPHERE_KUBECONFIG") == "" && os.Getenv("KUBERNETES_SERVICE_HOST") == "") {
+		t.Skip("real read-only Kubernetes Pod identity test is not configured")
+	}
+	got, err := VerifyKubernetesPodIdentity(context.Background(), KubernetesTarget{
+		Cluster: os.Getenv("DBSPHERE_TEST_K8S_CONTEXT"), Namespace: namespace, Pod: name}, uid)
+	if err != nil || got.Namespace != namespace || got.Name != name || got.UID != uid ||
+		got.CreatedAt.IsZero() {
+		t.Fatalf("real application Pod identity was not verified: %+v %v", got, err)
+	}
+	if expectedNode := os.Getenv("DBSPHERE_TEST_K8S_APP_NODE"); expectedNode != "" && got.Node != expectedNode {
+		t.Fatalf("real application Pod was scheduled on %q, expected %q", got.Node, expectedNode)
+	}
+	if _, err := VerifyKubernetesPodIdentity(context.Background(), KubernetesTarget{
+		Cluster: os.Getenv("DBSPHERE_TEST_K8S_CONTEXT"), Namespace: namespace, Pod: name}, "00000000-0000-4000-8000-000000000000"); err == nil {
+		t.Fatal("real Kubernetes API accepted a mismatched Pod UID")
+	}
+}
+
 func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	paths := []string{}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1013,9 +1013,13 @@ async function showEvent(id) {
     ['PostgreSQL', graphTypes.has('sample'), '有采样证据', '样本缺失'],
     ['会话与 SQL', ['wait', 'session', 'sql_fingerprint', 'slow_log', 'plan'].some(type => graphTypes.has(type)),
       '有等待、锁或 SQL 证据', '尚无会话或 SQL 证据'],
-    ['Linux / K8S', ['linux', 'pod', 'pvc', 'k8s_node'].some(type => graphTypes.has(type)),
+    ['Linux / K8S', ['linux', 'pod', 'app_pod', 'pvc', 'k8s_node'].some(type => graphTypes.has(type)),
       '有主机或容器证据', '未采集或不适用']
   ];
+  if ((analysis.traceCoverage?.appPodReported ?? 0) > 0) graphSteps.splice(1, 0,
+    ['应用 Pod', (analysis.traceCoverage?.appPodVerified ?? 0) > 0,
+      `${analysis.traceCoverage.appPodVerified}/${analysis.traceCoverage.appPodReported} 条数据库 Span 已经 Kubernetes API 核对`,
+      'OTel 已上报应用 Pod，Kubernetes API 尚未核对']);
   if (graphTypes.has('pgbouncer')) graphSteps.splice(2, 0,
     ['PgBouncer', true, '有连接池路由或采样证据', '未接入连接池']);
   for (const [title, present, available, missing] of graphSteps) {
@@ -1034,6 +1038,7 @@ async function showEvent(id) {
     time_window: '处于事件时间窗', query_id_matches: 'Query ID 匹配',
     same_backend_pid: '后端 PID 匹配', observed_session: '观测到会话',
     blocked_by: '被阻塞于', observed_sql: '观测到 SQL', scheduled_on: '调度于',
+    originated_from: '来自应用 Pod', references_pvc: '引用 PVC',
     routes_to: '路由至', compared_with: '与基线比较', hypothesizes: '提出候选',
     supported_by: '由证据支持', reviewed_by: '人工复核',
     baseline_before_event_and_log_within_event: '事前基线与事件内慢日志对应'

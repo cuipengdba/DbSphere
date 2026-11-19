@@ -3,13 +3,19 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,6 +211,171 @@ func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 		}
 	}
 	t.Fatal("asset disappeared after its PgBouncer credential became invalid")
+}
+
+func TestApplicationPodIdentityRequiresKubernetesUIDAndPersistsInEventPG18(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	var requests atomic.Int32
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/namespaces/apps/pods/checkout-0" ||
+			r.Header.Get("Authorization") != "Bearer read-only-token" {
+			t.Errorf("unexpected Kubernetes Pod lookup: %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1",`+
+			`"creationTimestamp":"2026-11-01T00:00:00Z"},"spec":{"nodeName":"worker-1",`+
+			`"volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+	}))
+	defer api.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: api.Certificate().Raw}))
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
+clusters:
+- name: cluster
+  cluster: {server: %q, certificate-authority-data: %q}
+contexts:
+- name: test-context
+  context: {cluster: cluster, user: reader}
+users:
+- name: reader
+  user: {token: read-only-token}
+current-context: test-context
+`, api.URL, base64.StdEncoding.EncodeToString([]byte(ca)))
+	configPath := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(configPath, []byte(kubeconfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DBSPHERE_KUBECONFIG", configPath)
+	pg, err := Open(ctx, storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "K8S application Pod trace",
+		Host: "pg-app-k8s.internal", Port: 5432, Database: "orders", Username: "monitor",
+		Password: "database-secret", SSLMode: "disable", Runtime: "k8s",
+		K8sCluster: "test-context", Namespace: "db", Pod: "pg-0"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	identities, err := pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	attribute := func(name, value string) map[string]any {
+		return map[string]any{"key": name, "value": map[string]string{"stringValue": value}}
+	}
+	build := func(uid string) (string, []byte) {
+		traceID := newTraceID(t)
+		body, err := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{attribute("service.name", "checkout"),
+				attribute("k8s.namespace.name", "apps"), attribute("k8s.pod.name", "checkout-0"),
+				attribute("k8s.pod.uid", uid)}},
+			"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
+				"traceId": traceID, "spanId": "1111111111111111", "kind": 3,
+				"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano(),
+				"attributes": []any{attribute("db.system.name", "postgresql"),
+					attribute("server.address", "pg-app-k8s.internal"),
+					attribute("db.namespace", "orders"), attribute("db.statement", "SELECT private_data")},
+			}}}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return traceID, body
+	}
+	goodTraceID, goodBody := build("pod-uid-1")
+	decoded, err := trace.Decode(goodBody, identities, now)
+	if err != nil || len(decoded.Spans) != 1 || decoded.Spans[0].AppPodUID != "pod-uid-1" {
+		t.Fatalf("OTLP application Pod attributes were not bounded and mapped: %+v %v", decoded, err)
+	}
+	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("expected one Kubernetes Pod GET, got %d", requests.Load())
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, asset.ID, now.Add(-time.Minute)).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+		VALUES($1,$2,'alert','Application Pod identity','open',$3,'app_pod_test')`,
+		eventID, asset.ID, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	for _, marker := range []string{`"type":"app_pod"`, `"relation":"originated_from"`,
+		`"relation":"scheduled_on"`, `"relation":"references_pvc"`,
+		`"appPodReported":1`, `"appPodVerified":1`} {
+		if !strings.Contains(string(encoded), marker) {
+			t.Fatalf("verified application Pod chain is missing %s: %s", marker, encoded)
+		}
+	}
+	raw, err := pg.RawTrace(ctx, asset.ID, goodTraceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawJSON, _ := json.Marshal(raw)
+	if !strings.Contains(string(rawJSON), `"appPodVerified"`) ||
+		strings.Contains(string(rawJSON), "private_data") ||
+		strings.Contains(string(rawJSON), "database-secret") ||
+		strings.Contains(string(rawJSON), "read-only-token") {
+		t.Fatalf("verified application Pod trace leaked a secret or lost identity: %s", rawJSON)
+	}
+	_, repeatedBody := build("pod-uid-1")
+	decoded, err = trace.Decode(repeatedBody, identities, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("repeated Pod UID bypassed the bounded API cache: %d GET requests", requests.Load())
+	}
+	badTraceID, badBody := build("replaced-uid")
+	decoded, err = trace.Decode(badBody, identities, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
+		t.Fatalf("Kubernetes UID mismatch stopped core Trace storage: %v", err)
+	}
+	bad, err := pg.RawTrace(ctx, asset.ID, badTraceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badJSON, _ := json.Marshal(bad)
+	if !strings.Contains(string(badJSON), `"appPodVerified":null`) {
+		t.Fatalf("mismatched Pod UID was presented as verified: %s", badJSON)
+	}
+	detail, err = pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ = json.Marshal(detail)
+	if !strings.Contains(string(encoded), `"appPodReported":3`) ||
+		!strings.Contains(string(encoded), `"appPodVerified":2`) ||
+		!strings.Contains(string(encoded), "未通过 Kubernetes API 核对") {
+		t.Fatalf("unverified application Pod was not shown as a chain gap: %s", encoded)
+	}
 }
 
 func TestRealPgBouncerEndpointMapsApplicationTracePG18(t *testing.T) {

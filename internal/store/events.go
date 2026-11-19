@@ -239,7 +239,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
 	observedSpans := []observedTraceSpan{}
-	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route FROM trace_spans
+	appPodReported, appPodVerified := 0, 0
+	appPodEdges := map[string]bool{}
+	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,
+		app_pod_reported,app_pod_verified FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY started_at DESC LIMIT 100`, event.AssetID, event.StartedAt, event.EndedAt)
@@ -255,8 +258,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		var parentID *string
 		var backendPID *int32
 		var queryID *string
+		var reportedPodJSON, verifiedPodJSON []byte
 		var at, endedAt time.Time
-		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt, &spanStatus, &backendPID, &queryID, &route); err != nil {
+		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt,
+			&spanStatus, &backendPID, &queryID, &route, &reportedPodJSON, &verifiedPodJSON); err != nil {
 			traceRows.Close()
 			return nil, err
 		}
@@ -340,6 +345,49 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 					}
 				}
 			}
+			if len(reportedPodJSON) != 0 {
+				appPodReported++
+			}
+			if len(verifiedPodJSON) != 0 {
+				var pod struct {
+					Namespace, Name, UID, Node string
+					PVCs                       []string
+					ObservedAt                 time.Time
+				}
+				if json.Unmarshal(verifiedPodJSON, &pod) == nil && pod.Namespace != "" &&
+					pod.Name != "" && pod.UID != "" {
+					appPodVerified++
+					podNode := "app-pod:" + pod.UID
+					source := "/api/assets/" + event.AssetID + "/traces/" + traceID
+					addNode(podNode, "app_pod", pod.Namespace+"/"+pod.Name, source, pod.ObservedAt)
+					link := spanNode + ":" + podNode
+					if !appPodEdges[link] {
+						appPodEdges[link] = true
+						edges = append(edges, map[string]string{"from": spanNode, "to": podNode,
+							"relation": "originated_from"})
+					}
+					if pod.Node != "" {
+						nodeID := "node:" + pod.Node
+						addNode(nodeID, "k8s_node", pod.Node, source, pod.ObservedAt)
+						link := podNode + ":" + nodeID
+						if !appPodEdges[link] {
+							appPodEdges[link] = true
+							edges = append(edges, map[string]string{"from": podNode, "to": nodeID,
+								"relation": "scheduled_on"})
+						}
+					}
+					for _, name := range pod.PVCs {
+						pvcID := "pvc:" + pod.Namespace + ":" + name
+						addNode(pvcID, "pvc", name, source, pod.ObservedAt)
+						link := podNode + ":" + pvcID
+						if !appPodEdges[link] {
+							appPodEdges[link] = true
+							edges = append(edges, map[string]string{"from": podNode, "to": pvcID,
+								"relation": "references_pvc"})
+						}
+					}
+				}
+			}
 		}
 		if parentID != nil {
 			parentEdges = append(parentEdges, map[string]string{"from": "span:" + traceID + ":" + *parentID,
@@ -362,6 +410,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if unresolvedParentSpans > 0 {
 		missing = append(missing, fmt.Sprintf("%d 条 Span 的父 Span 未在当前事件窗口中找到", unresolvedParentSpans))
 	}
+	if appPodReported > appPodVerified {
+		missing = append(missing, fmt.Sprintf("%d 条应用 Pod 身份仅由 OTel 上报，未通过 Kubernetes API 核对",
+			appPodReported-appPodVerified))
+	}
 	sort.Strings(services)
 	impactList := make([]serviceTraceImpact, 0, len(services))
 	for _, service := range services {
@@ -377,7 +429,8 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
 			"unresolvedParentSpans": unresolvedParentSpans,
-			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100},
+			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,
+			"appPodReported": appPodReported, "appPodVerified": appPodVerified},
 	}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related}, nil
 }
@@ -471,7 +524,8 @@ func (s *Postgres) RawSample(ctx context.Context, assetID, sampleID string) (any
 func (s *Postgres) RawTrace(ctx context.Context, assetID, traceID string) (any, error) {
 	spans, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 		'assetId',asset_id,'traceId',trace_id,'spanId',span_id,'parentSpanId',parent_span_id,
-		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id,'route',route)
+		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id,'route',route,
+		'appPodReported',app_pod_reported,'appPodVerified',app_pod_verified)
 		FROM trace_spans WHERE asset_id=$1 AND trace_id=$2 ORDER BY started_at LIMIT 256`, assetID, traceID)
 	if err != nil {
 		return nil, err

@@ -14,6 +14,8 @@ var ErrTooMany = errors.New("too many OTLP spans or scopes")
 
 var traceID = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 var spanID = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
+var k8sName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+var k8sUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 type Asset struct {
 	ID         string
@@ -25,18 +27,21 @@ type Asset struct {
 }
 
 type Span struct {
-	AssetID      string
-	TraceID      string
-	SpanID       string
-	ParentSpanID string
-	BackendPID   int
-	QueryID      string
-	Route        string
-	Service      string
-	Kind         string
-	Start        time.Time
-	End          time.Time
-	Status       string
+	AssetID         string
+	TraceID         string
+	SpanID          string
+	ParentSpanID    string
+	BackendPID      int
+	QueryID         string
+	Route           string
+	AppPodNamespace string
+	AppPodName      string
+	AppPodUID       string
+	Service         string
+	Kind            string
+	Start           time.Time
+	End             time.Time
+	Status          string
 }
 
 type Result struct {
@@ -121,7 +126,14 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 	groups := map[string][]parsedSpan{}
 	result := Result{Spans: []Span{}}
 	for _, resource := range envelope.ResourceSpans {
-		service := attributes(resource.Resource.Attributes)["service.name"]
+		resourceAttrs := attributes(resource.Resource.Attributes)
+		service := resourceAttrs["service.name"]
+		appNamespace, appPod, appUID := resourceAttrs["k8s.namespace.name"],
+			resourceAttrs["k8s.pod.name"], resourceAttrs["k8s.pod.uid"]
+		if !k8sName.MatchString(appNamespace) || len(appNamespace) > 63 ||
+			!k8sName.MatchString(appPod) || len(appPod) > 253 || !k8sUID.MatchString(appUID) {
+			appNamespace, appPod, appUID = "", "", ""
+		}
 		if len(resource.ScopeSpans) > 32 {
 			return Result{}, ErrTooMany
 		}
@@ -154,6 +166,7 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 				}
 				if isDB {
 					item.Kind = "postgresql_client"
+					item.AppPodNamespace, item.AppPodName, item.AppPodUID = appNamespace, appPod, appUID
 					if value, err := strconv.ParseInt(attrs["dbsphere.pg.backend_pid"], 10, 32); err == nil && value > 0 {
 						item.BackendPID = int(value)
 					}

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,17 @@ type KubernetesTarget struct {
 	Namespace string
 	Pod       string
 	Workload  string
+}
+
+// KubernetesPodIdentity is a bounded snapshot of a Pod's API-verified identity.
+// PVC names come from Pod spec references; they do not imply a bound volume.
+type KubernetesPodIdentity struct {
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+	UID       string    `json:"uid"`
+	CreatedAt time.Time `json:"createdAt"`
+	Node      string    `json:"node,omitempty"`
+	PVCs      []string  `json:"pvcs"`
 }
 
 type kubeHTTPError int
@@ -73,6 +85,56 @@ type kubeClient struct {
 }
 
 var kubeName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+var kubeUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+
+// VerifyKubernetesPodIdentity reads one Pod with the configured read-only
+// credentials and rejects a reused name whose UID differs from the OTLP value.
+func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, expectedUID string) (KubernetesPodIdentity, error) {
+	if !kubeName.MatchString(target.Namespace) || len(target.Namespace) > 63 ||
+		!kubeName.MatchString(target.Pod) || len(target.Pod) > 253 || !kubeUID.MatchString(expectedUID) {
+		return KubernetesPodIdentity{}, errors.New("invalid application Pod identity")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	k, err := kubeCredentials(target)
+	if err != nil {
+		return KubernetesPodIdentity{}, err
+	}
+	pod, err := k.get(ctx, "/api/v1/namespaces/"+url.PathEscape(target.Namespace)+
+		"/pods/"+url.PathEscape(target.Pod), nil)
+	if err != nil {
+		return KubernetesPodIdentity{}, err
+	}
+	metadata := kubeObject(pod["metadata"])
+	if kubeString(metadata["name"]) != target.Pod || kubeString(metadata["uid"]) != expectedUID ||
+		kubeString(metadata["namespace"]) != target.Namespace {
+		return KubernetesPodIdentity{}, errors.New("application Pod UID or namespace does not match Kubernetes API")
+	}
+	createdAt, err := time.Parse(time.RFC3339, kubeString(metadata["creationTimestamp"]))
+	if err != nil {
+		return KubernetesPodIdentity{}, errors.New("application Pod creation time is unavailable")
+	}
+	spec := kubeObject(pod["spec"])
+	identity := KubernetesPodIdentity{Namespace: target.Namespace, Name: target.Pod,
+		UID: expectedUID, CreatedAt: createdAt.UTC(), PVCs: []string{}}
+	if node := kubeString(spec["nodeName"]); node != "" && kubeName.MatchString(node) && len(node) <= 253 {
+		identity.Node = node
+	}
+	seenPVCs := map[string]bool{}
+	for _, raw := range kubeList(spec["volumes"]) {
+		name := kubeString(kubeObject(kubeObject(raw)["persistentVolumeClaim"])["claimName"])
+		if name == "" || seenPVCs[name] || !kubeName.MatchString(name) || len(name) > 253 {
+			continue
+		}
+		if len(identity.PVCs) >= 10 {
+			return KubernetesPodIdentity{}, errors.New("application Pod references more than 10 PVCs")
+		}
+		seenPVCs[name] = true
+		identity.PVCs = append(identity.PVCs, name)
+	}
+	sort.Strings(identity.PVCs)
+	return identity, nil
+}
 
 func kubeCredentials(target KubernetesTarget) (*kubeClient, error) {
 	configPath := os.Getenv("DBSPHERE_KUBECONFIG")

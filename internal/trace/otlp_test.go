@@ -106,6 +106,57 @@ func TestDecodeMapsOnlyUniquePgBouncerEndpointWithDatabaseIdentity(t *testing.T)
 	}
 }
 
+func TestDecodeOnlyAllowsCompleteBoundedKubernetesResourceIdentityOnDBSpan(t *testing.T) {
+	now := time.Now().UTC()
+	attr := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	for _, tc := range []struct {
+		name, namespace, pod, uid string
+		wantIdentity              bool
+	}{
+		{"complete", "apps", "checkout-0", "pod-uid-1", true},
+		{"missing uid", "apps", "checkout-0", "", false},
+		{"invalid namespace", "../apps", "checkout-0", "pod-uid-1", false},
+		{"oversized uid", "apps", "checkout-0", strings.Repeat("a", 129), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+				"resource": map[string]any{"attributes": []any{attr("service.name", "checkout"),
+					attr("k8s.namespace.name", tc.namespace), attr("k8s.pod.name", tc.pod),
+					attr("k8s.pod.uid", tc.uid), attr("process.command_line", "private-secret")}},
+				"scopeSpans": []any{map[string]any{"spans": []any{
+					map[string]any{"traceId": "cccccccccccccccccccccccccccccccc", "spanId": "1111111111111111",
+						"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano()},
+					map[string]any{"traceId": "cccccccccccccccccccccccccccccccc", "spanId": "2222222222222222",
+						"parentSpanId": "1111111111111111", "kind": 3,
+						"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano(),
+						"attributes": []any{attr("db.system.name", "postgresql"),
+							attr("server.address", "pg.internal"), attr("db.namespace", "orders")}},
+				}}}}}})
+			result, err := Decode(body, []Asset{{ID: "asset", Host: "pg.internal", Port: 5432,
+				Database: "orders"}}, now)
+			if err != nil || len(result.Spans) != 2 {
+				t.Fatalf("basic Trace was lost with Kubernetes metadata: %+v %v", result, err)
+			}
+			for _, span := range result.Spans {
+				if span.Kind == "service" && span.AppPodUID != "" {
+					t.Fatalf("unmapped parent carried application Pod identity: %+v", span)
+				}
+				if span.Kind == "postgresql_client" &&
+					((span.AppPodUID != "") != tc.wantIdentity ||
+						(tc.wantIdentity && (span.AppPodNamespace != tc.namespace || span.AppPodName != tc.pod))) {
+					t.Fatalf("Kubernetes identity was accepted or discarded incorrectly: %+v", span)
+				}
+				encoded, _ := json.Marshal(span)
+				if strings.Contains(string(encoded), "private-secret") {
+					t.Fatalf("unallowlisted resource attribute leaked: %s", encoded)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsInvalidAndExcessiveOTLP(t *testing.T) {
 	if _, err := Decode([]byte(`{"other":[]}`), nil, time.Now()); !errors.Is(err, ErrInvalid) {
 		t.Fatal("missing resourceSpans accepted")
