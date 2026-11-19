@@ -76,7 +76,7 @@ Playwright Chromium 登录实际 Go B/S 页面，读取真实 OOM 事件 `50f712
 
 测试管理员把 PG18 Deployment 限制到 16 MiB，实际新 Pod `dbsphere-go-oom-pg-67576dd6b7-gzz8h` 出现 `OOMKilled`；Go 应用请求返回 HTTP 502，并导出 Trace `e46e8da8d03862799d72df932d5dd51c` 的两个 `error` Span（连接失败时无后端 PID）。DbSphere 对映射到该 Pod 的资产采样 `18b2921a-0908-4238-9b6c-b5e6491e0814`，将 PG 连接失败、K8S 容器终止状态、OOM 告警和中置信度 `pod_oom_correlated` 候选写入**同一事件** `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7`；该事件图包含失败请求的服务 Span → PG 客户端 Span → PG 资产，以及候选到原始 K8S/PG 证据的边。
 
-将内存限制恢复为 256 MiB 后，新 Pod 就绪；成功采样 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 自动把已删除的旧 Pod 名解析到新 Pod，原事件变为 `resolved`，恢复证据仍挂在该 ID。应用再次请求返回成功。场景 B 目前只在单节点 kind 本机测试，尚无多节点/生产 Operator、真实业务应用或自动 CI 演练；事件时间窗还包含故障前一次健康 Trace，因此影响面数值必须按错误 Span 与时间逐项核对。
+将内存限制恢复为 256 MiB 后，新 Pod 就绪；成功采样 `89e858aa-7593-4ee0-afb1-c2ee87ef9301` 自动把已删除的旧 Pod 名解析到新 Pod，原事件变为 `resolved`，恢复证据仍挂在该 ID。应用再次请求返回成功。这次本机演练只覆盖单节点 kind；后续[四节点 kind 独立 CI](KIND_APP_OOM_ACCEPTANCE.md)已用真实应用连接失败、PG18 OOM 和同事件恢复复核。生产 Operator、真实业务应用仍未验收；事件时间窗还包含故障前一次健康 Trace，因此影响面数值必须按错误 Span 与时间逐项核对。
 
 更新 Go 静态镜像为 `dbsphere/kind-acceptance:trace-impact` 后，在同一个已恢复 OOM 事件 `50f7124d-cfa9-42eb-9ca8-d2f25982a4c7` 上复验：服务 `dbsphere-lock-demo` 的同期观测为 3 条 Trace、6 条 Span，**仅 1 条**带数据库错误的 Trace `e46e8da8d03862799d72df932d5dd51c` 被标为故障信号关联；另 2 条正常同期 Trace 未算入。管理员下钻原始脱敏 Trace 读到 2 条 `error` Span，Markdown 复盘也包含“故障信号关联 1 条”及该 Trace 链接。该分类证明事件页不再把所有同窗请求都称作故障影响；请求错误与 OOM 的因果关系仍须结合事件时间、Pod 状态和人工复核判断。
 
