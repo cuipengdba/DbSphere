@@ -178,6 +178,13 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 				references = append(references, struct{ id, relation string }{baselineID, "compared_with"})
 			}
 		}
+		if stringValue(payload["metric"]) == "pg.sql_regression_ratio" {
+			for _, field := range []string{"previousSampleId", "baselineSampleId"} {
+				if referenceID := stringValue(object(payload["detail"])[field]); referenceID != "" {
+					references = append(references, struct{ id, relation string }{referenceID, "compared_with"})
+				}
+			}
+		}
 		for _, reference := range references {
 			sampleID := reference.id
 			if !evidenceUUID.MatchString(sampleID) {

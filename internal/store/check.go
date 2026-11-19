@@ -282,9 +282,11 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 		return CheckResult{}, err
 	}
 	var previous map[string]any
+	var previousID string
+	var previousAt time.Time
 	var previousJSON []byte
-	if err := tx.QueryRow(ctx, `SELECT metrics_json FROM samples WHERE asset_id=$1
-		AND collected_at<$2 ORDER BY collected_at DESC LIMIT 1`, id, now).Scan(&previousJSON); err == nil {
+	if err := tx.QueryRow(ctx, `SELECT id::text,collected_at,metrics_json FROM samples WHERE asset_id=$1
+		AND collected_at<$2 ORDER BY collected_at DESC LIMIT 1`, id, now).Scan(&previousID, &previousAt, &previousJSON); err == nil {
 		_ = json.Unmarshal(previousJSON, &previous)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, fmt.Errorf("read previous monitoring sample: %w", err)
@@ -296,6 +298,31 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	if status == "ok" {
 		if err := attachDatabaseGrowth(ctx, tx, id, metrics, now); err != nil {
 			return CheckResult{}, err
+		}
+		if stringValue(object(metrics["sqlPerformance"])["status"]) == "ok" &&
+			stringValue(object(previous["sqlPerformance"])["status"]) == "ok" &&
+			now.Sub(previousAt) <= 2*time.Hour {
+			var olderID string
+			var olderAt time.Time
+			var olderJSON []byte
+			err := tx.QueryRow(ctx, `SELECT id::text,collected_at,metrics_json FROM samples WHERE asset_id=$1
+				AND collected_at<$2 ORDER BY collected_at DESC LIMIT 1 OFFSET 1`, id, now).
+				Scan(&olderID, &olderAt, &olderJSON)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return CheckResult{}, fmt.Errorf("read SQL baseline sample: %w", err)
+			}
+			if err == nil && previousAt.After(olderAt) && previousAt.Sub(olderAt) <= 2*time.Hour {
+				var older map[string]any
+				if json.Unmarshal(olderJSON, &older) == nil {
+					regression := sqlRegressionSignal(object(metrics["sqlPerformance"]),
+						object(previous["sqlPerformance"]), object(older["sqlPerformance"]))
+					if regression != nil {
+						regression["previousSampleId"] = previousID
+						regression["baselineSampleId"] = olderID
+						metrics["sqlRegression"] = regression
+					}
+				}
+			}
 		}
 	}
 	encoded, err := json.Marshal(metrics)

@@ -54,6 +54,49 @@ func sqlDelta(newer, older map[string]any) map[string]map[string]any {
 	return result
 }
 
+// sqlRegressionSignal compares two complete intervals of the same fingerprint.
+// A missing interval is not a healthy signal: it must not close a firing alert.
+func sqlRegressionSignal(current, previous, older map[string]any) map[string]any {
+	for _, snapshot := range []map[string]any{current, previous, older} {
+		if stringValue(snapshot["status"]) != "ok" {
+			return nil
+		}
+	}
+	interval := sqlDelta(current, previous)
+	baseline := sqlDelta(previous, older)
+	if interval == nil || baseline == nil {
+		return nil
+	}
+	eligible := 0
+	bestRatio := 0.0
+	var best map[string]any
+	for _, raw := range list(current["statements"]) {
+		row := object(raw)
+		fingerprint := stringValue(row["fingerprint"])
+		latest, prior := interval[fingerprint], baseline[fingerprint]
+		if latest == nil || prior == nil || number(latest["calls"]) < 5 || number(prior["calls"]) < 5 {
+			continue
+		}
+		previousMs, currentMs := number(prior["averageExecMs"]), number(latest["averageExecMs"])
+		if previousMs <= 0 {
+			continue
+		}
+		eligible++
+		ratio := currentMs / previousMs
+		if ratio >= 2 && currentMs-previousMs >= 50 && ratio > bestRatio {
+			bestRatio = ratio
+			best = map[string]any{"queryId": row["queryId"], "fingerprint": fingerprint,
+				"previousAverageExecMs": previousMs, "currentAverageExecMs": currentMs,
+				"previousCalls": prior["calls"], "currentCalls": latest["calls"]}
+		}
+	}
+	if eligible == 0 {
+		return nil
+	}
+	return map[string]any{"status": "ok", "source": "pg_stat_statements",
+		"eligibleStatements": eligible, "maxRatio": bestRatio, "worst": best}
+}
+
 func (s *Postgres) SQLSummary(ctx context.Context, assetID string) (any, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id::text,collected_at,status,metrics_json
 		FROM samples WHERE asset_id=$1 ORDER BY collected_at DESC LIMIT 12`, assetID)

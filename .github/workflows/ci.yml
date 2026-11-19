@@ -528,6 +528,14 @@ jobs:
       - name: Detect a real SQL latency regression
         if: matrix.pg == 18
         run: node scripts/pg-sql-regression-smoke.mjs
+      - name: Verify real Go SQL regression opens and recovers one incident
+        if: matrix.pg == 18
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-root-test@127.0.0.1:15432/postgres
+          DBSPHERE_TEST_PG_TARGET_PORT: '15432'
+          DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
+          DBSPHERE_TEST_PG_TARGET_MAJOR: '18'
+        run: go test ./internal/store -run '^TestRealPG18SQLRegressionOpensAndRecoversOneIncident$' -count=1 -v
 
   test:
     runs-on: ubuntu-latest

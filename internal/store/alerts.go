@@ -35,6 +35,7 @@ var goDefaultRules = []alertRule{
 	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
 	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "storage", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
 	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
+	{"pg_sql_regression", "PostgreSQL SQL 耗时退化", "pg.sql_regression_ratio", "pg_stat_statements", "latency", "warning", ">=", 2, 0, 1, true},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
 	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true},
@@ -112,7 +113,7 @@ func supportedAlertMetric(metric string) bool {
 	switch metric {
 	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
 		"collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed",
-		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.long_transactions",
+		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.sql_regression_ratio", "pg.long_transactions",
 		"pg.replication_lag_bytes", "pg.wal_receiver_down", "patroni.leader_count_invalid", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
@@ -195,6 +196,14 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 		if stringValue(item["status"]) == "ok" {
 			if value, ok := numeric(object(item["data"])[field]); ok {
 				return alertSignal{Available: true, Value: value, Source: "PostgreSQL"}
+			}
+		}
+	case "pg.sql_regression_ratio":
+		signal.Source = "pg_stat_statements"
+		regression := object(metrics["sqlRegression"])
+		if stringValue(regression["status"]) == "ok" {
+			if value, ok := numeric(regression["maxRatio"]); ok && value >= 0 {
+				return alertSignal{Available: true, Value: value, Source: signal.Source, Detail: regression}
 			}
 		}
 	case "pg.replication_lag_bytes":
