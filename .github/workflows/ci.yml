@@ -162,7 +162,9 @@ jobs:
           DBSPHERE_TEST_PG_TARGET_PORT: '15435'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-target-test
           DBSPHERE_TEST_PG_TARGET_MAJOR: ${{ matrix.pg }}
-        run: go test ./internal/collector ./internal/store ./examples/trace-lock-app -count=1 -v
+        # These packages observe the same target-wide pg_stat_activity. Running
+        # their real lock drills concurrently can make one drill see another's waiter.
+        run: go test -p 1 ./internal/collector ./internal/store ./examples/trace-lock-app -count=1 -v
 
   offline-upgrade-rollback:
     runs-on: ubuntu-latest
