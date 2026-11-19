@@ -24,7 +24,7 @@ printf 'DBSPHERE_ADMIN_PASSWORD=%s\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_
 # The harness is prepared while online; only the installer runs with no network.
 docker build --quiet -t dbsphere/offline-airgap-harness:ci - <<'DOCKERFILE'
 FROM docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
-RUN apk add --no-cache bash
+RUN apk add --no-cache bash coreutils
 DOCKERFILE
 
 version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n 1)"
