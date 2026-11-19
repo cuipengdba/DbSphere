@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,6 +27,31 @@ func required(name string) string {
 		log.Fatal(name + " is required")
 	}
 	return value
+}
+
+func tracerProvider(ctx context.Context, endpoint, service string, probability *float64) (*sdktrace.TracerProvider, error) {
+	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint))
+	if err != nil {
+		return nil, err
+	}
+	attributes := []attribute.KeyValue{attribute.String("service.name", service)}
+	if probability != nil {
+		attributes = append(attributes, attribute.Float64("dbsphere.trace.sampling_probability", *probability))
+	}
+	return sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes("", attributes...))), nil
+}
+
+func samplingProbability() (*float64, error) {
+	raw := os.Getenv("DBSPHERE_SDK_PROBE_SAMPLING_PROBABILITY")
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 || value > 1 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil, errors.New("sampling probability must be greater than 0 and no greater than 1")
+	}
+	return &value, nil
 }
 
 func run() error {
@@ -49,12 +75,14 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint))
+	probability, err := samplingProbability()
 	if err != nil {
 		return err
 	}
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithResource(
-		resource.NewWithAttributes("", attribute.String("service.name", service))))
+	provider, err := tracerProvider(ctx, endpoint, service, probability)
+	if err != nil {
+		return err
+	}
 	defer provider.Shutdown(context.Background())
 	tracer := provider.Tracer("dbsphere-sdk-probe")
 	requestCtx, parent := tracer.Start(ctx, "checkout", trace.WithSpanKind(trace.SpanKindServer))
