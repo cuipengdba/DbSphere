@@ -1,5 +1,6 @@
 let csrf = null;
 let currentRole = null;
+let approvalEnabled = false;
 let viewerScoped = false;
 let selectedAsset = null;
 let selectedAssetLayer = null;
@@ -86,6 +87,9 @@ function renderOverview(assets, events) {
 async function api(path, method = 'GET', payload) {
   if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout')
     throw new Error('只读账号不能修改监控数据。');
+  if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' &&
+      !(method === 'POST' && /^\/api\/work-orders\/[0-9a-f-]+\/(approve|reject)$/.test(path)))
+    throw new Error('审批账号只能审批事件工单。');
   const response = await fetch(path, {
     method, credentials: 'same-origin',
     headers: { ...(payload ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
@@ -164,7 +168,7 @@ async function refresh() {
 function renderAdminAudit(entries, target = $('admin-audit-list')) {
   target.replaceChildren();
   if (!entries) { target.append(cell('p', '操作记录暂时不可用。', 'empty')); return; }
-  if (!entries.length) { target.append(cell('p', '尚无管理员写入操作。', 'empty')); return; }
+  if (!entries.length) { target.append(cell('p', '尚无事件写入操作。', 'empty')); return; }
   for (const item of entries) target.append(cell('p',
     `${formatTime(item.observedAt)} · ${item.actor} · ${item.method} ${item.path} · ${item.statusCode || '进行中'} · ${item.outcome}`, 'evidence'));
 }
@@ -941,6 +945,8 @@ async function showEvent(id) {
   setView('incidents');
   const { event, analysis, relatedEvents = [] } = await api(`/api/events/${id}`);
   const eventAudit = currentRole === 'admin' ? await api(`/api/events/${id}/audit`).catch(() => null) : null;
+  const workOrders = currentRole === 'admin' || currentRole === 'approver' ?
+    await api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] };
   selectedEvent = id;
   for (const button of $('event-list').querySelectorAll('[data-event-id]')) {
     button.classList.toggle('selected', button.dataset.eventId === id);
@@ -974,7 +980,7 @@ async function showEvent(id) {
   if (analysis.traceCoverage?.serviceImpact?.length) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
     for (const service of analysis.traceCoverage.serviceImpact) {
-      const row = document.createElement('div'); row.className = 'evidence';
+      const row = document.createElement('div'); row.className = 'evidence work-order-card';
       const signals = [
         ['数据库错误', service.errorTraces],
         ['锁等待 PID 匹配', service.lockWaitTraces],
@@ -1091,9 +1097,61 @@ async function showEvent(id) {
     reports.append(button);
   }
   target.append(reports);
+  if (currentRole === 'admin' || currentRole === 'approver') {
+    const panel = document.createElement('section'); panel.className = 'response-form';
+    panel.append(cell('h4', '事件工单 · 双人审批'));
+    panel.append(cell('p', '受控动作：审批后只对该事件资产执行一次只读采样；不执行 SQL 变更或 Kubernetes 操作。工单 15 分钟后失效。', 'hint'));
+    if (currentRole === 'admin' && event.status === 'open' && approvalEnabled) {
+      const form = document.createElement('form'); form.className = 'response-form';
+      const label = cell('label', '申请原因（5–300 字）');
+      const reason = document.createElement('textarea'); reason.required = true; reason.minLength = 5;
+      reason.maxLength = 300; reason.rows = 2; reason.placeholder = '说明为什么需要对当前事件重新采样';
+      label.append(reason);
+      const submit = cell('button', '提交只读采样工单', 'ghost small-button write-action'); submit.type = 'submit';
+      form.append(label, submit);
+      form.addEventListener('submit', async e => {
+        e.preventDefault(); submit.disabled = true;
+        try { await api(`/api/events/${event.id}/work-orders`, 'POST', { reason: reason.value.trim() }); await showEvent(event.id); }
+        catch (error) { notice(error.message, true); submit.disabled = false; }
+      });
+      panel.append(form);
+    }
+    if (currentRole === 'admin' && !approvalEnabled) panel.append(cell('p', '启用独立审批账号后可申请受控只读采样。', 'hint'));
+    if (!workOrders.orders?.length) panel.append(cell('p', '当前事件暂无工单。', 'empty'));
+    for (const order of workOrders.orders || []) {
+      const row = document.createElement('div'); row.className = 'evidence';
+      const states = { requested: '待审批', approved: '已批准待执行', rejected: '已驳回',
+        executing: '执行中', completed: '已完成', failed: '采样失败', expired: '已过期' };
+      row.append(cell('p', `${states[order.status] || order.status} · ${order.reason}`),
+        cell('small', `工单 ${order.id} · 申请 ${formatTime(order.requestedAt)} · 到期 ${formatTime(order.expiresAt)}`));
+      if (order.result?.sampleId) row.append(cell('small', `采样 ID ${order.result.sampleId} · 状态 ${order.result.sampleStatus || '未知'}`));
+      if (currentRole === 'approver' && order.status === 'requested') {
+        for (const [action, label] of [['approve', '批准'], ['reject', '驳回']]) {
+          const button = cell('button', label, 'ghost small-button approval-action');
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            try { await api(`/api/work-orders/${order.id}/${action}`, 'POST'); await showEvent(event.id); }
+            catch (error) { notice(error.message, true); button.disabled = false; }
+          });
+          row.append(button);
+        }
+      }
+      if (currentRole === 'admin' && order.status === 'approved') {
+        const execute = cell('button', '执行已审批的只读采样', 'ghost small-button write-action');
+        execute.addEventListener('click', async () => {
+          execute.disabled = true;
+          try { await api(`/api/work-orders/${order.id}/execute`, 'POST'); await showEvent(event.id); await refresh(); }
+          catch (error) { notice(error.message, true); execute.disabled = false; }
+        });
+        row.append(execute);
+      }
+      panel.append(row);
+    }
+    target.append(panel);
+  }
   if (currentRole === 'admin') {
     const auditDetails = document.createElement('details'); auditDetails.className = 'settings-details';
-    auditDetails.append(cell('summary', '查看该事件的管理员操作记录'));
+    auditDetails.append(cell('summary', '查看该事件的操作记录'));
     const auditList = document.createElement('div'); auditList.className = 'list';
     renderAdminAudit(eventAudit?.entries, auditList);
     auditDetails.append(auditList); target.append(auditDetails);
@@ -1224,6 +1282,9 @@ async function showEvent(id) {
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
+    if (evidence.kind === 'work_order_requested') text = `管理员申请只读采样工单 ${evidence.payload.workOrderId}：${evidence.payload.reason}`;
+    if (evidence.kind === 'work_order_decision') text = `独立审批账号${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
+    if (evidence.kind === 'work_order_executed') text = `管理员执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') text =
       `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence');
@@ -1245,9 +1306,10 @@ async function boot() {
   const session = await api('/api/session');
   csrf = session.csrf;
   currentRole = session.authenticated ? (session.role || 'admin') : null;
+  approvalEnabled = session.approvalEnabled === true;
   viewerScoped = session.authenticated && session.viewerScoped === true;
   document.body.dataset.role = currentRole || '';
-  $('role-label').textContent = currentRole === 'viewer' ? '只读查看' : '管理员';
+  $('role-label').textContent = currentRole === 'viewer' ? '只读查看' : currentRole === 'approver' ? '独立审批' : '管理员';
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
@@ -1287,11 +1349,15 @@ window.addEventListener('hashchange', () => setView(location.hash.slice(1), fals
 
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  try { const data = await api('/api/login', 'POST', { password: new FormData(event.target).get('password') }); csrf = data.csrf; await boot(); }
+  try { const data = await api('/api/login', 'POST', { password: new FormData(event.target).get('password') }); event.target.reset(); csrf = data.csrf; await boot(); }
   catch (e) { alert(e.message); }
 });
 
-$('logout').addEventListener('click', async () => { await api('/api/logout', 'POST'); csrf = null; currentRole = null; selectedAsset = null; await boot(); });
+$('logout').addEventListener('click', async () => {
+  await api('/api/logout', 'POST');
+  $('login-form').reset();
+  location.reload();
+});
 $('refresh').addEventListener('click', () => refresh().catch(e => notice(e.message, true)));
 $('inspection-asset').addEventListener('change', () => refresh().catch(error => notice(error.message, true)));
 $('inspection-run').addEventListener('click', async () => {

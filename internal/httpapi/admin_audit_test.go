@@ -27,6 +27,9 @@ func (s *adminAuditStub) StartAdminAudit(_ context.Context, method, path string)
 	s.method, s.path = method, path
 	return "audit-id", nil
 }
+func (s *adminAuditStub) StartRoleAudit(ctx context.Context, _ string, method, path string) (string, error) {
+	return s.StartAdminAudit(ctx, method, path)
+}
 func (s *adminAuditStub) FinishAdminAudit(_ context.Context, _ string, status int) error {
 	s.status = status
 	return nil

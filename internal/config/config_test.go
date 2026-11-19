@@ -107,6 +107,23 @@ func TestViewerAssetScopeRequiresValidIDsAndPassword(t *testing.T) {
 	}
 }
 
+func TestApproverPasswordRequiresSeparateStrongAccount(t *testing.T) {
+	t.Setenv("DBSPHERE_DATABASE_URL", "postgres://example.invalid/dbsphere")
+	t.Setenv("DBSPHERE_ADMIN_PASSWORD", "admin-test-password")
+	t.Setenv("DBSPHERE_VIEWER_PASSWORD", "viewer-test-password")
+	t.Setenv("DBSPHERE_MASTER_KEY", testMasterKey())
+	for _, password := range []string{"short", "admin-test-password", "viewer-test-password"} {
+		t.Setenv("DBSPHERE_APPROVER_PASSWORD", password)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APPROVER_PASSWORD") {
+			t.Fatalf("unsafe approver password accepted: %q %v", password, err)
+		}
+	}
+	t.Setenv("DBSPHERE_APPROVER_PASSWORD", "approver-test-password")
+	if cfg, err := Load(); err != nil || cfg.ApproverPass != "approver-test-password" {
+		t.Fatalf("separate approver account unavailable: %v", err)
+	}
+}
+
 func testMasterKey() string {
 	key := make([]byte, 32)
 	for i := range key {

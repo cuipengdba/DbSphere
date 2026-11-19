@@ -294,6 +294,28 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record trace Query ID migration: %w", err)
 		}
 	}
+	var workOrdersMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=26)").Scan(&workOrdersMigrated); err != nil {
+		return fmt.Errorf("check work order migration: %w", err)
+	}
+	if !workOrdersMigrated {
+		if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS work_orders (
+			id uuid PRIMARY KEY, event_id uuid NOT NULL REFERENCES event_keys(id) ON DELETE CASCADE,
+			asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+			action text NOT NULL CHECK(action='collect_once'), reason text NOT NULL,
+			status text NOT NULL CHECK(status IN ('requested','approved','rejected','executing','completed','failed')),
+			requested_by text NOT NULL, approved_by text,
+			requested_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL,
+			approved_at timestamptz, executed_at timestamptz, result_json jsonb)`); err != nil {
+			return fmt.Errorf("create work orders: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS work_orders_event_time ON work_orders(event_id,requested_at DESC)"); err != nil {
+			return fmt.Errorf("index event work orders: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(26) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record work order migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
@@ -463,6 +485,46 @@ func (s *Postgres) ViewerPasswordHash(ctx context.Context, bootstrapPassword str
 		return "", err
 	}
 	return stored, nil
+}
+
+// ApproverPasswordHash reconciles a separate approval-only account. A changed
+// password invalidates its sessions without changing the administrator key.
+func (s *Postgres) ApproverPasswordHash(ctx context.Context, password string) (string, error) {
+	var stored string
+	err := s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='approver_password_hash'").Scan(&stored)
+	if err == nil {
+		if password == "" {
+			_, err = s.pool.Exec(ctx, "DELETE FROM settings WHERE key='approver_password_hash'")
+			return "", err
+		}
+		if security.VerifyPassword(password, stored) {
+			return stored, nil
+		}
+		hash, err := security.HashPassword(password)
+		if err != nil {
+			return "", err
+		}
+		_, err = s.pool.Exec(ctx, "UPDATE settings SET value=$1 WHERE key='approver_password_hash'", hash)
+		return hash, err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if password == "" {
+		return "", nil
+	}
+	if len(password) < 12 {
+		return "", errors.New("DBSPHERE_APPROVER_PASSWORD must contain at least 12 characters")
+	}
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		return "", err
+	}
+	if _, err = s.pool.Exec(ctx, "INSERT INTO settings(key,value) VALUES('approver_password_hash',$1) ON CONFLICT(key) DO NOTHING", hash); err != nil {
+		return "", err
+	}
+	err = s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='approver_password_hash'").Scan(&stored)
+	return stored, err
 }
 
 func (s *Postgres) Close() { s.pool.Close() }

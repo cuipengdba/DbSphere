@@ -98,3 +98,6 @@ button{background:#245ea7}
 .header-session{display:flex;align-items:center;gap:10px}.header-session span{font-size:12px;color:#446b78;background:#eaf3f5;border-radius:14px;padding:5px 9px}body[data-role=viewer] #workspace form,body[data-role=viewer] #workspace .write-action{display:none!important}
 
 body[data-role=viewer] section.panel:has(> #asset-form),body[data-role=viewer] section.panel:has(> #silence-form){display:none}body[data-role=viewer] div.grid[data-view=assets],body[data-role=viewer] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}
+body[data-role=approver] #workspace form,body[data-role=approver] #workspace .write-action{display:none!important}
+body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approver] section.panel:has(> #silence-form){display:none}body[data-role=approver] div.grid[data-view=assets],body[data-role=approver] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}
+.work-order-card small{display:block;overflow-wrap:anywhere;margin-top:5px}.work-order-card button{margin:9px 8px 0 0}

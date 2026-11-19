@@ -18,6 +18,7 @@ type Config struct {
 	MasterKey      []byte
 	AdminPass      string
 	ViewerPass     string
+	ApproverPass   string
 	ViewerAssetIDs []string
 	AutoCollect    bool
 	CollectEvery   int
@@ -40,6 +41,10 @@ func Load() (Config, error) {
 	viewer := os.Getenv("DBSPHERE_VIEWER_PASSWORD")
 	if viewer != "" && (len(viewer) < 12 || viewer == password) {
 		return Config{}, errors.New("DBSPHERE_VIEWER_PASSWORD must be distinct and contain at least 12 characters")
+	}
+	approver := os.Getenv("DBSPHERE_APPROVER_PASSWORD")
+	if approver != "" && (len(approver) < 12 || approver == password || approver == viewer) {
+		return Config{}, errors.New("DBSPHERE_APPROVER_PASSWORD must be distinct and contain at least 12 characters")
 	}
 	var viewerAssetIDs []string
 	if raw := os.Getenv("DBSPHERE_VIEWER_ASSET_IDS"); raw != "" {
@@ -128,7 +133,7 @@ func Load() (Config, error) {
 		}
 	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
-		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer,
+		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer, ApproverPass: approver,
 		ViewerAssetIDs: viewerAssetIDs,
 		AutoCollect:    autoCollect, CollectEvery: interval, CollectWorkers: workers,
 		OTLPToken: otlpToken, TraceDays: traceDays,

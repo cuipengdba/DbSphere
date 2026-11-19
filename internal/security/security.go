@@ -106,6 +106,10 @@ func CreateViewerSession(key []byte, now time.Time) (string, error) {
 	return createSession(key, now, "viewer")
 }
 
+func CreateApproverSession(key []byte, now time.Time) (string, error) {
+	return createSession(key, now, "approver")
+}
+
 // AdminSessionKey invalidates administrator cookies when the password hash
 // changes while leaving the master key for encrypted assets unchanged.
 func AdminSessionKey(master []byte, passwordHash string) []byte {
@@ -120,6 +124,13 @@ func AdminSessionKey(master []byte, passwordHash string) []byte {
 func ViewerSessionKey(master []byte, passwordHash string) []byte {
 	mac := hmac.New(sha256.New, master)
 	mac.Write([]byte("dbsphere-viewer-session-v1:"))
+	mac.Write([]byte(passwordHash))
+	return mac.Sum(nil)
+}
+
+func ApproverSessionKey(master []byte, passwordHash string) []byte {
+	mac := hmac.New(sha256.New, master)
+	mac.Write([]byte("dbsphere-approver-session-v1:"))
 	mac.Write([]byte(passwordHash))
 	return mac.Sum(nil)
 }
@@ -169,7 +180,7 @@ func SessionRole(key []byte, token string, now time.Time) (string, bool) {
 	if session.Role == "" {
 		session.Role = "admin"
 	}
-	if session.Role != "admin" && session.Role != "viewer" {
+	if session.Role != "admin" && session.Role != "viewer" && session.Role != "approver" {
 		return "", false
 	}
 	return session.Role, true

@@ -88,6 +88,25 @@ func TestAdminSessionInvalidatedByPasswordRotation(t *testing.T) {
 	}
 }
 
+func TestApproverSessionIsRoleBoundAndRevokedOnRotation(t *testing.T) {
+	master := bytes.Repeat([]byte{11}, 32)
+	now := time.Now().UTC()
+	key := ApproverSessionKey(master, "first-hash")
+	token, err := CreateApproverSession(key, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if role, ok := SessionRole(key, token, now); !ok || role != "approver" {
+		t.Fatal("approver role was not verified")
+	}
+	if _, ok := SessionRole(AdminSessionKey(master, "first-hash"), token, now); ok {
+		t.Fatal("approver session was accepted as administrator")
+	}
+	if _, ok := SessionRole(ApproverSessionKey(master, "second-hash"), token, now); ok {
+		t.Fatal("approver session survived credential rotation")
+	}
+}
+
 func TestNodeSessionCompatibility(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	token := "eyJleHAiOjk5OTk5OTk5OTk5OTksIm5vbmNlIjoiMDAwMTAyMDMwNDA1MDYwNzA4MDkwYTBiMGMwZDBlMGYifQ.Y2xRmFlsu57CkZsdF4CpJrytLZT-KR3qDiPFGN4hzBA"

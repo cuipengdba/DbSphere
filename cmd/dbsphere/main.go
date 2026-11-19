@@ -105,6 +105,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	approverHash, err := pg.ApproverPasswordHash(ctx, cfg.ApproverPass)
+	if err != nil {
+		return err
+	}
 	remoteAI := os.Getenv("DBSPHERE_AI_ALLOW_REMOTE")
 	if remoteAI != "" && remoteAI != "true" && remoteAI != "false" {
 		return fmt.Errorf("DBSPHERE_AI_ALLOW_REMOTE must be true or false")
@@ -131,12 +135,13 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
-			ViewerPasswordHash: viewerHash,
-			ViewerAssetIDs:     cfg.ViewerAssetIDs,
-			AutoCollect:        cfg.AutoCollect,
-			CollectEvery:       cfg.CollectEvery,
-			SecureCookie:       os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
-			OTLPToken:          cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
+			ViewerPasswordHash:   viewerHash,
+			ApproverPasswordHash: approverHash,
+			ViewerAssetIDs:       cfg.ViewerAssetIDs,
+			AutoCollect:          cfg.AutoCollect,
+			CollectEvery:         cfg.CollectEvery,
+			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
+			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {

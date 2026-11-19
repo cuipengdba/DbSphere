@@ -5,11 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // StartAdminAudit is called before a browser administrator mutation. A failed
 // insert prevents the mutation; no request body, cookie or credential is saved.
 func (s *Postgres) StartAdminAudit(ctx context.Context, method, path string) (string, error) {
+	return s.StartRoleAudit(ctx, "admin", method, path)
+}
+
+func (s *Postgres) StartRoleAudit(ctx context.Context, actor, method, path string) (string, error) {
+	if actor != "admin" && actor != "approver" {
+		return "", errors.New("unsupported audit actor")
+	}
 	if method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" {
 		return "", errors.New("unsupported audited method")
 	}
@@ -21,9 +30,18 @@ func (s *Postgres) StartAdminAudit(ctx context.Context, method, path string) (st
 	if len(segments) >= 4 && segments[1] == "api" && segments[2] == "events" && evidenceUUID.MatchString(segments[3]) {
 		eventID = &segments[3]
 	}
+	if len(segments) >= 4 && segments[1] == "api" && segments[2] == "work-orders" && evidenceUUID.MatchString(segments[3]) {
+		var linked string
+		err := s.pool.QueryRow(ctx, "SELECT event_id::text FROM work_orders WHERE id=$1", segments[3]).Scan(&linked)
+		if err == nil {
+			eventID = &linked
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
 	var id string
 	err := s.pool.QueryRow(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome,event_id)
-		VALUES(gen_random_uuid(),'admin',$1,$2,'started',$3) RETURNING id::text`, method, path, eventID).Scan(&id)
+		VALUES(gen_random_uuid(),$1,$2,$3,'started',$4) RETURNING id::text`, actor, method, path, eventID).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("start admin audit: %w", err)
 	}

@@ -58,6 +58,9 @@ var eventReportPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-
 var eventAuditPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/audit$`)
 var eventAIPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-summary$`)
 var eventAIQuestionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ai-question$`)
+var eventWorkOrdersPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/work-orders$`)
+var workOrderDecisionPath = regexp.MustCompile(`^/api/work-orders/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(approve|reject)$`)
+var workOrderExecutePath = regexp.MustCompile(`^/api/work-orders/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/execute$`)
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var eventResponsePath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/response$`)
@@ -93,8 +96,16 @@ type EventAIStore interface {
 	ReserveAIQuestionInvocation(context.Context, string, string, int) (string, error)
 	CompleteAIInvocation(context.Context, string, string, string, []string) error
 }
+type WorkOrderStore interface {
+	CreateWorkOrder(context.Context, string, string) (json.RawMessage, error)
+	EventWorkOrders(context.Context, string) (any, error)
+	DecideWorkOrder(context.Context, string, string) (json.RawMessage, error)
+	BeginWorkOrder(context.Context, string) (string, string, error)
+	FinishWorkOrder(context.Context, string, storepkg.CheckResult, error) (json.RawMessage, error)
+}
 type AdminAuditStore interface {
 	StartAdminAudit(context.Context, string, string) (string, error)
+	StartRoleAudit(context.Context, string, string, string) (string, error)
 	FinishAdminAudit(context.Context, string, int) error
 	RecentAdminAudit(context.Context) (any, error)
 	RecentEventAdminAudit(context.Context, string) (any, error)
@@ -161,16 +172,17 @@ type TraceBatchStore interface {
 }
 
 type AuthConfig struct {
-	MasterKey          []byte
-	PasswordHash       string
-	ViewerPasswordHash string
-	ViewerAssetIDs     []string
-	AutoCollect        bool
-	CollectEvery       int
-	SecureCookie       bool
-	OTLPToken          string
-	AI                 *ai.Client
-	AIDailyLimit       int
+	MasterKey            []byte
+	PasswordHash         string
+	ViewerPasswordHash   string
+	ApproverPasswordHash string
+	ViewerAssetIDs       []string
+	AutoCollect          bool
+	CollectEvery         int
+	SecureCookie         bool
+	OTLPToken            string
+	AI                   *ai.Client
+	AIDailyLimit         int
 }
 
 type loginAttempt struct {
@@ -300,6 +312,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			role, loggedIn = security.SessionRole(viewerKey, token, time.Now())
 			loggedIn = loggedIn && role == "viewer"
 		}
+		if !loggedIn && credentials.ApproverPasswordHash != "" {
+			approverKey := security.ApproverSessionKey(credentials.MasterKey, credentials.ApproverPasswordHash)
+			role, loggedIn = security.SessionRole(approverKey, token, time.Now())
+			loggedIn = loggedIn && role == "approver"
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/login" {
 			ip := r.RemoteAddr
 			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
@@ -325,6 +342,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				loginRole = ""
 				if credentials.ViewerPasswordHash != "" && security.VerifyPassword(input.Password, credentials.ViewerPasswordHash) {
 					loginRole = "viewer"
+				} else if credentials.ApproverPasswordHash != "" &&
+					security.VerifyPassword(input.Password, credentials.ApproverPasswordHash) {
+					loginRole = "approver"
 				}
 			}
 			if loginRole == "" {
@@ -348,6 +368,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if loginRole == "viewer" {
 				viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
 				session, err = security.CreateViewerSession(viewerKey, time.Now())
+			} else if loginRole == "approver" {
+				approverKey := security.ApproverSessionKey(credentials.MasterKey, credentials.ApproverPasswordHash)
+				session, err = security.CreateApproverSession(approverKey, time.Now())
 			} else {
 				session, err = security.CreateSession(adminKey, time.Now())
 			}
@@ -358,8 +381,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
-				"viewerScoped": loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"csrf":         security.CSRFToken(credentials.MasterKey, session)})
+				"viewerScoped":    loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
+				"approvalEnabled": credentials.ApproverPasswordHash != "",
+				"csrf":            security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/session" {
@@ -372,8 +396,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				sessionRole = role
 			}
 			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole,
-				"viewerScoped": loggedIn && role == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"csrf":         csrf})
+				"viewerScoped":    loggedIn && role == "viewer" && len(credentials.ViewerAssetIDs) > 0,
+				"approvalEnabled": credentials.ApproverPasswordHash != "",
+				"csrf":            csrf})
 			return
 		}
 		if !loggedIn {
@@ -393,6 +418,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if role == "viewer" && r.Method != http.MethodGet {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
+			return
+		}
+		if role == "approver" && r.Method != http.MethodGet &&
+			!(r.Method == http.MethodPost && workOrderDecisionPath.MatchString(r.URL.Path)) {
+			respond(w, http.StatusForbidden, map[string]string{"error": "Approver account can only review work orders"})
 			return
 		}
 		viewerScope := map[string]bool(nil)
@@ -443,10 +473,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				return
 			}
 		}
-		if role == "admin" && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
+		if (role == "admin" || role == "approver") && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
 			if auditor, ok := store.(AdminAuditStore); ok {
-				id, err := auditor.StartAdminAudit(r.Context(), r.Method, r.URL.Path)
+				id, err := auditor.StartRoleAudit(r.Context(), role, r.Method, r.URL.Path)
 				if err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable; operation was not run"})
 					return
@@ -465,6 +495,112 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					}
 				}()
 			}
+		}
+		if match := eventWorkOrdersPath.FindStringSubmatch(r.URL.Path); match != nil &&
+			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
+			if role != "admin" && role != "approver" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Work order access required"})
+				return
+			}
+			orders, ok := store.(WorkOrderStore)
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Work orders unavailable"})
+				return
+			}
+			if r.Method == http.MethodGet {
+				value, err := orders.EventWorkOrders(r.Context(), match[1])
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work orders unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, value)
+				return
+			}
+			if role != "admin" || credentials.ApproverPasswordHash == "" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "A separate approver account is required"})
+				return
+			}
+			var input struct {
+				Reason string `json:"reason"`
+			}
+			if readJSONLimit(w, r, &input, 2048) != nil {
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid work order request"})
+				return
+			}
+			order, err := orders.CreateWorkOrder(r.Context(), match[1], input.Reason)
+			switch {
+			case errors.Is(err, storepkg.ErrInvalidWorkOrder):
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Reason must be 5–300 characters"})
+			case errors.Is(err, storepkg.ErrEventNotFound):
+				respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
+			case errors.Is(err, storepkg.ErrWorkOrderConflict):
+				respond(w, http.StatusConflict, map[string]string{"error": "Event is closed or has too many active work orders"})
+			case err != nil:
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order storage unavailable"})
+			default:
+				respond(w, http.StatusCreated, map[string]any{"order": order,
+					"preview": "审批后仅对该事件的资产运行一次只读采样；不执行 SQL 变更或 Kubernetes 操作。"})
+			}
+			return
+		}
+		if match := workOrderDecisionPath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodPost {
+			if role != "approver" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Separate approver required"})
+				return
+			}
+			orders, ok := store.(WorkOrderStore)
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Work orders unavailable"})
+				return
+			}
+			decision := "approved"
+			if match[2] == "reject" {
+				decision = "rejected"
+			}
+			order, err := orders.DecideWorkOrder(r.Context(), match[1], decision)
+			if errors.Is(err, storepkg.ErrWorkOrderConflict) {
+				respond(w, http.StatusConflict, map[string]string{"error": "Work order expired or already decided"})
+				return
+			}
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order decision unavailable"})
+				return
+			}
+			respond(w, http.StatusOK, map[string]any{"order": order})
+			return
+		}
+		if match := workOrderExecutePath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodPost {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Administrator execution required"})
+				return
+			}
+			orders, ok := store.(WorkOrderStore)
+			checker, checkOK := store.(AssetChecker)
+			if !ok || !checkOK {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Controlled collection unavailable"})
+				return
+			}
+			_, assetID, err := orders.BeginWorkOrder(r.Context(), match[1])
+			if errors.Is(err, storepkg.ErrWorkOrderConflict) {
+				respond(w, http.StatusConflict, map[string]string{"error": "Approval required, event resolved, or work order expired"})
+				return
+			}
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order unavailable"})
+				return
+			}
+			collectionCtx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+			result, collectionErr := checker.CheckAsset(collectionCtx, assetID, credentials.MasterKey)
+			cancel()
+			auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer auditCancel()
+			order, err := orders.FinishWorkOrder(auditCtx, match[1], result, collectionErr)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order execution audit unavailable"})
+				return
+			}
+			respond(w, http.StatusOK, map[string]any{"order": order, "result": result})
+			return
 		}
 		if r.Method == http.MethodPost {
 			if match := slowLogImportPath.FindStringSubmatch(r.URL.Path); match != nil {
