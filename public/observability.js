@@ -39,6 +39,21 @@
     k8s_node: 'K8S Node', pvc: 'PVC', pvc_status: 'PVC 状态',
     event: '事件', evidence: '证据', candidate: '根因候选'
   };
+  const evidenceLabel = {
+    alert_firing: '告警触发', alert_recovered: '告警恢复',
+    alert_signal_missing: '告警信号缺失', alert_disabled: '规则停用',
+    alert_suppressed: '告警静默', alert_unsuppressed: '静默结束',
+    collection_error: '采集失败', collection_recovered: '采集恢复',
+    linux_state: 'Linux 状态', k8s_state: 'Kubernetes 状态',
+    pgbouncer_state: 'PgBouncer 状态', patroni_state: 'Patroni 状态',
+    root_cause_candidate: '根因候选', rca_decision: '人工根因决定',
+    event_acknowledged: '事件确认', recovery_verified: '恢复验证',
+    operator_response: '处置记录', work_order_requested: '工单申请',
+    work_order_decision: '工单审批', work_order_executed: '工单执行',
+    ai_invocation: 'AI 分析调用', ai_advisory: 'AI 分析建议'
+  };
+  const displayLabel = node => node.type === 'evidence'
+    ? evidenceLabel[node.label] || node.label : node.label;
   const scopes = {
     all: null,
     trace: new Set(['service', 'service_span', 'app_pod', 'db_client_span', 'pgbouncer', 'postgres', 'sample']),
@@ -98,7 +113,8 @@
       selected = id;
       const node = byID.get(id);
       if (!node) return;
-      detail.replaceChildren(make('strong', '', `${typeLabel[node.type] || node.type} · ${node.label}`),
+      const label = displayLabel(node);
+      detail.replaceChildren(make('strong', '', `${typeLabel[node.type] || node.type} · ${label}${label === node.label ? '' : ` (${node.label})`}`),
         make('small', '', `观测时间 ${time(node.at)} · ${allEdges.filter(edge => edge.from === id || edge.to === id).length} 条关联`));
       const path = sourcePath(node.source);
       if (path) {
@@ -113,7 +129,7 @@
           const neighbor = byID.get(outgoing ? edge.to : edge.from);
           if (!neighbor) continue;
           const button = make('button', 'ghost small-button',
-            `${outgoing ? '→' : '←'} ${relationLabel[edge.relation] || edge.relation} · ${short(neighbor.label, 35)}`);
+            `${outgoing ? '→' : '←'} ${relationLabel[edge.relation] || edge.relation} · ${short(displayLabel(neighbor), 35)}`);
           button.type = 'button'; button.addEventListener('click', () => nodeDetail(neighbor.id));
           links.append(button);
         }
@@ -127,7 +143,7 @@
       const allowed = scopes[scope.value] || null;
       const visible = allNodes.filter(node => !allowed || allowed.has(node.type));
       const matches = query ? visible.filter(node =>
-        `${node.label} ${node.id} ${typeLabel[node.type] || node.type}`.toLocaleLowerCase().includes(query)) : visible;
+        `${node.label} ${displayLabel(node)} ${node.id} ${typeLabel[node.type] || node.type}`.toLocaleLowerCase().includes(query)) : visible;
       const ids = new Set(matches.map(node => node.id));
       if (query) {
         for (const edge of allEdges) if (ids.has(edge.from) || ids.has(edge.to)) {
@@ -193,14 +209,14 @@
       for (const node of selectedNodes) {
         const at = positions.get(node.id);
         const group = svg('g', { class: `obs-graph-node${selected === node.id ? ' is-selected' : ''}`,
-          role: 'button', tabindex: 0, 'aria-label': `${typeLabel[node.type] || node.type} ${node.label}` });
+          role: 'button', tabindex: 0, 'aria-label': `${typeLabel[node.type] || node.type} ${displayLabel(node)}` });
         group.append(svg('rect', { x: at.x, y: at.y, width: 208, height: 52, rx: 9,
           fill: selected === node.id ? '#e8efff' : '#fff', stroke: accent[at.stageIndex], 'stroke-width': selected === node.id ? 2.7 : 1.3 }));
         const label = svg('text', { x: at.x + 11, y: at.y + 20, class: 'obs-node-label' });
-        label.textContent = short(node.label, 24); group.append(label);
+        label.textContent = short(displayLabel(node), 24); group.append(label);
         const kind = svg('text', { x: at.x + 11, y: at.y + 39, class: 'obs-node-kind' });
         kind.textContent = typeLabel[node.type] || node.type; group.append(kind);
-        group.append(titleNode(`${node.label} · ${typeLabel[node.type] || node.type}`));
+        group.append(titleNode(`${displayLabel(node)} · ${typeLabel[node.type] || node.type} · ${node.label}`));
         group.addEventListener('click', () => nodeDetail(node.id));
         group.addEventListener('keydown', event => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); nodeDetail(node.id); }
@@ -225,7 +241,7 @@
       make('small', '', `${evidence.length} 条事件记录`)); section.append(header);
     if (!evidence.length) { section.append(make('p', 'empty', '暂无时间线数据。')); return section; }
     const rows = evidence.slice(-60);
-    const lanes = ['告警', '数据库', '基础设施', '处置'];
+    const lanes = ['告警', '数据库', '基础设施', '判断/处置'];
     const lane = kind => /alert|anomaly/.test(kind) ? 0 :
       /collection|sample|sql|lock|replica/.test(kind) ? 1 :
         /k8s|pod|pvc|linux|node/.test(kind) ? 2 : 3;
@@ -256,13 +272,19 @@
       const marker = svg('circle', { cx: x, cy: y, r: 6.5,
         fill: point.item.kind.includes('recovered') ? '#2f9874' :
           point.item.kind.includes('error') || point.item.kind.includes('firing') ? '#db6c47' : '#426fb3' });
-      marker.append(titleNode(`${time(point.item.observedAt)} · ${point.item.kind}`));
+      marker.append(titleNode(`${time(point.item.observedAt)} · ${evidenceLabel[point.item.kind] || point.item.kind}`));
       const group = svg('g', { role: 'button', tabindex: 0,
-        'aria-label': `${time(point.item.observedAt)} ${point.item.kind}` });
+        'aria-label': `${time(point.item.observedAt)} ${evidenceLabel[point.item.kind] || point.item.kind}` });
       group.append(marker);
-      const show = () => detail.replaceChildren(
-        make('strong', '', `${time(point.item.observedAt)} · ${point.item.kind}`),
-        make('small', '', `来源：${lanes[point.lane]} · 记录 ID ${point.item.id || '未提供'}`));
+      const show = () => {
+        detail.replaceChildren(
+          make('strong', '', `${time(point.item.observedAt)} · ${evidenceLabel[point.item.kind] || point.item.kind} (${point.item.kind})`),
+          make('small', '', `来源：${lanes[point.lane]} · 记录 ID ${point.item.id || '未提供'}`));
+        const payload = point.item.payload || {};
+        const summary = [payload.ruleId, payload.hypothesis, payload.reason,
+          payload.error, payload.sampleId].filter(value => typeof value === 'string' && value);
+        if (summary.length) detail.append(make('small', '', short(summary.join(' · '), 200)));
+      };
       group.addEventListener('click', show);
       group.addEventListener('keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); }
