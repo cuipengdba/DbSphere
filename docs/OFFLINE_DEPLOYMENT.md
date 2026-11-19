@@ -1,6 +1,6 @@
 # Linux 一键离线部署
 
-当前版本可从 [V1.0.10 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.10)获取 `DbSphere-go-offline-1.0.10-linux-amd64.run` 与同名 `.sha256`；下文 V1.0.0 命令用于说明正式版首次交付的安装及升级/回退基线，安装最新版本时请替换为当前附件名。
+当前版本可从 [V1.0.11 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.11)获取 `DbSphere-go-offline-1.0.11-linux-amd64.run` 与同名 `.sha256`；下文 V1.0.0 命令用于说明正式版首次交付的安装及升级/回退基线，安装最新版本时请替换为当前附件名。
 
 > [V1.0.0 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.0)提供 Go 一键离线包和静态 Go 程序。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 

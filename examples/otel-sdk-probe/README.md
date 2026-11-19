@@ -19,4 +19,6 @@ go run .
 
 V1.0.9 的故障验收还会让真实 HTTP 请求等待 PostgreSQL advisory lock，并核对应用父子 Span、等待 PID、阻塞会话、根因候选和恢复是否属于同一个 DbSphere 事件 ID。PG14–18 的 CI 使用进程内 OTLP protobuf→JSON 测试转接器；PG18 另经官方 Collector 的 `otlp_http` JSON Exporter 完整重跑该故障。转接器仅在测试中使用，正式接入仍按上述 Collector 配置。
 
+设置 `DBSPHERE_SDK_PROBE_LISTEN=0.0.0.0:18093` 后，示例改为 HTTP 服务，提供 `/healthz` 与 `/checkout`。请求成功时返回 200；数据库连接或查询失败时，官方 SDK 将服务 Span 与数据库客户端 Span 标为错误，并返回带 Trace ID 的 502。可将 `DBSPHERE_SDK_PROBE_K8S_NAMESPACE`、`DBSPHERE_SDK_PROBE_K8S_POD`、`DBSPHERE_SDK_PROBE_K8S_POD_UID` 三项一同设为 Kubernetes Downward API 值；DbSphere 仍需用只读 Kubernetes API 核对 UID，才把该应用 Pod 接到事件证据图。四节点 kind 的场景 B 夹具使用此模式、独立 Collector 和真实 PG18 Pod OOM，见[专项验收](../../docs/SDK_KIND_OOM_ACCEPTANCE.md)。
+
 本机 kind 验收记录和实际 Trace ID 见[验收文档](../../docs/KIND_ACCEPTANCE.md)；V1.0.9 故障验收见[专项记录](../../docs/SDK_COLLECTOR_LOCK_ACCEPTANCE.md)。此程序验证 Go SDK 的手工埋点和官方 Collector；其他语言 SDK、自动埋点、生产 TLS/负载和复杂跨服务传播仍须独立验收。SDK 用法依据[OpenTelemetry Go 官方文档](https://opentelemetry.io/docs/languages/go/instrumentation/)与[OTLP HTTP Exporter 文档](https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp)。

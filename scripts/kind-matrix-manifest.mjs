@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Development acceptance only. Credentials are supplied separately as a Secret.
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 const namespace = 'dbsphere-matrix';
 const cluster = process.argv[2] || 'agentsql-v350';
 const outputPath = process.argv[3];
@@ -12,7 +12,9 @@ if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(cluster)) {
 const controlPlane = `${cluster}-control-plane`;
 const workers = [`${cluster}-worker`, `${cluster}-worker2`, `${cluster}-worker3`];
 const credentials = 'dbsphere-matrix-credentials';
+const collectorConfig = readFileSync(new URL('../examples/trace-lock-app/otel-collector.yaml', import.meta.url), 'utf8');
 const secret = key => ({ name: key, valueFrom: { secretKeyRef: { name: credentials, key } } });
+const podField = (name, fieldPath) => ({ name, valueFrom: { fieldRef: { fieldPath } } });
 const metadata = name => ({ name, namespace });
 const selector = name => ({ matchLabels: { app: name } });
 const service = (name, port) => ({
@@ -69,6 +71,8 @@ GRANT pg_monitor TO dbsphere_monitor;
 SQL
 ` }
   },
+  { apiVersion: 'v1', kind: 'ConfigMap', metadata: metadata('dbsphere-otel-collector'),
+    data: { 'config.yaml': collectorConfig } },
   { apiVersion: 'v1', kind: 'ServiceAccount', metadata: metadata('dbsphere-reader') },
   {
     apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'Role', metadata: metadata('dbsphere-reader'),
@@ -140,7 +144,55 @@ SQL
       }
     } }
   },
-  service('dbsphere-oom-app', 18092)
+  service('dbsphere-oom-app', 18092),
+  {
+    apiVersion: 'apps/v1', kind: 'Deployment', metadata: metadata('dbsphere-otel-collector'),
+    spec: { replicas: 1, selector: selector('dbsphere-otel-collector'), template: {
+      metadata: { labels: { app: 'dbsphere-otel-collector' } }, spec: {
+        ...placement(workers[0]), containers: [{
+          name: 'collector', image: 'otel/opentelemetry-collector:0.165.0', imagePullPolicy: 'Never',
+          args: ['--config=/etc/otelcol/config.yaml'],
+          ports: [{ containerPort: 4318 }],
+          env: [
+            { name: 'DBSPHERE_OTLP_ENDPOINT', value: 'http://dbsphere-go:8080/v1/traces' },
+            { ...secret('traceToken'), name: 'DBSPHERE_OTLP_TOKEN' }
+          ],
+          volumeMounts: [{ name: 'config', mountPath: '/etc/otelcol/config.yaml', subPath: 'config.yaml', readOnly: true }],
+          readinessProbe: { tcpSocket: { port: 4318 }, periodSeconds: 5 },
+          resources: { requests: { cpu: '25m', memory: '32Mi' }, limits: { memory: '128Mi' } }
+        }],
+        volumes: [{ name: 'config', configMap: { name: 'dbsphere-otel-collector' } }]
+      }
+    } }
+  },
+  service('dbsphere-otel-collector', 4318),
+  {
+    apiVersion: 'apps/v1', kind: 'Deployment', metadata: metadata('dbsphere-sdk-oom-app'),
+    spec: { replicas: 1, selector: selector('dbsphere-sdk-oom-app'), template: {
+      metadata: { labels: { app: 'dbsphere-sdk-oom-app' } }, spec: {
+        ...placement(workers[0]), containers: [{
+          name: 'app', image: 'dbsphere/otel-sdk-probe:kind-oom', imagePullPolicy: 'Never',
+          ports: [{ containerPort: 18093 }],
+          env: [
+            { ...secret('demoPGURL'), name: 'DBSPHERE_SDK_PROBE_PG_URL' },
+            { name: 'DBSPHERE_SDK_PROBE_OTLP_ENDPOINT', value: 'http://dbsphere-otel-collector:4318/v1/traces' },
+            { name: 'DBSPHERE_SDK_PROBE_ASSET_HOST', value: 'pg18' },
+            { name: 'DBSPHERE_SDK_PROBE_ASSET_PORT', value: '5432' },
+            { name: 'DBSPHERE_SDK_PROBE_ASSET_DATABASE', value: 'postgres' },
+            { name: 'DBSPHERE_SDK_PROBE_SERVICE', value: 'dbsphere-sdk-oom-app' },
+            { name: 'DBSPHERE_SDK_PROBE_SAMPLING_PROBABILITY', value: '1.0' },
+            { name: 'DBSPHERE_SDK_PROBE_LISTEN', value: '0.0.0.0:18093' },
+            podField('DBSPHERE_SDK_PROBE_K8S_NAMESPACE', 'metadata.namespace'),
+            podField('DBSPHERE_SDK_PROBE_K8S_POD', 'metadata.name'),
+            podField('DBSPHERE_SDK_PROBE_K8S_POD_UID', 'metadata.uid')
+          ],
+          readinessProbe: { httpGet: { path: '/healthz', port: 18093 }, periodSeconds: 5 },
+          resources: { requests: { cpu: '25m', memory: '32Mi' }, limits: { memory: '128Mi' } }
+        }]
+      }
+    } }
+  },
+  service('dbsphere-sdk-oom-app', 18093)
 ];
 
 const manifest = JSON.stringify({ apiVersion: 'v1', kind: 'List', items });

@@ -38,6 +38,11 @@ func tracerProvider(ctx context.Context, endpoint, service string, probability *
 	if probability != nil {
 		attributes = append(attributes, attribute.Float64("dbsphere.trace.sampling_probability", *probability))
 	}
+	if namespace, pod, uid := os.Getenv("DBSPHERE_SDK_PROBE_K8S_NAMESPACE"),
+		os.Getenv("DBSPHERE_SDK_PROBE_K8S_POD"), os.Getenv("DBSPHERE_SDK_PROBE_K8S_POD_UID"); namespace != "" && pod != "" && uid != "" {
+		attributes = append(attributes, attribute.String("k8s.namespace.name", namespace),
+			attribute.String("k8s.pod.name", pod), attribute.String("k8s.pod.uid", uid))
+	}
 	return sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter),
 		sdktrace.WithResource(resource.NewWithAttributes("", attributes...))), nil
 }
@@ -114,7 +119,13 @@ func run() error {
 }
 
 func main() {
-	if err := run(); err != nil {
+	var err error
+	if os.Getenv("DBSPHERE_SDK_PROBE_LISTEN") != "" {
+		err = serve()
+	} else {
+		err = run()
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }

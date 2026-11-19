@@ -7,13 +7,14 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const [baseURL, appURL, credentialsPath, kubeconfigPath, resultPath] = process.argv.slice(2);
-if (!baseURL || !appURL || !credentialsPath || !kubeconfigPath || !resultPath) {
-  console.error('usage: node scripts/kind-matrix-app-oom.mjs DBSPHERE_URL APP_URL CREDENTIALS KUBECONFIG RESULT');
+const [baseURL, appURL, sdkURL, credentialsPath, kubeconfigPath, resultPath] = process.argv.slice(2);
+if (!baseURL || !appURL || !sdkURL || !credentialsPath || !kubeconfigPath || !resultPath) {
+  console.error('usage: node scripts/kind-matrix-app-oom.mjs DBSPHERE_URL APP_URL SDK_URL CREDENTIALS KUBECONFIG RESULT');
   process.exit(2);
 }
 const base = baseURL.replace(/\/$/, '');
 const app = appURL.replace(/\/$/, '');
+const sdk = sdkURL.replace(/\/$/, '');
 const credentials = JSON.parse(readFileSync(credentialsPath, 'utf8'));
 const namespace = 'dbsphere-matrix';
 let cookie = '';
@@ -39,8 +40,8 @@ async function api(path, method = 'GET', payload) {
   assert.ok(response.ok, `${method} ${path}: ${response.status} ${JSON.stringify(body)}`);
   return body;
 }
-async function checkout() {
-  const response = await fetch(app + '/checkout', { signal: AbortSignal.timeout(55000) });
+async function checkout(endpoint) {
+  const response = await fetch(endpoint + '/checkout', { signal: AbortSignal.timeout(55000) });
   const body = await response.json();
   assert.match(body.traceId || '', /^[0-9a-f]{32}$/);
   return { code: response.status, body };
@@ -74,9 +75,12 @@ const nodes = JSON.parse(execFileSync('kubectl', ['--kubeconfig', kubeconfigPath
   'get', 'nodes', '-o', 'json'], { encoding: 'utf8', timeout: 25000 })).items;
 assert.ok(nodes.length >= 4, 'four-node kind cluster is required');
 const appPod = pods('dbsphere-oom-app')[0];
+const sdkPod = pods('dbsphere-sdk-oom-app')[0];
 const targetPod = pods('pg18')[0];
-assert.ok(appPod?.status?.phase === 'Running' && targetPod?.status?.phase === 'Running');
+assert.ok(appPod?.status?.phase === 'Running' && sdkPod?.status?.phase === 'Running' &&
+  targetPod?.status?.phase === 'Running');
 assert.notEqual(appPod.spec.nodeName, targetPod.spec.nodeName, 'application and PG must span nodes');
+assert.notEqual(sdkPod.spec.nodeName, targetPod.spec.nodeName, 'SDK application and PG must span nodes');
 assert.equal((await api('/readyz')).storage, 'postgresql18');
 const loginResponse = await fetch(base + '/api/login', {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -89,10 +93,18 @@ csrf = (await loginResponse.json()).csrf;
 assert.ok(cookie && csrf);
 const asset = (await api('/api/assets')).assets.find(item => item.name === 'kind-matrix-pg18');
 assert.ok(asset?.id, 'PG18 kind asset was not created by the matrix acceptance');
-const baseline = await checkout();
+const baseline = await checkout(app);
 assert.equal(baseline.code, 200, 'baseline application request failed');
 const baselineTrace = await api(`/api/assets/${asset.id}/traces/${baseline.body.traceId}`);
 assert.equal(baselineTrace.spans?.length, 2, 'baseline application Trace lacks parent and DB Span');
+const sdkBaseline = await checkout(sdk);
+assert.equal(sdkBaseline.code, 200, 'official SDK baseline request failed');
+const sdkBaselineTrace = await until('official SDK baseline parent and DB Span', 25, 200, async () => {
+  const raw = await api(`/api/assets/${asset.id}/traces/${sdkBaseline.body.traceId}`);
+  return raw?.spans?.length === 2 && raw.spans.some(span =>
+    span.kind === 'postgresql_client' && span.appPodVerified?.uid === sdkPod.metadata.uid)
+    ? raw : null;
+});
 const baselineSample = (await api(`/api/assets/${asset.id}/check`, 'POST')).result;
 assert.equal(baselineSample.status, 'ok');
 
@@ -108,7 +120,11 @@ try {
       status.lastState?.terminated?.reason === 'OOMKilled')));
   assert.notEqual(failedPod.metadata.uid, targetPod.metadata.uid);
   const failedRequest = await until('application connection failure', 20, 1000, async () => {
-    const request = await checkout();
+    const request = await checkout(app);
+    return request.code === 502 && request.body.status === 'error' ? request : null;
+  });
+  const failedSDKRequest = await until('official SDK application connection failure', 20, 1000, async () => {
+    const request = await checkout(sdk);
     return request.code === 502 && request.body.status === 'error' ? request : null;
   });
   const sample = await until('PostgreSQL and Kubernetes OOM sample', 20, 1000, async () => {
@@ -123,14 +139,19 @@ try {
     if (!open) return null;
     const detail = await api(`/api/events/${open.id}`);
     const trace = await api(`/api/assets/${asset.id}/traces/${failedRequest.body.traceId}`);
+    const sdkTrace = await api(`/api/assets/${asset.id}/traces/${failedSDKRequest.body.traceId}`);
     const candidates = detail.analysis?.candidates || [];
     const edges = detail.analysis?.graph?.edges || [];
     if (detail.event.id !== open.id ||
         !candidates.some(candidate => candidate.code === 'pod_oom_correlated' && candidate.supports?.length) ||
-        !edges.some(edge => edge.relation === 'parent_of') ||
+        edges.filter(edge => edge.relation === 'parent_of').length < 2 ||
+        detail.analysis?.traceCoverage?.appPodVerified < 1 ||
         !trace.spans?.some(span => span.kind === 'postgresql_client' && span.status === 'error') ||
-        !trace.spans?.some(span => span.kind === 'service' && span.status === 'error')) return null;
-    return { detail, trace };
+        !trace.spans?.some(span => span.kind === 'service' && span.status === 'error') ||
+        !sdkTrace?.spans?.some(span => span.kind === 'postgresql_client' && span.status === 'error' &&
+          span.appPodVerified?.uid === sdkPod.metadata.uid) ||
+        !sdkTrace?.spans?.some(span => span.kind === 'service' && span.status === 'error')) return null;
+    return { detail, trace, sdkTrace };
   });
   const incidentID = event.detail.event.id;
   const reportResponse = await fetch(`${base}/api/events/${incidentID}/report?format=md`, {
@@ -139,7 +160,8 @@ try {
   assert.equal(reportResponse.status, 200);
   const report = await reportResponse.text();
   assert.ok(report.includes(incidentID) && report.includes('pod_oom_correlated') &&
-    report.includes(failedRequest.body.traceId), 'report lost same-event OOM/Trace evidence');
+    report.includes(failedRequest.body.traceId) && report.includes(failedSDKRequest.body.traceId),
+  'report lost same-event OOM/Trace evidence');
 
   await restore();
   restored = true;
@@ -148,15 +170,20 @@ try {
     const detail = await api(`/api/events/${incidentID}`);
     return check.status === 'ok' && detail.event.status === 'resolved' ? { check, detail } : null;
   });
-  const recoveredRequest = await checkout();
+  const recoveredRequest = await checkout(app);
   assert.equal(recoveredRequest.code, 200, 'application did not recover with PostgreSQL');
+  const recoveredSDKRequest = await checkout(sdk);
+  assert.equal(recoveredSDKRequest.code, 200, 'SDK application did not recover with PostgreSQL');
   result = {
     eventId: incidentID, assetId: asset.id, failedTraceId: failedRequest.body.traceId,
+    sdkFailedTraceId: failedSDKRequest.body.traceId,
     failedSampleId: sample.check.sampleId, recoveredSampleId: resolved.check.sampleId,
     status: resolved.detail.event.status, rootCauseCandidate: 'pod_oom_correlated',
     failedPod: failedPod.metadata.name, failedPodNode: failedPod.spec.nodeName,
-    appPodNode: appPod.spec.nodeName, applicationRecovered: true,
-    traceSpans: event.trace.spans.length, kubernetesOOM: true
+    appPodNode: appPod.spec.nodeName, sdkPodNode: sdkPod.spec.nodeName,
+    sdkPodUIDVerified: true, applicationRecovered: true, sdkApplicationRecovered: true,
+    traceSpans: event.trace.spans.length, sdkTraceSpans: event.sdkTrace.spans.length,
+    kubernetesOOM: true
   };
 } finally {
   if (!restored) await restore();
