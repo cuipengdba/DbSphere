@@ -380,7 +380,16 @@ jobs:
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
-          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}"
+          previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
+          mkdir -p "$previous_dir"
+          previous="$previous_dir/DbSphere-go-offline-0.9.0-linux-amd64.run"
+          curl -fL --retry 3 --output "$previous" \
+            'https://github.com/cuipengdba/DbSphere/releases/download/v0.9.0/DbSphere-go-offline-0.9.0-linux-amd64.run'
+          printf '%s  %s\n' \
+            2a2c8563ec33e56aa3e012e08889d67609d3c728e067f1639b5664cb2f1ae2be \
+            "$previous" > "$previous.sha256"
+          sha256sum --check --strict "$previous.sha256"
+          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"
       - name: Preserve tested Go offline and native packages
         if: success()
         uses: actions/upload-artifact@v4
@@ -436,6 +445,14 @@ jobs:
           jq -n --slurpfile app "$RUNNER_TEMP/dbsphere-go-image-vulnerabilities.json" \
             --slurpfile store "$RUNNER_TEMP/dbsphere-postgres18-image-vulnerabilities.json" \
             '{go_matches:($app[0].matches|length),postgres18_matches:($store[0].matches|length)}'
+      - name: Enforce reviewed critical vulnerability inventory
+        run: |
+          jq -e '[.matches[] | select(.vulnerability.severity == "Critical" or .vulnerability.severity == "High")] | length == 0' \
+            "$RUNNER_TEMP/dbsphere-go-image-vulnerabilities.json" >/dev/null
+          jq -e '[.matches[] | select(.vulnerability.severity == "Critical") | .vulnerability.id] | unique | sort == [
+            "CVE-2025-7458", "CVE-2026-5450", "CVE-2026-6653",
+            "GO-2026-4337", "GO-2026-6604", "GO-2026-6612"
+          ]' "$RUNNER_TEMP/dbsphere-postgres18-image-vulnerabilities.json" >/dev/null
       - name: Preserve container vulnerability reports
         if: always()
         uses: actions/upload-artifact@v4

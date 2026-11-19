@@ -1,20 +1,30 @@
-# V0.7.0 支持与验收矩阵
+# DbSphere V1.0 支持与验收矩阵
 
-> 截至 2026-11-19。这是已执行测试的边界，不是 V1.0 正式支持声明。长期监控存储在以下测试中均为独立 PostgreSQL 18，业务目标 PostgreSQL 版本另列。
+> 本矩阵区分已通过的版本与部署路径、依赖额外信号的能力，以及未完成的环境验收。监控数据始终写入独立 PostgreSQL 18；下表 PG14–18 指被监控业务数据库。
 
-| 目标环境 | PG14 | PG15 | PG16 | PG17 | PG18 | 已验证内容与限制 |
+| 目标环境 | PG14 | PG15 | PG16 | PG17 | PG18 | 验收范围 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Linux 容器中的 PostgreSQL | CI | CI | CI | CI | CI | 真实连接、数据库样本、角色识别与事件路径；[五版兼容 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44363714543)。尚未覆盖各发行版的裸机运维差异 |
-| Kubernetes 中的 PostgreSQL | CI | CI | CI | CI | CI | 四节点 kind 的 Pod/Service/Node 与 PG18 PVC 持久化；[多节点矩阵](KIND_MATRIX_ACCEPTANCE.md)。生产集群、Operator、持续负载未验收 |
-| Linux Patroni 双节点 | CI | CI | CI | CI | CI | 无 leader、选主、原节点重入及同一事件 ID 恢复；[Patroni 验收](PATRONI_ACCEPTANCE.md)。测试 DCS 为单节点，不代表生产高可用 |
-| Kubernetes Patroni | 本机 | — | — | — | — | 单节点 kind 中 PG14 双节点故障闭环；[本机演练](PATRONI_ACCEPTANCE.md#kubernetes-本机故障演练)。多节点 DCS/Operator/PVC 组合未验收 |
-| 托管模式的数据库协议路径 | CI | CI | CI | CI | CI | 仅数据库侧信号与缺口显示；[能力说明](MANAGED_PG.md)。CI 使用本地 PostgreSQL 容器，不等于云服务验收 |
-| 实际云厂商托管 PostgreSQL | — | — | — | — | — | 尚无测试实例；TLS、角色权限、系统视图限制及供应商连接策略待验收 |
+| Linux 容器中的单实例 PostgreSQL | CI | CI | CI | CI | CI | 真实只读连接、诊断采样、版本与角色识别、事件；[五版兼容 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44363714543) |
+| Kubernetes 中的单实例 PostgreSQL | CI | CI | CI | CI | CI | 四节点 kind 的 Pod/Service/Node 关联、故障证据及独立 PG18 PVC；[多节点矩阵](KIND_MATRIX_ACCEPTANCE.md) |
+| Linux Patroni 双节点 | CI | CI | CI | CI | CI | 只读拓扑、失去 leader、选主、原节点重入及同一事件 ID 的恢复；[Patroni 验收](PATRONI_ACCEPTANCE.md) |
+| Kubernetes Patroni | 本机 PG14 | — | — | — | — | 单节点 kind 的 PG14 故障闭环；多节点 DCS、Operator 和不同 PG 大版本组合未验收 |
+| 托管模式的数据库协议路径 | CI | CI | CI | CI | CI | 使用本地 PostgreSQL 容器验证数据库侧采集与缺口显示；不代表实际云服务验收 |
+| 实际云厂商托管 PostgreSQL | — | — | — | — | — | 尚无测试实例；TLS、角色权限、系统视图限制及厂商连接策略未验收 |
 
-`CI` 表示独立 Ubuntu runner 的容器或 kind 测试，`本机` 表示本机隔离测试集群，`—` 表示未验收。[PostgreSQL 14 已结束上游支持](https://www.postgresql.org/about/news/postgresql-187-1712-1616-1520-1425-and-19-rc-2-released-3442/)，页面持续显示升级提示；DbSphere 在兼容矩阵中保留 PG14 测试，但生产使用应规划升级。
+`CI` 表示独立 Ubuntu Linux runner 的真实数据库容器或 kind 测试；`本机` 表示隔离本机测试。`—` 表示未验收，不能据此推断支持。Linux 裸机/虚机上的 PostgreSQL 使用相同数据库协议，但不同发行版、文件系统、服务管理和生产持续负载未完成独立验收。生产 Kubernetes 集群、Operator、跨区域和持续高负载不在已测矩阵内。
 
-Go 后端与静态前端已在 Linux 容器和本机开发环境运行。Go 离线包面向 **Linux x86_64**，目标机仍需 Docker Engine 与 Compose v2；Node.js 不参与 Go 包的运行。Linux arm64、跨发行版裸机和生产断网升级/恢复尚无正式发布验收。详见[离线部署](OFFLINE_DEPLOYMENT.md)及[V1.0 发布任务](DEVELOPMENT_TASKS.md#v10正式版发布门槛)。
+[PostgreSQL 14 已结束上游支持](https://www.postgresql.org/about/news/postgresql-187-1712-1616-1520-1425-and-19-rc-2-released-3442/)；DbSphere 仍回归其监控兼容性，并在资产界面提示升级风险。
 
-一个问题的全链路能力以同一事件 ID 的原始样本、告警、Trace（如已接入）、基础设施或 Patroni 信号、根因候选及恢复证据为准。缺少应用 Trace、K8S API、主机 exporter 或云服务视图时，页面显示缺口；时间相关的候选需人工复核，不能视为已证实根因。
+## 部署与依赖
 
-V0.7.0 的应用链路支持范围与已知限制见[Trace 发布验收](V0.7_RELEASE_GATE.md)。官方 Go SDK 经 Collector JSON 转发与本机 PG18 存储已验证；其他语言 SDK、生产跨服务采样覆盖和自定义 Query ID 自动埋点尚未验收。
+| 交付方式 | 已验证平台 | 运行时依赖 | 监控存储 |
+| --- | --- | --- | --- |
+| 一键离线容器包 | Linux x86_64、Docker Engine 27 与 Compose v2 的独立 CI；含无外网嵌套守护进程验收 | 目标机预装 Docker Engine/Compose；安装过程无需 Node.js、Go、包管理器或镜像仓库 | 包内 PostgreSQL 18 镜像，独立持久卷；可改用已有独立 PG18 |
+| 静态 Go 程序 | Linux amd64 CI，`CGO_ENABLED=0` | 独立 PG18、服务管理与 HTTPS 入口由部署者提供 | 外部独立 PG18 |
+| 源码在线 Compose | Ubuntu Linux CI | Docker Engine/Compose 与构建时网络 | 独立 PG18 容器或外部 PG18 |
+
+Linux arm64 尚未构建与验收，不属于 V1.0 交付范围。当前只支持一个启用自动采集的 DbSphere 服务副本；采集租约和高可用控制台尚未完成。离线安装的“断网”指安装器及 Docker 守护进程均无法访问外网时使用本地镜像；它不代替物理服务器的离线升级、硬件故障或生产演练。
+
+## 一个问题的全链路边界
+
+一个事件 ID 汇集原始 PG 样本、告警、SQL/锁与等待、可用的 Linux/K8S/Patroni/PgBouncer 信号、应用 Trace、根因候选、人工决定和恢复证据。数据库连接串即可运行基础监控和无模型规则诊断；主机需要 node_exporter，K8S 需要只读 API 与相应指标，应用链路需要接入 OTel。缺少信号时明确显示未知或未定位，候选原因需要人工复核。可选 AI 只分析脱敏证据，不接入模型仍可纳管、监控、告警、巡检和生成报告。不同语言 SDK、跨服务采样覆盖和连接池到 Pod/PVC 的完整身份映射尚未验收。
