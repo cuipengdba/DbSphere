@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -115,17 +117,36 @@ func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Pooler trace route", Host: "pg-pool-route.internal",
 		Port: 5432, Database: "orders", Username: "monitor", Password: "database-secret",
 		SSLMode: "disable", Runtime: "linux",
-		PoolerURL: "postgres://monitor:pooler-secret@pool-route.internal:6432/pgbouncer"}, key)
+		PoolerURL:      "postgres://monitor:pooler-secret@pool-admin.internal:6432/pgbouncer",
+		PoolerEndpoint: "pool-route.internal:6433"}, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var asset struct {
-		ID string `json:"id"`
+		ID               string  `json:"id"`
+		PoolerConfigured bool    `json:"poolerConfigured"`
+		PoolerEndpoint   *string `json:"poolerEndpoint"`
 	}
 	if err := json.Unmarshal(created, &asset); err != nil {
 		t.Fatal(err)
 	}
+	if asset.PoolerEndpoint == nil || *asset.PoolerEndpoint != "pool-route.internal:6433" {
+		t.Fatalf("application endpoint was not returned with asset: %s", created)
+	}
+	if strings.Contains(string(created), "pooler-secret") || strings.Contains(string(created), "database-secret") {
+		t.Fatalf("asset response leaked a database credential: %s", created)
+	}
 	defer pg.DeleteAsset(ctx, asset.ID)
+	page, err := pg.AssetPage(ctx, AssetPageQuery{Search: "Pooler trace route", Limit: 10}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageJSON, _ := json.Marshal(page)
+	if !strings.Contains(string(pageJSON), asset.ID) ||
+		!strings.Contains(string(pageJSON), "pool-route.internal:6433") ||
+		strings.Contains(string(pageJSON), "pooler-secret") {
+		t.Fatalf("asset list omitted application endpoint or leaked credentials: %s", pageJSON)
+	}
 	identities, err := pg.TraceAssets(ctx, key)
 	if err != nil {
 		t.Fatal(err)
@@ -133,14 +154,14 @@ func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 	found := false
 	for _, identity := range identities {
 		if identity.ID == asset.ID {
-			found = identity.PoolerHost == "pool-route.internal" && identity.PoolerPort == 6432
+			found = identity.PoolerHost == "pool-route.internal" && identity.PoolerPort == 6433
 			if strings.Contains(fmt.Sprintf("%+v", identity), "pooler-secret") {
 				t.Fatal("PgBouncer credential leaked into Trace identity")
 			}
 		}
 	}
 	if !found {
-		t.Fatal("decrypted PgBouncer endpoint was not available for Trace mapping")
+		t.Fatal("separate PgBouncer application endpoint was not available for Trace mapping")
 	}
 	now := time.Now().UTC()
 	attribute := func(name, value string) map[string]any {
@@ -155,7 +176,7 @@ func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 			"endTimeUnixNano":   now.UnixNano(), "attributes": []any{
 				attribute("db.system.name", "postgresql"),
 				attribute("server.address", "pool-route.internal"),
-				attribute("server.port", "6432"), attribute("db.namespace", "orders"),
+				attribute("server.port", "6433"), attribute("db.namespace", "orders"),
 				attribute("db.statement", "SELECT private_data")},
 		}}}}}}})
 	decoded, err := trace.Decode(spansJSON, identities, now)
@@ -204,13 +225,51 @@ func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 	}
 	for _, identity := range identities {
 		if identity.ID == asset.ID {
-			if identity.Host != "pg-pool-route.internal" || identity.PoolerHost != "" {
-				t.Fatalf("invalid pooler URL must leave direct asset mapping available: %+v", identity)
+			if identity.Host != "pg-pool-route.internal" || identity.PoolerHost != "pool-route.internal" ||
+				identity.PoolerPort != 6433 {
+				t.Fatalf("explicit pooler application endpoint depended on management credential: %+v", identity)
+			}
+			break
+		}
+	}
+	updated, err := pg.UpdateAsset(ctx, asset.ID, assets.Input{Name: "Pooler trace route", Host: "pg-pool-route.internal",
+		Port: 5432, Database: "orders", Username: "monitor", SSLMode: "disable", Runtime: "linux",
+		PoolerURL: "postgres://monitor:pooler-secret@pool-admin.internal:6432/pgbouncer"}, key)
+	if err != nil || json.Unmarshal(updated, &asset) != nil || asset.PoolerEndpoint != nil {
+		t.Fatalf("clearing explicit pooler application endpoint failed: %s %v", updated, err)
+	}
+	identities, err = pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range identities {
+		if identity.ID == asset.ID {
+			if identity.PoolerHost != "pool-admin.internal" || identity.PoolerPort != 6432 {
+				t.Fatalf("legacy management endpoint fallback was not restored: %+v", identity)
+			}
+			break
+		}
+	}
+	updated, err = pg.UpdateAsset(ctx, asset.ID, assets.Input{Name: "Pooler trace route", Host: "pg-pool-route.internal",
+		Port: 5432, Database: "orders", Username: "monitor", SSLMode: "disable", Runtime: "linux",
+		PoolerClear: true, PoolerEndpoint: "pool-route.internal:6433"}, key)
+	if err != nil || json.Unmarshal(updated, &asset) != nil || asset.PoolerConfigured ||
+		asset.PoolerEndpoint == nil || *asset.PoolerEndpoint != "pool-route.internal:6433" {
+		t.Fatalf("standalone pooler application endpoint was not saved: %s %v", updated, err)
+	}
+	identities, err = pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range identities {
+		if identity.ID == asset.ID {
+			if identity.PoolerHost != "pool-route.internal" || identity.PoolerPort != 6433 {
+				t.Fatalf("standalone application endpoint lost its Trace route: %+v", identity)
 			}
 			return
 		}
 	}
-	t.Fatal("asset disappeared after its PgBouncer credential became invalid")
+	t.Fatal("asset disappeared after its management credential was cleared")
 }
 
 func TestApplicationPodIdentityRequiresKubernetesUIDAndPersistsInEventPG18(t *testing.T) {
@@ -391,8 +450,32 @@ func TestRealPgBouncerEndpointMapsApplicationTracePG18(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proxy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	go func() {
+		for {
+			client, err := proxy.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer client.Close()
+				backend, err := net.DialTimeout("tcp", parsed.Host, 3*time.Second)
+				if err != nil {
+					return
+				}
+				defer backend.Close()
+				go func() { _, _ = io.Copy(backend, client); _ = backend.(*net.TCPConn).CloseWrite() }()
+				_, _ = io.Copy(client, backend)
+			}()
+		}
+	}()
 	queryURL := *parsed
 	queryURL.Path = "/postgres"
+	queryURL.Host = proxy.Addr().String()
 	client, err := pgx.Connect(ctx, queryURL.String())
 	if err != nil {
 		t.Fatalf("application could not reach PostgreSQL through PgBouncer: %v", err)
@@ -414,7 +497,8 @@ func TestRealPgBouncerEndpointMapsApplicationTracePG18(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Real PgBouncer application route",
 		Host: "127.0.0.1", Port: port, Database: "postgres", Username: "postgres",
-		Password: pgPassword, SSLMode: "disable", Runtime: "linux", PoolerURL: poolerURL}, key)
+		Password: pgPassword, SSLMode: "disable", Runtime: "linux", PoolerURL: poolerURL,
+		PoolerEndpoint: proxy.Addr().String()}, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,8 +524,8 @@ func TestRealPgBouncerEndpointMapsApplicationTracePG18(t *testing.T) {
 			"startTimeUnixNano": now.Add(-time.Second).UnixNano(),
 			"endTimeUnixNano":   now.UnixNano(), "attributes": []any{
 				attribute("db.system.name", "postgresql"),
-				attribute("server.address", parsed.Hostname()),
-				attribute("server.port", parsed.Port()),
+				attribute("server.address", queryURL.Hostname()),
+				attribute("server.port", queryURL.Port()),
 				attribute("db.namespace", database)},
 		}}}}}}})
 	decoded, err := trace.Decode(body, identities, now)

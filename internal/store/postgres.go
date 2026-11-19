@@ -343,6 +343,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record trace application Pod migration: %w", err)
 		}
 	}
+	var poolerEndpointMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=29)").Scan(&poolerEndpointMigrated); err != nil {
+		return fmt.Errorf("check PgBouncer application endpoint migration: %w", err)
+	}
+	if !poolerEndpointMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE assets ADD COLUMN IF NOT EXISTS pooler_endpoint text"); err != nil {
+			return fmt.Errorf("migrate PgBouncer application endpoint: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(29) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record PgBouncer application endpoint migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

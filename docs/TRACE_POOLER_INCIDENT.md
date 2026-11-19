@@ -8,4 +8,4 @@
 
 本机用真实 PgBouncer → PostgreSQL 14 和独立 PG18 存储运行 `TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID`，通过；原直连版本 `TestApplicationLockTraceUsesOneDbSphereEventID` 同时通过。[Linux CI 的 PG14–18 五版 PgBouncer 作业](https://github.com/cuipengdba/DbSphere/actions/runs/44484348230)均通过同一真实应用故障链演练。
 
-此演练覆盖受控应用中的锁等待，不代表任意生产应用已自动埋点。经官方 OTel SDK/Collector 的**池路由故障**、PgBouncer 管理与业务端点不一致的映射、应用 Pod/Node/PVC 身份、生产 K8S/Operator 及真实业务负载仍需单独验收。
+此演练覆盖受控应用中的锁等待，不代表任意生产应用已自动埋点。管理与业务端点不同的基础映射另见[连接池身份说明](TRACE_POOLER_ROUTE.md)，尚未在该锁等待故障演练中重跑。经官方 OTel SDK/Collector 的**池路由故障**、生产代理配置、应用 Pod/Node/PVC 的故障相关性、生产 K8S/Operator 及真实业务负载仍需单独验收。

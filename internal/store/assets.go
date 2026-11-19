@@ -24,7 +24,7 @@ func (s *Postgres) AssetByID(ctx context.Context, id string) (json.RawMessage, e
 		'id',id,'name',name,'host',host,'port',port,'database',database_name,
 		'username',username,'sslMode',ssl_mode,'runtime',runtime,
 		'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
-		'poolerConfigured',pooler_url_enc IS NOT NULL,
+		'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 		'patroniConfigured',patroni_url_enc IS NOT NULL,
 		'k8sCluster',k8s_cluster,'namespace',k8s_namespace,'workload',k8s_workload,
 		'pod',k8s_pod,'node',k8s_node,'createdAt',created_at,
@@ -66,12 +66,12 @@ func (s *Postgres) CreateAsset(ctx context.Context, input assets.Input, key []by
 	err = s.pool.QueryRow(ctx, `INSERT INTO assets
 		(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,
 		linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,k8s_cluster,k8s_namespace,
-		k8s_workload,k8s_pod,k8s_node,created_at)
-		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
+		k8s_workload,k8s_pod,k8s_node,pooler_endpoint,created_at)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
 		RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username, password,
 		input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		pooler, patroni, nullable(input.K8sCluster), nullable(input.Namespace), nullable(input.Workload),
-		nullable(input.Pod), nullable(input.Node)).Scan(&id)
+		nullable(input.Pod), nullable(input.Node), nullable(input.PoolerEndpoint)).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("create PostgreSQL asset: %w", err)
 	}
@@ -118,11 +118,13 @@ func (s *Postgres) UpdateAsset(ctx context.Context, id string, input assets.Inpu
 		pooler_url_enc=CASE WHEN $11 THEN NULL ELSE coalesce($12,pooler_url_enc) END,
 		patroni_url_enc=CASE WHEN $13 THEN NULL ELSE coalesce($14,patroni_url_enc) END,
 		k8s_cluster=$15,k8s_namespace=$16,k8s_workload=$17,k8s_pod=$18,k8s_node=$19,
+		pooler_endpoint=$21,
 		last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
 		WHERE id=$20 RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username,
 		password, input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		input.PoolerClear, pooler, input.PatroniClear, patroni, nullable(input.K8sCluster), nullable(input.Namespace),
-		nullable(input.Workload), nullable(input.Pod), nullable(input.Node), id).Scan(&updated)
+		nullable(input.Workload), nullable(input.Pod), nullable(input.Node), id,
+		nullable(input.PoolerEndpoint)).Scan(&updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

@@ -349,7 +349,7 @@ async function showAsset(id) {
       : asset.linuxHost || 'Linux 主机未关联';
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${location}`));
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
-  detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置'}`));
+  detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置统计连接'}${asset.poolerEndpoint ? ` · 应用端点 ${asset.poolerEndpoint}` : ''}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
   detail.append(cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
   const sample = samples[0];
@@ -476,7 +476,7 @@ function renderSignalCoverage(target, asset, sample, performance) {
       asset.runtime === 'managed' ? '不适用：托管模式无主机或 K8S API 信号'
         : asset.runtime === 'k8s' ? (metrics.k8s?.status === 'ok' ? '已采集' : `未采集：${metrics.k8s?.reason || '待检查映射与权限'}`)
           : metrics.linux?.status === 'ok' ? '已采集' : `未采集：${metrics.linux?.reason || '未配置 node_exporter'}`],
-    ['PgBouncer', asset.poolerConfigured ? (metrics.pgbouncer?.status === 'ok' ? '已采集' : `未采集：${metrics.pgbouncer?.reason || '连接或权限待检查'}`) : '未接入'],
+    ['PgBouncer', asset.poolerConfigured ? (metrics.pgbouncer?.status === 'ok' ? '已采集' : `未采集：${metrics.pgbouncer?.reason || '连接或权限待检查'}`) : asset.poolerEndpoint ? '仅配置应用端点，未接入统计采集' : '未接入'],
     ['Patroni', asset.patroniConfigured ? (metrics.patroni?.status === 'ok' ? '已采集' : `未采集：${metrics.patroni?.reason || '端点待检查'}`) : '未接入']
   ];
   const panel = document.createElement('details'); panel.className = 'settings-details';
@@ -920,7 +920,8 @@ function editAsset(asset) {
     name: asset.name, host: asset.host, port: asset.port, database: asset.database,
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
     linuxHost: asset.linuxHost, linuxExporterPort: asset.linuxExporterPort, k8sCluster: asset.k8sCluster, namespace: asset.namespace,
-    workload: asset.workload, pod: asset.pod, node: asset.node
+    workload: asset.workload, pod: asset.pod, node: asset.node,
+    poolerEndpoint: asset.poolerEndpoint
   })) form.elements[field].value = value ?? '';
   form.elements.password.value = '';
   form.elements.poolerUrl.value = '';

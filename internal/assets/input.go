@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 var hostPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,255}$`)
 var shortHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,150}$`)
+var poolerHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
 
 type OptionalPort int
 
@@ -54,6 +56,7 @@ type Input struct {
 	LinuxExporterPort OptionalPort `json:"linuxExporterPort"`
 	PoolerURL         string       `json:"poolerUrl"`
 	PoolerClear       bool         `json:"poolerClear"`
+	PoolerEndpoint    string       `json:"poolerEndpoint"`
 	PatroniURL        string       `json:"patroniUrl"`
 	PatroniClear      bool         `json:"patroniClear"`
 	K8sCluster        string       `json:"k8sCluster"`
@@ -101,6 +104,11 @@ func (a Input) Validate() error {
 			return errors.New("invalid PgBouncer management URL")
 		}
 	}
+	if a.PoolerEndpoint != "" {
+		if _, _, err := ParsePoolerEndpoint(a.PoolerEndpoint); err != nil {
+			return err
+		}
+	}
 	if a.PatroniURL != "" {
 		if len(a.PatroniURL) > 2048 {
 			return errors.New("Patroni REST URL is too long")
@@ -114,4 +122,23 @@ func (a Input) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ParsePoolerEndpoint accepts only a host and TCP port. It never interprets
+// credentials, URL paths or query parameters as an application route.
+func ParsePoolerEndpoint(value string) (string, int, error) {
+	if len(value) > 261 {
+		return "", 0, errors.New("PgBouncer application endpoint is too long")
+	}
+	host, rawPort, err := net.SplitHostPort(value)
+	if err != nil || host == "" || len(host) > 255 ||
+		(net.ParseIP(host) == nil && !poolerHostPattern.MatchString(host)) ||
+		rawPort == "" || len(rawPort) > 5 || strings.Trim(rawPort, "0123456789") != "" {
+		return "", 0, errors.New("invalid PgBouncer application endpoint")
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, errors.New("invalid PgBouncer application port")
+	}
+	return host, port, nil
 }

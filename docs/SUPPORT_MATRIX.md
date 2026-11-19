@@ -5,7 +5,7 @@
 | 目标环境 | PG14 | PG15 | PG16 | PG17 | PG18 | 验收范围 |
 | --- | --- | --- | --- | --- | --- | --- |
 | Linux 容器中的单实例 PostgreSQL | CI | CI | CI | CI | CI | 真实只读连接、诊断采样、版本与角色识别、事件；[五版兼容 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44363714543) |
-| Linux PgBouncer → PostgreSQL | CI | CI | CI | CI | CI | 真实 HTTP 请求经池发生 PG 锁等待，同一事件关联精确后端 PID、阻塞会话、根因候选与恢复；[五版故障链演练](TRACE_POOLER_INCIDENT.md)。要求池管理地址与业务端点主机/端口一致，不代表生产池配置验收 |
+| Linux PgBouncer → PostgreSQL | CI | CI | CI | CI | CI | 真实 HTTP 请求经池发生 PG 锁等待，同一事件关联精确后端 PID、阻塞会话、根因候选与恢复；[五版故障链演练](TRACE_POOLER_INCIDENT.md)。可显式配置不同的[业务代理地址](TRACE_POOLER_ROUTE.md)；本机真实 TCP 转发与 PG18 事件图已测，尚未以此配置重跑锁故障链或验收生产代理 |
 | Kubernetes 中的单实例 PostgreSQL | CI | CI | CI | CI | CI | 四节点 kind 的 Pod/Service/Node 关联、故障证据及独立 PG18 PVC；[多节点矩阵](KIND_MATRIX_ACCEPTANCE.md) |
 | Linux Patroni 双节点 | CI | CI | CI | CI | CI | 只读拓扑、失去 leader、选主、原节点重入及同一事件 ID 的恢复；[Patroni 验收](PATRONI_ACCEPTANCE.md) |
 | Kubernetes Patroni | 本机 PG14 | — | — | — | — | 单节点 kind 的 PG14 故障闭环；多节点 DCS、Operator 和不同 PG 大版本组合未验收 |

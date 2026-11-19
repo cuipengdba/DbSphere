@@ -72,7 +72,8 @@
             <label class="linux-field wide">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field wide">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <label class="wide">PgBouncer 管理连接 URL（可选）<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
-            <label class="wide"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 连接</label>
+            <label class="wide">应用访问 PgBouncer 的地址（可选）<input name="poolerEndpoint" maxlength="261" placeholder="pooler.example:6432"><span class="hint">业务代理地址与统计管理地址不同时填写 host:port；留空沿用管理连接地址。</span></label>
+            <label class="wide"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 统计连接</label>
             <label class="wide">Patroni REST 地址（可选）<input name="patroniUrl" type="password" autocomplete="off" placeholder="https://监控用户:密码@patroni.internal:8008"></label>
             <label class="wide"><input name="patroniClear" type="checkbox">清除已保存的 Patroni 连接</label>
             <div id="k8s-fields" class="nested wide" hidden>

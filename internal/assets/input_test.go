@@ -42,6 +42,23 @@ func TestAssetInputValidationAndBrowserPort(t *testing.T) {
 	if bad.Validate() == nil {
 		t.Fatal("unrelated pooler URL accepted")
 	}
+	withPooler := input
+	withPooler.PoolerEndpoint = "pooler-app.internal:6543"
+	if err := withPooler.Validate(); err != nil {
+		t.Fatalf("separate PgBouncer application endpoint rejected: %v", err)
+	}
+	if host, port, err := ParsePoolerEndpoint("[2001:db8::1]:6543"); err != nil || host != "2001:db8::1" || port != 6543 {
+		t.Fatalf("IPv6 PgBouncer application endpoint was misread: %q %d %v", host, port, err)
+	}
+	for _, endpoint := range []string{"postgres://user:secret@pooler:6432/pgbouncer", "pooler.internal",
+		"pooler.internal:0", "pooler.internal:65536", "pooler.internal:6432/path",
+		"user@pooler.internal:6432", "pooler.internal:6432?token=secret", "[invalid:ip]:6432"} {
+		bad = input
+		bad.PoolerEndpoint = endpoint
+		if bad.Validate() == nil {
+			t.Fatalf("unsafe PgBouncer application endpoint accepted: %s", endpoint)
+		}
+	}
 	withPatroni := input
 	withPatroni.PatroniURL = "https://reader:secret@patroni.internal:8008"
 	if err := withPatroni.Validate(); err != nil {

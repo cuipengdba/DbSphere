@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	assetconfig "github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/trace"
@@ -16,7 +17,7 @@ import (
 )
 
 func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc FROM assets`)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc,pooler_endpoint FROM assets`)
 	if err != nil {
 		return nil, fmt.Errorf("list OTLP asset identities: %w", err)
 	}
@@ -25,8 +26,15 @@ func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, 
 	for rows.Next() {
 		var asset trace.Asset
 		var poolerEncrypted *string
-		if err := rows.Scan(&asset.ID, &asset.Host, &asset.Port, &asset.Database, &poolerEncrypted); err != nil {
+		var poolerEndpoint *string
+		if err := rows.Scan(&asset.ID, &asset.Host, &asset.Port, &asset.Database,
+			&poolerEncrypted, &poolerEndpoint); err != nil {
 			return nil, err
+		}
+		if poolerEndpoint != nil {
+			asset.PoolerHost, asset.PoolerPort, _ = assetconfig.ParsePoolerEndpoint(*poolerEndpoint)
+			assets = append(assets, asset)
+			continue
 		}
 		if poolerEncrypted != nil {
 			plain, err := security.Decrypt(key, *poolerEncrypted)

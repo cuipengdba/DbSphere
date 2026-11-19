@@ -24,7 +24,7 @@ const assetJSON = `jsonb_build_object(
 	'id',id,'name',name,'host',host,'port',port,'database',database_name,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
-	'poolerConfigured',pooler_url_enc IS NOT NULL,
+	'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 	'patroniConfigured',patroni_url_enc IS NOT NULL,
 	'k8sCluster',k8s_cluster,'namespace',k8s_namespace,'workload',k8s_workload,
 	'pod',k8s_pod,'node',k8s_node,'createdAt',created_at,

@@ -74,6 +74,8 @@ func TestDecodeMapsOnlyUniquePgBouncerEndpointWithDatabaseIdentity(t *testing.T)
 	}
 	asset := Asset{ID: "orders", Host: "pg.internal", Port: 5432, Database: "orders",
 		PoolerHost: "pool.internal", PoolerPort: 6432}
+	separate := asset
+	separate.PoolerHost = "pool-app.internal"
 	for _, tc := range []struct {
 		name, address, database string
 		assets                  []Asset
@@ -85,6 +87,8 @@ func TestDecodeMapsOnlyUniquePgBouncerEndpointWithDatabaseIdentity(t *testing.T)
 		{"ambiguous pooler", "pool.internal", "orders", []Asset{asset,
 			{ID: "other", Host: "pg-other.internal", Port: 5432, Database: "orders",
 				PoolerHost: "pool.internal", PoolerPort: 6432}}, ""},
+		{"separate application endpoint", "pool-app.internal", "orders", []Asset{separate}, "pgbouncer"},
+		{"management endpoint is not an application route", "pool.internal", "orders", []Asset{separate}, ""},
 		{"direct endpoint", "pg.internal", "orders", []Asset{asset}, "direct"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
