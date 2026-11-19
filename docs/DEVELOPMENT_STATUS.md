@@ -4,6 +4,8 @@
 
 [V0.6.0 RC1 Go 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)已发布，包含静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。发布提交 `b060d98` 的[完整 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44433132016)通过，发布产物均来自该次验收构建；V0.6.0 正式版的八类故障矩阵与物理断网主机验收仍未完成。
 
+本机新增 Go 真实锁闭环验收：PG18 目标的两个真实会话构成 advisory lock 阻塞，默认 `pg_lock_wait` 规则持续 60 秒后，事件 `9087d17d-604a-49b0-8e8d-31a2414b4d56` 关联等待 PID 164、阻塞 PID 163、原始故障样本和 `lock_chain` 候选。解除锁后成功样本 `1d3421f7-a078-4106-907c-70c5855522c1` 使**同一事件 ID**转为 `resolved`，恢复证据与 Markdown 报告均引用该样本。目标和样本属于隔离测试，测试结束删除资产；Linux CI 复验尚待完成。其余七类状态见[V0.6 正式版发布门槛](V0.6_RELEASE_GATE.md)。
+
 [当前 Go 自动采集与故障矩阵 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44367664009) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni 与托管模式本地目标、复制延迟、真实 WAL 归档失败、autovacuum 关闭、默认 120 秒连接压力、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
 
 新增独立的托管 PostgreSQL 资产类型：Go 调度器对其只采数据库与可选的 PgBouncer/Patroni 端点，B/S 页面不再把它显示为 Linux 主机或要求 K8S 映射。本机以 PG18 监控库和 PG14 目标验证了自动调度、成功诊断样本和不存在虚构主机/Pod 指标；浏览器完成表单隐藏、创建、手动采集及详情缺口提示验收，无控制台错误，截图为 `H:\CodexLS\outputs\DbSphere-managed-ui.png`。厂商实际云数据库及 TLS 路径尚未验收，具体能力与限制见[托管模式能力矩阵](MANAGED_PG.md)。
