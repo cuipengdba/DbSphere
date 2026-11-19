@@ -320,10 +320,14 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 		if span.parent != "" {
 			parent = span.parent
 		}
+		var queryID any
+		if span.kind == "postgresql_client" {
+			queryID = "42"
+		}
 		if _, err := pg.pool.Exec(context.Background(), `INSERT INTO trace_spans
-			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid)
-			VALUES($1,$2,$3,$4,'api',$5,now()-interval '1 second',now(),'ok',$6)`,
-			asset.ID, traceID, span.id, parent, span.kind, optionalBackendPID(span.backendPID)); err != nil {
+			(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id)
+			VALUES($1,$2,$3,$4,'api',$5,now()-interval '1 second',now(),'ok',$6,$7)`,
+			asset.ID, traceID, span.id, parent, span.kind, optionalBackendPID(span.backendPID), queryID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -347,6 +351,18 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	detail, err := pg.EventByID(context.Background(), eventID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	graph := object(object(detail.(map[string]any)["analysis"])["graph"])
+	traceSQLLinked := false
+	for _, edge := range graph["edges"].([]map[string]string) {
+		if edge["from"] == "span:"+traceID+":2222222222222222" &&
+			edge["to"] == "sql:"+asset.ID+":test-fingerprint" &&
+			edge["relation"] == "query_id_matches" {
+			traceSQLLinked = true
+		}
+	}
+	if !traceSQLLinked {
+		t.Fatal("same event did not link the database span to its exact SQL fingerprint")
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil || !strings.Contains(string(encoded), "observed_in") || !strings.Contains(string(encoded), eventID) ||

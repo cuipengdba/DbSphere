@@ -152,3 +152,33 @@ func TestDecodeKeepsOnlyValidatedBackendPIDOnDatabaseSpan(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeKeepsOnlyValidatedPostgresQueryID(t *testing.T) {
+	now := time.Now().UTC()
+	attribute := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{"-9223372036854775808", "-9223372036854775808"},
+		{"+42", "42"}, {"0", ""}, {"9223372036854775808", ""},
+		{"42;SELECT secret", ""},
+	} {
+		span := map[string]any{"traceId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"spanId": "1111111111111111", "kind": 3,
+			"startTimeUnixNano": now.Add(-time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano(),
+			"attributes": []any{attribute("db.system.name", "postgresql"),
+				attribute("server.address", "pg-a"), attribute("db.namespace", "orders"),
+				attribute("dbsphere.pg.query_id", tc.raw), attribute("db.statement", "SELECT secret")}}
+		body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+			"resource":   map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
+			"scopeSpans": []any{map[string]any{"spans": []any{span}}}}}})
+		result, err := Decode(body, []Asset{{ID: "asset-a", Host: "pg-a", Port: 5432, Database: "orders"}}, now)
+		if err != nil || len(result.Spans) != 1 || result.Spans[0].QueryID != tc.want {
+			t.Fatalf("Query ID %q was not normalized: %+v %v", tc.raw, result, err)
+		}
+		encoded, _ := json.Marshal(result.Spans[0])
+		if strings.Contains(string(encoded), "secret") {
+			t.Fatal("SQL text entered decoded span")
+		}
+	}
+}

@@ -1,6 +1,8 @@
 # V0.7 应用 Trace 开发记录
 
-> 2026-11-17。当前是开发能力，尚未达到 V0.7 发布验收。
+> 2026-11-19。当前是开发能力，尚未达到 V0.7 发布验收。
+
+V0.6.0 正式版之后的 Go 开发增量：数据库客户端 Span 可选择携带 `dbsphere.pg.query_id`（PostgreSQL 有符号 64 位 Query ID）。Go 只保留规范化整数，不保存 SQL 文本；PG18 schema 25 迁移保存该字段。事件页在同一资产、请求前后五分钟的已引用 `pg_stat_statements` 样本中，只有该 Query ID 唯一对应一个 SQL 指纹时，才把数据库 Span 连到 SQL 指纹节点。不同角色或数据库 OID 产生的多个指纹视为歧义，不建立连线。原始脱敏 Trace API 显示 Query ID。本机 PG18 实库验证了旧库升级、Span 存储及一个事件 ID 下的精确连线；此属性需要应用能够可靠取得，普通 SDK 不会自动产生，连线只表示同一语句身份，不证明单次请求造成性能退化。
 
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。官方 OpenTelemetry Collector 0.165.0 与 Go SDK 1.47.0 的分批 Trace 转发已在本机 kind 验证；其他 SDK 与完整应用故障矩阵仍待验收。
 
@@ -31,7 +33,7 @@ Go 同一事件页现在按服务展示**已观测** Span 数、数据库客户�
 
 - 只接收 JSON 编码的 OTLP/HTTP Trace；Protobuf、gRPC、gzip、日志与指标入口未实现。应用可向 Collector 标准 Receiver 发送，再由其 `otlp_http` Exporter 用 `encoding: json`、`compression: none` 指向 DbSphere 的 `/v1/traces`；[已验证配置](../examples/trace-lock-app/otel-collector.yaml)提供独立写入令牌。不同语言 SDK 的自动埋点和接入方式仍需按各自实现核验。
 - 当前按精确的配置地址、端口、数据库身份匹配，不支持代理地址、动态 Service 发现、Pod/Node/PVC 的应用侧身份映射。待关联服务 Span 仅在接入后 10 分钟内参与补链，时钟偏移超过 5 秒可能阻止父子关联。链路时间重叠仅表示相关，不能单凭重叠证明根因。
-- 采样率、时钟偏移目前只能标为未知；慢请求的 SQL 指纹到 DB Span 的精确绑定和资产级访问控制仍待开发。应用锁等待场景 A 已有本机与五版 CI 端到端测试；K8S OOM 场景 B 已有单节点 kind 实测，两者仍需独立环境及生产级复核。
+- 采样率、时钟偏移目前只能标为未知；自定义 Query ID 提供有条件的 SQL 指纹精确连线，但应用自动获取 Query ID、代理和多身份映射仍待开发。资产级访问控制仍待完善。应用锁等待场景 A 已有本机与五版 CI 端到端测试；K8S OOM 场景 B 已有单节点 kind 实测，两者仍需独立环境及生产级复核。
 - 默认安装不开启 Trace 接入。接入令牌是独立的写入凭据，生产环境需通过 TLS 终止的入口使用；不要把令牌放进客户端页面。
 
 ## 验证

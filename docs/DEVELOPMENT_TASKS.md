@@ -88,7 +88,7 @@ V0.6.0 正式版交付证据图、规则候选和 Go 离线包，已验证的故
 首段 OTLP/HTTP JSON 接入、PG18 Trace 存储、事件时间窗证据图和敏感字段白名单已实现并通过本地验证；官方 OpenTelemetry Collector 0.165.0 和 Go SDK 1.47.0 的分批 Trace 转发也在本机 kind 验证。其余任务仍需其他语言 SDK、精确身份映射、双向下钻和真实故障验收。详见[开发记录](TRACE_V0.7_PROGRESS.md)。
 
 - [x] **07-01** 接入 OTel 数据库客户端 Span 和服务身份，遵循 PostgreSQL 语义约定并控制 SQL 敏感字段。官方 Go SDK → Collector → Go DbSphere → PG18 实测读回同一 Trace 的服务父 Span、数据库客户端子 Span 和真实 PG 后端 PID；分批到达补链、脱敏待关联与失效清理有 PG18 回归测试。其他语言 SDK 留在 V1.0 兼容矩阵继续验收。
-- [ ] **07-02** 连接服务/请求/Trace/连接池/PG 实例/SQL 指纹/Host 或 Pod/Node/PVC 的身份映射与时间关联。
+- [ ] **07-02** 连接服务/请求/Trace/连接池/PG 实例/SQL 指纹/Host 或 Pod/Node/PVC 的身份映射与时间关联。Go 现在支持自定义 `dbsphere.pg.query_id`，在事件已引用的同期 SQL 样本中唯一对应一个指纹时建立 DB Span → SQL 指纹连线；本机 PG18 升级和同事件图已验证。连接池、代理地址、Pod/Node/PVC 应用身份映射仍待完成。
 - [ ] **07-03** 事件页提供双向下钻：慢请求 → SQL/PG/基础设施，以及数据库故障 → 受影响服务和请求。Go 事件页现把同期 Trace 与有数据库客户端错误或精确锁等待 PID 信号的 Trace 分开，并提供后者的脱敏原始链路链接；本机 kind 的真实 OOM 事件 3 条同期 Trace 中仅 1 条错误 Trace 被关联。跨服务依赖和 SQL 指纹精确回溯仍未完成。
 - [ ] **07-04** 标示链路断点、采样率与时钟偏移；没有应用 Trace 时保持数据库侧诊断可用。事件页已将应用服务 Span 和 PostgreSQL 客户端 Span 分开显示，明确指出缺少上游 Span、数据库调用 Span、PG 样本及基础设施证据；API 另统计当前事件窗口内父 Span 未找到的数量，并在报告标出原因尚不确定。无 Trace 时仍可查看数据库侧证据。实际采样率与端到端时钟偏移尚未采集，当前明确标为未知。
 - [ ] **07-05** 影响面计算与依赖拓扑，按资产权限控制可见服务和 Trace。

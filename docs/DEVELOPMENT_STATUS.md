@@ -4,7 +4,7 @@
 
 [V0.6.0 Go 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0)交付静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。真实 SQL 退化、计划/慢日志及 CSI PVC 容量压力在同一事件 ID 下有故障与恢复证据；[完整范围和限制](V0.6_RELEASE_GATE.md)说明尚未完成的 Linux 容量映射、物理断网主机和生产 Kubernetes 验收。
 
-RC3 发布后的 `main` 已将 SQL 执行计划候选限定到告警的精确 Query ID，并用真实 PG18 执行计划变化、数据库 `jsonlog` 慢日志及五分钟事前基线复验；[该提交的 34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44454602701)通过。该改进会进入下一次 V0.6 发布产物。
+V0.6.0 正式发布提交通过[34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44458860832)，包含真实 PG18 执行计划变化、数据库 `jsonlog` 慢日志及五分钟事前基线复验。后续 `main` 进入 V0.7.0 开发，正式版仍以 V0.6.0 标签为准。
 
 本机 kind 已完成 PG18 在真实 CSI PVC 上的容量压力与同一事件恢复，事件和样本 ID 记录在[Kubernetes 验收记录](KIND_ACCEPTANCE.md)。测试的告警持续时间临时设为 0 秒，使用真实 kubelet 指标的本地 Prometheus API 适配器；生产 CSI/Prometheus 和默认五分钟持续时间仍待验收。
 

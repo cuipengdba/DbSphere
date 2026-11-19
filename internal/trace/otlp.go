@@ -28,6 +28,7 @@ type Span struct {
 	SpanID       string
 	ParentSpanID string
 	BackendPID   int
+	QueryID      string
 	Service      string
 	Kind         string
 	Start        time.Time
@@ -152,6 +153,9 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					item.Kind = "postgresql_client"
 					if value, err := strconv.ParseInt(attrs["dbsphere.pg.backend_pid"], 10, 32); err == nil && value > 0 {
 						item.BackendPID = int(value)
+					}
+					if value, err := strconv.ParseInt(attrs["dbsphere.pg.query_id"], 10, 64); err == nil && value != 0 {
+						item.QueryID = strconv.FormatInt(value, 10)
 					}
 					item.address = attrs["server.address"]
 					item.port = 5432

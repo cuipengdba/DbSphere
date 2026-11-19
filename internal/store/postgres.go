@@ -282,6 +282,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record asset pagination migration: %w", err)
 		}
 	}
+	var traceQueryIDMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=25)").Scan(&traceQueryIDMigrated); err != nil {
+		return fmt.Errorf("check trace Query ID migration: %w", err)
+	}
+	if !traceQueryIDMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE trace_spans ADD COLUMN IF NOT EXISTS query_id text"); err != nil {
+			return fmt.Errorf("migrate trace Query ID: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(25) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace Query ID migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

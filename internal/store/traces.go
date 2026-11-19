@@ -36,12 +36,16 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 	if span.ParentSpanID != "" {
 		parent = span.ParentSpanID
 	}
+	var queryID any
+	if span.QueryID != "" {
+		queryID = span.QueryID
+	}
 	result, err := tx.Exec(ctx, `INSERT INTO trace_spans
-		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 		span.TraceID, span.SpanID, parent, span.Service, span.Kind,
-		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID))
+		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID)
 	if err != nil {
 		return 0, fmt.Errorf("save OTLP span: %w", err)
 	}

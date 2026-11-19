@@ -69,7 +69,7 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 	now := time.Now().UTC()
 	span := trace.Span{AssetID: asset.ID, TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		SpanID: "1111111111111111", Service: "checkout", Kind: "postgresql_client",
-		Start: now.Add(-time.Second), End: now, Status: "error", BackendPID: 301}
+		Start: now.Add(-time.Second), End: now, Status: "error", BackendPID: 301, QueryID: "-42"}
 	if imported, err := pg.SaveTraceSpans(ctx, []trace.Span{span}); err != nil || imported != 1 {
 		t.Fatalf("trace import failed: %d %v", imported, err)
 	}
@@ -81,8 +81,9 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 		t.Fatalf("saved trace was not readable: %v", err)
 	}
 	encoded, _ := json.Marshal(value)
-	if !strings.Contains(string(encoded), `"backendPid":301`) {
-		t.Fatalf("validated backend PID was not retained: %s", encoded)
+	if !strings.Contains(string(encoded), `"backendPid":301`) ||
+		!strings.Contains(string(encoded), `"queryId":"-42"`) {
+		t.Fatalf("validated backend PID and Query ID were not retained: %s", encoded)
 	}
 	if _, err := pg.pool.Exec(ctx, `UPDATE trace_spans SET ended_at=now()-interval '8 days'
 		WHERE asset_id=$1 AND trace_id=$2`, asset.ID, span.TraceID); err != nil {
