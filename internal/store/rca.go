@@ -45,6 +45,11 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 		add(hostNode, "linux", "Linux 主机", source, sample.At)
 		*edges = append(*edges, map[string]string{"from": sampleNode, "to": hostNode, "relation": "collected_with"})
 	}
+	if pooler := object(metrics["pgbouncer"]); stringValue(pooler["status"]) == "ok" {
+		poolerNode := "pooler:" + assetID
+		add(poolerNode, "pgbouncer", "PgBouncer", source, sample.At)
+		*edges = append(*edges, map[string]string{"from": sampleNode, "to": poolerNode, "relation": "collected_with"})
+	}
 	if k8s := object(metrics["k8s"]); stringValue(k8s["status"]) == "ok" {
 		pod := object(k8s["pod"])
 		if uid := stringValue(pod["uid"]); uid != "" {

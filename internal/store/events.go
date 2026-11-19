@@ -239,7 +239,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
 	observedSpans := []observedTraceSpan{}
-	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id FROM trace_spans
+	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY started_at DESC LIMIT 100`, event.AssetID, event.StartedAt, event.EndedAt)
@@ -251,12 +251,12 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	spanServices := map[string]string{}
 	parentEdges := []map[string]string{}
 	for traceRows.Next() {
-		var traceID, spanID, service, kind, spanStatus string
+		var traceID, spanID, service, kind, spanStatus, route string
 		var parentID *string
 		var backendPID *int32
 		var queryID *string
 		var at, endedAt time.Time
-		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt, &spanStatus, &backendPID, &queryID); err != nil {
+		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt, &spanStatus, &backendPID, &queryID, &route); err != nil {
 			traceRows.Close()
 			return nil, err
 		}
@@ -321,7 +321,14 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		edges = append(edges, map[string]string{"from": serviceNode, "to": spanNode, "relation": "emitted"},
 			map[string]string{"from": eventNode, "to": spanNode, "relation": "time_window"})
 		if kind == "postgresql_client" {
-			edges = append(edges, map[string]string{"from": spanNode, "to": assetNode, "relation": "calls"})
+			if route == "pgbouncer" {
+				poolerNode := "pooler:" + event.AssetID
+				addNode(poolerNode, "pgbouncer", "PgBouncer", "/api/assets/"+event.AssetID, at)
+				edges = append(edges, map[string]string{"from": spanNode, "to": poolerNode, "relation": "via_pooler"},
+					map[string]string{"from": poolerNode, "to": assetNode, "relation": "forwards_to"})
+			} else {
+				edges = append(edges, map[string]string{"from": spanNode, "to": assetNode, "relation": "calls"})
+			}
 			if queryID != nil {
 				if fingerprint := traceSQLFingerprint(samples, *queryID, at, endedAt); fingerprint != "" {
 					edges = append(edges, map[string]string{"from": spanNode,
@@ -464,7 +471,7 @@ func (s *Postgres) RawSample(ctx context.Context, assetID, sampleID string) (any
 func (s *Postgres) RawTrace(ctx context.Context, assetID, traceID string) (any, error) {
 	spans, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 		'assetId',asset_id,'traceId',trace_id,'spanId',span_id,'parentSpanId',parent_span_id,
-		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id)
+		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id,'route',route)
 		FROM trace_spans WHERE asset_id=$1 AND trace_id=$2 ORDER BY started_at LIMIT 256`, assetID, traceID)
 	if err != nil {
 		return nil, err

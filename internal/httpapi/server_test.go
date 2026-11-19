@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,9 +28,11 @@ func (stub healthStub) Health(context.Context) error { return stub.err }
 type traceStub struct {
 	healthStub
 	spans []trace.Span
+	key   []byte
 }
 
-func (*traceStub) TraceAssets(context.Context) ([]trace.Asset, error) {
+func (stub *traceStub) TraceAssets(_ context.Context, key []byte) ([]trace.Asset, error) {
+	stub.key = append([]byte(nil), key...)
 	return []trace.Asset{{ID: "11111111-1111-1111-1111-111111111111",
 		Host: "pg.internal", Port: 5432, Database: "orders"}}, nil
 }
@@ -55,7 +58,8 @@ func TestGoOTLPIntakeRequiresSeparateTokenAndBounds(t *testing.T) {
 	if got := call(New(stub, AuthConfig{}), "Bearer "+token, `{}`); got.Code != http.StatusNotFound {
 		t.Fatal("disabled trace intake accepted data")
 	}
-	handler := New(stub, AuthConfig{OTLPToken: token})
+	masterKey := []byte("01234567890123456789012345678901")
+	handler := New(stub, AuthConfig{OTLPToken: token, MasterKey: masterKey})
 	if got := call(handler, token, `{}`); got.Code != http.StatusUnauthorized {
 		t.Fatal("trace token without Bearer accepted")
 	}
@@ -70,6 +74,9 @@ func TestGoOTLPIntakeRequiresSeparateTokenAndBounds(t *testing.T) {
 	if got := call(handler, "Bearer "+token, payload); got.Code != http.StatusOK || len(stub.spans) != 1 ||
 		stub.spans[0].AssetID != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("valid OTLP span was not mapped: %d %s", got.Code, got.Body.String())
+	}
+	if !bytes.Equal(stub.key, masterKey) {
+		t.Fatal("OTLP asset lookup did not receive the configured encryption key")
 	}
 }
 

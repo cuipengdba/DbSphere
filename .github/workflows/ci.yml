@@ -1087,4 +1087,4 @@ jobs:
           DBSPHERE_TEST_PG_TARGET_PORT: '15435'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_POOLER_URL: postgres://dbsphere_monitor:dbsphere-monitor-test@127.0.0.1:16433/pgbouncer
-        run: go test ./internal/collector ./internal/store -run 'TestPgBouncer|TestGoPgBouncerCombinedSampleInPG18' -count=1
+        run: go test ./internal/collector ./internal/store -run 'TestPgBouncer|TestGoPgBouncerCombinedSampleInPG18|TestRealPgBouncerEndpointMapsApplicationTracePG18' -count=1

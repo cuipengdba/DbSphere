@@ -16,10 +16,12 @@ var traceID = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 var spanID = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
 
 type Asset struct {
-	ID       string
-	Host     string
-	Port     int
-	Database string
+	ID         string
+	Host       string
+	Port       int
+	Database   string
+	PoolerHost string
+	PoolerPort int
 }
 
 type Span struct {
@@ -29,6 +31,7 @@ type Span struct {
 	ParentSpanID string
 	BackendPID   int
 	QueryID      string
+	Route        string
 	Service      string
 	Kind         string
 	Start        time.Time
@@ -180,23 +183,33 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 		}
 		matched := map[string]bool{}
 		dbAsset := map[string]string{}
+		dbRoute := map[string]string{}
 		for _, item := range group {
 			if item.Kind != "postgresql_client" || ambiguous[item.SpanID] ||
 				item.address == "" || item.port < 1 || item.port > 65535 {
 				continue
 			}
-			match := ""
+			match, route := "", ""
 			count := 0
 			for _, asset := range assets {
-				if strings.EqualFold(asset.Host, item.address) && asset.Port == item.port &&
-					(item.namespace == "" || asset.Database == item.namespace) {
+				direct := strings.EqualFold(asset.Host, item.address) && asset.Port == item.port &&
+					(item.namespace == "" || asset.Database == item.namespace)
+				viaPooler := item.namespace != "" && asset.Database == item.namespace &&
+					asset.PoolerHost != "" && strings.EqualFold(asset.PoolerHost, item.address) &&
+					asset.PoolerPort == item.port
+				if direct || viaPooler {
 					match = asset.ID
+					route = "direct"
+					if !direct {
+						route = "pgbouncer"
+					}
 					count++
 				}
 			}
 			if count == 1 {
 				matched[match] = true
 				dbAsset[item.SpanID] = match
+				dbRoute[item.SpanID] = route
 			}
 		}
 		for assetID := range matched {
@@ -222,6 +235,9 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					continue
 				}
 				item.AssetID = assetID
+				if item.Kind == "postgresql_client" {
+					item.Route = dbRoute[item.SpanID]
+				}
 				result.Spans = append(result.Spans, item.Span)
 				if len(result.Spans) > 4096 {
 					return Result{}, ErrTooMany

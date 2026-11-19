@@ -52,7 +52,7 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.DeleteAsset(ctx, asset.ID)
-	identities, err := pg.TraceAssets(ctx)
+	identities, err := pg.TraceAssets(ctx, []byte("01234567890123456789012345678901"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,195 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 	}
 	if removed, err := pg.PruneTraceSpans(ctx, 7); err != nil || removed < 1 {
 		t.Fatalf("expired trace was not pruned: %d %v", removed, err)
+	}
+}
+
+func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Pooler trace route", Host: "pg-pool-route.internal",
+		Port: 5432, Database: "orders", Username: "monitor", Password: "database-secret",
+		SSLMode: "disable", Runtime: "linux",
+		PoolerURL: "postgres://monitor:pooler-secret@pool-route.internal:6432/pgbouncer"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	identities, err := pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, identity := range identities {
+		if identity.ID == asset.ID {
+			found = identity.PoolerHost == "pool-route.internal" && identity.PoolerPort == 6432
+			if strings.Contains(fmt.Sprintf("%+v", identity), "pooler-secret") {
+				t.Fatal("PgBouncer credential leaked into Trace identity")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("decrypted PgBouncer endpoint was not available for Trace mapping")
+	}
+	now := time.Now().UTC()
+	attribute := func(name, value string) map[string]any {
+		return map[string]any{"key": name, "value": map[string]string{"stringValue": value}}
+	}
+	traceID := newTraceID(t)
+	spansJSON, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource": map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
+		"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
+			"traceId": traceID, "spanId": "1111111111111111", "kind": 3,
+			"startTimeUnixNano": now.Add(-time.Second).UnixNano(),
+			"endTimeUnixNano":   now.UnixNano(), "attributes": []any{
+				attribute("db.system.name", "postgresql"),
+				attribute("server.address", "pool-route.internal"),
+				attribute("server.port", "6432"), attribute("db.namespace", "orders"),
+				attribute("db.statement", "SELECT private_data")},
+		}}}}}}})
+	decoded, err := trace.Decode(spansJSON, identities, now)
+	if err != nil || len(decoded.Spans) != 1 || decoded.Spans[0].Route != "pgbouncer" {
+		t.Fatalf("pooler Trace was not uniquely mapped: %+v %v", decoded, err)
+	}
+	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
+		t.Fatal(err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, asset.ID, now.Add(-time.Minute)).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+		VALUES($1,$2,'alert','PgBouncer trace route','open',$3,'pooler_route_test')`,
+		eventID, asset.ID, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(detail)
+	for _, required := range []string{`"relation":"via_pooler"`, `"relation":"forwards_to"`,
+		`"type":"pgbouncer"`} {
+		if !strings.Contains(string(encoded), required) {
+			t.Fatalf("event graph is missing %s: %s", required, encoded)
+		}
+	}
+	raw, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawJSON, _ := json.Marshal(raw)
+	if !strings.Contains(string(rawJSON), `"route":"pgbouncer"`) ||
+		strings.Contains(string(rawJSON), "private_data") || strings.Contains(string(rawJSON), "pooler-secret") {
+		t.Fatalf("unsafe or incomplete raw Trace: %s", rawJSON)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE assets SET pooler_url_enc='corrupt-ciphertext' WHERE id=$1`, asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	identities, err = pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatalf("one invalid PgBouncer credential must not stop all Trace ingestion: %v", err)
+	}
+	for _, identity := range identities {
+		if identity.ID == asset.ID {
+			if identity.Host != "pg-pool-route.internal" || identity.PoolerHost != "" {
+				t.Fatalf("invalid pooler URL must leave direct asset mapping available: %+v", identity)
+			}
+			return
+		}
+	}
+	t.Fatal("asset disappeared after its PgBouncer credential became invalid")
+}
+
+func TestRealPgBouncerEndpointMapsApplicationTracePG18(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	poolerURL := os.Getenv("DBSPHERE_TEST_POOLER_URL")
+	pgPort := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
+	pgPassword := os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD")
+	if storeURL == "" || poolerURL == "" || pgPort == "" || pgPassword == "" {
+		t.Skip("PG18 store, PostgreSQL target and PgBouncer are required")
+	}
+	ctx := context.Background()
+	parsed, err := url.Parse(poolerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryURL := *parsed
+	queryURL.Path = "/postgres"
+	client, err := pgx.Connect(ctx, queryURL.String())
+	if err != nil {
+		t.Fatalf("application could not reach PostgreSQL through PgBouncer: %v", err)
+	}
+	defer client.Close(ctx)
+	var database string
+	if err := client.QueryRow(ctx, "SELECT current_database()").Scan(&database); err != nil || database != "postgres" {
+		t.Fatalf("real PgBouncer query failed: %s %v", database, err)
+	}
+	port, err := strconv.Atoi(pgPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, err := Open(ctx, storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Real PgBouncer application route",
+		Host: "127.0.0.1", Port: port, Database: "postgres", Username: "postgres",
+		Password: pgPassword, SSLMode: "disable", Runtime: "linux", PoolerURL: poolerURL}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	identities, err := pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	attribute := func(name, value string) map[string]any {
+		return map[string]any{"key": name, "value": map[string]string{"stringValue": value}}
+	}
+	body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource": map[string]any{"attributes": []any{attribute("service.name", "pooler-app")}},
+		"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
+			"traceId": newTraceID(t), "spanId": "1111111111111111", "kind": 3,
+			"startTimeUnixNano": now.Add(-time.Second).UnixNano(),
+			"endTimeUnixNano":   now.UnixNano(), "attributes": []any{
+				attribute("db.system.name", "postgresql"),
+				attribute("server.address", parsed.Hostname()),
+				attribute("server.port", parsed.Port()),
+				attribute("db.namespace", database)},
+		}}}}}}})
+	decoded, err := trace.Decode(body, identities, now)
+	if err != nil || len(decoded.Spans) != 1 || decoded.Spans[0].AssetID != asset.ID ||
+		decoded.Spans[0].Route != "pgbouncer" {
+		t.Fatalf("real PgBouncer endpoint did not map to one asset: %+v %v", decoded, err)
+	}
+	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -328,7 +517,7 @@ func TestGoOTLPTraceConnectsToExistingIncidentID(t *testing.T) {
 	traceID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	body := fmt.Sprintf(`{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeSpans":[{"spans":[{"traceId":"%s","spanId":"1111111111111111","startTimeUnixNano":"%d","endTimeUnixNano":"%d"},{"traceId":"%s","spanId":"2222222222222222","parentSpanId":"1111111111111111","kind":3,"startTimeUnixNano":"%d","endTimeUnixNano":"%d","attributes":[{"key":"db.system.name","value":{"stringValue":"postgresql"}},{"key":"server.address","value":{"stringValue":"pg-linked.internal"}},{"key":"db.namespace","value":{"stringValue":"orders"}}]}]}]}]}`,
 		traceID, startNano, endNano, traceID, startNano, endNano)
-	identities, err := pg.TraceAssets(ctx)
+	identities, err := pg.TraceAssets(ctx, []byte("01234567890123456789012345678901"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +712,7 @@ func TestRealPostgreSQLLockPIDConnectsApplicationTraceToOneEvent(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
 		"resource":   map[string]any{"attributes": []any{attribute("service.name", "checkout")}},
 		"scopeSpans": []any{map[string]any{"spans": []any{parent, dbSpan}}}}}})
-	identities, err := pg.TraceAssets(ctx)
+	identities, err := pg.TraceAssets(ctx, key)
 	if err != nil {
 		t.Fatal(err)
 	}

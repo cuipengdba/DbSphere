@@ -163,7 +163,7 @@ type NotificationRetryStore interface {
 	RetryNotification(context.Context, string) (bool, error)
 }
 type TraceStore interface {
-	TraceAssets(context.Context) ([]trace.Asset, error)
+	TraceAssets(context.Context, []byte) ([]trace.Asset, error)
 	SaveTraceSpans(context.Context, []trace.Span) (int, error)
 }
 
@@ -255,7 +255,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "Trace payload exceeds 1 MiB"})
 			return
 		}
-		assets, err := tracesDB.TraceAssets(r.Context())
+		assets, err := tracesDB.TraceAssets(r.Context(), credentials.MasterKey)
 		if err != nil {
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Trace asset mapping unavailable"})
 			return

@@ -316,6 +316,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record work order migration: %w", err)
 		}
 	}
+	var traceRouteMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=27)").Scan(&traceRouteMigrated); err != nil {
+		return fmt.Errorf("check trace route migration: %w", err)
+	}
+	if !traceRouteMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE trace_spans ADD COLUMN IF NOT EXISTS route text NOT NULL DEFAULT 'direct'"); err != nil {
+			return fmt.Errorf("migrate trace route: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(27) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace route migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

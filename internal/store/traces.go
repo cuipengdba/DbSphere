@@ -3,14 +3,17 @@ package store
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *Postgres) TraceAssets(ctx context.Context) ([]trace.Asset, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name FROM assets`)
+func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc FROM assets`)
 	if err != nil {
 		return nil, fmt.Errorf("list OTLP asset identities: %w", err)
 	}
@@ -18,8 +21,30 @@ func (s *Postgres) TraceAssets(ctx context.Context) ([]trace.Asset, error) {
 	assets := []trace.Asset{}
 	for rows.Next() {
 		var asset trace.Asset
-		if err := rows.Scan(&asset.ID, &asset.Host, &asset.Port, &asset.Database); err != nil {
+		var poolerEncrypted *string
+		if err := rows.Scan(&asset.ID, &asset.Host, &asset.Port, &asset.Database, &poolerEncrypted); err != nil {
 			return nil, err
+		}
+		if poolerEncrypted != nil {
+			plain, err := security.Decrypt(key, *poolerEncrypted)
+			if err != nil {
+				assets = append(assets, asset)
+				continue
+			}
+			endpoint, err := url.Parse(plain)
+			if err != nil || endpoint.Hostname() == "" {
+				assets = append(assets, asset)
+				continue
+			}
+			asset.PoolerHost = endpoint.Hostname()
+			asset.PoolerPort = 5432
+			if endpoint.Port() != "" {
+				asset.PoolerPort, err = strconv.Atoi(endpoint.Port())
+				if err != nil || asset.PoolerPort < 1 || asset.PoolerPort > 65535 {
+					asset.PoolerHost = ""
+					asset.PoolerPort = 0
+				}
+			}
 		}
 		assets = append(assets, asset)
 	}
@@ -32,6 +57,13 @@ func (s *Postgres) SaveTraceSpans(ctx context.Context, spans []trace.Span) (int,
 }
 
 func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, error) {
+	route := span.Route
+	if route == "" {
+		route = "direct"
+	}
+	if route != "direct" && route != "pgbouncer" {
+		return 0, fmt.Errorf("invalid OTLP database route")
+	}
 	var parent any
 	if span.ParentSpanID != "" {
 		parent = span.ParentSpanID
@@ -41,11 +73,11 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 		queryID = span.QueryID
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO trace_spans
-		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 		span.TraceID, span.SpanID, parent, span.Service, span.Kind,
-		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID)
+		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route)
 	if err != nil {
 		return 0, fmt.Errorf("save OTLP span: %w", err)
 	}

@@ -48,6 +48,64 @@ func TestDecodeMapsDatabaseSpansWithoutCrossAssetLeak(t *testing.T) {
 	}
 }
 
+func TestDecodeMapsOnlyUniquePgBouncerEndpointWithDatabaseIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	attr := func(key, value string) map[string]any {
+		return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
+	}
+	build := func(address, database string) []byte {
+		port := "6432"
+		if address == "pg.internal" {
+			port = "5432"
+		}
+		attributes := []any{attr("db.system.name", "postgresql"),
+			attr("server.address", address), attr("server.port", port)}
+		if database != "" {
+			attributes = append(attributes, attr("db.namespace", database))
+		}
+		body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{attr("service.name", "checkout")}},
+			"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
+				"traceId": "abababababababababababababababab", "spanId": "1111111111111111",
+				"kind": 3, "startTimeUnixNano": now.Add(-time.Second).UnixNano(),
+				"endTimeUnixNano": now.UnixNano(), "attributes": attributes,
+			}}}}}}})
+		return body
+	}
+	asset := Asset{ID: "orders", Host: "pg.internal", Port: 5432, Database: "orders",
+		PoolerHost: "pool.internal", PoolerPort: 6432}
+	for _, tc := range []struct {
+		name, address, database string
+		assets                  []Asset
+		wantRoute               string
+	}{
+		{"unique pooler", "pool.internal", "orders", []Asset{asset}, "pgbouncer"},
+		{"missing database", "pool.internal", "", []Asset{asset}, ""},
+		{"wrong database", "pool.internal", "other", []Asset{asset}, ""},
+		{"ambiguous pooler", "pool.internal", "orders", []Asset{asset,
+			{ID: "other", Host: "pg-other.internal", Port: 5432, Database: "orders",
+				PoolerHost: "pool.internal", PoolerPort: 6432}}, ""},
+		{"direct endpoint", "pg.internal", "orders", []Asset{asset}, "direct"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := Decode(build(tc.address, tc.database), tc.assets, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantRoute == "" {
+				if len(result.Spans) != 0 || result.Rejected != 1 {
+					t.Fatalf("ambiguous or unqualified pooler span accepted: %+v", result)
+				}
+				return
+			}
+			if len(result.Spans) != 1 || result.Spans[0].AssetID != asset.ID ||
+				result.Spans[0].Route != tc.wantRoute {
+				t.Fatalf("incorrect PostgreSQL route: %+v", result)
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsInvalidAndExcessiveOTLP(t *testing.T) {
 	if _, err := Decode([]byte(`{"other":[]}`), nil, time.Now()); !errors.Is(err, ErrInvalid) {
 		t.Fatal("missing resourceSpans accepted")

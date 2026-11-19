@@ -1007,7 +1007,7 @@ async function showEvent(id) {
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
   const hasTrace = (analysis.traceCoverage?.spans ?? 0) > 0;
   const chain = document.createElement('div'); chain.className = 'flow-strip';
-  for (const [title, present, available, missing] of [
+  const graphSteps = [
     ['应用服务', graphTypes.has('service_span'), '有上游服务 Span', hasTrace ? '缺少上游服务 Span' : '未接入 Trace'],
     ['数据库调用', graphTypes.has('db_client_span'), '有 PostgreSQL 客户端 Span', hasTrace ? '缺少数据库客户端 Span' : '未接入 Trace'],
     ['PostgreSQL', graphTypes.has('sample'), '有采样证据', '样本缺失'],
@@ -1015,7 +1015,10 @@ async function showEvent(id) {
       '有等待、锁或 SQL 证据', '尚无会话或 SQL 证据'],
     ['Linux / K8S', ['linux', 'pod', 'pvc', 'k8s_node'].some(type => graphTypes.has(type)),
       '有主机或容器证据', '未采集或不适用']
-  ]) {
+  ];
+  if (graphTypes.has('pgbouncer')) graphSteps.splice(2, 0,
+    ['PgBouncer', true, '有连接池路由或采样证据', '未接入连接池']);
+  for (const [title, present, available, missing] of graphSteps) {
     const step = document.createElement('div'); step.className = `flow-step ${present ? 'present' : 'missing'}`;
     step.append(cell('strong', title), cell('span', present ? available : missing));
     chain.append(step);
@@ -1024,9 +1027,20 @@ async function showEvent(id) {
   const graphDetails = document.createElement('details');
   graphDetails.append(cell('summary', '查看证据关系'));
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
+  const relationLabels = {
+    affects: '影响', contains: '包含', observed_in: '见于样本', collected_from: '采自',
+    collected_with: '同期采集', emitted: '产生', parent_of: '父链路', calls: '调用',
+    calls_service: '调用服务', via_pooler: '经由连接池', forwards_to: '转发至',
+    time_window: '处于事件时间窗', query_id_matches: 'Query ID 匹配',
+    same_backend_pid: '后端 PID 匹配', observed_session: '观测到会话',
+    blocked_by: '被阻塞于', observed_sql: '观测到 SQL', scheduled_on: '调度于',
+    routes_to: '路由至', compared_with: '与基线比较', hypothesizes: '提出候选',
+    supported_by: '由证据支持', reviewed_by: '人工复核',
+    baseline_before_event_and_log_within_event: '事前基线与事件内慢日志对应'
+  };
   for (const edge of analysis.graph.edges) {
     const from = graphNodes.get(edge.from); const to = graphNodes.get(edge.to);
-    const relation = cell('p', `${from?.type ?? '未知'} ${from?.label ?? edge.from} → ${edge.relation} → ${to?.type ?? '未知'} ${to?.label ?? edge.to}`, 'evidence');
+    const relation = cell('p', `${from?.type ?? '未知'} ${from?.label ?? edge.from} → ${relationLabels[edge.relation] ?? edge.relation} → ${to?.type ?? '未知'} ${to?.label ?? edge.to}`, 'evidence');
     if (to?.source) {
       const source = cell('a', ' · 原始数据');
       source.href = to.source;
