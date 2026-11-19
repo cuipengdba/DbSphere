@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
+	"github.com/cuipengdba/dbsphere/internal/store"
 )
 
 func TestContainerReadinessProbe(t *testing.T) {
@@ -73,6 +76,68 @@ func TestCollectorBatchRunsInParallelWithinConfiguredLimit(t *testing.T) {
 	}
 	if completed.Load() != 6 || peak.Load() != 3 {
 		t.Fatalf("collector worker limit was not honored: completed=%d peak=%d", completed.Load(), peak.Load())
+	}
+}
+
+type collectorCycleStub struct{ scanErr error }
+
+func (stub collectorCycleStub) DueAssetIDs(context.Context, time.Duration, int) ([]string, error) {
+	if stub.scanErr != nil {
+		return nil, stub.scanErr
+	}
+	return []string{"unavailable-target", "store-failure"}, nil
+}
+func (collectorCycleStub) CheckStaleAsset(context.Context, string, time.Duration, time.Time) error {
+	return nil
+}
+func (collectorCycleStub) CheckAsset(_ context.Context, id string, _ []byte) (store.CheckResult, error) {
+	if id == "store-failure" {
+		return store.CheckResult{}, errors.New("test write failure")
+	}
+	return store.CheckResult{Status: "error"}, nil
+}
+
+func TestCollectorCycleSeparatesTargetAndStoreFailures(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		scanErr      error
+		selected     int
+		processed    int
+		target       int
+		collectorErr int
+		scanFailed   bool
+	}{
+		{name: "target and store", selected: 2, processed: 2, target: 1, collectorErr: 1},
+		{name: "due scan", scanErr: errors.New("test scan failure"), scanFailed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tracker := collectorstate.New(true, 15*time.Second, 2, time.Now().UTC())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runCollector(ctx, collectorCycleStub{scanErr: test.scanErr}, nil, 15*time.Second, 2,
+					tracker, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			}()
+			deadline := time.After(3 * time.Second)
+			for tracker.Snapshot(time.Now().UTC()).CompletedCycles == 0 {
+				select {
+				case <-deadline:
+					t.Fatal("collector did not complete its first cycle")
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+			cancel()
+			<-done
+			snapshot := tracker.Snapshot(time.Now().UTC())
+			cycle := snapshot.Cycle
+			if snapshot.State != "degraded" || cycle.Selected != test.selected ||
+				cycle.Processed != test.processed || cycle.TargetFailures != test.target ||
+				cycle.CollectorErrors != test.collectorErr || cycle.DueScanFailed != test.scanFailed {
+				t.Fatalf("collector cycle status = %+v", snapshot)
+			}
+		})
 	}
 }
 

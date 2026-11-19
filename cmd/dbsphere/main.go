@@ -10,10 +10,12 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/config"
 	"github.com/cuipengdba/dbsphere/internal/httpapi"
 	"github.com/cuipengdba/dbsphere/internal/notify"
@@ -133,6 +135,8 @@ func run(log *slog.Logger) error {
 	if autoAI == "true" && aiClient == nil {
 		return fmt.Errorf("automatic AI analysis requires a configured model")
 	}
+	collectorRuntime := collectorstate.New(cfg.AutoCollect, time.Duration(cfg.CollectEvery)*time.Second,
+		cfg.CollectWorkers, time.Now())
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash:   viewerHash,
@@ -140,6 +144,7 @@ func run(log *slog.Logger) error {
 			ViewerAssetIDs:       cfg.ViewerAssetIDs,
 			AutoCollect:          cfg.AutoCollect,
 			CollectEvery:         cfg.CollectEvery,
+			CollectorState:       collectorRuntime,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
@@ -196,7 +201,7 @@ func run(log *slog.Logger) error {
 		go func() {
 			defer close(done)
 			runCollector(ctx, pg, cfg.MasterKey, time.Duration(cfg.CollectEvery)*time.Second,
-				cfg.CollectWorkers, log)
+				cfg.CollectWorkers, collectorRuntime, log)
 		}()
 		log.Info("Go PostgreSQL collector enabled", "intervalSeconds", cfg.CollectEvery)
 	}
@@ -454,36 +459,58 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 	}
 }
 
-func runCollector(ctx context.Context, pg *store.Postgres, key []byte, interval time.Duration, workers int, log *slog.Logger) {
+type collectorStore interface {
+	DueAssetIDs(context.Context, time.Duration, int) ([]string, error)
+	CheckStaleAsset(context.Context, string, time.Duration, time.Time) error
+	CheckAsset(context.Context, string, []byte) (store.CheckResult, error)
+}
+
+func runCollector(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
+	tracker *collectorstate.Tracker, log *slog.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		tracker.Begin(time.Now())
+		cycle := collectorstate.Cycle{}
 		ids, err := pg.DueAssetIDs(ctx, interval, 100)
 		if err != nil {
+			cycle.DueScanFailed = true
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
+			cycle.Selected = len(ids)
+			cycle.AtBatchLimit = len(ids) == 100
+			var processed, targetFailures, collectorErrors atomic.Int64
 			runBoundedBatch(ctx, ids, workers, func(id string) {
 				if err := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); err != nil {
+					collectorErrors.Add(1)
 					log.Error("Go collector could not evaluate stale asset", "assetId", id, "error", err)
 				}
 				checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 				result, err := pg.CheckAsset(checkCtx, id, key)
 				cancel()
+				processed.Add(1)
 				if err == nil {
 					if staleErr := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); staleErr != nil {
+						collectorErrors.Add(1)
 						log.Error("Go collector could not clear stale asset", "assetId", id, "error", staleErr)
 					}
 				}
 				if err != nil {
+					collectorErrors.Add(1)
 					log.Error("Go collector failed to persist asset sample", "assetId", id, "error", err)
 				} else if result.Status == "error" {
+					targetFailures.Add(1)
 					log.Warn("Go collector observed asset failure", "assetId", id, "sampleId", result.SampleID)
 				}
 			})
+			cycle.Processed = int(processed.Load())
+			cycle.TargetFailures = int(targetFailures.Load())
+			cycle.CollectorErrors = int(collectorErrors.Load())
 		}
+		tracker.Finish(time.Now(), cycle)
 		select {
 		case <-ctx.Done():
 			return

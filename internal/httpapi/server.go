@@ -21,6 +21,7 @@ import (
 	"github.com/cuipengdba/dbsphere"
 	"github.com/cuipengdba/dbsphere/internal/ai"
 	"github.com/cuipengdba/dbsphere/internal/assets"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	storepkg "github.com/cuipengdba/dbsphere/internal/store"
 	"github.com/cuipengdba/dbsphere/internal/trace"
@@ -179,6 +180,7 @@ type AuthConfig struct {
 	ViewerAssetIDs       []string
 	AutoCollect          bool
 	CollectEvery         int
+	CollectorState       *collectorstate.Tracker
 	SecureCookie         bool
 	OTLPToken            string
 	AI                   *ai.Client
@@ -452,6 +454,18 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				return
 			}
 			respond(w, http.StatusOK, entries)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Administrator access required"})
+				return
+			}
+			if credentials.CollectorState == nil {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Collector status unavailable"})
+				return
+			}
+			respond(w, http.StatusOK, credentials.CollectorState.Snapshot(time.Now()))
 			return
 		}
 		if r.Method == http.MethodGet {

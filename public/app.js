@@ -48,7 +48,8 @@ const views = {
 function setView(view, updateHash = true) {
   const selected = views[view] ? view : 'overview';
   for (const section of document.querySelectorAll('[data-view]'))
-    section.hidden = section.dataset.view !== selected || (section.id === 'admin-audit-panel' && currentRole !== 'admin');
+    section.hidden = section.dataset.view !== selected ||
+      ((section.id === 'admin-audit-panel' || section.id === 'collector-status-panel') && currentRole !== 'admin');
   for (const button of document.querySelectorAll('[data-nav]')) {
     const active = button.dataset.nav === selected;
     button.classList.toggle('active', active);
@@ -114,12 +115,13 @@ function cell(tag, text, cls) {
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
-    { templates }, { schedules }, { runs }, audit, runtime] = await Promise.all([
+    { templates }, { schedules }, { runs }, audit, runtime, collector] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
     api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
     api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
     currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
-    api('/api/version').catch(() => null)
+    api('/api/version').catch(() => null),
+    currentRole === 'admin' ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null)
   ]);
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
@@ -159,7 +161,11 @@ async function refresh() {
   pg18Store = storage.mode !== 'sqlite-preview';
   renderStorage(storage);
   $('admin-audit-panel').hidden = currentRole !== 'admin' || location.hash.slice(1) !== 'settings';
-  if (currentRole === 'admin') renderAdminAudit(audit?.entries);
+  $('collector-status-panel').hidden = currentRole !== 'admin' || location.hash.slice(1) !== 'settings';
+  if (currentRole === 'admin') {
+    renderAdminAudit(audit?.entries);
+    renderCollectorStatus(collector);
+  }
   renderInspections(assets, templates, schedules, runs);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
   if (selectedAsset) await showAsset(selectedAsset);
@@ -872,6 +878,35 @@ function renderStorage(storage) {
   }
   target.append(grid);
   if (storage.backup?.status !== 'ok') target.append(cell('p', storage.backup?.reason ?? '监控存储备份状态未知', 'warning'));
+}
+
+function renderCollectorStatus(status) {
+  const target = $('collector-status-detail'); target.replaceChildren();
+  if (!status) { target.append(cell('p', '当前进程的采集状态暂时不可用。', 'warning')); return; }
+  const labels = { disabled: '自动采集已关闭', starting: '等待首轮采集', running: '正在采集',
+    overdue: '本轮已超过两个采集周期', healthy: '采集循环正常',
+    degraded: '最近一轮有采集器错误', stalled: '采集循环未按周期推进' };
+  target.append(cell('p', labels[status.state] ?? '状态未知',
+    ['overdue', 'degraded', 'stalled'].includes(status.state) ? 'warning' : 'hint'));
+  const grid = document.createElement('div'); grid.className = 'metric-grid';
+  for (const [label, value] of [
+    ['采集周期 / 并发', `${status.intervalSeconds} 秒 / ${status.workerLimit} 个`],
+    ['进程启动', formatTime(status.processStartedAt)],
+    ['当前轮开始', status.activeStartedAt ? formatTime(status.activeStartedAt) : '未运行'],
+    ['最近一轮开始', formatTime(status.cycleStartedAt)],
+    ['最近一轮结束', formatTime(status.cycleFinishedAt)],
+    ['最近一轮耗时', status.cycleFinishedAt ? `${status.cycleDurationMs} ms` : '尚无结果'],
+    ['本进程完成轮次', status.completedCycles],
+    ['最近一轮选中 / 实际处理', `${status.cycle?.selected ?? 0} / ${status.cycle?.processed ?? 0}`],
+    ['最近一轮目标失败', status.cycle?.targetFailures ?? 0],
+    ['最近一轮执行错误', status.cycle?.collectorErrors ?? 0]
+  ]) {
+    const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
+  }
+  target.append(grid);
+  if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
+  if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮达到 ${status.batchLimit} 个资产的批次上限；是否存在积压尚未测量。`, 'warning'));
+  target.append(cell('p', '这些计数只覆盖当前 Go 进程；重启后归零。目标采集失败与采集器执行错误分开统计。', 'hint'));
 }
 
 function renderRules(rules) {

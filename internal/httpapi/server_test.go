@@ -16,6 +16,7 @@ import (
 
 	"github.com/cuipengdba/dbsphere"
 	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/cuipengdba/dbsphere/internal/store"
 	"github.com/cuipengdba/dbsphere/internal/trace"
@@ -311,6 +312,53 @@ func TestGoLoginSessionAndCSRF(t *testing.T) {
 	handler.ServeHTTP(logout, logoutRequest)
 	if logout.Code != http.StatusOK {
 		t.Fatalf("logout failed: %d", logout.Code)
+	}
+}
+
+func TestCollectorRuntimeStatusRequiresAdministrator(t *testing.T) {
+	masterKey := []byte("01234567890123456789012345678901")
+	adminHash, err := security.HashPassword("collector-status-admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerHash, err := security.HashPassword("collector-status-viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	tracker := collectorstate.New(true, time.Minute, 3, now.Add(-time.Minute))
+	tracker.Begin(now.Add(-10 * time.Second))
+	tracker.Finish(now, collectorstate.Cycle{Selected: 2, Processed: 2, TargetFailures: 1})
+	handler := New(healthStub{}, AuthConfig{MasterKey: masterKey, PasswordHash: adminHash,
+		ViewerPasswordHash: viewerHash, CollectorState: tracker})
+	read := func(cookie *http.Cookie) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/api/admin/collector", nil)
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := read(nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated collector status = %d", response.Code)
+	}
+	viewerToken, err := security.CreateViewerSession(security.ViewerSessionKey(masterKey, viewerHash), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := read(&http.Cookie{Name: "dbsphere_session", Value: viewerToken}); response.Code != http.StatusForbidden {
+		t.Fatalf("viewer received global collector status: %d %s", response.Code, response.Body.String())
+	}
+	adminToken, err := security.CreateSession(security.AdminSessionKey(masterKey, adminHash), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := read(&http.Cookie{Name: "dbsphere_session", Value: adminToken})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"healthy"`) ||
+		!strings.Contains(response.Body.String(), `"targetFailures":1`) ||
+		strings.Contains(response.Body.String(), "collector-status-admin") {
+		t.Fatalf("admin collector status = %d %s", response.Code, response.Body.String())
 	}
 }
 

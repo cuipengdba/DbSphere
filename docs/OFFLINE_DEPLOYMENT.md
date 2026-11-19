@@ -1,5 +1,7 @@
 # Linux 一键离线部署
 
+当前版本可从 [V1.0.8 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.8)获取 `DbSphere-go-offline-1.0.8-linux-amd64.run` 与同名 `.sha256`；下文 V1.0.0 命令用于说明正式版首次交付的安装及升级/回退基线，安装最新版本时请替换为当前附件名。
+
 > [V1.0.0 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.0)提供 Go 一键离线包和静态 Go 程序。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 
 V1.0.0 延续 Docker Engine 27 导入镜像后的 ID 规范化，并增加正式 V0.9.0 安装包 → V1.0.0 → V0.9.0 的无外网守护进程升级/回退验收，同一 PG18 数据记录须在三阶段保留。物理断网服务器仍需在部署方环境验收。
