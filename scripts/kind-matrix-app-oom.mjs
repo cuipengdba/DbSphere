@@ -137,10 +137,17 @@ try {
         status.lastState?.terminated?.reason === 'OOMKilled')));
   } catch (error) {
     console.error(JSON.stringify(pods('pg18').map(pod => ({ name: pod.metadata.name,
-      phase: pod.status?.phase, statuses: pod.status?.containerStatuses?.map(status => ({
-        waiting: status.state?.waiting?.reason, terminated: status.state?.terminated?.reason,
-        lastTerminated: status.lastState?.terminated?.reason, restarts: status.restartCount
+      phase: pod.status?.phase, containers: pod.spec?.containers?.map(container => ({
+        name: container.name, command: container.command, args: container.args,
+        resources: container.resources
+      })), statuses: pod.status?.containerStatuses?.map(status => ({
+        state: status.state, lastState: status.lastState, restarts: status.restartCount
       })) }))));
+    for (const pod of pods('pg18')) {
+      try { console.error(`previous ${pod.metadata.name}: ${kube([
+        'logs', pod.metadata.name, '-c', 'postgres', '--previous', '--tail=20'
+      ])}`); } catch (logsError) { console.error(`previous logs unavailable: ${logsError.message}`); }
+    }
     throw error;
   }
   assert.notEqual(failedPod.metadata.uid, targetPod.metadata.uid);
