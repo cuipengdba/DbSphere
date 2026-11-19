@@ -220,7 +220,8 @@ func (s *Postgres) verifyTracePods(ctx context.Context, spans []trace.Span) {
 			}
 			verified, err := json.Marshal(map[string]any{"namespace": entry.identity.Namespace,
 				"name": entry.identity.Name, "uid": entry.identity.UID, "node": entry.identity.Node,
-				"pvcs": entry.identity.PVCs, "createdAt": entry.identity.CreatedAt,
+				"pvcs": entry.identity.PVCs, "pvcStates": entry.identity.PVCStates,
+				"createdAt":  entry.identity.CreatedAt,
 				"observedAt": entry.observedAt})
 			if err != nil {
 				return

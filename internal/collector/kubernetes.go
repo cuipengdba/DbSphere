@@ -31,14 +31,24 @@ type KubernetesTarget struct {
 }
 
 // KubernetesPodIdentity is a bounded snapshot of a Pod's API-verified identity.
-// PVC names come from Pod spec references; they do not imply a bound volume.
+// PVC names come from Pod spec references; states are separate API observations.
 type KubernetesPodIdentity struct {
-	Namespace string    `json:"namespace"`
-	Name      string    `json:"name"`
-	UID       string    `json:"uid"`
-	CreatedAt time.Time `json:"createdAt"`
-	Node      string    `json:"node,omitempty"`
-	PVCs      []string  `json:"pvcs"`
+	Namespace string               `json:"namespace"`
+	Name      string               `json:"name"`
+	UID       string               `json:"uid"`
+	CreatedAt time.Time            `json:"createdAt"`
+	Node      string               `json:"node,omitempty"`
+	PVCs      []string             `json:"pvcs"`
+	PVCStates []KubernetesPVCState `json:"pvcStates"`
+}
+
+// KubernetesPVCState records a namespaced, read-only GET made while verifying
+// an application Pod. An unavailable phase must never be interpreted as Bound.
+type KubernetesPVCState struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Phase      string `json:"phase,omitempty"`
+	VolumeName string `json:"volumeName,omitempty"`
 }
 
 type kubeHTTPError int
@@ -116,7 +126,7 @@ func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, e
 	}
 	spec := kubeObject(pod["spec"])
 	identity := KubernetesPodIdentity{Namespace: target.Namespace, Name: target.Pod,
-		UID: expectedUID, CreatedAt: createdAt.UTC(), PVCs: []string{}}
+		UID: expectedUID, CreatedAt: createdAt.UTC(), PVCs: []string{}, PVCStates: []KubernetesPVCState{}}
 	if node := kubeString(spec["nodeName"]); node != "" && kubeName.MatchString(node) && len(node) <= 253 {
 		identity.Node = node
 	}
@@ -133,6 +143,28 @@ func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, e
 		identity.PVCs = append(identity.PVCs, name)
 	}
 	sort.Strings(identity.PVCs)
+	for _, name := range identity.PVCs {
+		state := KubernetesPVCState{Name: name, Status: "unavailable"}
+		pvc, err := k.get(ctx, "/api/v1/namespaces/"+url.PathEscape(target.Namespace)+
+			"/persistentvolumeclaims/"+url.PathEscape(name), nil)
+		if err == nil {
+			meta := kubeObject(pvc["metadata"])
+			if kubeString(meta["namespace"]) == target.Namespace && kubeString(meta["name"]) == name {
+				state.Status = "ok"
+				switch kubeString(kubeObject(pvc["status"])["phase"]) {
+				case "Bound", "Pending", "Lost":
+					state.Phase = kubeString(kubeObject(pvc["status"])["phase"])
+				default:
+					state.Phase = "Unknown"
+				}
+				if volume := kubeString(kubeObject(pvc["spec"])["volumeName"]); volume != "" &&
+					len(volume) <= 253 && kubeName.MatchString(volume) {
+					state.VolumeName = volume
+				}
+			}
+		}
+		identity.PVCStates = append(identity.PVCStates, state)
+	}
 	return identity, nil
 }
 

@@ -1040,6 +1040,7 @@ async function showEvent(id) {
     same_backend_pid: '后端 PID 匹配', observed_session: '观测到会话',
     blocked_by: '被阻塞于', observed_sql: '观测到 SQL', scheduled_on: '调度于',
     originated_from: '来自应用 Pod', references_pvc: '引用 PVC',
+    observed_pvc_status: '核对 PVC 状态',
     routes_to: '路由至', compared_with: '与基线比较', hypothesizes: '提出候选',
     supported_by: '由证据支持', reviewed_by: '人工复核',
     baseline_before_event_and_log_within_event: '事前基线与事件内慢日志对应'

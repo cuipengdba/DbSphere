@@ -281,13 +281,20 @@ func TestApplicationPodIdentityRequiresKubernetesUIDAndPersistsInEventPG18(t *te
 	var requests atomic.Int32
 	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/namespaces/apps/pods/checkout-0" ||
-			r.Header.Get("Authorization") != "Bearer read-only-token" {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-only-token" {
 			t.Errorf("unexpected Kubernetes Pod lookup: %s %s", r.Method, r.URL.Path)
 		}
-		fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1",`+
-			`"creationTimestamp":"2026-11-01T00:00:00Z"},"spec":{"nodeName":"worker-1",`+
-			`"volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+		switch r.URL.Path {
+		case "/api/v1/namespaces/apps/pods/checkout-0":
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1",`+
+				`"creationTimestamp":"2026-11-01T00:00:00Z"},"spec":{"nodeName":"worker-1",`+
+				`"volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+		case "/api/v1/namespaces/apps/persistentvolumeclaims/checkout-data":
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-data"},`+
+				`"status":{"phase":"Bound"},"spec":{"volumeName":"pv-checkout"}}`)
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer api.Close()
 	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: api.Certificate().Raw}))
@@ -362,8 +369,8 @@ current-context: test-context
 	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("expected one Kubernetes Pod GET, got %d", requests.Load())
+	if requests.Load() != 2 {
+		t.Fatalf("expected one Pod and one PVC GET, got %d", requests.Load())
 	}
 	var eventID string
 	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
@@ -382,6 +389,7 @@ current-context: test-context
 	encoded, _ := json.Marshal(detail)
 	for _, marker := range []string{`"type":"app_pod"`, `"relation":"originated_from"`,
 		`"relation":"scheduled_on"`, `"relation":"references_pvc"`,
+		`"relation":"observed_pvc_status"`, `checkout-data · Bound`,
 		`"appPodReported":1`, `"appPodVerified":1`} {
 		if !strings.Contains(string(encoded), marker) {
 			t.Fatalf("verified application Pod chain is missing %s: %s", marker, encoded)
@@ -393,6 +401,8 @@ current-context: test-context
 	}
 	rawJSON, _ := json.Marshal(raw)
 	if !strings.Contains(string(rawJSON), `"appPodVerified"`) ||
+		!strings.Contains(string(rawJSON), `"pvcStates"`) ||
+		!strings.Contains(string(rawJSON), `"phase":"Bound"`) ||
 		strings.Contains(string(rawJSON), "private_data") ||
 		strings.Contains(string(rawJSON), "database-secret") ||
 		strings.Contains(string(rawJSON), "read-only-token") {
@@ -406,7 +416,7 @@ current-context: test-context
 	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 1 {
+	if requests.Load() != 2 {
 		t.Fatalf("repeated Pod UID bypassed the bounded API cache: %d GET requests", requests.Load())
 	}
 	badTraceID, badBody := build("replaced-uid")

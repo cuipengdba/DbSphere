@@ -42,13 +42,20 @@ func TestVerifyKubernetesApplicationPodUsesOneReadOnlyUIDCheckedRequest(t *testi
 	requests := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/namespaces/apps/pods/checkout-0" ||
-			r.Header.Get("Authorization") != "Bearer read-only-token" {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-only-token" {
 			t.Errorf("unexpected application Pod lookup: %s %s", r.Method, r.URL.Path)
 		}
-		fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1","creationTimestamp":"2026-11-19T00:00:00Z"},`+
-			`"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}},`+
-			`{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+		switch r.URL.Path {
+		case "/api/v1/namespaces/apps/pods/checkout-0":
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1","creationTimestamp":"2026-11-19T00:00:00Z"},`+
+				`"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}},`+
+				`{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+		case "/api/v1/namespaces/apps/persistentvolumeclaims/checkout-data":
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-data"},"status":{"phase":"Bound"},`+
+				`"spec":{"volumeName":"pv-checkout"}}`)
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer server.Close()
 	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
@@ -56,7 +63,9 @@ func TestVerifyKubernetesApplicationPodUsesOneReadOnlyUIDCheckedRequest(t *testi
 	target := KubernetesTarget{Cluster: "test-context", Namespace: "apps", Pod: "checkout-0"}
 	got, err := VerifyKubernetesPodIdentity(context.Background(), target, "pod-uid-1")
 	if err != nil || got.UID != "pod-uid-1" || got.Node != "worker-1" ||
-		len(got.PVCs) != 1 || got.PVCs[0] != "checkout-data" {
+		len(got.PVCs) != 1 || got.PVCs[0] != "checkout-data" ||
+		len(got.PVCStates) != 1 || got.PVCStates[0].Status != "ok" ||
+		got.PVCStates[0].Phase != "Bound" || got.PVCStates[0].VolumeName != "pv-checkout" {
 		t.Fatalf("application Pod identity was not verified: %+v %v", got, err)
 	}
 	if _, err := VerifyKubernetesPodIdentity(context.Background(), target, "replaced-uid"); err == nil {
@@ -66,8 +75,33 @@ func TestVerifyKubernetesApplicationPodUsesOneReadOnlyUIDCheckedRequest(t *testi
 		Cluster: "test-context", Namespace: "../other", Pod: "checkout-0"}, "pod-uid-1"); err == nil {
 		t.Fatal("invalid namespace was sent to Kubernetes API")
 	}
-	if requests != 2 {
-		t.Fatalf("expected only two scoped GET requests, got %d", requests)
+	if requests != 3 {
+		t.Fatalf("expected three scoped GET requests, got %d", requests)
+	}
+}
+
+func TestVerifyKubernetesApplicationPodKeepsPVCStatusUnknownWhenDenied(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/namespaces/apps/pods/checkout-0":
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-0","uid":"pod-uid-1",`+
+				`"creationTimestamp":"2026-11-19T00:00:00Z"},"spec":{"volumes":[`+
+				`{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
+		case "/api/v1/namespaces/apps/persistentvolumeclaims/checkout-data":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	writeKubeConfig(t, server.URL, ca, `token: read-only-token`)
+	got, err := VerifyKubernetesPodIdentity(context.Background(), KubernetesTarget{
+		Cluster: "test-context", Namespace: "apps", Pod: "checkout-0"}, "pod-uid-1")
+	if err != nil || got.UID != "pod-uid-1" || len(got.PVCs) != 1 ||
+		len(got.PVCStates) != 1 || got.PVCStates[0].Status != "unavailable" ||
+		got.PVCStates[0].Phase != "" || got.PVCStates[0].VolumeName != "" {
+		t.Fatalf("PVC read denial should not invalidate Pod identity or invent a phase: %+v %v", got, err)
 	}
 }
 

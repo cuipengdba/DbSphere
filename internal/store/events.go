@@ -241,6 +241,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	observedSpans := []observedTraceSpan{}
 	appPodReported, appPodVerified := 0, 0
 	appPodEdges := map[string]bool{}
+	appPVCStatusNodes := map[string]bool{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,
 		app_pod_reported,app_pod_verified FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
@@ -352,7 +353,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 				var pod struct {
 					Namespace, Name, UID, Node string
 					PVCs                       []string
-					ObservedAt                 time.Time
+					PVCStates                  []struct {
+						Name, Status, Phase, VolumeName string
+					}
+					ObservedAt time.Time
 				}
 				if json.Unmarshal(verifiedPodJSON, &pod) == nil && pod.Namespace != "" &&
 					pod.Name != "" && pod.UID != "" {
@@ -376,6 +380,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 								"relation": "scheduled_on"})
 						}
 					}
+					states := map[string]struct{ Status, Phase string }{}
+					for _, state := range pod.PVCStates {
+						states[state.Name] = struct{ Status, Phase string }{state.Status, state.Phase}
+					}
 					for _, name := range pod.PVCs {
 						pvcID := "pvc:" + pod.Namespace + ":" + name
 						addNode(pvcID, "pvc", name, source, pod.ObservedAt)
@@ -384,6 +392,19 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 							appPodEdges[link] = true
 							edges = append(edges, map[string]string{"from": podNode, "to": pvcID,
 								"relation": "references_pvc"})
+						}
+						if state, ok := states[name]; ok {
+							statusNode := fmt.Sprintf("app-pvc-state:%s:%s:%d", pod.UID, name, pod.ObservedAt.UnixNano())
+							if !appPVCStatusNodes[statusNode] && len(appPVCStatusNodes) < 20 {
+								appPVCStatusNodes[statusNode] = true
+								label := name + " · 状态未核对"
+								if state.Status == "ok" {
+									label = name + " · " + state.Phase
+								}
+								addNode(statusNode, "pvc_status", label, source, pod.ObservedAt)
+								edges = append(edges, map[string]string{"from": statusNode, "to": pvcID,
+									"relation": "observed_pvc_status"})
+							}
 						}
 					}
 				}
