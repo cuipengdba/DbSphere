@@ -2,7 +2,7 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
-[V0.6.0 RC3 Go 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)包含静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256；[34 项发布 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44451086412)通过。RC3 新增真实 SQL 退化告警与同事件恢复，修正 PVC 实际容量计算；V0.6.0 正式版的八类故障矩阵与物理断网主机验收仍未完成。
+[V0.6.0 Go 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0)交付静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。真实 SQL 退化、计划/慢日志及 CSI PVC 容量压力在同一事件 ID 下有故障与恢复证据；[完整范围和限制](V0.6_RELEASE_GATE.md)说明尚未完成的 Linux 容量映射、物理断网主机和生产 Kubernetes 验收。
 
 RC3 发布后的 `main` 已将 SQL 执行计划候选限定到告警的精确 Query ID，并用真实 PG18 执行计划变化、数据库 `jsonlog` 慢日志及五分钟事前基线复验；[该提交的 34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44454602701)通过。该改进会进入下一次 V0.6 发布产物。
 

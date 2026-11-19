@@ -1,13 +1,13 @@
 # Go 后端与分层工作台迁移计划
 
-> 2026-11-17 新增需求。此文是开发和验收清单，不把迁移中的能力称为已发布。
+> 2026-11-17 新增需求。此文记录 V0.6.0 已交付的 Go 架构和后续仍需完成的迁移验收。
 
 ## 强制架构
 
 - V1.0 后端使用 Go。入口为 Linux `dbsphere` 可执行文件，优先 `CGO_ENABLED=0` 编译；静态前端资源编入同一程序，通过 HTTP API 与服务端交互。浏览器不需要 Node.js。
 - DbSphere 的长期监控存储仍为独立 PostgreSQL 18；被监控实例兼容 PG14–18。Linux 主机、Kubernetes PostgreSQL、PgBouncer、Patroni 只读集群拓扑、备份和 OTel Trace 由只读或明确授权的适配器采集。Patroni 双节点故障演练已在 PG14–18 独立 CI 矩阵通过，生产集群验收仍待完成。
 - Docker Compose 一键部署和 Linux x86_64 一键离线包以 Go 程序 + PG18 镜像为交付物。Go 单文件原生运行模式允许连接已有独立 PG18。离线目标机不需要 Node.js、Go 编译器或包管理器；容器模式仍需预装 Docker Engine/Compose。
-- 已发布的 V0.1–V0.5 和 V0.6 开发预览使用 Node.js 后端，是迁移前历史产物。新架构达到对应功能对等和升级/回滚验证前，不发布 Go 版正式版本，更不将现有 Node 预览称为 Go 交付。
+- V0.1–V0.5 和 V0.6 开发预览使用 Node.js 后端，是迁移前历史产物。V0.6.0 正式版使用 Go 后端与内嵌静态前端；后续仍需完成剩余功能对等、生产升级与回滚验收。
 
 Go 开发版现有管理员与可选只读查看账号。设置 `DBSPHERE_VIEWER_PASSWORD`（至少 12 字符，不能与管理员相同）后重启可启用；更换并重启可轮换，移除并重启可停用，旧查看会话随凭据变化失效。默认读取所有资产；可设置逗号分隔的 `DBSPHERE_VIEWER_ASSET_IDS`，限制其读取指定资产 UUID 的资产列表、事件、告警、通知、巡检、样本、Trace 与报告。跨资产 PG18 存储汇总拒绝读取；受限集合查询先在 PG18 按资产过滤，再在 HTTP 响应层校验归属，尚未支持组织/多用户和数据库层租户隔离，因此 V0.9 RBAC 任务仍未完成。
 
@@ -26,7 +26,7 @@ Go 自动摘要可显式开启，对最近 24 小时严重开放事件在同一�
 - [ ] PG14–18 只读采集、Linux 与 K8S 适配器、连接池/备份信号、告警/巡检、根因证据图、OTLP Trace、可选 AI 按现有 API 契约逐项迁移并做双实现对照。
 - [ ] `go test`、`go vet`、五版 PG 实库、K8S kind、PG18 持久化、浏览器与离线升级/回滚共同作为 CI 发布门禁；发布包校验和与 SBOM。
 
-当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；二十五条 PG/Linux/K8S/PgBouncer/采集器默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。Go OTLP/HTTP JSON 已用独立 Bearer 令牌接入，仅白名单 Span 字段按唯一 PG 资产身份入库，并与既有事件 ID 的证据图关联。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**完整跨层采集、生产通知通道、完整根因候选、自动 AI 预警、Go 正式版离线交付仍未完成**，所以 Go 服务只用于开发验收。
+当前 Go 进度：已从现有 Node 实现提取 PG18 基础 schema，Go 启动时在事务与 advisory lock 下迁移并创建当月/下月分区；空 PG18 实库验证了版本 13 和分区。管理员密码的 scrypt 哈希、AES-GCM 凭据、HMAC Session/CSRF 已用 Node 格式向量验证兼容，Go 登录、限流、同源检查与登出已实现。总览所需的十个只读列表/存储接口已经从真实 PG18 读取，包含 Node 历史库的已有数据。资产增删改及 PostgreSQL 只读采集已进入 Go，凭据不返回浏览器；PG14 本机实库验证了连接失败两次和恢复共用同一事件 ID。事件详情读取同一 ID 下的原始证据、采样与同窗 Trace，提供原始样本入口和人工确认；资产详情可读样本、时间序列、慢日志和计划。Go 支持 Linux PG 与可选 node_exporter 联合采集，初步接入 K8S Pod/Node/PVC/PV/Service/Pod 事件、可选 Pod/Node `metrics.k8s.io`、Prometheus PVC 用量和 PgBouncer SHOW POOLS/STATS 的只读采集；二十五条 PG/Linux/K8S/PgBouncer/采集器默认规则具备阈值、持续时间、启停、静默识别和事件恢复，浏览器可修改这些规则。Go OTLP/HTTP JSON 已用独立 Bearer 令牌接入，仅白名单 Span 字段按唯一 PG 资产身份入库，并与既有事件 ID 的证据图关联。K8S 的生产 PVC 指标路径与其余规则仍需验收；缺少 Pod 映射或凭据会标记采集错误，避免只采数据库就误报全局健康。**生产跨层采集、通知通道、完整根因候选与自动 AI 预警仍需后续验收**；Go 一键离线交付已进入 V0.6.0 正式版，范围见发布验收。
 
 ## 页面信息架构
 
