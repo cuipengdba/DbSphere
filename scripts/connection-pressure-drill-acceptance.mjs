@@ -105,6 +105,9 @@ try {
     row.payload?.ruleId === 'pg_connections_high' && row.payload?.sampleId === fault.id));
   const candidate = detail.analysis.candidates.find(row => row.code === 'connection_pressure');
   assert.ok(candidate?.supports.includes(`sample:${fault.id}`));
+  assert.equal(candidate.state, 'hypothesis', 'high utilization alone must not prove a root cause');
+  assert.ok(candidate.missing?.length > 0 && candidate.limitation?.includes('尚未证明'),
+    'capacity candidate must expose missing connection-refusal evidence');
   const reportResponse = await fetch(`${base}/api/events/${eventId}/report?format=md`,
     { headers: { Cookie: cookie }, signal: AbortSignal.timeout(20000) });
   assert.equal(reportResponse.status, 200);
