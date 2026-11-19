@@ -355,6 +355,38 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record PgBouncer application endpoint migration: %w", err)
 		}
 	}
+	var traceTimingMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=30)").Scan(&traceTimingMigrated); err != nil {
+		return fmt.Errorf("check trace timing migration: %w", err)
+	}
+	if !traceTimingMigrated {
+		if _, err = tx.Exec(ctx, `ALTER TABLE trace_spans
+			ADD COLUMN IF NOT EXISTS received_at timestamptz,
+			ADD COLUMN IF NOT EXISTS sampling_probability double precision
+				CHECK (sampling_probability > 0 AND sampling_probability <= 1)`); err != nil {
+			return fmt.Errorf("migrate trace timing columns: %w", err)
+		}
+		if _, err = tx.Exec(ctx, `ALTER TABLE trace_pending_spans
+			ADD COLUMN IF NOT EXISTS sampling_probability double precision
+				CHECK (sampling_probability > 0 AND sampling_probability <= 1)`); err != nil {
+			return fmt.Errorf("migrate pending trace sampling column: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(30) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record trace timing migration: %w", err)
+		}
+	}
+	var pendingIngressMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=31)").Scan(&pendingIngressMigrated); err != nil {
+		return fmt.Errorf("check pending trace ingress migration: %w", err)
+	}
+	if !pendingIngressMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE trace_pending_spans ADD COLUMN IF NOT EXISTS ingress_at timestamptz"); err != nil {
+			return fmt.Errorf("migrate pending trace ingress time: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(31) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record pending trace ingress migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

@@ -973,9 +973,25 @@ async function showEvent(id) {
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
   diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
-  if (analysis.traceCoverage) diagnosis.append(cell('small', analysis.traceCoverage.spans
-    ? `应用链路：${analysis.traceCoverage.services.join('、')} · ${analysis.traceCoverage.databaseSpans} 条 PostgreSQL 客户端 Span；采样率和时钟偏移未知。`
-    : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
+  if (analysis.traceCoverage) {
+    const coverage = analysis.traceCoverage;
+    diagnosis.append(cell('small', coverage.spans
+      ? `应用链路：${coverage.services.join('、')} · ${coverage.databaseSpans} 条 PostgreSQL 客户端 Span。`
+      : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
+    if (coverage.spans) {
+      const declared = coverage.sampling;
+      const rate = value => `${Number((value * 100).toPrecision(4))}%`;
+      const hasRate = declared?.declaredSpans > 0 &&
+        Number.isFinite(declared.minProbability) && Number.isFinite(declared.maxProbability);
+      diagnosis.append(cell('small', hasRate
+        ? `应用声明采样概率：${rate(declared.minProbability)}${declared.minProbability === declared.maxProbability ? '' : `–${rate(declared.maxProbability)}`}（${declared.declaredSpans}/${coverage.spans} 条 Span）；实际请求与 Trace 覆盖率未知。`
+        : '应用未声明采样概率；实际请求与 Trace 覆盖率未知。'));
+      const timing = coverage.clock;
+      diagnosis.append(cell('small', timing?.futureTimestampSpans > 0
+        ? `${timing.futureTimestampSpans} 条 Span 结束时间晚于 DbSphere 接收超过 1 秒，最大表观超前 ${timing.maxApparentLeadMs} ms；这些 Span 不用于跨层时间关联，实际时钟偏移仍未知。`
+        : `接收时间可核对 ${timing?.timedSpans ?? 0}/${coverage.spans} 条 Span；未发现结束时间晚于接收超过 1 秒，实际时钟偏移仍未知。`));
+    }
+  }
   if (analysis.traceCoverage?.unresolvedParentSpans) diagnosis.append(cell('small',
     `链路断点：${analysis.traceCoverage.unresolvedParentSpans} 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；可能由采样、延迟或时间窗造成。`));
   if (analysis.traceCoverage?.serviceImpact?.length) {
@@ -1036,7 +1052,7 @@ async function showEvent(id) {
     affects: '影响', contains: '包含', observed_in: '见于样本', collected_from: '采自',
     collected_with: '同期采集', emitted: '产生', parent_of: '父链路', calls: '调用',
     calls_service: '调用服务', via_pooler: '经由连接池', forwards_to: '转发至',
-    time_window: '处于事件时间窗', query_id_matches: 'Query ID 匹配',
+    time_window: '处于事件时间窗', time_unreliable: '时间关联待核对', query_id_matches: 'Query ID 匹配',
     same_backend_pid: '后端 PID 匹配', observed_session: '观测到会话',
     blocked_by: '被阻塞于', observed_sql: '观测到 SQL', scheduled_on: '调度于',
     originated_from: '来自应用 Pod', references_pvc: '引用 PVC',

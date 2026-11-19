@@ -42,7 +42,7 @@ Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发�
 
 Go 告警通知也是可选配置。在同一配置文件设置 `DBSPHERE_WEBHOOK_URL=https://...`，可加 `DBSPHERE_WEBHOOK_SECRET` 启用 HMAC-SHA256 签名；邮件需同时设置 `DBSPHERE_SMTP_HOST`、`DBSPHERE_SMTP_FROM`、`DBSPHERE_SMTP_TO`，可选端口及用户/密码。默认邮件端口 587 并要求 STARTTLS，465 使用 TLS；仅环回 SMTP 可设置 `DBSPHERE_SMTP_ALLOW_PLAIN=true`。`DBSPHERE_NOTIFY_MIN_SEVERITY` 默认 `warning`，可按 `DBSPHERE_WEBHOOK_MIN_SEVERITY`、`DBSPHERE_EMAIL_MIN_SEVERITY` 分通道覆盖。未配置通道的投递记录标记为跳过；失败投递最多自动重试五次，之后可在 B/S 页面手动重试。生产通知通道仍待验收。
 
-应用 Trace 接入默认关闭。需要时在同一配置文件设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN`，重启后将应用或 OpenTelemetry Collector 的 OTLP/HTTP JSON Trace 发送到 `POST /v1/traces`，使用 `Authorization: Bearer <token>`。仅与唯一纳管 PG 资产匹配的 Trace 入库，不保存 SQL、参数、URL 或任意 Span 属性。`DBSPHERE_TRACE_RETENTION_DAYS` 默认 7 天，Go 工作器每小时最多清理 10000 条过期 Span；生产入口应使用 TLS。不同 SDK 的 `http/json` 支持仍需分别验证。
+应用 Trace 接入默认关闭。需要时在同一配置文件设置不少于 32 字符的 `DBSPHERE_OTLP_TOKEN`，重启后将应用或 OpenTelemetry Collector 的 OTLP/HTTP JSON Trace 发送到 `POST /v1/traces`，使用 `Authorization: Bearer <token>`。仅与唯一纳管 PG 资产匹配的 Trace 入库，不保存 SQL、参数、URL 或任意未经允许的 Span 属性；可选白名单字段 `dbsphere.trace.sampling_probability` 仅作为发送方采样声明保存，详见[Trace 时间可信度](TRACE_TIME_COVERAGE.md)。`DBSPHERE_TRACE_RETENTION_DAYS` 默认 7 天，Go 工作器每小时最多清理 10000 条过期 Span；生产入口应使用 TLS。不同 SDK 的 `http/json` 支持仍需分别验证。
 
 ## 历史 Node.js 开发预览包
 

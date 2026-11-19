@@ -48,6 +48,52 @@ func TestDecodeMapsDatabaseSpansWithoutCrossAssetLeak(t *testing.T) {
 	}
 }
 
+func TestDecodeKeepsOnlyValidDeclaredSamplingAndReceiveTime(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  float64
+	}{
+		{"double value", map[string]any{"doubleValue": 0.25}, 0.25},
+		{"string value", map[string]any{"stringValue": "0.01"}, 0.01},
+		{"zero", map[string]any{"doubleValue": 0}, 0},
+		{"over one", map[string]any{"stringValue": "1.1"}, 0},
+		{"nonfinite", map[string]any{"stringValue": "NaN"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+				"resource": map[string]any{"attributes": []any{
+					map[string]any{"key": "service.name", "value": map[string]any{"stringValue": "checkout"}},
+					map[string]any{"key": "dbsphere.trace.sampling_probability", "value": tc.value},
+				}},
+				"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
+					"traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "1111111111111111",
+					"kind": 3, "startTimeUnixNano": now.Add(-2 * time.Second).UnixNano(),
+					"endTimeUnixNano": now.Add(-time.Second).UnixNano(),
+					"attributes": []any{
+						map[string]any{"key": "db.system.name", "value": map[string]any{"stringValue": "postgresql"}},
+						map[string]any{"key": "server.address", "value": map[string]any{"stringValue": "pg.internal"}},
+						map[string]any{"key": "db.statement", "value": map[string]any{"stringValue": "SELECT private_data"}},
+					},
+				}}}}}}})
+			result, err := Decode(body, []Asset{{ID: "asset", Host: "pg.internal", Port: 5432}}, now)
+			if err != nil || len(result.Spans) != 1 || !result.Spans[0].ReceivedAt.Equal(now) {
+				t.Fatalf("declared sampling or receive time was lost: %+v %v", result, err)
+			}
+			probability := result.Spans[0].SamplingProbability
+			if (tc.want == 0 && probability != nil) ||
+				(tc.want > 0 && (probability == nil || *probability != tc.want)) {
+				t.Fatalf("invalid declared sampling probability: %v", probability)
+			}
+			encoded, _ := json.Marshal(result.Spans[0])
+			if strings.Contains(string(encoded), "private_data") {
+				t.Fatalf("OTLP attribute leaked into stored span: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestDecodeMapsOnlyUniquePgBouncerEndpointWithDatabaseIdentity(t *testing.T) {
 	now := time.Now().UTC()
 	attr := func(key, value string) map[string]any {

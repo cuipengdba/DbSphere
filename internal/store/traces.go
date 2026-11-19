@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"sync"
@@ -93,16 +94,40 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 		}
 		appPod = string(value)
 	}
+	probability, err := traceSamplingValue(span)
+	if err != nil {
+		return 0, err
+	}
 	result, err := tx.Exec(ctx, `INSERT INTO trace_spans
-		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,app_pod_reported)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,app_pod_reported,
+		 received_at,sampling_probability)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 		span.TraceID, span.SpanID, parent, span.Service, span.Kind,
-		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route, appPod)
+		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route, appPod,
+		traceReceivedAt(span), probability)
 	if err != nil {
 		return 0, fmt.Errorf("save OTLP span: %w", err)
 	}
 	return int(result.RowsAffected()), nil
+}
+
+func traceReceivedAt(span trace.Span) time.Time {
+	if span.ReceivedAt.IsZero() {
+		return time.Now().UTC()
+	}
+	return span.ReceivedAt.UTC()
+}
+
+func traceSamplingValue(span trace.Span) (any, error) {
+	if span.SamplingProbability == nil {
+		return nil, nil
+	}
+	value := *span.SamplingProbability
+	if value <= 0 || value > 1 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil, fmt.Errorf("invalid declared trace sampling probability")
+	}
+	return value, nil
 }
 
 // SaveTraceBatch attaches service ancestors only to a mapped database chain.
@@ -278,11 +303,15 @@ func (s *Postgres) saveTraceBatch(ctx context.Context, spans, candidates []trace
 		if candidate.ParentSpanID != "" {
 			parent = candidate.ParentSpanID
 		}
+		probability, err := traceSamplingValue(candidate)
+		if err != nil {
+			return 0, 0, err
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO trace_pending_spans
-			(trace_id,span_id,parent_span_id,service,started_at,ended_at,status)
-			VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(trace_id,span_id) DO NOTHING`,
+			(trace_id,span_id,parent_span_id,service,started_at,ended_at,status,ingress_at,sampling_probability)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(trace_id,span_id) DO NOTHING`,
 			candidate.TraceID, candidate.SpanID, parent, candidate.Service,
-			candidate.Start, candidate.End, candidate.Status); err != nil {
+			candidate.Start, candidate.End, candidate.Status, traceReceivedAt(candidate), probability); err != nil {
 			return 0, 0, fmt.Errorf("buffer unmapped OTLP service span: %w", err)
 		}
 	}
@@ -292,10 +321,12 @@ func (s *Postgres) saveTraceBatch(ctx context.Context, spans, candidates []trace
 		}
 		var span trace.Span
 		var parent *string
-		err := tx.QueryRow(ctx, `SELECT parent_span_id,service,started_at,ended_at,status
+		err := tx.QueryRow(ctx, `SELECT parent_span_id,service,started_at,ended_at,status,
+			coalesce(ingress_at,received_at),sampling_probability
 			FROM trace_pending_spans WHERE trace_id=$1 AND span_id=$2
 			AND received_at >= now()-interval '10 minutes'`, traceID, spanID).
-			Scan(&parent, &span.Service, &span.Start, &span.End, &span.Status)
+			Scan(&parent, &span.Service, &span.Start, &span.End, &span.Status,
+				&span.ReceivedAt, &span.SamplingProbability)
 		if err == pgx.ErrNoRows {
 			return trace.Span{}, false, nil
 		}
@@ -438,7 +469,8 @@ func (s *Postgres) saveTraceBatch(ctx context.Context, spans, candidates []trace
 }
 
 func (s *Postgres) recentPendingTraceSpans(ctx context.Context, traceID string) ([]trace.Span, error) {
-	rows, err := s.pool.Query(ctx, `SELECT span_id,parent_span_id,service,started_at,ended_at,status
+	rows, err := s.pool.Query(ctx, `SELECT span_id,parent_span_id,service,started_at,ended_at,status,
+		coalesce(ingress_at,received_at),sampling_probability
 		FROM trace_pending_spans WHERE trace_id=$1 AND received_at >= now()-interval '10 minutes'
 		ORDER BY received_at DESC LIMIT 256`, traceID)
 	if err != nil {
@@ -449,7 +481,8 @@ func (s *Postgres) recentPendingTraceSpans(ctx context.Context, traceID string) 
 	for rows.Next() {
 		span := trace.Span{TraceID: traceID, Kind: "service"}
 		var parent *string
-		if err := rows.Scan(&span.SpanID, &parent, &span.Service, &span.Start, &span.End, &span.Status); err != nil {
+		if err := rows.Scan(&span.SpanID, &parent, &span.Service, &span.Start, &span.End,
+			&span.Status, &span.ReceivedAt, &span.SamplingProbability); err != nil {
 			return nil, err
 		}
 		if parent != nil {

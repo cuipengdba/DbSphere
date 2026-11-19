@@ -102,6 +102,18 @@ type serviceTraceImpact struct {
 	LastAt              time.Time `json:"lastAt"`
 }
 
+type traceSamplingSummary struct {
+	DeclaredSpans  int      `json:"declaredSpans"`
+	MinProbability *float64 `json:"minProbability"`
+	MaxProbability *float64 `json:"maxProbability"`
+}
+
+type traceClockSummary struct {
+	TimedSpans           int   `json:"timedSpans"`
+	FutureTimestampSpans int   `json:"futureTimestampSpans"`
+	MaxApparentLeadMs    int64 `json:"maxApparentLeadMs"`
+}
+
 func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, error) {
 	var event eventRecord
 	err := s.pool.QueryRow(ctx, `SELECT e.id::text,e.asset_id::text,a.name,e.kind,e.event_group,
@@ -243,8 +255,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	appPodEdges := map[string]bool{}
 	appPVCStatusNodes := map[string]bool{}
 	appPVCStatusOmitted := false
+	sampling := traceSamplingSummary{}
+	clock := traceClockSummary{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,
-		app_pod_reported,app_pod_verified FROM trace_spans
+		app_pod_reported,app_pod_verified,received_at,sampling_probability FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY started_at DESC LIMIT 100`, event.AssetID, event.StartedAt, event.EndedAt)
@@ -262,12 +276,37 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		var queryID *string
 		var reportedPodJSON, verifiedPodJSON []byte
 		var at, endedAt time.Time
+		var receivedAt *time.Time
+		var declaredProbability *float64
 		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt,
-			&spanStatus, &backendPID, &queryID, &route, &reportedPodJSON, &verifiedPodJSON); err != nil {
+			&spanStatus, &backendPID, &queryID, &route, &reportedPodJSON, &verifiedPodJSON,
+			&receivedAt, &declaredProbability); err != nil {
 			traceRows.Close()
 			return nil, err
 		}
 		traceCount++
+		if declaredProbability != nil {
+			sampling.DeclaredSpans++
+			if sampling.MinProbability == nil || *declaredProbability < *sampling.MinProbability {
+				value := *declaredProbability
+				sampling.MinProbability = &value
+			}
+			if sampling.MaxProbability == nil || *declaredProbability > *sampling.MaxProbability {
+				value := *declaredProbability
+				sampling.MaxProbability = &value
+			}
+		}
+		timingAnomaly := false
+		if receivedAt != nil {
+			clock.TimedSpans++
+			if lead := endedAt.Sub(*receivedAt); lead > time.Second {
+				timingAnomaly = true
+				clock.FutureTimestampSpans++
+				if lead.Milliseconds() > clock.MaxApparentLeadMs {
+					clock.MaxApparentLeadMs = lead.Milliseconds()
+				}
+			}
+		}
 		observed := observedTraceSpan{TraceID: traceID, SpanID: spanID, Service: service,
 			Kind: kind, Status: spanStatus, Start: at, End: endedAt}
 		if parentID != nil {
@@ -279,7 +318,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if queryID != nil {
 			observed.QueryID = *queryID
 		}
-		observedSpans = append(observedSpans, observed)
+		if !timingAnomaly {
+			observedSpans = append(observedSpans, observed)
+		}
 		if !serviceSet[service] {
 			serviceSet[service] = true
 			services = append(services, service)
@@ -303,7 +344,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			impact.LastAt = endedAt
 		}
 		spanNode := "span:" + traceID + ":" + spanID
-		spanSet[spanNode] = true
+		spanSet[spanNode] = !timingAnomaly
 		spanServices[spanNode] = service
 		serviceNode := "service:" + service
 		addNode(serviceNode, "service", service,
@@ -312,7 +353,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if kind == "postgresql_client" {
 			databaseSpans++
 			spanType = "db_client_span"
-			if parentID != nil {
+			if parentID != nil && !timingAnomaly {
 				item := traceDBSpan{
 					Node: spanNode, Parent: "span:" + traceID + ":" + *parentID,
 					Service: service, Start: at, End: endedAt}
@@ -325,8 +366,12 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		addNode(spanNode, spanType, fmt.Sprintf("%s · %d ms · %s", service,
 			endedAt.Sub(at).Milliseconds(), spanStatus),
 			"/api/assets/"+event.AssetID+"/traces/"+traceID, at)
+		timeRelation := "time_window"
+		if timingAnomaly {
+			timeRelation = "time_unreliable"
+		}
 		edges = append(edges, map[string]string{"from": serviceNode, "to": spanNode, "relation": "emitted"},
-			map[string]string{"from": eventNode, "to": spanNode, "relation": "time_window"})
+			map[string]string{"from": eventNode, "to": spanNode, "relation": timeRelation})
 		if kind == "postgresql_client" {
 			if route == "pgbouncer" {
 				poolerNode := "pooler:" + event.AssetID
@@ -336,7 +381,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			} else {
 				edges = append(edges, map[string]string{"from": spanNode, "to": assetNode, "relation": "calls"})
 			}
-			if queryID != nil {
+			if queryID != nil && !timingAnomaly {
 				if fingerprint := traceSQLFingerprint(samples, *queryID, at, endedAt); fingerprint != "" {
 					edges = append(edges, map[string]string{"from": spanNode,
 						"to":       "sql:" + event.AssetID + ":" + fingerprint,
@@ -442,6 +487,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if appPVCStatusOmitted {
 		missing = append(missing, "应用 PVC 状态快照超过事件图 20 个节点上限；原始 Trace 仍可查看完整快照")
 	}
+	if clock.FutureTimestampSpans > 0 {
+		missing = append(missing, fmt.Sprintf("%d 条 Span 的结束时间晚于 DbSphere 接收时间超过 1 秒；其跨层时间关联未用于根因或影响面判断",
+			clock.FutureTimestampSpans))
+	}
 	sort.Strings(services)
 	impactList := make([]serviceTraceImpact, 0, len(services))
 	for _, service := range services {
@@ -458,7 +507,8 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
 			"unresolvedParentSpans": unresolvedParentSpans,
 			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,
-			"appPodReported": appPodReported, "appPodVerified": appPodVerified},
+			"appPodReported": appPodReported, "appPodVerified": appPodVerified,
+			"sampling": sampling, "clock": clock},
 	}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related}, nil
 }
@@ -553,7 +603,8 @@ func (s *Postgres) RawTrace(ctx context.Context, assetID, traceID string) (any, 
 	spans, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 		'assetId',asset_id,'traceId',trace_id,'spanId',span_id,'parentSpanId',parent_span_id,
 		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id,'route',route,
-		'appPodReported',app_pod_reported,'appPodVerified',app_pod_verified)
+		'appPodReported',app_pod_reported,'appPodVerified',app_pod_verified,
+		'receivedAt',received_at,'declaredSamplingProbability',sampling_probability)
 		FROM trace_spans WHERE asset_id=$1 AND trace_id=$2 ORDER BY started_at LIMIT 256`, assetID, traceID)
 	if err != nil {
 		return nil, err

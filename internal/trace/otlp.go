@@ -3,6 +3,7 @@ package trace
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,6 +43,9 @@ type Span struct {
 	Start           time.Time
 	End             time.Time
 	Status          string
+	// SamplingProbability is an application declaration, not measured coverage.
+	SamplingProbability *float64
+	ReceivedAt          time.Time
 }
 
 type Result struct {
@@ -96,6 +100,8 @@ func attributes(values []attribute) map[string]string {
 			result[item.Key] = rawText(raw)
 		} else if raw, ok := item.Value["intValue"]; ok {
 			result[item.Key] = rawText(raw)
+		} else if raw, ok := item.Value["doubleValue"]; ok {
+			result[item.Key] = rawText(raw)
 		}
 	}
 	return result
@@ -107,6 +113,17 @@ func nanos(value json.RawMessage) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return time.Unix(0, number).UTC(), true
+}
+
+func declaredSamplingProbability(value string) *float64 {
+	if len(value) == 0 || len(value) > 32 {
+		return nil
+	}
+	probability, err := strconv.ParseFloat(value, 64)
+	if err != nil || probability <= 0 || probability > 1 || math.IsNaN(probability) || math.IsInf(probability, 0) {
+		return nil
+	}
+	return &probability
 }
 
 func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
@@ -128,6 +145,7 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 	for _, resource := range envelope.ResourceSpans {
 		resourceAttrs := attributes(resource.Resource.Attributes)
 		service := resourceAttrs["service.name"]
+		probability := declaredSamplingProbability(resourceAttrs["dbsphere.trace.sampling_probability"])
 		appNamespace, appPod, appUID := resourceAttrs["k8s.namespace.name"],
 			resourceAttrs["k8s.pod.name"], resourceAttrs["k8s.pod.uid"]
 		if !k8sName.MatchString(appNamespace) || len(appNamespace) > 63 ||
@@ -160,7 +178,8 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					attrs["db.system.name"] == "postgresql"
 				item := parsedSpan{Span: Span{TraceID: strings.ToLower(raw.TraceID),
 					SpanID: strings.ToLower(raw.SpanID), ParentSpanID: strings.ToLower(raw.ParentSpanID),
-					Service: service, Kind: "service", Start: start, End: end, Status: "ok"}}
+					Service: service, Kind: "service", Start: start, End: end, Status: "ok",
+					SamplingProbability: probability, ReceivedAt: now.UTC()}}
 				if code := rawText(raw.Status.Code); code == "2" || code == "STATUS_CODE_ERROR" {
 					item.Status = "error"
 				}

@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v1.0.6](https://img.shields.io/badge/当前版本-v1.0.6-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.6) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v1.0.7](https://img.shields.io/badge/当前版本-v1.0.7-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.7) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。第一阶段支持 PostgreSQL 14–18；“全域”是产品方向，不表示当前支持所有数据库。
 
@@ -12,7 +12,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 |---|---|
 | 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。Go 版可按唯一 Deployment/StatefulSet 自动解析重建后的 Pod，歧义时明确报错。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni 只读 REST API、备份信息和应用 Trace。 |
 | 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。 |
-| 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；唯一资产匹配时还可沿服务 → PgBouncer → PG 等待 PID → 阻塞会话定位，PgBouncer 的应用业务地址可与只读统计管理地址分开配置。可选 Query ID 唯一匹配时从请求下钻到 SQL；K8S 应用 Pod UID 经只读 API 核对后，可在事件图连接应用 Pod、Node 与 PVC 引用及单独核对的 PVC 阶段。按服务区分同期 Trace 与故障线索，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
+| 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；唯一资产匹配时还可沿服务 → PgBouncer → PG 等待 PID → 阻塞会话定位，PgBouncer 的应用业务地址可与只读统计管理地址分开配置。可选 Query ID 唯一匹配时从请求下钻到 SQL；K8S 应用 Pod UID 经只读 API 核对后，可在事件图连接应用 Pod、Node 与 PVC 引用及单独核对的 PVC 阶段。按服务区分同期 Trace 与故障线索，显示可选采样声明与时间异常，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
 | 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |
 | 巡检与报告 | PostgreSQL、Linux、Kubernetes 和备份模板；手动与定时巡检、阈值版本、异常与未知项、历史差异、Markdown/HTML 报告及关联事件 ID。 |
 | 访问与审计 | 管理员、可选只读查看及独立审批账号；Go 版可用资产 UUID 白名单限制查看账号。事件页支持申请、独立审批、一次性执行只读采样工单，并把申请、决定、样本结果和两种账号的 API 操作记录关联同一事件 ID。个人账号、组织/租户隔离及审计防篡改仍在开发。 |
@@ -29,7 +29,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V1.0.6** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.6)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[发布验收](docs/V1_RELEASE_GATE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
+当前正式版 **V1.0.7** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.7)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[发布验收](docs/V1_RELEASE_GATE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
 
 ## 部署与接入
 

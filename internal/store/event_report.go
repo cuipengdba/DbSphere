@@ -30,6 +30,8 @@ type eventReportData struct {
 			Services              []string             `json:"services"`
 			ServiceImpact         []serviceTraceImpact `json:"serviceImpact"`
 			AtLimit               bool                 `json:"atLimit"`
+			Sampling              traceSamplingSummary `json:"sampling"`
+			Clock                 traceClockSummary    `json:"clock"`
 		} `json:"traceCoverage"`
 		Candidates []struct {
 			Code              string   `json:"code"`
@@ -370,9 +372,28 @@ func renderEventMarkdown(data eventReportData) string {
 		out.WriteString("共享原始样本仅证明两个事件记录了同一次采样，不证明相同根因。\n\n")
 	}
 	out.WriteString("## 应用链路覆盖\n\n")
-	fmt.Fprintf(&out, "Span %d 条，其中 PostgreSQL 客户端 Span %d 条；服务：%s。采样率和时钟偏移尚未验证。\n\n",
+	fmt.Fprintf(&out, "Span %d 条，其中 PostgreSQL 客户端 Span %d 条；服务：%s。\n\n",
 		data.Analysis.TraceCoverage.Spans, data.Analysis.TraceCoverage.DatabaseSpans,
 		reportText(strings.Join(data.Analysis.TraceCoverage.Services, "、")))
+	sampling := data.Analysis.TraceCoverage.Sampling
+	if sampling.DeclaredSpans == 0 || sampling.MinProbability == nil || sampling.MaxProbability == nil {
+		out.WriteString("应用未声明采样概率；实际请求/Trace 覆盖率未知。\n\n")
+	} else if *sampling.MinProbability == *sampling.MaxProbability {
+		fmt.Fprintf(&out, "应用声明采样概率 %.4g%%（%d/%d 条 Span 有声明）；实际请求/Trace 覆盖率未知。\n\n",
+			*sampling.MinProbability*100, sampling.DeclaredSpans, data.Analysis.TraceCoverage.Spans)
+	} else {
+		fmt.Fprintf(&out, "应用声明采样概率范围 %.4g%%–%.4g%%（%d/%d 条 Span 有声明）；实际请求/Trace 覆盖率未知。\n\n",
+			*sampling.MinProbability*100, *sampling.MaxProbability*100, sampling.DeclaredSpans,
+			data.Analysis.TraceCoverage.Spans)
+	}
+	clock := data.Analysis.TraceCoverage.Clock
+	if clock.FutureTimestampSpans > 0 {
+		fmt.Fprintf(&out, "%d 条 Span 的结束时间晚于 DbSphere 接收时间超过 1 秒，最大表观超前 %d ms；这些 Span 不用于跨层根因和影响面时间关联。请核对应用与服务端时钟及上报时间戳；实际时钟偏移仍未知。\n\n",
+			clock.FutureTimestampSpans, clock.MaxApparentLeadMs)
+	} else {
+		fmt.Fprintf(&out, "有接收时间的 Span %d/%d 条，未发现结束时间晚于接收超过 1 秒；这不能证明时钟同步，实际时钟偏移仍未知。\n\n",
+			clock.TimedSpans, data.Analysis.TraceCoverage.Spans)
+	}
 	if data.Analysis.TraceCoverage.UnresolvedParentSpans > 0 {
 		fmt.Fprintf(&out, "链路断点：%d 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；原因可能是采样、延迟或时间窗，尚未确认。\n\n",
 			data.Analysis.TraceCoverage.UnresolvedParentSpans)

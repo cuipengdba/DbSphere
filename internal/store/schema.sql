@@ -120,6 +120,8 @@
     route text NOT NULL DEFAULT 'direct', app_pod_reported jsonb, app_pod_verified jsonb,
     service text NOT NULL, kind text NOT NULL, started_at timestamptz NOT NULL,
     ended_at timestamptz NOT NULL, status text NOT NULL,
+    received_at timestamptz, sampling_probability double precision
+      CHECK (sampling_probability > 0 AND sampling_probability <= 1),
     PRIMARY KEY(asset_id,trace_id,span_id)
   );
   CREATE INDEX IF NOT EXISTS trace_spans_asset_time ON trace_spans(asset_id,started_at DESC);
@@ -129,6 +131,9 @@
     trace_id text NOT NULL, span_id text NOT NULL, parent_span_id text,
     service text NOT NULL, started_at timestamptz NOT NULL,
     ended_at timestamptz NOT NULL, status text NOT NULL,
+    sampling_probability double precision
+      CHECK (sampling_probability > 0 AND sampling_probability <= 1),
+    ingress_at timestamptz,
     received_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(trace_id,span_id)
   );

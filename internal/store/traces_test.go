@@ -102,6 +102,131 @@ func TestGoTracePersistenceAndDedupPG18(t *testing.T) {
 	}
 }
 
+func TestDeclaredSamplingAndFutureSpanTimingStayExplicitPG18(t *testing.T) {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
+		t.Skip("PostgreSQL 18 store is required")
+	}
+	ctx := context.Background()
+	pg, err := Open(ctx, storeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	key := []byte("01234567890123456789012345678901")
+	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Trace timing declaration",
+		Host: "pg-trace-timing.internal", Port: 5432, Database: "orders", Username: "monitor",
+		Password: "database-secret", SSLMode: "disable", Runtime: "linux"}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created, &asset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, asset.ID)
+	now := time.Now().UTC()
+	traceID := newTraceID(t)
+	attribute := func(name string, value any) map[string]any {
+		return map[string]any{"key": name, "value": value}
+	}
+	body, err := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+		"resource": map[string]any{"attributes": []any{
+			attribute("service.name", map[string]any{"stringValue": "checkout"}),
+			attribute("dbsphere.trace.sampling_probability", map[string]any{"doubleValue": 0.25}),
+		}},
+		"scopeSpans": []any{map[string]any{"spans": []any{
+			map[string]any{"traceId": traceID, "spanId": "1111111111111111",
+				"startTimeUnixNano": now.Add(-2 * time.Second).UnixNano(), "endTimeUnixNano": now.UnixNano()},
+			map[string]any{"traceId": traceID, "spanId": "2222222222222222",
+				"parentSpanId": "1111111111111111", "kind": 3,
+				"startTimeUnixNano": now.Add(-time.Second).UnixNano(),
+				"endTimeUnixNano":   now.Add(3 * time.Second).UnixNano(),
+				"status":            map[string]any{"code": 2},
+				"attributes": []any{
+					attribute("db.system.name", map[string]any{"stringValue": "postgresql"}),
+					attribute("server.address", map[string]any{"stringValue": "pg-trace-timing.internal"}),
+					attribute("db.namespace", map[string]any{"stringValue": "orders"}),
+					attribute("db.statement", map[string]any{"stringValue": "SELECT private_data"}),
+				}},
+		}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities, err := pg.TraceAssets(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := trace.Decode(body, identities, now)
+	if err != nil || len(decoded.Spans) != 2 {
+		t.Fatalf("timed OTLP pair was not mapped: %+v %v", decoded, err)
+	}
+	if imported, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil || imported != 2 {
+		t.Fatalf("timed OTLP pair was not saved: %d %v", imported, err)
+	}
+	var eventID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
+		VALUES(gen_random_uuid(),$1,$2) RETURNING id::text`, asset.ID, now.Add(-time.Minute)).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+		VALUES($1,$2,'alert','Trace clock anomaly','open',$3,'trace_timing_test')`,
+		eventID, asset.ID, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawJSON, _ := json.Marshal(raw)
+	if !strings.Contains(string(rawJSON), `"declaredSamplingProbability":0.25`) ||
+		!strings.Contains(string(rawJSON), `"receivedAt"`) ||
+		strings.Contains(string(rawJSON), "private_data") ||
+		strings.Contains(string(rawJSON), "database-secret") {
+		t.Fatalf("Trace sampling or receive timestamp was lost or leaked a secret: %s", rawJSON)
+	}
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view struct {
+		Analysis struct {
+			Graph struct {
+				Edges []map[string]string `json:"edges"`
+			} `json:"graph"`
+			TraceCoverage struct {
+				Sampling      traceSamplingSummary `json:"sampling"`
+				Clock         traceClockSummary    `json:"clock"`
+				ServiceImpact []serviceTraceImpact `json:"serviceImpact"`
+			} `json:"traceCoverage"`
+			MissingSignals []string `json:"missingSignals"`
+		} `json:"analysis"`
+	}
+	encoded, _ := json.Marshal(detail)
+	if err := json.Unmarshal(encoded, &view); err != nil {
+		t.Fatal(err)
+	}
+	sampling := view.Analysis.TraceCoverage.Sampling
+	clock := view.Analysis.TraceCoverage.Clock
+	if sampling.DeclaredSpans != 2 || sampling.MinProbability == nil ||
+		*sampling.MinProbability != 0.25 || sampling.MaxProbability == nil ||
+		*sampling.MaxProbability != 0.25 || clock.TimedSpans != 2 ||
+		clock.FutureTimestampSpans != 1 || clock.MaxApparentLeadMs < 2900 ||
+		len(view.Analysis.TraceCoverage.ServiceImpact) != 1 ||
+		view.Analysis.TraceCoverage.ServiceImpact[0].CorrelatedTraces != 0 ||
+		!strings.Contains(string(encoded), `"relation":"time_unreliable"`) ||
+		!strings.Contains(strings.Join(view.Analysis.MissingSignals, " "), "跨层时间关联未用于根因") {
+		t.Fatalf("future-dated DB error was treated as reliable impact or sampling was lost: %s", encoded)
+	}
+	report, err := pg.EventReport(ctx, eventID, "md")
+	if err != nil || !strings.Contains(report, "应用声明采样概率 25%") ||
+		!strings.Contains(report, "最大表观超前") || strings.Contains(report, "private_data") {
+		t.Fatalf("timing and sampling were omitted from the incident report: %s %v", report, err)
+	}
+}
+
 func TestPgBouncerTraceRoutePersistsInOneEventGraphPG18(t *testing.T) {
 	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if storeURL == "" {
@@ -652,10 +777,20 @@ func TestGoTraceLinksEarlySDKParentAndPrunesPendingPG18(t *testing.T) {
 	defer pg.DeleteAsset(ctx, asset.ID)
 	now := time.Now().UTC()
 	traceID := newTraceID(t)
+	declaredProbability := 0.4
+	ingressAt := now.Add(-11 * time.Minute)
 	parent := trace.Span{TraceID: traceID, SpanID: "1111111111111111", Service: "sdk-checkout",
-		Kind: "service", Start: now.Add(-time.Second), End: now, Status: "ok"}
+		Kind: "service", Start: now.Add(-time.Second), End: now, Status: "ok",
+		SamplingProbability: &declaredProbability, ReceivedAt: ingressAt}
 	if imported, linked, err := pg.SaveTraceBatch(ctx, nil, []trace.Span{parent}); err != nil || imported != 0 || linked != 0 {
 		t.Fatalf("early parent should only enter the short buffer: %d %d %v", imported, linked, err)
+	}
+	var bufferReceivedAt time.Time
+	if err := pg.pool.QueryRow(ctx, `SELECT received_at FROM trace_pending_spans
+		WHERE trace_id=$1 AND span_id=$2`, traceID, parent.SpanID).Scan(&bufferReceivedAt); err != nil ||
+		bufferReceivedAt.Before(now.Add(-time.Minute)) {
+		t.Fatalf("the short buffer used the application clock instead of PG18 storage time: %v %v",
+			bufferReceivedAt, err)
 	}
 	if value, err := pg.RawTrace(ctx, asset.ID, traceID); err != nil ||
 		strings.Contains(fmt.Sprint(value), parent.SpanID) {
@@ -674,6 +809,16 @@ func TestGoTraceLinksEarlySDKParentAndPrunesPendingPG18(t *testing.T) {
 	encoded, _ := json.Marshal(value)
 	if !strings.Contains(string(encoded), parent.SpanID) || !strings.Contains(string(encoded), child.SpanID) {
 		t.Fatalf("parent-first SDK trace was incomplete: %s", encoded)
+	}
+	var savedProbability *float64
+	var savedReceivedAt *time.Time
+	if err := pg.pool.QueryRow(ctx, `SELECT sampling_probability,received_at FROM trace_spans
+		WHERE asset_id=$1 AND trace_id=$2 AND span_id=$3`, asset.ID, traceID, parent.SpanID).
+		Scan(&savedProbability, &savedReceivedAt); err != nil || savedProbability == nil ||
+		*savedProbability != declaredProbability || savedReceivedAt == nil ||
+		savedReceivedAt.Sub(ingressAt) > time.Millisecond || ingressAt.Sub(*savedReceivedAt) > time.Millisecond {
+		t.Fatalf("pending parent lost its original sampling declaration or receive time: %v %v %v",
+			savedProbability, savedReceivedAt, err)
 	}
 	if _, err := pg.pool.Exec(ctx, `UPDATE trace_pending_spans SET received_at=now()-interval '11 minutes'
 		WHERE trace_id=$1 AND span_id=$2`, traceID, parent.SpanID); err != nil {
