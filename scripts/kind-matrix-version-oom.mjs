@@ -116,6 +116,7 @@ for (const major of [14, 15, 16, 17]) {
     try {
       failedPod = await until(`${app} real OOMKilled`, 120, () => pods(app).find(pod =>
         pod.status?.containerStatuses?.some(status =>
+          status.state?.terminated?.reason === 'OOMKilled' ||
           status.lastState?.terminated?.reason === 'OOMKilled')));
     } catch (error) { diagnose(app); throw error; }
     assert.notEqual(failedPod.metadata.uid, baselinePod.metadata.uid);
