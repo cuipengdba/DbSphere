@@ -14,6 +14,9 @@
     for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
     return node;
   };
+  const titleNode = value => {
+    const node = svg('title'); node.textContent = value; return node;
+  };
   const time = value => value ? new Date(value).toLocaleString('zh-CN') : '时间未知';
   const short = (value, size = 20) => String(value ?? '').length > size
     ? `${String(value).slice(0, size - 1)}…` : String(value ?? '');
@@ -179,7 +182,7 @@
           'stroke-width': important.has(edge.relation) ? 1.8 : 1.2,
           'marker-end': `url(#${markerID})`,
           class: selected && edge.from !== selected && edge.to !== selected ? 'obs-muted' : '' });
-        line.append(svg('title')).textContent = relationLabel[edge.relation] || edge.relation;
+        line.append(titleNode(relationLabel[edge.relation] || edge.relation));
         canvas.append(line);
       }
       for (const node of selectedNodes) {
@@ -192,7 +195,7 @@
         label.textContent = short(node.label, 24); group.append(label);
         const kind = svg('text', { x: at.x + 11, y: at.y + 39, class: 'obs-node-kind' });
         kind.textContent = typeLabel[node.type] || node.type; group.append(kind);
-        group.append(svg('title')).textContent = `${node.label} · ${typeLabel[node.type] || node.type}`;
+        group.append(titleNode(`${node.label} · ${typeLabel[node.type] || node.type}`));
         group.addEventListener('click', () => nodeDetail(node.id));
         group.addEventListener('keydown', event => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); nodeDetail(node.id); }
@@ -244,7 +247,7 @@
       const marker = svg('circle', { cx: x, cy: y, r: 6.5,
         fill: point.item.kind.includes('recovered') ? '#2f9874' :
           point.item.kind.includes('error') || point.item.kind.includes('firing') ? '#db6c47' : '#426fb3' });
-      marker.append(svg('title')).textContent = `${time(point.item.observedAt)} · ${point.item.kind}`;
+      marker.append(titleNode(`${time(point.item.observedAt)} · ${point.item.kind}`));
       const group = svg('g', { role: 'button', tabindex: 0,
         'aria-label': `${time(point.item.observedAt)} ${point.item.kind}` });
       group.append(marker);
@@ -309,7 +312,7 @@
               y: 150 - samples * unit, width: barWidth, height: errors * unit, fill: '#df7958' }));
           } else group.append(svg('line', { x1: x - 4, x2: x + 4, y1: 148, y2: 148,
             stroke: '#aab9c8', 'stroke-width': 2 }));
-          group.append(svg('title')).textContent = `${time(stamp)} · ${point ? `成功 ${success}、失败 ${errors}` : '无采样'}`;
+          group.append(titleNode(`${time(stamp)} · ${point ? `成功 ${success}、失败 ${errors}` : '无采样'}`));
           canvas.append(group);
         } else {
           const value = point?.averageConnections == null ? NaN : Number(point.averageConnections);
@@ -318,7 +321,7 @@
             if (previous) canvas.append(svg('line', { x1: previous.x, y1: previous.y,
               x2: x, y2: y, stroke: '#5570ba', 'stroke-width': 2.5 }));
             const dot = svg('circle', { cx: x, cy: y, r: 3.6, fill: '#315ea4' });
-            dot.append(svg('title')).textContent = `${time(stamp)} · 平均连接 ${value}`;
+            dot.append(titleNode(`${time(stamp)} · 平均连接 ${value}`));
             canvas.append(dot); previous = { x, y };
           } else previous = null;
         }
