@@ -6,6 +6,8 @@
 
 RC3 发布后的 `main` 已将 SQL 执行计划候选限定到告警的精确 Query ID，并用真实 PG18 执行计划变化、数据库 `jsonlog` 慢日志及五分钟事前基线复验；[该提交的 34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44454602701)通过。该改进会进入下一次 V0.6 发布产物。
 
+本机 kind 已完成 PG18 在真实 CSI PVC 上的容量压力与同一事件恢复，事件和样本 ID 记录在[Kubernetes 验收记录](KIND_ACCEPTANCE.md)。测试的告警持续时间临时设为 0 秒，使用真实 kubelet 指标的本地 Prometheus API 适配器；生产 CSI/Prometheus 和默认五分钟持续时间仍待验收。
+
 RC1 的跨引擎离线部署补充验收发现：无外网 Docker 27 守护进程成功从包中加载 Go 与 PG18 镜像，但导入后的本地镜像 ID 与构建机不同，旧安装器因此拒绝继续。RC2 先核对外层及内部 SHA-256、`docker image load` 的两个预期标签，允许 Docker 规范化导致的 ID 差异；[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877/job/135277415238) 对**完整 RC2 包**执行 `--network none` 嵌套守护进程安装，验证 `ready/postgresql18`、内嵌 RC2 版本和重复安装后 PG18 测试记录仍在。这不等于物理断网主机验收。
 
 本机新增 Go 真实锁闭环验收：PG18 目标的两个真实会话构成 advisory lock 阻塞，默认 `pg_lock_wait` 规则持续 60 秒后，事件 `9087d17d-604a-49b0-8e8d-31a2414b4d56` 关联等待 PID 164、阻塞 PID 163、原始故障样本和 `lock_chain` 候选。解除锁后成功样本 `1d3421f7-a078-4106-907c-70c5855522c1` 使**同一事件 ID**转为 `resolved`，恢复证据与 Markdown 报告均引用该样本。目标和样本属于隔离测试，测试结束删除资产；[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44437594843) 的 PG18 目标复验通过。共享目标的 Go 测试包现顺序运行，避免并行锁演练相互影响。其余七类状态见[V0.6 正式版发布门槛](V0.6_RELEASE_GATE.md)。

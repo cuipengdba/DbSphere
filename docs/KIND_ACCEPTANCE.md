@@ -1,5 +1,11 @@
 # 本机 Kubernetes 验收记录（开发版）
 
+## 2026-11-19 V0.6 真实 PVC 压力与同事件恢复
+
+旧 kind 集群的 CSI hostpath 测试驱动最终达到 `7/7 Running`，专用 Namespace `dbsphere-pvc-smoke` 的 64 MiB PVC 绑定到实际 PV。将该驱动数据目录限制在节点内 64 MiB tmpfs；运行于该 PVC 的 PostgreSQL 18.6 Pod 使用 `/data/pgdata`，`1/1 Running`。kubelet 原始指标真实返回 `kubelet_volume_stats_capacity_bytes=67108864` 和随受控填充文件变化的 `used_bytes`。本机可选 Go 实库测试读取真实 Pod/PVC 对象与 kubelet 指标，使用一个仅包装真实抓取结果的本地 Prometheus API 适配器，并从实际 PG18 Pod 采集数据库指标；未人工编造容量数据。该测试将 `k8s_pvc_high` 持续时间临时设为 0 秒，结束时恢复原值。
+
+PVC 超过默认 85% 阈值后，事件 `b56b2b9a-0503-4aa0-a1a3-7d507d64d5a5` 含故障样本 `08abd741-5f88-40c7-9bb8-4206208fe523`、`pvc_pressure` 候选与 PVC 原始证据。删除填充文件后 kubelet 指标下降，恢复样本 `9aa790fd-0341-43b3-b906-8d4ce2a1572a` 关闭同一事件，报告保留两次样本。测试卷回到约 61% 使用率，PG18 Pod 仍为 `1/1 Running`、零重启。由于旧集群 scheduler 再次 CrashLoop，重建测试 Pod 时显式指定了单节点 `nodeName`；此演练验证 PVC/PG 信号和事件闭环，不验证自动调度、生产 CSI 或 DbSphere 只读 ServiceAccount 的端到端权限。可选测试源码见 `internal/store/pvc_real_test.go`。
+
 ## 2026-11-19 V0.6 PVC 使用率实测尝试
 
 现有单节点 kind `dbsphere-test` 的 local-path StorageClass 能读取 PVC/PV 对象，但 kubelet 不上报该驱动的 `kubelet_volume_stats_used_bytes` / `capacity_bytes`。尝试在该集群安装官方 CSI hostpath 测试驱动时，控制平面的 scheduler 和 controller-manager 已分别累计接近 500 次重启，API/etcd 间歇超时，不能作为可信的容量压力验收。为避免混淆测试结果，停下旧集群容器后尝试新建独立 `dbsphere-v06-pvc` kind 集群；新集群仍在 `kubeadm init` 创建管理员 ClusterRoleBinding 时因 API Server 超时失败，kind 自动删除了新节点，随后重新启动旧集群容器。没有将人工构造的 Prometheus 响应算作真实 PVC 故障通过；待可稳定创建的隔离集群与能上报卷统计的 CSI 驱动后重做。
