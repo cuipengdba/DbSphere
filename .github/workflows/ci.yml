@@ -535,6 +535,7 @@ jobs:
           DBSPHERE_TEST_PG_TARGET_PORT: '15432'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_PG_TARGET_MAJOR: '18'
+          DBSPHERE_TEST_REAL_SQL_REGRESSION: '1'
         run: go test ./internal/store -run '^TestRealPG18SQLRegressionOpensAndRecoversOneIncident$' -count=1 -v
 
   test:

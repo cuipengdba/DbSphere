@@ -59,8 +59,9 @@ func TestSQLRegressionRequiresTwoComparableIntervalsAndRecovers(t *testing.T) {
 }
 
 func TestRealPG18SQLRegressionOpensAndRecoversOneIncident(t *testing.T) {
-	if os.Getenv("DBSPHERE_TEST_PG_TARGET_MAJOR") != "18" {
-		t.Skip("real SQL regression drill runs on the PostgreSQL 18 matrix target")
+	if os.Getenv("DBSPHERE_TEST_PG_TARGET_MAJOR") != "18" ||
+		os.Getenv("DBSPHERE_TEST_REAL_SQL_REGRESSION") != "1" {
+		t.Skip("real SQL regression drill requires the PostgreSQL 18 pg_stat_statements target")
 	}
 	storeURL, portText := os.Getenv("DBSPHERE_TEST_PG18_URL"), os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
 	password := os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD")
