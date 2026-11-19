@@ -66,13 +66,12 @@ function resources(requestMemory, limitMemory) {
 }
 function faultCommand(enabled) {
   // The official postgres:18-bookworm image contains Perl. Make the container's
-  // PID 1 exceed its cgroup limit so Kubernetes records a real OOMKilled state.
-  // Keep the size in a variable to prevent Perl from allocating at compile time,
-  // before the container runtime has installed its OOM event watcher.
+  // PID 1 grows memory in 4 MiB steps after the OOM watcher is installed.
+  // A variable prevents Perl from allocating at compile time.
   // This is a test-only Deployment patch, restored before PostgreSQL recovery.
   const container = enabled
     ? { name: 'postgres', command: ['/usr/bin/perl'],
-        args: ['-e', 'my $size = 128*1024*1024; sleep 5; my $x = "x" x $size; sleep 60;'] }
+        args: ['-e', 'my @blocks; my $chunk=4*1024*1024; sleep 5; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
     : { name: 'postgres', command: null, args: null };
   kube(['patch', 'deployment/pg18', '--type=strategic', '-p',
     JSON.stringify({ spec: { template: { spec: { containers: [container] } } } })]);

@@ -53,11 +53,11 @@ function resources(app, requestMemory, limitMemory) {
     `--requests=cpu=25m,memory=${requestMemory}`, `--limits=memory=${limitMemory}`]);
 }
 function faultCommand(app, enabled) {
-  // Runtime size prevents Perl's constant folding from allocating before
-  // containerd installs the OOM event watcher.
+  // Runtime chunks avoid compile-time allocation and give containerd time
+  // to install its OOM event watcher before the cgroup limit is exceeded.
   const container = enabled
     ? { name: 'postgres', command: ['/usr/bin/perl'],
-        args: ['-e', 'my $size = 128*1024*1024; sleep 5; my $x = "x" x $size; sleep 60;'] }
+        args: ['-e', 'my @blocks; my $chunk=4*1024*1024; sleep 5; while (1) { push @blocks, "x" x $chunk; sleep 1; }'] }
     : { name: 'postgres', command: null, args: null };
   kube(['patch', `deployment/${app}`, '--type=strategic', '-p',
     JSON.stringify({ spec: { template: { spec: { containers: [container] } } } })]);
