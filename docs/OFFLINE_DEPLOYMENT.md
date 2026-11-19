@@ -1,12 +1,14 @@
 # Linux 一键离线部署
 
-> 当前页面描述迁移前 Node.js 开发预览包。2026-11-17 起正式版后端要求改为 Go；Go 版离线包验收前，这份预览不代表新架构的正式交付。详见[迁移清单](GO_UI_MIGRATION.md)。
+> Go 后端与静态前端是正式版交付方向。文末保留早期 Node.js 预览包说明，不能把它当作 Go 版或 V1.0 正式发行包。详见[迁移清单](GO_UI_MIGRATION.md)。
 
 ## Go 架构开发版部署
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
 
 Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，运行生成的 `DbSphere-go-offline-*.run`；包内含静态 Go 应用镜像、固定摘要的 PG18 镜像、Compose 文件和 SHA-256 清单，安装时仅从包中导入镜像，核对两个镜像内容 ID，并用 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[31 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44390513840)已验证删除本机镜像后的离线安装、重复运行、管理员密码轮换和 PG18 备份恢复；本机 kind 也验证了 Go B/S 服务及 PG18 存储。未来 schema 变更的升级回滚、生产负载和安全审查尚未完成，因此这是开发版交付路径，不是 V1.0 发布包。
+
+新增的 [Linux 无网络安装验收作业](https://github.com/cuipengdba/DbSphere/actions/runs/44426339798/job/135232046226)先在联网阶段构建测试容器，再移除本地 Go/PG18 镜像标签，把原始 `.run` 放进 `--network none` 的容器执行。测试容器仅通过本机 Docker socket 操作预装的 Docker Engine；安装器从包内加载镜像，Compose 使用 `--pull never`，端口 18081 的 `/readyz` 报告 `postgresql18`。这证明安装器进程不需要外网，且在该 Linux CI 环境可完成一键部署；Docker 守护进程所在主机仍有网络，不能将其等同于一台物理断网目标机的完整安装/升级/回滚验收。
 
 Go 原生进程设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true` 后启动自动采集，一键 Compose 模式默认开启；`DBSPHERE_COLLECT_INTERVAL_SECONDS` 可设为 15–3600 秒，`DBSPHERE_COLLECT_WORKERS` 可设为 1–16（默认 4）。每轮最多选取 100 个到期资产，按工作数并行，每个资产有独立 45 秒上限。请按目标实例及 PG18 监控库的负载调整工作数。多服务副本的跨实例采集租约尚未实现，当前仅在一个 DbSphere 副本启用自动采集。
 
