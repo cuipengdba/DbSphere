@@ -160,6 +160,39 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 	if err := pg.RecordRCADecision(ctx, eventID, "sql_plan_regression", "confirmed", "计划变化与慢日志同窗，已由值班人员核实"); err != nil {
 		t.Fatalf("SQL hypothesis could not be reviewed: %v", err)
 	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE events SET kind='alert_incident' WHERE id=$1`, eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'alert_firing',now(),$2::jsonb)`, eventID,
+		`{"metric":"pg.sql_regression_ratio","detail":{"worst":{"queryId":"999"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	wrongQuery, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range object(wrongQuery.(map[string]any)["analysis"])["candidates"].([]map[string]any) {
+		if candidate["code"] == "sql_plan_regression" {
+			t.Fatal("an unrelated slow log and plan were attributed to a SQL alert")
+		}
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'alert_firing',now(),$2::jsonb)`, eventID,
+		`{"metric":"pg.sql_regression_ratio","detail":{"worst":{"queryId":"42"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	matchingQuery, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchingCandidate := false
+	for _, candidate := range object(matchingQuery.(map[string]any)["analysis"])["candidates"].([]map[string]any) {
+		matchingCandidate = matchingCandidate || candidate["code"] == "sql_plan_regression"
+	}
+	if !matchingCandidate {
+		t.Fatal("exact Query ID did not restore the corroborated SQL candidate")
+	}
 	var queryID string
 	var count int
 	if err := pg.pool.QueryRow(ctx, `SELECT query_id FROM slow_log_entries WHERE asset_id=$1`, asset.ID).Scan(&queryID); err != nil || queryID != "42" {

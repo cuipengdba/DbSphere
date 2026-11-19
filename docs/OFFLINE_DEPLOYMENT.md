@@ -2,9 +2,9 @@
 
 > [V0.6.0 RC3 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)提供 Go 一键离线包和静态 Go 程序。V0.6.0 正式版仍在验收。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 
-RC2 修复了 RC1 离线包在 Docker Engine 27 中因导入镜像 ID 规范化而误拒绝安装的问题。[RC2 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44439772877)让安装器和嵌套 Docker 27 守护进程同时处于无外网环境，确认 `/readyz`、PG18 存储和重复安装后的数据保留；这仍不是物理断网服务器验收。使用 Docker 27 的目标机请下载 RC2。
+RC3 包含 RC2 对 Docker Engine 27 导入镜像 ID 规范化的修复。[RC3 的 34 项 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44451086412)让安装器和嵌套 Docker 27 守护进程同时处于无外网环境，确认 `/readyz`、PG18 存储和重复安装后的数据保留；这仍不是物理断网服务器验收。
 
-## Go 架构 RC2 预发布部署
+## Go 架构 RC3 预发布部署
 
 从[RC3 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.3)下载 `DbSphere-go-offline-0.6.0-rc.3-linux-amd64.run` 及同名 `.sha256`，复制到已安装 Docker Engine 与 Compose v2 的 Linux x86_64 目标机同一目录，运行：
 
