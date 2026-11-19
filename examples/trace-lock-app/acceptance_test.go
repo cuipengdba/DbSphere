@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,17 +23,52 @@ import (
 // This drill starts a real Go HTTP application, a real Go DbSphere OTLP intake,
 // PostgreSQL 14–18 as the target and an isolated PostgreSQL 18 monitoring database.
 func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
-	runApplicationLockTraceUsesOneDbSphereEventID(t, false)
+	runApplicationLockTraceUsesOneDbSphereEventID(t, false, false)
 }
 
 func TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID(t *testing.T) {
 	if os.Getenv("DBSPHERE_TEST_POOLER_URL") == "" {
 		t.Skip("PgBouncer endpoint is required")
 	}
-	runApplicationLockTraceUsesOneDbSphereEventID(t, true)
+	runApplicationLockTraceUsesOneDbSphereEventID(t, true, false)
 }
 
-func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler bool) {
+func TestApplicationLockTraceThroughSeparatePgBouncerEndpointUsesOneDbSphereEventID(t *testing.T) {
+	if os.Getenv("DBSPHERE_TEST_POOLER_URL") == "" {
+		t.Skip("PgBouncer endpoint is required")
+	}
+	runApplicationLockTraceUsesOneDbSphereEventID(t, true, true)
+}
+
+func startPoolerTCPForwarder(t *testing.T, upstream string) net.Listener {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer client.Close()
+				backend, err := net.DialTimeout("tcp", upstream, 3*time.Second)
+				if err != nil {
+					return
+				}
+				defer backend.Close()
+				go func() { _, _ = io.Copy(backend, client); _ = backend.(*net.TCPConn).CloseWrite() }()
+				_, _ = io.Copy(client, backend)
+			}()
+		}
+	}()
+	return listener
+}
+
+func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, separatePoolerEndpoint bool) {
 	t.Helper()
 	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
@@ -81,6 +117,13 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler bool)
 		SSLMode: "disable", Runtime: "linux"}
 	if viaPooler {
 		assetInput.PoolerURL = os.Getenv("DBSPHERE_TEST_POOLER_URL")
+		if separatePoolerEndpoint {
+			management, err := url.Parse(assetInput.PoolerURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assetInput.PoolerEndpoint = startPoolerTCPForwarder(t, management.Host).Addr().String()
+		}
 	}
 	created, err := pg.CreateAsset(ctx, assetInput, key)
 	if err != nil {
@@ -112,6 +155,9 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler bool)
 		}
 		poolerSecret, _ = parsedPooler.User.Password()
 		parsedPooler.Path = "/postgres"
+		if separatePoolerEndpoint {
+			parsedPooler.Host = assetInput.PoolerEndpoint
+		}
 		appURL = parsedPooler.String()
 	}
 	blocker, err := pgx.Connect(ctx, targetURL)
@@ -164,6 +210,25 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler bool)
 	checked, err := pg.CheckAsset(ctx, asset.ID, key)
 	if err != nil || checked.Status != "ok" {
 		t.Fatalf("DbSphere did not collect the blocked target: %+v %v", checked, err)
+	}
+	if separatePoolerEndpoint {
+		rawSample, err := pg.RawSample(ctx, asset.ID, checked.SampleID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(rawSample)
+		var evidence struct {
+			Sample struct {
+				Metrics struct {
+					PgBouncer struct {
+						Status string `json:"status"`
+					} `json:"pgbouncer"`
+				} `json:"metrics"`
+			} `json:"sample"`
+		}
+		if json.Unmarshal(body, &evidence) != nil || evidence.Sample.Metrics.PgBouncer.Status != "ok" {
+			t.Fatalf("separate management URL did not collect PgBouncer statistics: %s", body)
+		}
 	}
 	value, known, err := pg.ReadCollection(ctx, "/api/events")
 	if err != nil || !known {

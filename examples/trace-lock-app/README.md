@@ -31,4 +31,4 @@ go run ./examples/trace-lock-app
 
 同时设置 `DBSPHERE_TEST_PG18_URL` 会运行更完整的验收：测试在 PG18 新建并最终删除独立监控库，启动真实 Go DbSphere OTLP 接口，按真实锁告警创建事件，验证同一 ID 下服务→数据库 Span→等待 PID→阻塞 PID 的图与根因候选，解除锁后检查原事件恢复。此测试临时将隔离库中的锁告警持续时间设为 0，不改现有监控库规则。
 
-如额外设置 `DBSPHERE_TEST_POOLER_URL` 为同一 PgBouncer 实例的管理连接串，`TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID` 会把应用连接切换到该池的 `postgres` 数据库，验证服务 Span → 数据库 Span → PgBouncer → PG 等待与阻塞会话 → 根因候选及同一事件恢复。资产直连地址仍指向实际 PostgreSQL；管理端点与业务端点需有相同主机和端口。完整证据见[连接池事件验收](../../docs/TRACE_POOLER_INCIDENT.md)。
+如额外设置 `DBSPHERE_TEST_POOLER_URL` 为同一 PgBouncer 实例的管理连接串，`TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID` 会把应用连接切换到该池的 `postgres` 数据库，验证服务 Span → 数据库 Span → PgBouncer → PG 等待与阻塞会话 → 根因候选及同一事件恢复。`TestApplicationLockTraceThroughSeparatePgBouncerEndpointUsesOneDbSphereEventID` 再在 PgBouncer 前设置独立的业务 TCP 端口，资产将其配置为 `poolerEndpoint`，管理 URL 保持原端口，重复验证同一完整故障链。资产直连地址始终指向实际 PostgreSQL。完整证据见[连接池事件验收](../../docs/TRACE_POOLER_INCIDENT.md)。
