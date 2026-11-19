@@ -243,7 +243,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate Go deployment scripts
-        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh scripts/offline-self-extract.sh
+        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh scripts/go-offline-nested-airgap-smoke.sh scripts/offline-self-extract.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
       - name: Extract static Linux Go binary for external PostgreSQL 18
@@ -376,6 +376,11 @@ jobs:
           version="$(docker exec -e PGPASSWORD=restore-ci-password dbsphere-go-restore-ci \
             psql -h 127.0.0.1 -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
           test "$version" -ge 20
+      - name: Install with a network-isolated Docker 27 daemon and preserve PG18 data
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}"
       - name: Preserve tested Go offline and native packages
         if: success()
         uses: actions/upload-artifact@v4

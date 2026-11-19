@@ -72,12 +72,19 @@ if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
   fi
   compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.k8s.yaml")
 fi
-docker image load --input "$bundle_dir/images.tar.gz" >/dev/null
-docker image inspect "$DBSPHERE_GO_OFFLINE_APP_IMAGE" >/dev/null
+loaded_images="$(docker image load --input "$bundle_dir/images.tar.gz")"
+if ! grep -Fqx "Loaded image: $DBSPHERE_GO_OFFLINE_APP_IMAGE" <<< "$loaded_images" ||
+   ! grep -Fqx 'Loaded image: postgres:18-bookworm' <<< "$loaded_images"; then
+  echo 'The verified offline archive did not load both expected image tags.' >&2
+  exit 1
+fi
+docker image inspect "$DBSPHERE_GO_OFFLINE_APP_IMAGE" postgres:18-bookworm >/dev/null
 if [[ "$(docker image inspect --format '{{.Id}}' "$DBSPHERE_GO_OFFLINE_APP_IMAGE")" != "$DBSPHERE_GO_OFFLINE_APP_IMAGE_ID" ||
       "$(docker image inspect --format '{{.Id}}' postgres:18-bookworm)" != "$DBSPHERE_GO_OFFLINE_PG_IMAGE_ID" ]]; then
-  echo 'Loaded Go or PostgreSQL image does not match this offline bundle.' >&2
-  exit 1
+  # Docker Engine versions can normalize image manifests on load, changing
+  # local image IDs. The verified archive and the two load results remain the
+  # source of identity for this installation.
+  echo 'Docker normalized image IDs; verified archive and loaded tags match the bundle.' >&2
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" config -q
@@ -93,7 +100,7 @@ docker compose --env-file "$env_file" "${compose_args[@]}" \
   -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
   up -d --no-build --pull never --wait --wait-timeout 180
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
-echo "DbSphere Go development server is ready at http://127.0.0.1:${web_port:-8081}"
+echo "DbSphere Go is ready at http://127.0.0.1:${web_port:-8081}"
 if [[ -n "$new_admin_password" && "${DBSPHERE_NO_PRINT_PASSWORD:-false}" != true ]]; then
   echo "Initial administrator password: $new_admin_password"
 else

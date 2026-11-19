@@ -28,6 +28,6 @@ kubectl --kubeconfig <kind-admin-kubeconfig> -n dbsphere-smoke delete pod dbsphe
 
 真实 PostgreSQL 锁演练也已接入 `scripts/pg-compat.mjs`：一个会话持有 advisory lock，另一个会话等待；只读监控账号读取真实 `pg_blocking_pids`，即时规则创建一个事件 ID，事件图连到等待 PID、阻塞 PID 与原始采样。PG14 本机演练通过，CI 已对 PG14–18 五个大版本运行同样步骤。
 
-Go 版增加 `TestRealLockWaitOpensAndRecoversOneIncident`：真实 PG18 阻塞持续超过默认 60 秒后，`CheckAsset` 以同一事件 ID 写入告警、阻塞 PID 图和 `lock_chain` 候选；解除锁后再次采样，`alert_recovered` 引用新样本并关闭原事件，Markdown 复盘仍能追溯故障与恢复。本机 PG18 实测通过，Linux CI 复跑待验收。
+Go 版增加 `TestRealLockWaitOpensAndRecoversOneIncident`：真实 PG18 阻塞持续超过默认 60 秒后，`CheckAsset` 以同一事件 ID 写入告警、阻塞 PID 图和 `lock_chain` 候选；解除锁后再次采样，`alert_recovered` 引用新样本并关闭原事件，Markdown 复盘仍能追溯故障与恢复。本机 PG18 和[顺序执行的 Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44437594843) 均已通过；并行执行曾使另一应用锁测试读到此演练的等待会话，现通过同一目标的包级顺序执行消除干扰。
 
 [五版 PG 锁链 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44064849447)已全部通过，且离线安装、PG18 存储和其余作业共 14 项均为绿色。另有十类**注入式**故障矩阵测试，逐资产检查连接压力、锁、复制延迟、归档失败、autovacuum、Linux 磁盘、K8S OOM/PVC/Node/调度候选各自关联一个事件 ID。注入式矩阵用于规则回归；正式 06-06 仍需真实故障的恢复过程与影响面演练。

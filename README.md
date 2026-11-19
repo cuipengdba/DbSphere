@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前预览版本 v0.6.0-rc.1](https://img.shields.io/badge/当前预览版本-v0.6.0--rc.1-2F6FEB?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+![当前候选构建 v0.6.0-rc.2](https://img.shields.io/badge/当前候选构建-v0.6.0--rc.2-2F6FEB?style=flat-square) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。第一阶段支持 PostgreSQL 14–18；“全域”是产品方向，不表示当前支持所有数据库。
 
@@ -29,7 +29,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-`main` 当前构建 **v0.6.0-rc.1** Go 预览版，已发布[RC1 安装包与静态程序](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)；[最新正式发布版](https://github.com/cuipengdba/DbSphere/releases/latest)仍为 V0.5.0。V0.6 正式版的根因分析、八类故障和离线交付门槛尚未全部验收，RC 不能作为正式版。项目按 V0.6.0、V0.7.0、V0.8.0、V0.9.0、V1.0.0 逐版发布，每版均更新此徽标。当前功能边界见[开发进度](docs/DEVELOPMENT_STATUS.md)和[Go 迁移清单](docs/GO_UI_MIGRATION.md)。
+`main` 当前构建 **v0.6.0-rc.2** 候选版；已发布的预览为[RC1](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)，[最新正式发布版](https://github.com/cuipengdba/DbSphere/releases/latest)仍为 V0.5.0。V0.6 正式版的根因分析、八类故障和离线交付门槛尚未全部验收，RC 不能作为正式版。项目按 V0.6.0、V0.7.0、V0.8.0、V0.9.0、V1.0.0 逐版发布，每版均更新此徽标。当前功能边界见[开发进度](docs/DEVELOPMENT_STATUS.md)和[Go 迁移清单](docs/GO_UI_MIGRATION.md)。
 
 ## 部署与接入
 

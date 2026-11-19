@@ -4,7 +4,9 @@
 
 [V0.6.0 RC1 Go 预发布](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-rc.1)已发布，包含静态 Go 程序、Go/PG18 一键离线包及许可证包，各附 SHA-256。发布提交 `b060d98` 的[完整 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44433132016)通过，发布产物均来自该次验收构建；V0.6.0 正式版的八类故障矩阵与物理断网主机验收仍未完成。
 
-本机新增 Go 真实锁闭环验收：PG18 目标的两个真实会话构成 advisory lock 阻塞，默认 `pg_lock_wait` 规则持续 60 秒后，事件 `9087d17d-604a-49b0-8e8d-31a2414b4d56` 关联等待 PID 164、阻塞 PID 163、原始故障样本和 `lock_chain` 候选。解除锁后成功样本 `1d3421f7-a078-4106-907c-70c5855522c1` 使**同一事件 ID**转为 `resolved`，恢复证据与 Markdown 报告均引用该样本。目标和样本属于隔离测试，测试结束删除资产；Linux CI 复验尚待完成。其余七类状态见[V0.6 正式版发布门槛](V0.6_RELEASE_GATE.md)。
+RC1 的跨引擎离线部署补充验收发现：无外网 Docker 27 守护进程成功从包中加载 Go 与 PG18 镜像，但导入后的本地镜像 ID 与构建机不同，旧安装器因此拒绝继续。源码现先核对外层及内部 SHA-256、`docker image load` 的两个预期标签，允许 Docker 规范化导致的 ID 差异；用 RC1 原始包内容加修正安装脚本，本机 `--network none` 嵌套守护进程返回 `ready/postgresql18`、`version=0.6.0-rc.1`，重复安装后 PG18 中的测试记录仍在。完整 RC2 包的 CI 与发布尚未完成，这项测试不等于物理断网主机验收。
+
+本机新增 Go 真实锁闭环验收：PG18 目标的两个真实会话构成 advisory lock 阻塞，默认 `pg_lock_wait` 规则持续 60 秒后，事件 `9087d17d-604a-49b0-8e8d-31a2414b4d56` 关联等待 PID 164、阻塞 PID 163、原始故障样本和 `lock_chain` 候选。解除锁后成功样本 `1d3421f7-a078-4106-907c-70c5855522c1` 使**同一事件 ID**转为 `resolved`，恢复证据与 Markdown 报告均引用该样本。目标和样本属于隔离测试，测试结束删除资产；[Linux CI](https://github.com/cuipengdba/DbSphere/actions/runs/44437594843) 的 PG18 目标复验通过。共享目标的 Go 测试包现顺序运行，避免并行锁演练相互影响。其余七类状态见[V0.6 正式版发布门槛](V0.6_RELEASE_GATE.md)。
 
 [当前 Go 自动采集与故障矩阵 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44367664009) 已通过全部 29 个作业，包含 Go PG18 实库、PG14–18 Patroni 与托管模式本地目标、复制延迟、真实 WAL 归档失败、autovacuum 关闭、默认 120 秒连接压力、K8S 矩阵和离线包回归；本机单节点 kind 的故障演练另见下文。CI 通过不代表 V1.0 正式发布门槛完成。
 
