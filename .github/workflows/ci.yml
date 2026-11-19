@@ -928,11 +928,9 @@ jobs:
           (cd examples/otel-sdk-probe && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -trimpath -ldflags='-s -w' -o sdk-oom-app .)
           docker build -f examples/otel-sdk-probe/Dockerfile -t dbsphere/otel-sdk-probe:kind-oom .
-          docker pull otel/opentelemetry-collector:0.165.0
           kind load docker-image dbsphere/kind-matrix:local --name dbsphere-ci
           kind load docker-image dbsphere/trace-lock-app:kind-oom --name dbsphere-ci
           kind load docker-image dbsphere/otel-sdk-probe:kind-oom --name dbsphere-ci
-          kind load docker-image otel/opentelemetry-collector:0.165.0 --name dbsphere-ci
           node scripts/kind-matrix-manifest.mjs dbsphere-ci "$RUNNER_TEMP/dbsphere-kind-manifest.json"
           node scripts/kind-matrix-secrets.mjs \
             "$RUNNER_TEMP/dbsphere-kind-secret.json" "$RUNNER_TEMP/dbsphere-kind-credentials.json"

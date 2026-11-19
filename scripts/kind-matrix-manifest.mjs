@@ -150,7 +150,7 @@ SQL
     spec: { replicas: 1, selector: selector('dbsphere-otel-collector'), template: {
       metadata: { labels: { app: 'dbsphere-otel-collector' } }, spec: {
         ...placement(workers[0]), containers: [{
-          name: 'collector', image: 'otel/opentelemetry-collector:0.165.0', imagePullPolicy: 'Never',
+          name: 'collector', image: 'otel/opentelemetry-collector:0.165.0', imagePullPolicy: 'IfNotPresent',
           args: ['--config=/etc/otelcol/config.yaml'],
           ports: [{ containerPort: 4318 }],
           env: [
