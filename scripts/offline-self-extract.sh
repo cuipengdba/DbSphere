@@ -7,12 +7,14 @@ if [[ "$(uname -s)" != 'Linux' ]]; then
 fi
 self="$(realpath -- "$0")"
 checksum="$self.sha256"
-if [[ -f "$checksum" ]]; then
-  (cd -- "$(dirname -- "$self")" && sha256sum --check --quiet "$(basename -- "$checksum")") || {
-    echo 'Offline installer SHA-256 verification failed.' >&2
-    exit 1
-  }
+if [[ ! -f "$checksum" ]]; then
+  echo 'Offline installer SHA-256 file is missing.' >&2
+  exit 1
 fi
+(cd -- "$(dirname -- "$self")" && sha256sum --check --quiet "$(basename -- "$checksum")") || {
+  echo 'Offline installer SHA-256 verification failed.' >&2
+  exit 1
+}
 payload_line="$(awk '/^__DBSPHERE_PAYLOAD__$/ { print NR + 1; exit }' "$self")"
 if [[ -z "$payload_line" ]]; then
   echo 'Offline installer payload marker is missing.' >&2

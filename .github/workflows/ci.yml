@@ -241,9 +241,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate Go deployment scripts
-        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh
+        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh scripts/offline-self-extract.sh
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
+      - name: Reject missing and altered offline checksums
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          checksum="${archive[0]}.sha256"
+          saved="$checksum.ci-original"
+          mv "$checksum" "$saved"
+          trap 'mv -f "$saved" "$checksum"' EXIT
+          if output="$(bash "${archive[0]}" 2>&1)"; then exit 1; fi
+          grep -Fq 'SHA-256 file is missing' <<< "$output"
+          printf '%064d  %s\n' 0 "$(basename "${archive[0]}")" > "$checksum"
+          if output="$(bash "${archive[0]}" 2>&1)"; then exit 1; fi
+          grep -Fq 'SHA-256 verification failed' <<< "$output"
       - name: Generate SBOMs for the exact bundled container images
         run: |
           mkdir -p "$RUNNER_TEMP/dbsphere-syft"
