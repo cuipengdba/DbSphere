@@ -4,7 +4,7 @@ V1.0.9 将官方 OpenTelemetry Go SDK 的应用 Span 放进真实的 PostgreSQL 
 
 验收程序在独立 PostgreSQL 18 存储中创建临时库，纳管一台测试 PostgreSQL；HTTP `/checkout` 请求生成服务父 Span 和数据库客户端子 Span，并在真实 advisory lock 上等待。DbSphere 采集时锁仍被阻塞，因而同一事件须包含精确等待 PID、阻塞 PID 和 `pg_lock_wait` 告警。解锁后 SDK 将结束的 Span 发往 OTLP，验收程序检查 `trace_lock_pid_matched` 根因候选、父子和等待 PID 图边、显式采样声明、脱敏原始 Trace、报告及事件恢复。测试结束删除临时存储库。
 
-本机已在 PG14 目标和 PG18 存储的直连测试模式通过。此模式中的进程内转接器仅把 SDK 的 OTLP/HTTP protobuf 转成 DbSphere 要求的 OTLP/HTTP JSON。Linux CI 会对 PG14–18 分别执行此模式，并在 PG18 目标上增加官方 Collector `0.165.0` 的独立故障演练。Collector 模式不使用测试转接器。
+本机已在 PG14 目标和 PG18 存储的直连测试模式通过。此模式中的进程内转接器仅把 SDK 的 OTLP/HTTP protobuf 转成 DbSphere 要求的 OTLP/HTTP JSON。[Linux CI 验收](https://github.com/cuipengdba/DbSphere/actions/runs/44529047475)的 38 个作业全部通过：PG14–18 各运行一次直连故障演练；PG18 还在[独立作业步骤](https://github.com/cuipengdba/DbSphere/actions/runs/44529047475/job/135577222021)用官方 Collector `0.165.0` 完整重跑，`TestSDKLockIncidentUsesOneDbSphereEventID` 返回 PASS。Collector 模式不使用测试转接器。
 
 验收命令在 `examples/otel-sdk-probe` 模块内执行：
 
