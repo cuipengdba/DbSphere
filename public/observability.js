@@ -289,7 +289,7 @@
     const data = new Map(points.map(point => [Math.floor(Date.parse(point.bucket) / bucketMs) * bucketMs, point]));
     const slots = Array.from({ length: Math.ceil(hours / bucketHours) }, (_, index) =>
       data.get(start + index * bucketMs) || null);
-    const width = 760; const height = 178; const left = 43; const right = 14;
+    const width = 400; const height = 178; const left = 38; const right = 12;
     const plotWidth = width - left - right;
     const maxSamples = Math.max(1, ...slots.map(point => Number(point?.samples) || 0));
     const maxConnections = Math.max(1, ...slots.map(point => Number(point?.averageConnections) || 0));
@@ -344,6 +344,9 @@
       return block;
     };
     section.append(chart('采样成功与失败', 'samples'), chart('平均连接数', 'connections'));
+    const latest = points.at(-1);
+    section.append(make('p', 'obs-latest',
+      `最新时间桶 ${time(latest.bucket)} · ${latest.samples} 次采样 · ${latest.errors} 次失败 · 平均连接 ${latest.averageConnections ?? '未采集'}`));
     section.append(make('p', 'obs-caption', '蓝色为成功采样，橙色为失败采样；短横线表示无采样。连接数只连接相邻且有值的时间桶，不推断缺失数据。'));
     return section;
   }

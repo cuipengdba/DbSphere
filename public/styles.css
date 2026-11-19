@@ -137,6 +137,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .obs-chart{min-width:0;padding:12px;border:1px solid #dce5f1;border-radius:10px;background:#fff}
 .obs-chart h4{font-size:13px;margin:0 0 8px}
 .obs-trend-charts>.obs-caption{grid-column:1/-1;margin:0}
+.obs-trend-charts>.obs-latest{grid-column:1/-1;margin:0;color:#284a78;font-size:12px;font-weight:650}
 .obs-coverage-details{margin:10px 0}
 .obs-coverage-details summary{cursor:pointer;color:#345d88;font-weight:600}
 @media(max-width:1080px){.incident-grid{grid-template-columns:minmax(0,1fr)}}
