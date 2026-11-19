@@ -64,9 +64,21 @@ function resources(requestMemory, limitMemory) {
   kube(['set', 'resources', 'deployment/pg18', '--containers=postgres',
     `--requests=cpu=25m,memory=${requestMemory}`, `--limits=memory=${limitMemory}`]);
 }
+function faultCommand(enabled) {
+  // The official postgres:18-bookworm image contains Perl. Make the container's
+  // PID 1 exceed its cgroup limit so Kubernetes records a real OOMKilled state.
+  // This is a test-only Deployment patch, restored before PostgreSQL recovery.
+  const container = enabled
+    ? { name: 'postgres', command: ['/usr/bin/perl'],
+        args: ['-e', '$x = "x" x (128*1024*1024); sleep 60;'] }
+    : { name: 'postgres', command: null, args: null };
+  kube(['patch', 'deployment/pg18', '--type=strategic', '-p',
+    JSON.stringify({ spec: { template: { spec: { containers: [container] } } } })]);
+}
 async function restore() {
   kube(['scale', 'deployment/pg18', '--replicas=0']);
   await waitPodsGone();
+  faultCommand(false);
   resources('64Mi', '512Mi');
   kube(['scale', 'deployment/pg18', '--replicas=1']);
   kube(['rollout', 'status', 'deployment/pg18', '--timeout=180s'], 200000);
@@ -115,7 +127,8 @@ let result;
 try {
   kube(['scale', 'deployment/pg18', '--replicas=0']);
   await waitPodsGone();
-  resources('4Mi', '8Mi');
+  resources('8Mi', '32Mi');
+  faultCommand(true);
   kube(['scale', 'deployment/pg18', '--replicas=1']);
   let failedPod;
   try {
