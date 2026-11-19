@@ -25,7 +25,7 @@ const kube = (args, timeout = 25000) => execFileSync('kubectl', [
 ], { encoding: 'utf8', timeout }).trim();
 const pods = selector => JSON.parse(kube(['get', 'pods', '-l', `app=${selector}`, '-o', 'json'])).items;
 
-async function api(path, method = 'GET', payload) {
+async function api(path, method = 'GET', payload, allowNotFound = false) {
   const response = await fetch(base + path, {
     method,
     headers: {
@@ -37,6 +37,7 @@ async function api(path, method = 'GET', payload) {
     signal: AbortSignal.timeout(45000)
   });
   const body = await response.json();
+  if (allowNotFound && response.status === 404) return null;
   assert.ok(response.ok, `${method} ${path}: ${response.status} ${JSON.stringify(body)}`);
   return body;
 }
@@ -100,7 +101,8 @@ assert.equal(baselineTrace.spans?.length, 2, 'baseline application Trace lacks p
 const sdkBaseline = await checkout(sdk);
 assert.equal(sdkBaseline.code, 200, 'official SDK baseline request failed');
 const sdkBaselineTrace = await until('official SDK baseline parent and DB Span', 25, 200, async () => {
-  const raw = await api(`/api/assets/${asset.id}/traces/${sdkBaseline.body.traceId}`);
+  const raw = await api(`/api/assets/${asset.id}/traces/${sdkBaseline.body.traceId}`,
+    'GET', undefined, true);
   return raw?.spans?.length === 2 && raw.spans.some(span =>
     span.kind === 'postgresql_client' && span.appPodVerified?.uid === sdkPod.metadata.uid)
     ? raw : null;
@@ -139,7 +141,8 @@ try {
     if (!open) return null;
     const detail = await api(`/api/events/${open.id}`);
     const trace = await api(`/api/assets/${asset.id}/traces/${failedRequest.body.traceId}`);
-    const sdkTrace = await api(`/api/assets/${asset.id}/traces/${failedSDKRequest.body.traceId}`);
+    const sdkTrace = await api(`/api/assets/${asset.id}/traces/${failedSDKRequest.body.traceId}`,
+      'GET', undefined, true);
     const candidates = detail.analysis?.candidates || [];
     const edges = detail.analysis?.graph?.edges || [];
     if (detail.event.id !== open.id ||
