@@ -864,6 +864,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Install pinned kind and kubectl
         run: |
           mkdir -p "$RUNNER_TEMP/dbsphere-bin"
@@ -907,6 +911,33 @@ jobs:
           kubectl apply -f "$RUNNER_TEMP/dbsphere-kind-manifest.json"
           kubectl -n dbsphere-matrix wait --for=condition=available deployment --all --timeout=300s
           kubectl -n dbsphere-matrix get pods,pvc -o wide
+      - name: Verify real application Pod and Bound PVC with read-only Kubernetes credentials
+        run: |
+          reader_config="$RUNNER_TEMP/dbsphere-reader.kubeconfig"
+          ca_file="$RUNNER_TEMP/dbsphere-kind-ca.crt"
+          server="$(kubectl config view --raw --minify -o json | jq -r '.clusters[0].cluster.server')"
+          kubectl config view --raw --minify -o json |
+            jq -r '.clusters[0].cluster["certificate-authority-data"]' | base64 -d > "$ca_file"
+          token="$(kubectl -n dbsphere-matrix create token dbsphere-reader --duration=10m)"
+          kubectl config set-cluster dbsphere-ci --server="$server" \
+            --certificate-authority="$ca_file" --embed-certs=true --kubeconfig="$reader_config"
+          kubectl config set-credentials reader --token="$token" --kubeconfig="$reader_config"
+          unset token
+          kubectl config set-context reader --cluster=dbsphere-ci --user=reader --kubeconfig="$reader_config"
+          kubectl config use-context reader --kubeconfig="$reader_config"
+          chmod 600 "$reader_config"
+          test "$(kubectl --kubeconfig "$reader_config" -n dbsphere-matrix auth can-i get persistentvolumeclaims)" = yes
+          test "$(kubectl --kubeconfig "$reader_config" -n dbsphere-matrix auth can-i get secrets)" = no
+          pod="$(kubectl -n dbsphere-matrix get pods -l app=pg18 -o jsonpath='{.items[0].metadata.name}')"
+          uid="$(kubectl -n dbsphere-matrix get pod "$pod" -o jsonpath='{.metadata.uid}')"
+          test -n "$pod" && test -n "$uid"
+          DBSPHERE_KUBECONFIG="$reader_config" \
+          DBSPHERE_TEST_K8S_APP_NAMESPACE=dbsphere-matrix \
+          DBSPHERE_TEST_K8S_APP_POD="$pod" \
+          DBSPHERE_TEST_K8S_APP_UID="$uid" \
+          DBSPHERE_TEST_K8S_APP_PVC=pg18-data \
+          DBSPHERE_TEST_K8S_APP_PVC_PHASE=Bound \
+            go test ./internal/collector -run '^TestRealKubernetesApplicationPodIdentity$' -count=1 -v
       - name: Verify PG14-18 and cross-node Kubernetes evidence after Pod replacement
         run: |
           node --check scripts/kind-matrix-verify-persistence.mjs

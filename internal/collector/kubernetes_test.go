@@ -122,6 +122,13 @@ func TestRealKubernetesApplicationPodIdentity(t *testing.T) {
 	if expectedNode := os.Getenv("DBSPHERE_TEST_K8S_APP_NODE"); expectedNode != "" && got.Node != expectedNode {
 		t.Fatalf("real application Pod was scheduled on %q, expected %q", got.Node, expectedNode)
 	}
+	if expectedPVC := os.Getenv("DBSPHERE_TEST_K8S_APP_PVC"); expectedPVC != "" {
+		if len(got.PVCs) != 1 || got.PVCs[0] != expectedPVC || len(got.PVCStates) != 1 ||
+			got.PVCStates[0].Name != expectedPVC || got.PVCStates[0].Status != "ok" ||
+			got.PVCStates[0].Phase != os.Getenv("DBSPHERE_TEST_K8S_APP_PVC_PHASE") {
+			t.Fatalf("real application Pod PVC state was not verified: %+v", got)
+		}
+	}
 	if _, err := VerifyKubernetesPodIdentity(context.Background(), KubernetesTarget{
 		Cluster: os.Getenv("DBSPHERE_TEST_K8S_CONTEXT"), Namespace: namespace, Pod: name}, "00000000-0000-4000-8000-000000000000"); err == nil {
 		t.Fatal("real Kubernetes API accepted a mismatched Pod UID")
