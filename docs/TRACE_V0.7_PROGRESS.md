@@ -10,6 +10,8 @@ SQL 退化事件的服务影响面现在另计“同指纹慢调用”：必须�
 
 本机 PG18 实库再做一次 SQL 退化演练：真实 `pg_stat_statements` 采样与真实慢查询打开事件 `c9cea449-c75d-4da4-8946-8f873bda9025`，受控埋点的同 Query ID 数据库 Span 在事件图里连到唯一指纹和上游服务，服务影响面计入一条同指纹慢调用；恢复样本 `4db6494e-6c36-4439-9a1b-6f2e8a15fad5` 关闭原事件。Trace Span 由测试程序根据真实调用起止时间写入，尚不代表生产应用自动埋点验收。
 
+正式版页面本机浏览器验收使用隔离 PG18 夹具：事件 `2da304f2-7edc-4a47-88e2-4d18799cc2d7` 在同一页展示服务 `api → checkout`、数据库 Span、Query ID 42 的 SQL 指纹、事前/事中计划、慢日志和可审查根因候选。浏览器发现并修正登录页遗留 RC2 文案、工作台“开发预览”标记，以及已有关联 Span 时仍提示“缺少应用直接链路”的矛盾；支持证据改成可展开的原始数据链接。Chromium 的 390px 视口没有横向溢出，控制台无错误。该夹具用于页面验收，真实 SQL 故障闭环另由上述 PG18 演练证明。
+
 Go 迁移进度（2026-11-18）：Go 后端已接入相同的可选 `/v1/traces` OTLP/HTTP JSON 入口，以不少于 32 字符的独立令牌认证；1 MiB/256 Span、唯一 PG 资产映射、白名单字段、PG18 去重和默认 7 天保留期均有代码及测试。PG18 实库演练从 OTLP JSON 经 Go 解析与写入，在**既有同一个事件 ID**的图中显示服务父子 Span → PG 客户端 Span → PG 资产。Node 历史实现仍保留。官方 OpenTelemetry Collector 0.165.0 与 Go SDK 1.47.0 的分批 Trace 转发已在本机 kind 验证；其他 SDK 与完整应用故障矩阵仍待验收。
 
 新增[Go 锁等待示例应用](../examples/trace-lock-app/README.md)：本机 PG14 实库中，实际 HTTP `/checkout` 请求在 advisory lock 后等待，应用按实际请求时间、真实 PG 等待 PID 导出父子 OTLP/HTTP JSON Span。独立测试验证请求、PID、导出契约和 SQL/密码不外泄。新增整链路测试使用**真实 Go DbSphere OTLP 接口 + 独立 PG18 监控库 + PG14–18 目标库**，从锁告警取得事件 ID，检查同一 ID 下的父子 Span、`same_backend_pid`、等待→阻塞会话和恢复关闭；本机 PG14 与[五版 CI 矩阵](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)均通过。场景 B 在本机 kind 用真实 Go 应用请求连接实际 OOMKilled 的 PG18 Pod，错误 Span、PG 连接失败和 K8S OOM 候选进入同一事件 ID，恢复后原事件关闭；详见[本机 kind 验收](KIND_ACCEPTANCE.md)。官方 Collector 与 Go SDK 的 Trace 转发已实测；生产 K8S 与独立环境复核仍待验收。

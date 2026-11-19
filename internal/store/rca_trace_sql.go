@@ -36,3 +36,30 @@ func traceSQLFingerprint(samples map[string]sampleObservation, queryID string, s
 	}
 	return ""
 }
+
+// A matching application span closes the candidate's explicit link gap. The
+// custom Query ID still needs human verification against the database session.
+func attachTraceToSQLPlanCandidate(candidate map[string]any, queryID, spanNode string) bool {
+	if candidate == nil || queryID == "" ||
+		stringValue(object(candidate["detail"])["queryId"]) != queryID {
+		return false
+	}
+	supports, ok := candidate["supports"].([]string)
+	if !ok {
+		return false
+	}
+	for _, support := range supports {
+		if support == spanNode {
+			return false
+		}
+	}
+	if len(supports) >= 4 {
+		return false
+	}
+	candidate["supports"] = append(supports, spanNode)
+	candidate["missing"] = []string{
+		"应用自定义 Query ID 与数据库会话身份需复核", "Query ID 复用或统计重置未排除"}
+	candidate["matchedConditions"] = append(candidate["matchedConditions"].([]any),
+		"应用数据库 Span 的 Query ID 与同一事件的 SQL 指纹一致")
+	return true
+}

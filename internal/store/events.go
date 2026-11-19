@@ -327,6 +327,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 					edges = append(edges, map[string]string{"from": spanNode,
 						"to":       "sql:" + event.AssetID + ":" + fingerprint,
 						"relation": "query_id_matches"})
+					if attachTraceToSQLPlanCandidate(planCandidate, *queryID, spanNode) {
+						edges = append(edges, map[string]string{"from": "candidate:sql_plan_regression",
+							"to": spanNode, "relation": "supported_by"})
+					}
 				}
 			}
 		}

@@ -119,7 +119,11 @@ async function refresh() {
   ]);
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
-  if (runtime?.version) $('release-label').textContent = `V${runtime.version} · ${runtime.backend === 'go' ? 'Go 预览版' : '开发预览版'}`;
+  if (runtime?.version) {
+    const preview = runtime.version.includes('-');
+    $('release-label').textContent = `V${runtime.version} · ${runtime.backend === 'go' ? 'Go' : 'Node.js'} ${preview ? '开发预览' : '正式版'}`;
+    $('edition-label').textContent = preview ? '开发预览' : `V${runtime.version} 正式版`;
+  }
   collectorSchedule = {
     known: runtime?.backend === 'go' && typeof runtime.collectorEnabled === 'boolean',
     enabled: runtime?.collectorEnabled === true,
@@ -1033,12 +1037,31 @@ async function showEvent(id) {
     candidateCard.append(cell('h5', candidate.title),
       cell('p', `置信级别 ${candidate.confidence} · ${candidate.limitation}`, 'rca-candidate-interpretation'));
     const facts = cell('div', '', 'rca-facts');
-    facts.append(cell('p', `支持证据：${candidate.supports.join('、')}`));
+    const supports = document.createElement('details');
+    supports.append(cell('summary', `查看支持证据（${candidate.supports.length} 条）`));
+    for (const support of candidate.supports) {
+      const node = graphNodes.get(support) ?? graphNodes.get(`evidence:${support}`);
+      const row = cell('p', `${node?.type ?? '证据'} · ${node?.label ?? support}`, 'evidence');
+      row.title = support;
+      if (node?.source) {
+        const link = cell('a', '查看原始数据'); link.href = node.source;
+        link.target = '_blank'; link.rel = 'noopener noreferrer';
+        row.append(document.createTextNode(' · '), link);
+      }
+      supports.append(row);
+    }
+    facts.append(supports);
     if (candidate.matchedConditions?.length) facts.append(cell('p', `匹配条件：${candidate.matchedConditions.map(item =>
       typeof item === 'string' ? item : `${item.metric ?? '条件'}：${item.observed ?? '未知'} ${item.operator ?? ''} ${item.threshold ?? ''}`).join('；')}`));
     if (candidate.against?.length) facts.append(cell('p', `反证：${candidate.against.join('；')}`));
-    if (candidate.timeOrder) facts.append(cell('p', `时间顺序：${candidate.timeOrder.firstObservedAt
-      ? formatTime(candidate.timeOrder.firstObservedAt) : '未知'} · ${candidate.timeOrder.relation} · 事件开始 ${formatTime(candidate.timeOrder.eventStartedAt)}`));
+    if (candidate.timeOrder) {
+      const order = {
+        before_event: '先于事件', same_window: '事件同窗', after_event: '事件开始后',
+        baseline_before_event_and_log_within_event: '事前基线、事件与同期慢日志'
+      }[candidate.timeOrder.relation] ?? '时间关系待核对';
+      facts.append(cell('p', `时间顺序：${order} · 首次观测 ${candidate.timeOrder.firstObservedAt
+        ? formatTime(candidate.timeOrder.firstObservedAt) : '未知'} · 事件开始 ${formatTime(candidate.timeOrder.eventStartedAt)}`));
+    }
     if (candidate.missing.length) facts.append(cell('p', `缺失：${candidate.missing.join('；')}`));
     candidateCard.append(facts);
     if (candidate.review) candidateCard.append(cell('p', `人工${candidate.review.decision === 'confirmed' ? '确认' : '驳回'} · ${formatTime(candidate.review.at)} · ${candidate.review.reason}`, 'evidence'));

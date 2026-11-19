@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
+	"github.com/cuipengdba/dbsphere/internal/trace"
 )
 
 func TestSlowLogAndPlanSanitization(t *testing.T) {
@@ -156,6 +157,34 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 		!strings.Contains(string(detailJSON), `"relation":"compared_with"`) ||
 		strings.Contains(string(detailJSON), "confidential_value") {
 		t.Fatalf("event did not link safe SQL RCA evidence: %s", detailJSON)
+	}
+	var sampleID string
+	if err := pg.pool.QueryRow(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+		VALUES(gen_random_uuid(),$1,now(),'ok',$2::jsonb) RETURNING id::text`, asset.ID,
+		`{"sqlPerformance":{"status":"ok","statements":[{"queryId":"42","fingerprint":"1:2:42:1"}]}}`).Scan(&sampleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'sample_observed',now(),jsonb_build_object('sampleId',$2::text))`,
+		eventID, sampleID); err != nil {
+		t.Fatal(err)
+	}
+	traceID := newTraceID(t)
+	span := trace.Span{AssetID: asset.ID, TraceID: traceID, SpanID: "1111111111111111",
+		Service: "checkout", Kind: "postgresql_client", QueryID: "42",
+		Start: time.Now().UTC().Add(-time.Second), End: time.Now().UTC(), Status: "ok"}
+	if imported, err := pg.SaveTraceSpans(ctx, []trace.Span{span}); err != nil || imported != 1 {
+		t.Fatalf("matching application Span was not saved: %d %v", imported, err)
+	}
+	linked, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedJSON, _ := json.Marshal(linked)
+	if !strings.Contains(string(linkedJSON), `"span:`+traceID+`:1111111111111111"`) ||
+		!strings.Contains(string(linkedJSON), `"应用数据库 Span 的 Query ID 与同一事件的 SQL 指纹一致"`) ||
+		strings.Contains(string(linkedJSON), `"应用请求与 Query ID 的直接链路需核对"`) {
+		t.Fatalf("SQL candidate did not incorporate its exact application span: %s", linkedJSON)
 	}
 	if err := pg.RecordRCADecision(ctx, eventID, "sql_plan_regression", "confirmed", "计划变化与慢日志同窗，已由值班人员核实"); err != nil {
 		t.Fatalf("SQL hypothesis could not be reviewed: %v", err)

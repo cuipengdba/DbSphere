@@ -40,3 +40,26 @@ func TestTraceSQLFingerprintRequiresUniqueContemporaneousQueryID(t *testing.T) {
 		t.Fatalf("out-of-window sample linked to request: %q", got)
 	}
 }
+
+func TestTraceClosesOnlyMatchingSQLPlanCandidateLinkGap(t *testing.T) {
+	candidate := map[string]any{
+		"detail":            map[string]any{"queryId": "42"},
+		"supports":          []string{"plan:before", "plan:during", "slow_log:one"},
+		"missing":           []string{"应用请求与 Query ID 的直接链路需核对", "Query ID 复用或统计重置未排除"},
+		"matchedConditions": []any{"事前计划、事中计划和慢日志的 Query ID 精确一致"},
+	}
+	if attachTraceToSQLPlanCandidate(candidate, "99", "span:other") {
+		t.Fatal("different Query ID supported the plan candidate")
+	}
+	if !attachTraceToSQLPlanCandidate(candidate, "42", "span:matching") ||
+		attachTraceToSQLPlanCandidate(candidate, "42", "span:matching") ||
+		attachTraceToSQLPlanCandidate(candidate, "42", "span:second") {
+		t.Fatalf("matching application span was not bounded or deduplicated: %+v", candidate)
+	}
+	if supports := candidate["supports"].([]string); len(supports) != 4 || supports[3] != "span:matching" {
+		t.Fatalf("candidate lost its direct span evidence: %+v", candidate)
+	}
+	if missing := candidate["missing"].([]string); missing[0] == "应用请求与 Query ID 的直接链路需核对" {
+		t.Fatalf("candidate still claims the observed link is missing: %+v", candidate)
+	}
+}
