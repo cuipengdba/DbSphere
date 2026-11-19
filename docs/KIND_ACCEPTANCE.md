@@ -1,5 +1,9 @@
 # 本机 Kubernetes 验收记录（开发版）
 
+## 2026-11-19 V0.6 PVC 使用率实测尝试
+
+现有单节点 kind `dbsphere-test` 的 local-path StorageClass 能读取 PVC/PV 对象，但 kubelet 不上报该驱动的 `kubelet_volume_stats_used_bytes` / `capacity_bytes`。尝试在该集群安装官方 CSI hostpath 测试驱动时，控制平面的 scheduler 和 controller-manager 已分别累计接近 500 次重启，API/etcd 间歇超时，不能作为可信的容量压力验收。为避免混淆测试结果，停下旧集群容器后尝试新建独立 `dbsphere-v06-pvc` kind 集群；新集群仍在 `kubeadm init` 创建管理员 ClusterRoleBinding 时因 API Server 超时失败，kind 自动删除了新节点，随后重新启动旧集群容器。没有将人工构造的 Prometheus 响应算作真实 PVC 故障通过；待可稳定创建的隔离集群与能上报卷统计的 CSI 驱动后重做。
+
 > 2026-11-18，单节点 kind `dbsphere-test`，Namespace `dbsphere-smoke`，PostgreSQL 18 测试数据库。此记录只证明列出的本机故障路径，不是生产 Kubernetes 或 V1.0 正式版验收。PG14–18 多节点矩阵另见[独立验收记录](KIND_MATRIX_ACCEPTANCE.md)。
 
 ## 2026-11-19 五段问题链路浏览器复验
