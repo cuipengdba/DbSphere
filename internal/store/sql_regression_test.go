@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"os"
 	"strconv"
@@ -36,6 +35,14 @@ func TestSQLRegressionRequiresTwoComparableIntervalsAndRecovers(t *testing.T) {
 		time.Now()); !signal.Available || signal.Value != 10 {
 		t.Fatalf("SQL regression alert signal missing: %+v", signal)
 	}
+	resetAt := time.Date(2026, 11, 19, 2, 0, 0, 0, time.UTC)
+	oldest["resetAt"], previous["resetAt"], current["resetAt"] =
+		resetAt.Format(time.RFC3339Nano), resetAt.Format(time.RFC3339Nano), &resetAt
+	current["statements"] = []map[string]any{object(list(current["statements"])[0])}
+	if mixed := sqlRegressionSignal(current, previous, oldest); mixed == nil || mixed["maxRatio"] != float64(10) {
+		t.Fatalf("live time pointer and stored JSON reset timestamps did not compare: %v", mixed)
+	}
+	oldest["resetAt"], previous["resetAt"], current["resetAt"] = "reset-a", "reset-a", "reset-a"
 	recovered := sqlRegressionSignal(sqlRegressionFixture(16, 610, "reset-a"), current, previous)
 	if recovered == nil || recovered["maxRatio"] != float64(0) {
 		t.Fatalf("new fast interval did not explicitly clear regression: %v", recovered)
@@ -119,7 +126,19 @@ func TestRealPG18SQLRegressionOpensAndRecoversOneIncident(t *testing.T) {
 	var eventID string
 	if err := pg.pool.QueryRow(ctx, `SELECT id::text FROM events WHERE asset_id=$1
 		AND event_group='latency' AND status='open'`, asset.ID).Scan(&eventID); err != nil {
-		t.Fatal("real SQL latency regression did not open an incident", err)
+		summary, _ := pg.SQLSummary(ctx, asset.ID)
+		rows := list(object(object(summary)["performance"])["statements"])
+		var leading any
+		if len(rows) > 0 {
+			leading = map[string]any{"queryId": object(rows[0])["queryId"],
+				"regression": object(rows[0])["regression"]}
+		}
+		var faultRaw []byte
+		_ = pg.pool.QueryRow(ctx, `SELECT metrics_json FROM samples WHERE id=$1`, fault.SampleID).Scan(&faultRaw)
+		var faultMetrics map[string]any
+		_ = json.Unmarshal(faultRaw, &faultMetrics)
+		t.Fatalf("real SQL latency regression did not open an incident: %v; trend=%v; signal=%v",
+			err, leading, faultMetrics["sqlRegression"])
 	}
 	var regression map[string]any
 	var raw []byte
@@ -164,6 +183,6 @@ func TestRealPG18SQLRegressionOpensAndRecoversOneIncident(t *testing.T) {
 		!strings.Contains(report, eventID) || !strings.Contains(report, recovery.SampleID) {
 		t.Fatal("real SQL incident report lost its event or recovery sample", err)
 	}
-	t.Log(fmt.Sprintf("real PG18 SQL incident %s: ratio %.1f, fault %s, recovery %s",
-		eventID, number(regression["maxRatio"]), fault.SampleID, recovery.SampleID))
+	t.Logf("real PG18 SQL incident %s: ratio %.1f, fault %s, recovery %s",
+		eventID, number(regression["maxRatio"]), fault.SampleID, recovery.SampleID)
 }

@@ -17,19 +17,49 @@ type sqlSnapshot struct {
 	Metrics map[string]any
 }
 
+func sqlResetAt(value any) string {
+	switch reset := value.(type) {
+	case string:
+		if parsed, err := time.Parse(time.RFC3339Nano, reset); err == nil {
+			return parsed.UTC().Format(time.RFC3339Nano)
+		}
+		return reset
+	case time.Time:
+		if !reset.IsZero() {
+			return reset.UTC().Format(time.RFC3339Nano)
+		}
+	case *time.Time:
+		if reset != nil && !reset.IsZero() {
+			return reset.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return ""
+}
+
+func sqlStatementRows(value any) []map[string]any {
+	if rows, ok := value.([]map[string]any); ok {
+		return rows
+	}
+	result := []map[string]any{}
+	for _, raw := range list(value) {
+		if row := object(raw); row != nil {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
 func sqlDelta(newer, older map[string]any) map[string]map[string]any {
-	if stringValue(newer["resetAt"]) == "" ||
-		stringValue(newer["resetAt"]) != stringValue(older["resetAt"]) {
+	if sqlResetAt(newer["resetAt"]) == "" ||
+		sqlResetAt(newer["resetAt"]) != sqlResetAt(older["resetAt"]) {
 		return nil
 	}
 	prior := map[string]map[string]any{}
-	for _, raw := range list(older["statements"]) {
-		row := object(raw)
+	for _, row := range sqlStatementRows(older["statements"]) {
 		prior[stringValue(row["fingerprint"])] = row
 	}
 	result := map[string]map[string]any{}
-	for _, raw := range list(newer["statements"]) {
-		row := object(raw)
+	for _, row := range sqlStatementRows(newer["statements"]) {
 		fingerprint := stringValue(row["fingerprint"])
 		before := prior[fingerprint]
 		if before == nil {
@@ -70,8 +100,7 @@ func sqlRegressionSignal(current, previous, older map[string]any) map[string]any
 	eligible := 0
 	bestRatio := 0.0
 	var best map[string]any
-	for _, raw := range list(current["statements"]) {
-		row := object(raw)
+	for _, row := range sqlStatementRows(current["statements"]) {
 		fingerprint := stringValue(row["fingerprint"])
 		latest, prior := interval[fingerprint], baseline[fingerprint]
 		if latest == nil || prior == nil || number(latest["calls"]) < 5 || number(prior["calls"]) < 5 {
