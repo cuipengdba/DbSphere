@@ -115,6 +115,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .obs-graph-viewport,.obs-timeline-viewport,.obs-trend-viewport{max-width:100%;overflow:auto;border:1px solid #e0e8f3;border-radius:9px;background:#f9fbff}
 .obs-graph-viewport{max-height:550px}
 .obs-graph-viewport svg,.obs-timeline-viewport svg,.obs-trend-viewport svg{display:block}
+.obs-trend-viewport svg{width:100%;height:auto}
 .obs-graph-viewport:focus-visible{outline:3px solid #82c4d4;outline-offset:2px}
 .obs-lane-title{fill:#48658b;font-size:13px;font-weight:700}
 .obs-node-label{fill:#233f63;font-size:11px;font-weight:650}

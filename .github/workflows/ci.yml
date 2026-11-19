@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   go-foundation:
@@ -1001,6 +1002,7 @@ jobs:
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" \
             "$RUNNER_TEMP/dbsphere-kind-before.json" "$RUNNER_TEMP/dbsphere-kind-after.json"
       - name: Verify one real application incident across PostgreSQL Pod OOM and recovery
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node --check scripts/kind-matrix-app-oom.mjs
           kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18091:8080 \

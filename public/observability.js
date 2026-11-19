@@ -311,7 +311,8 @@
     const data = new Map(points.map(point => [Math.floor(Date.parse(point.bucket) / bucketMs) * bucketMs, point]));
     const slots = Array.from({ length: Math.ceil(hours / bucketHours) }, (_, index) =>
       data.get(start + index * bucketMs) || null);
-    const width = 400; const height = 178; const left = 38; const right = 12;
+    const width = window.matchMedia('(max-width:680px)').matches ? 280 : 400;
+    const height = 178; const left = 38; const right = 12;
     const plotWidth = width - left - right;
     const maxSamples = Math.max(1, ...slots.map(point => Number(point?.samples) || 0));
     const maxConnections = Math.max(1, ...slots.map(point => Number(point?.averageConnections) || 0));

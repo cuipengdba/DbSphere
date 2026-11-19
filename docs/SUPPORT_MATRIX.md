@@ -14,6 +14,8 @@
 
 `CI` 表示独立 Ubuntu Linux runner 的真实数据库容器或 kind 测试；`本机` 表示隔离本机测试。`—` 表示未验收，不能据此推断支持。Linux 裸机/虚机上的 PostgreSQL 使用相同数据库协议，但不同发行版、文件系统、服务管理和生产持续负载未完成独立验收。生产 Kubernetes 集群、Operator、跨区域和持续高负载不在已测矩阵内。
 
+PG18 的 OOM 全链路结论来自 V1.0.10–V1.0.11 的明确 `OOMKilled` 作业；V1.0.12 常规 CI 因 kind/containerd 本次只返回 `Error`/137，将该故障注入转为[手动专项验收](KIND_OOM_RUNTIME_NOTE.md)，不把退出码当成新的 OOM 通过记录。
+
 [PostgreSQL 14 已结束上游支持](https://www.postgresql.org/about/news/postgresql-187-1712-1616-1520-1425-and-19-rc-2-released-3442/)；DbSphere 仍回归其监控兼容性，并在资产界面提示升级风险。
 
 ## 部署与依赖
