@@ -391,7 +391,8 @@
       data.get(start + index * bucketMs) || null);
     const bytes = value => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GiB` :
       value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MiB` :
-        value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value.toFixed(0)} B`;
+        value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` :
+          `${value.toFixed(value > 0 && value < 1 ? 2 : 0)} B`;
     const count = value => Number(value).toFixed(1);
     const specs = [
       { key: 'averageConnectionUsagePercent', title: '连接占用率', format: value => `${value.toFixed(1)}%`, color: '#3979ad' },
@@ -412,14 +413,15 @@
       if (!values.some(value => value != null && Number.isFinite(value))) {
         missing.push(spec.title); continue;
       }
-      const topValue = Math.max(1, ...values.filter(value => value != null && Number.isFinite(value)));
+      const observedMax = Math.max(...values.filter(value => value != null && Number.isFinite(value)));
+      const scaleMax = observedMax > 0 ? observedMax : 1;
       const card = make('article', 'obs-chart'); card.append(make('h4', '', spec.title));
       const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width, height,
         role: 'img', 'aria-label': `${spec.title}，${hours} 小时` });
       for (const y of [24, 66, 108, 150]) canvas.append(svg('line', {
         x1: left, x2: width - right, y1: y, y2: y, stroke: '#e4ebf4' }));
       const topLabel = svg('text', { x: left, y: 16, class: 'obs-axis-label' });
-      topLabel.textContent = spec.format(topValue); canvas.append(topLabel);
+      topLabel.textContent = spec.format(observedMax); canvas.append(topLabel);
       const zero = svg('text', { x: left - 5, y: 154, 'text-anchor': 'end', class: 'obs-axis-label' });
       zero.textContent = '0'; canvas.append(zero);
       const selected = make('p', 'obs-metric-selected');
@@ -427,7 +429,7 @@
       values.forEach((value, index) => {
         if (value == null || !Number.isFinite(value)) { previous = null; return; }
         const x = left + index * plotWidth / values.length + plotWidth / values.length / 2;
-        const y = 150 - Math.max(0, value) / topValue * 122;
+        const y = 150 - Math.max(0, value) / scaleMax * 122;
         if (previous && previous.index === index - 1) canvas.append(svg('line', {
           x1: previous.x, y1: previous.y, x2: x, y2: y,
           stroke: spec.color, 'stroke-width': 2.5 }));
