@@ -115,11 +115,21 @@ let result;
 try {
   kube(['scale', 'deployment/pg18', '--replicas=0']);
   await waitPodsGone();
-  resources('8Mi', '16Mi');
+  resources('4Mi', '8Mi');
   kube(['scale', 'deployment/pg18', '--replicas=1']);
-  const failedPod = await until('real OOMKilled PostgreSQL container', 120, 1000, () =>
-    pods('pg18').find(pod => pod.status?.containerStatuses?.some(status =>
-      status.lastState?.terminated?.reason === 'OOMKilled')));
+  let failedPod;
+  try {
+    failedPod = await until('real OOMKilled PostgreSQL container', 120, 1000, () =>
+      pods('pg18').find(pod => pod.status?.containerStatuses?.some(status =>
+        status.lastState?.terminated?.reason === 'OOMKilled')));
+  } catch (error) {
+    console.error(JSON.stringify(pods('pg18').map(pod => ({ name: pod.metadata.name,
+      phase: pod.status?.phase, statuses: pod.status?.containerStatuses?.map(status => ({
+        waiting: status.state?.waiting?.reason, terminated: status.state?.terminated?.reason,
+        lastTerminated: status.lastState?.terminated?.reason, restarts: status.restartCount
+      })) }))));
+    throw error;
+  }
   assert.notEqual(failedPod.metadata.uid, targetPod.metadata.uid);
   const failedRequest = await until('application connection failure', 20, 1000, async () => {
     const request = await checkout(app);
