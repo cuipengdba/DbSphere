@@ -250,7 +250,7 @@ func TestCollectorScheduleContract(t *testing.T) {
 
 func TestEmbeddedFrontendAndReadiness(t *testing.T) {
 	handler := New(healthStub{})
-	for _, path := range []string{"/", "/app.js", "/styles.css", "/freshness.css", "/favicon.svg"} {
+	for _, path := range []string{"/", "/app.js", "/observability.js", "/styles.css", "/freshness.css", "/favicon.svg"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK || response.Body.Len() == 0 {

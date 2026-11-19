@@ -101,3 +101,44 @@ body[data-role=viewer] section.panel:has(> #asset-form),body[data-role=viewer] s
 body[data-role=approver] #workspace form,body[data-role=approver] #workspace .write-action{display:none!important}
 body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approver] section.panel:has(> #silence-form){display:none}body[data-role=approver] div.grid[data-view=assets],body[data-role=approver] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}
 .work-order-card small{display:block;overflow-wrap:anywhere;margin-top:5px}.work-order-card button{margin:9px 8px 0 0}
+
+/* Observability views use only the incident and series data returned by the Go API. */
+.incident-grid{grid-template-columns:minmax(240px,.58fr) minmax(0,1.42fr)}
+.obs-panel{margin:18px 0;padding:16px;border:1px solid #d9e3f1;border-radius:13px;background:#fff;min-width:0;box-shadow:0 3px 14px #244d7908}
+.obs-panel-head,.obs-trend-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.obs-panel-head h4,.obs-trend-head h3,.obs-chart h4{margin:0;color:#264775}
+.obs-panel-head small,.obs-caption{font-size:12px;color:#62758d;line-height:1.5}
+.obs-controls{display:flex;gap:8px;margin:13px 0 8px;flex-wrap:wrap}
+.obs-controls select,.obs-controls input{min-width:0;border:1px solid #c8d6e9;border-radius:8px;padding:7px 9px;background:#fff;color:#203e65}
+.obs-controls input{flex:1 1 210px}
+.obs-legend{margin:6px 0 11px;color:#526d8f;font-size:12px}
+.obs-graph-viewport,.obs-timeline-viewport,.obs-trend-viewport{max-width:100%;overflow:auto;border:1px solid #e0e8f3;border-radius:9px;background:#f9fbff}
+.obs-graph-viewport{max-height:550px}
+.obs-graph-viewport svg,.obs-timeline-viewport svg,.obs-trend-viewport svg{display:block}
+.obs-graph-viewport:focus-visible{outline:3px solid #82c4d4;outline-offset:2px}
+.obs-lane-title{fill:#48658b;font-size:13px;font-weight:700}
+.obs-node-label{fill:#233f63;font-size:11px;font-weight:650}
+.obs-node-kind{fill:#6b7f9a;font-size:10px}
+.obs-graph-node{cursor:pointer}
+.obs-graph-node:focus-visible{outline:none}
+.obs-graph-node:focus-visible rect{stroke:#0a527f;stroke-width:3}
+.obs-muted{opacity:.35}
+.obs-node-detail{display:grid;gap:5px;min-height:47px;margin-top:10px;padding:10px 12px;border-radius:8px;background:#eef4fb;color:#2b496c;font-size:12px;overflow-wrap:anywhere}
+.obs-node-detail small{color:#607794}
+.obs-node-detail a{justify-self:start;color:#235a9c}
+.obs-related{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+.obs-related button{white-space:normal;text-align:left}
+.obs-timeline-viewport g[role="button"]{cursor:pointer}
+.obs-timeline-viewport g[role="button"]:focus-visible circle{stroke:#0a527f;stroke-width:3}
+.obs-time-label,.obs-axis-label{fill:#61758e;font-size:10px}
+.obs-periods{display:flex;gap:6px;flex-wrap:wrap}
+.obs-periods button[aria-pressed="true"]{background:#245d9e;color:#fff}
+.obs-trend-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+.obs-chart{min-width:0;padding:12px;border:1px solid #dce5f1;border-radius:10px;background:#fff}
+.obs-chart h4{font-size:13px;margin:0 0 8px}
+.obs-trend-charts>.obs-caption{grid-column:1/-1;margin:0}
+.obs-trend-charts>.obs-latest{grid-column:1/-1;margin:0;color:#284a78;font-size:12px;font-weight:650}
+.obs-coverage-details{margin:10px 0}
+.obs-coverage-details summary{cursor:pointer;color:#345d88;font-weight:600}
+@media(max-width:1080px){.incident-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:680px){.obs-trend-charts{grid-template-columns:1fr}.obs-panel{padding:10px}.obs-controls select,.obs-controls input{width:100%}}

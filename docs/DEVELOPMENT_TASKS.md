@@ -94,6 +94,8 @@ V0.7.0 正式版交付可选 OTLP/HTTP JSON 接入、PG18 Trace 存储、同一�
 - [ ] **07-05** 影响面计算与依赖拓扑，按资产权限控制可见服务和 Trace。Go 同事件证据图从已观测跨服务父子 Span 建立去重的服务调用关系，父链缺口不推断依赖；服务影响面仍是已观测 Trace 的有限计数。完整采样覆盖率、复杂拓扑和生产权限矩阵仍待验收。
 - [ ] **07-06** 验收场景 A：应用慢请求 → DB Span → SQL 锁等待 → 阻塞会话 → 根因候选；场景 B：应用连接失败 → PG Pod OOMKilled/重启 → K8S 事件和资源证据 → 根因候选。每个场景都必须在**一个事件 ID** 下完成回溯。场景 A 的真实 Go HTTP 应用→Go OTLP→PG18 事件与同 ID 恢复已通过[PG14–18 五版 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44255593304)；场景 B 已在[本机单节点 kind](KIND_ACCEPTANCE.md)完成真实应用 OOM 故障闭环。官方 Go SDK 的真实 HTTP→PG14 锁等待→阻塞会话→同事件根因候选→恢复已在本机独立 PG18 存储通过，见[SDK/Collector 锁故障验收](SDK_COLLECTOR_LOCK_ACCEPTANCE.md)。[PG14–18 五版及 PG18 官方 Collector 的同故障 CI 验收](https://github.com/cuipengdba/DbSphere/actions/runs/44529047475)已全部通过；V1.0.10 又在[四节点 kind CI](KIND_APP_OOM_ACCEPTANCE.md)以真实 Go HTTP 应用、PG18 Pod OOM、错误 Trace、同事件根因候选和恢复复核场景 B；V1.0.11 已在[四节点 kind CI](SDK_KIND_OOM_ACCEPTANCE.md)将官方 Go SDK、独立 Collector、PG18 Pod 真实 OOMKilled、两条应用错误 Trace、Pod UID 核对及恢复归入同一个事件 ID；生产 K8S/Operator、其他目标 PG 版本和其他语言 SDK 仍待复核。
 
+V1.0.12 起的图形可观测性范围、已实现视图与 **OBS-01 至 OBS-06** 的后续开发/验收任务集中在[可观测性视图与后续任务](OBSERVABILITY_GRAPH.md)。图形展示仍以同一事件 ID 的可核验证据为准。
+
 ## V0.8：可选 AI 分析与预警
 
 - [x] **08-01** 可配置本地模型与兼容 API，模型未配置、失败、超时或预算耗尽时不影响核心功能。管理员显式调用或开启严重告警自动摘要；禁用模型时规则主干保持可用。

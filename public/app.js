@@ -362,11 +362,28 @@ async function showAsset(id) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   renderSignalCoverage(detail, asset, currentSample, performance);
   if (pg18Store) {
-    const to = new Date(); const from = new Date(to.getTime() - 24 * 3600 * 1000);
-    const { series } = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=1`);
-    detail.append(cell('h3', '近 24 小时采样趋势'));
-    if (!series.length) detail.append(cell('p', '暂无趋势数据。', 'empty'));
-    for (const point of series) detail.append(cell('p', `${formatTime(point.bucket)} · ${point.samples} 次采样 · ${point.errors} 次失败 · 平均连接 ${point.averageConnections ?? '未采集'}`, 'evidence'));
+    const trendHead = document.createElement('div'); trendHead.className = 'obs-trend-head';
+    trendHead.append(cell('h3', '采样与连接趋势'));
+    const periods = document.createElement('div'); periods.className = 'obs-periods';
+    const trend = document.createElement('div');
+    const loadTrend = async (hours, bucketHours) => {
+      for (const button of periods.children) button.setAttribute('aria-pressed', String(Number(button.dataset.hours) === hours));
+      trend.replaceChildren(cell('p', '正在读取趋势…', 'empty'));
+      const to = new Date(); const from = new Date(to.getTime() - hours * 3600 * 1000);
+      try {
+        const result = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=${bucketHours}`);
+        if (selectedAsset === id) trend.replaceChildren(window.DbSphereObservability.sampleTrend(result.series, hours, bucketHours));
+      } catch (error) {
+        if (selectedAsset === id) trend.replaceChildren(cell('p', `趋势读取失败：${error.message}`, 'warning'));
+      }
+    };
+    for (const [label, hours, bucketHours] of [['24 小时', 24, 1], ['7 天', 168, 6]]) {
+      const button = cell('button', label, 'ghost small-button'); button.type = 'button';
+      button.dataset.hours = String(hours); button.setAttribute('aria-pressed', String(hours === 24));
+      button.addEventListener('click', () => void loadTrend(hours, bucketHours)); periods.append(button);
+    }
+    trendHead.append(periods); detail.append(trendHead, trend);
+    await loadTrend(24, 1);
   }
   if (currentSample?.status === 'ok' && currentSample.metrics) {
     const metrics = currentSample.metrics;
@@ -1056,6 +1073,8 @@ async function showEvent(id) {
     if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，计数可能不完整。'));
     diagnosis.append(impact);
   }
+  diagnosis.append(window.DbSphereObservability.eventGraph(analysis.graph, event));
+  diagnosis.append(window.DbSphereObservability.incidentTimeline(event));
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
   const hasTrace = (analysis.traceCoverage?.spans ?? 0) > 0;
   const chain = document.createElement('div'); chain.className = 'flow-strip';
@@ -1079,7 +1098,9 @@ async function showEvent(id) {
     step.append(cell('strong', title), cell('span', present ? available : missing));
     chain.append(step);
   }
-  diagnosis.append(chain);
+  const coverageDetails = document.createElement('details'); coverageDetails.className = 'obs-coverage-details';
+  coverageDetails.append(cell('summary', '查看分层信号覆盖与缺口'), chain);
+  diagnosis.append(coverageDetails);
   const graphDetails = document.createElement('details');
   graphDetails.append(cell('summary', '查看证据关系'));
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
