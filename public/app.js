@@ -372,7 +372,9 @@ async function showAsset(id) {
       const to = new Date(); const from = new Date(to.getTime() - hours * 3600 * 1000);
       try {
         const result = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=${bucketHours}`);
-        if (selectedAsset === id) trend.replaceChildren(window.DbSphereObservability.sampleTrend(result.series, hours, bucketHours));
+        if (selectedAsset === id) trend.replaceChildren(
+          window.DbSphereObservability.sampleTrend(result.series, hours, bucketHours),
+          window.DbSphereObservability.metricTrend(result.series, hours, bucketHours));
       } catch (error) {
         if (selectedAsset === id) trend.replaceChildren(cell('p', `趋势读取失败：${error.message}`, 'warning'));
       }

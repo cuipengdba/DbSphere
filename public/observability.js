@@ -375,5 +375,89 @@
     return section;
   }
 
-  window.DbSphereObservability = { eventGraph, incidentTimeline, sampleTrend };
+  function metricTrend(series, hours, bucketHours) {
+    const section = make('section', 'obs-metric-panel');
+    section.append(make('h3', '', 'PostgreSQL 核心指标'));
+    const points = Array.isArray(series) ? series.filter(point => Number.isFinite(Date.parse(point.bucket))) : [];
+    if (!points.length) {
+      section.append(make('p', 'empty', '所选时间范围内没有成功采样；指标趋势不可用。'));
+      return section;
+    }
+    const bucketMs = bucketHours * 3600000;
+    const end = Math.floor(Date.now() / bucketMs) * bucketMs;
+    const start = end - (Math.ceil(hours / bucketHours) - 1) * bucketMs;
+    const data = new Map(points.map(point => [Math.floor(Date.parse(point.bucket) / bucketMs) * bucketMs, point]));
+    const slots = Array.from({ length: Math.ceil(hours / bucketHours) }, (_, index) =>
+      data.get(start + index * bucketMs) || null);
+    const bytes = value => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GiB` :
+      value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MiB` :
+        value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value.toFixed(0)} B`;
+    const count = value => Number(value).toFixed(1);
+    const specs = [
+      { key: 'averageConnectionUsagePercent', title: '连接占用率', format: value => `${value.toFixed(1)}%`, color: '#3979ad' },
+      { key: 'transactionsPerSecond', title: '事务吞吐', format: value => `${value.toFixed(2)} 次/秒`, color: '#6475bb' },
+      { key: 'averageBlockedSessions', title: '阻塞会话', format: value => `${count(value)} 个`, color: '#c06f4d' },
+      { key: 'averageLongTransactions', title: '长事务', format: value => `${count(value)} 个`, color: '#a166a6' },
+      { key: 'walBytesPerSecond', title: 'WAL 产生速率', format: value => `${bytes(value)}/s`, color: '#438a86' },
+      { key: 'averageDatabaseBytes', title: '数据库容量', format: bytes, color: '#6181a6' },
+      { key: 'averageReplicationLagBytes', title: '复制回放差距', format: bytes, color: '#ad7855' }
+    ];
+    const grid = make('div', 'obs-metric-grid');
+    const missing = [];
+    const width = window.matchMedia('(max-width:680px)').matches ? 280 : 400;
+    const height = 178; const left = 38; const right = 12;
+    const plotWidth = width - left - right;
+    for (const spec of specs) {
+      const values = slots.map(point => point?.[spec.key] == null ? null : Number(point[spec.key]));
+      if (!values.some(value => value != null && Number.isFinite(value))) {
+        missing.push(spec.title); continue;
+      }
+      const topValue = Math.max(1, ...values.filter(value => value != null && Number.isFinite(value)));
+      const card = make('article', 'obs-chart'); card.append(make('h4', '', spec.title));
+      const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width, height,
+        role: 'img', 'aria-label': `${spec.title}，${hours} 小时` });
+      for (const y of [24, 66, 108, 150]) canvas.append(svg('line', {
+        x1: left, x2: width - right, y1: y, y2: y, stroke: '#e4ebf4' }));
+      const topLabel = svg('text', { x: left, y: 16, class: 'obs-axis-label' });
+      topLabel.textContent = spec.format(topValue); canvas.append(topLabel);
+      const zero = svg('text', { x: left - 5, y: 154, 'text-anchor': 'end', class: 'obs-axis-label' });
+      zero.textContent = '0'; canvas.append(zero);
+      const selected = make('p', 'obs-metric-selected');
+      let previous = null;
+      values.forEach((value, index) => {
+        if (value == null || !Number.isFinite(value)) { previous = null; return; }
+        const x = left + index * plotWidth / values.length + plotWidth / values.length / 2;
+        const y = 150 - Math.max(0, value) / topValue * 122;
+        if (previous && previous.index === index - 1) canvas.append(svg('line', {
+          x1: previous.x, y1: previous.y, x2: x, y2: y,
+          stroke: spec.color, 'stroke-width': 2.5 }));
+        const stamp = new Date(start + index * bucketMs);
+        const label = `${time(stamp)} · ${spec.format(value)}`;
+        const group = svg('g', { role: 'button', tabindex: 0, 'aria-label': label });
+        const dot = svg('circle', { cx: x, cy: y, r: 4.2, fill: spec.color });
+        dot.append(titleNode(label)); group.append(dot);
+        const show = () => { selected.textContent = label; };
+        group.addEventListener('click', show);
+        group.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); }
+        });
+        canvas.append(group);
+        selected.textContent = label;
+        previous = { index, x, y };
+      });
+      const firstAt = svg('text', { x: left, y: 173, class: 'obs-axis-label' });
+      firstAt.textContent = time(new Date(start)); canvas.append(firstAt);
+      const lastAt = svg('text', { x: width - right, y: 173, 'text-anchor': 'end', class: 'obs-axis-label' });
+      lastAt.textContent = time(new Date(end)); canvas.append(lastAt);
+      const viewport = make('div', 'obs-trend-viewport'); viewport.append(canvas);
+      card.append(viewport, selected); grid.append(card);
+    }
+    section.append(grid);
+    if (missing.length) section.append(make('p', 'obs-caption', `当前范围未采集：${missing.join('、')}。`));
+    section.append(make('p', 'obs-caption',
+      '点选数据点查看时间与数值。事务和 WAL 速率只用相邻有效样本计算；计数器重置、采集失败及超过 10 分钟的间隔不补值。'));
+    return section;
+  }
+
+  window.DbSphereObservability = { eventGraph, incidentTimeline, sampleTrend, metricTrend };
 })();

@@ -92,14 +92,57 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 				return nil, ErrInvalidRange
 			}
 		}
-		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
+		values, err := s.queryJSON(ctx, `WITH observed AS (
+			SELECT id,collected_at,status,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'connections')='number'
+					THEN (metrics_json->>'connections')::numeric END AS connections,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'max_connections')='number'
+					THEN (metrics_json->>'max_connections')::numeric END AS max_connections,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'database_bytes')='number'
+					THEN (metrics_json->>'database_bytes')::numeric END AS database_bytes,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'replication_lag_bytes')='number'
+					THEN (metrics_json->>'replication_lag_bytes')::numeric END AS replication_lag_bytes,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json#>'{diagnostics,locks,data,blockedSessions}')='number'
+					THEN (metrics_json#>>'{diagnostics,locks,data,blockedSessions}')::numeric END AS blocked_sessions,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json#>'{diagnostics,transactions,data,longTransactions}')='number'
+					THEN (metrics_json#>>'{diagnostics,transactions,data,longTransactions}')::numeric END AS long_transactions,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_commit')='number'
+					THEN (metrics_json->>'xact_commit')::numeric END AS commits,
+				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_rollback')='number'
+					THEN (metrics_json->>'xact_rollback')::numeric END AS rollbacks,
+				CASE WHEN status='ok' AND (metrics_json#>>'{diagnostics,wal,data,bytes}') ~ '^[0-9]+([.][0-9]+)?$'
+					THEN (metrics_json#>>'{diagnostics,wal,data,bytes}')::numeric END AS wal_bytes
+			FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+		), compared AS (
+			SELECT *,lag(collected_at) OVER observed_order AS prior_at,
+				lag(commits) OVER observed_order AS prior_commits,
+				lag(rollbacks) OVER observed_order AS prior_rollbacks,
+				lag(wal_bytes) OVER observed_order AS prior_wal_bytes
+			FROM observed WINDOW observed_order AS (ORDER BY collected_at,id)
+		), rated AS (
+			SELECT *,CASE WHEN commits>=prior_commits AND rollbacks>=prior_rollbacks
+				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
+				THEN ((commits-prior_commits)+(rollbacks-prior_rollbacks)) /
+					extract(epoch FROM collected_at-prior_at) END AS transactions_per_second,
+				CASE WHEN wal_bytes>=prior_wal_bytes
+				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
+				THEN (wal_bytes-prior_wal_bytes) /
+					extract(epoch FROM collected_at-prior_at) END AS wal_bytes_per_second
+			FROM compared
+		)
+		SELECT jsonb_build_object(
 			'bucket',date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
-			'averageConnections',round(avg(CASE WHEN jsonb_typeof(metrics_json->'connections')='number'
-				THEN (metrics_json->>'connections')::numeric END),1))
-			FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
-			GROUP BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
-			ORDER BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
+			'averageConnections',round(avg(connections),1),
+			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
+			'averageBlockedSessions',round(avg(blocked_sessions),1),
+			'averageLongTransactions',round(avg(long_transactions),1),
+			'averageDatabaseBytes',round(avg(database_bytes),0),
+			'averageReplicationLagBytes',round(avg(replication_lag_bytes),0),
+			'transactionsPerSecond',round(avg(transactions_per_second),2),
+			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
+		FROM rated GROUP BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
+		ORDER BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
 		return map[string]any{"series": values}, err
 	case "capacity":
 		forecast, err := s.CapacityForecast(ctx, id)

@@ -139,7 +139,13 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .obs-chart h4{font-size:13px;margin:0 0 8px}
 .obs-trend-charts>.obs-caption{grid-column:1/-1;margin:0}
 .obs-trend-charts>.obs-latest{grid-column:1/-1;margin:0;color:#284a78;font-size:12px;font-weight:650}
+.obs-metric-panel{margin:18px 0 8px;padding-top:12px;border-top:1px solid #dce5f1}
+.obs-metric-panel>h3{margin:0 0 12px;color:#264775}
+.obs-metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.obs-metric-selected{min-height:30px;margin:8px 0 0;color:#365c88;font-size:11px;overflow-wrap:anywhere}
+.obs-chart g[role="button"]{cursor:pointer}
+.obs-chart g[role="button"]:focus-visible circle{stroke:#15375c;stroke-width:3}
 .obs-coverage-details{margin:10px 0}
 .obs-coverage-details summary{cursor:pointer;color:#345d88;font-weight:600}
 @media(max-width:1080px){.incident-grid{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:680px){.obs-trend-charts{grid-template-columns:1fr}.obs-panel{padding:10px}.obs-controls select,.obs-controls input{width:100%}}
+@media(max-width:680px){.obs-trend-charts,.obs-metric-grid{grid-template-columns:1fr}.obs-panel{padding:10px}.obs-controls select,.obs-controls input{width:100%}}
