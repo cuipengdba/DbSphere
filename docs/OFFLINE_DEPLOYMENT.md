@@ -16,7 +16,7 @@ bash DbSphere-go-offline-1.0.0-linux-amd64.run
 
 源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
 
-Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，将生成的 `DbSphere-go-offline-*.run` 和同名 `.run.sha256` 放在同一目录，再运行 `.run`；缺少校验文件或内容不匹配时会在解包前失败。包内含静态 Go 应用镜像、固定摘要的 PG18 镜像、Compose 文件和 SHA-256 清单，安装时先核对清单，再加载包内的两张预期镜像；不同 Docker 引擎可能规范化镜像 ID。Compose 以 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。[31 作业 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44390513840)已验证删除本机镜像后的离线安装、重复运行、管理员密码轮换和 PG18 备份恢复；本机 kind 也验证了 Go B/S 服务及 PG18 存储。外层 SHA-256 用于发现传输损坏，不能证明发布者身份；发行签名仍属于 V1.0 待验收门槛。
+Go 一键离线包由联网 Linux x86_64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作。目标 Linux x86_64 主机预装 Docker Engine/Compose v2 后，将生成的 `DbSphere-go-offline-*.run` 和同名 `.run.sha256` 放在同一目录，再运行 `.run`；缺少校验文件或内容不匹配时会在解包前失败。包内含静态 Go 应用镜像、固定摘要的 PG18 镜像、Compose 文件和 SHA-256 清单，安装时先核对清单，再加载包内的两张预期镜像；不同 Docker 引擎可能规范化镜像 ID。Compose 以 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。最终 Linux CI 验证删除本机镜像后的离线安装、重复运行、管理员密码轮换、PG18 备份恢复及无外网守护进程升级/回退；本机 kind 也验证了 Go B/S 服务及 PG18 存储。外层 SHA-256 用于发现传输损坏，不能证明发布者身份；发行签名尚未交付，见[安全审查](V1_SECURITY_REVIEW.md)。
 
 新增的 [Linux 无网络安装验收作业](https://github.com/cuipengdba/DbSphere/actions/runs/44426339798/job/135232046226)先在联网阶段构建测试容器，再移除本地 Go/PG18 镜像标签，把原始 `.run` 放进 `--network none` 的容器执行。测试容器仅通过本机 Docker socket 操作预装的 Docker Engine；安装器从包内加载镜像，Compose 使用 `--pull never`，端口 18081 的 `/readyz` 报告 `postgresql18`。这证明安装器进程不需要外网，且在该 Linux CI 环境可完成一键部署；Docker 守护进程所在主机仍有网络，不能将其等同于一台物理断网目标机的完整安装/升级/回滚验收。
 
@@ -46,7 +46,7 @@ Go 告警通知也是可选配置。在同一配置文件设置 `DBSPHERE_WEBHOO
 
 ## 历史 Node.js 开发预览包
 
-早期 [V0.6 Node.js 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)提供了两种 Linux x86_64 安装包及各自的 SHA-256 文件。新部署请使用上面的 Go V0.9.0 正式版产物。
+早期 [V0.6 Node.js 开发预览](https://github.com/cuipengdba/DbSphere/releases/tag/v0.6.0-dev)提供了两种 Linux x86_64 安装包及各自的 SHA-256 文件。新部署请使用上面的 Go V1.0.0 正式版产物。
 
 从 V0.6 起，DbSphere 提供可在**目标服务器断网**时运行的 `.run` 安装包。包内含预构建的 DbSphere 应用镜像、PostgreSQL 18 镜像、Compose 配置和校验清单。目标机无需安装 Node.js、pnpm 或下载依赖；需事先具备 **Linux x86_64、Docker Engine 和 Docker Compose v2**。应用仍采用 B/S 架构，监控数据仍写入独立 PG18。监控目标是否可达由部署网络决定；“离线部署”只保证安装阶段不连接软件仓库或镜像仓库。
 
@@ -76,7 +76,7 @@ bash DbSphere-offline-<版本>-linux-amd64.run
 
 ## 升级、回滚与边界
 
-后续版本的 `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。[Linux CI 演练](https://github.com/cuipengdba/DbSphere/actions/runs/44058038127)已使用真实 V0.5 应用镜像构造旧离线包，建资产后升级到 V0.6 开发版、再回到 V0.5 应用，三阶段均在同一 PG18 存储读到该资产。这只验证了目前两版的应用切换和该数据路径。升级前仍应使用[PG18 存储备份与恢复演练](INSPECTIONS_V0.4.md)备份数据并保存当前安装包；未来 schema 变更的回滚需单独验证兼容或先恢复备份。V1.0 将正式验收断网升级与回滚。
+历史 Node `.run` 复用同一配置目录和 `dbsphere` Compose 卷，应用镜像随版本切换。[Linux CI 演练](https://github.com/cuipengdba/DbSphere/actions/runs/44058038127)曾使用真实 V0.5 应用镜像构造旧离线包，建资产后升级到 V0.6 开发版、再回到 V0.5 应用，三阶段均在同一 PG18 存储读到该资产。新部署和升级应使用上文的 Go V1.0.0 包；升级前备份 PG18 并保存当前安装包，涉及未来 schema 变更时需另验回滚兼容或先恢复备份。
 
 ## 可选的 Node.js 轻量离线包
 

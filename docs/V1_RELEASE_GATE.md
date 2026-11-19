@@ -20,7 +20,7 @@
 | 一键断网交付 | Docker 27 无外网嵌套守护进程的安装、重复安装与健康检查 | V0.9.0 → V1.0.0 → V0.9.0 三阶段在无外网守护进程里保持同一 PG18 数据记录；校验六个发行附件 |
 | 安全与许可证 | [Go 依赖审计](GO_DEPENDENCY_AUDIT.md)、[V1.0 镜像风险记录](V1_SECURITY_REVIEW.md) | 固定镜像摘要，SBOM/扫描留档；Go 无 Critical/High，PG18 未知 Critical 阻断 |
 
-最终 CI 运行、附件 SHA-256 和发布链接在完成后补录。未补录前本文件只是待验收清单，不代表 V1.0 已发布。
+最终 CI 运行号、六个附件及 SHA-256 以[正式发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.0)为准；发布前须在同一最终提交的 CI 中逐项验证本表。
 
 ## 已知限制与后续
 

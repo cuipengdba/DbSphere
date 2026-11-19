@@ -117,6 +117,8 @@ V0.7.0 正式版交付可选 OTLP/HTTP JSON 接入、PG18 Trace 存储、同一�
 
 ## V1.0：正式版发布门槛
 
+V1.0.0 的实际交付与验收按[正式版发布验收](V1_RELEASE_GATE.md)和[实测支持矩阵](SUPPORT_MATRIX.md)声明。以下原计划任务中超出已测范围的部分继续保持 `[ ]`，不以版本号代替交付证据。
+
 - [ ] **10-01** PG14–18 × Linux 裸机/虚机/K8S × 单机/主从/Patroni/至少一种云 PG 的支持矩阵和回归结果。
 
   当前实测组合和空白项汇总在[开发版支持矩阵](SUPPORT_MATRIX.md)；此表不代表正式支持声明。
@@ -143,7 +145,7 @@ V0.7.0 正式版交付可选 OTLP/HTTP JSON 接入、PG18 Trace 存储、同一�
   Go/PG18 存储现于启动时预建当月与未来两个月的采样/事件分区，并在运行期间每小时维护；真实 PG18 测试验证推进三个月后的重复建分区与实际写入。Go 版新增默认关闭的样本/已结事件保留期，每小时限时追赶，保护事件证据、巡检样本及关联事件、未结事件和待投递/失败通知。schema 21 将证据样本引用回填并建索引，新增/修改由 PG18 触发器维护；真实 PG18 集成测试通过。过期且为空的旧月分区可限量删除，非空分区及未配置对应保留期的分区受保护。本机 kind 在 PG18 Service 无端点时启动新 Go Pod，确认启动失败、恢复端点后就绪且原事件证据仍可读取。独立 Linux CI 的外部 PG18 模式已通过离线安装、运行中存储停机/恢复及三阶段升级回滚的同 ID 数据核对。[本机 kind PVC 恢复演练](KIND_PG18_RESTORE_ACCEPTANCE.md)将当前 PG18 小库的 `pg_dump -Fc` 恢复到独立 PVC，原事件和证据计数一致；新存储 Pod 两次替换后，Go 仍可读取同一事件并采新样本。[容量初测](RETENTION_CAPACITY.md)在本机与 Linux PG18.7 作业清理 120000 条样本及 5000 个事件，但缺少真实负载。生产保留期及分区锁性能、异机备份恢复、并发写入和存储故障演练仍未完成，见[存储记录](STORAGE_V0.3.md)和[本机 kind 记录](KIND_ACCEPTANCE.md)，故保持未勾选。
 - [ ] **10-09** 将一键离线部署列为正式版门槛：Linux x86_64 断网安装/升级/回滚、校验和、镜像及 PG18 数据迁移和 B/S 健康检查通过；Linux arm64 如未验证需在支持矩阵中明确限制。公布容器运行时或 Node.js/外部 PG18 的准确依赖边界。
 
-  [Linux CI 无网络安装作业](https://github.com/cuipengdba/DbSphere/actions/runs/44426339798/job/135232046226)已让原始 Go `.run` 在 `--network none` 的容器里通过校验、加载镜像、以 `--pull never` 启动应用和 PG18，并确认 B/S 健康；同作业还通过重复安装、管理员轮换及备份恢复。[后续 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44428279629/job/135238716225)验证外层 `.run.sha256` 缺失或错误均在解包前拒绝，正常离线安装及备份恢复仍通过。测试容器可访问主机 Docker socket，主机未物理断网；真正断网主机的升级/回滚、数据迁移、发行签名与 arm64 限制说明仍未全部验收，故保持未勾选。
+  [Linux CI 无网络安装作业](https://github.com/cuipengdba/DbSphere/actions/runs/44426339798/job/135232046226)已让原始 Go `.run` 在 `--network none` 的容器里通过校验、加载镜像、以 `--pull never` 启动应用和 PG18，并确认 B/S 健康；同作业还通过重复安装、管理员轮换及备份恢复。[后续 CI](https://github.com/cuipengdba/DbSphere/actions/runs/44428279629/job/135238716225)验证外层 `.run.sha256` 缺失或错误均在解包前拒绝。V1.0 增加无外网 Docker 27 守护进程内的正式 V0.9.0 → V1.0.0 → V0.9.0 三阶段安装，验证同一 PG18 数据记录和健康接口；具体最终结果见[发布验收](V1_RELEASE_GATE.md)。物理断网服务器、生产数据迁移和发行签名仍需环境验收，故原任务保持未勾选。
 
 ## 发布规则
 

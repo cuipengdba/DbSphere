@@ -101,7 +101,7 @@ flowchart LR
 
 ## 6. V1.0 验收基线
 
-以下是规划目标，具体数值与场景需在开发前校准。
+以下是原规划目标，具体数值与场景需按实际测试校准。V1.0.0 的真实交付范围和未验收组合以[正式版发布验收](V1_RELEASE_GATE.md)及[支持矩阵](SUPPORT_MATRIX.md)为准；原规划中未完成的云厂商、生产集群和安全审查事项继续保留在[开发任务清单](DEVELOPMENT_TASKS.md)。
 
 - **覆盖**：PostgreSQL 14–18 的 Linux 自建单机、主从/Patroni、Kubernetes PostgreSQL 场景，以及至少一种云 PG 连接串模式；每种模式公布指标能力矩阵，并标记 PG14 上游 EOL。
 - **架构**：Linux 或 Linux 容器部署服务端，浏览器完成主要操作；K8S 环境可只读纳管，数据库运行在 K8S 不要求 DbSphere 本身也运行在 K8S。

@@ -387,8 +387,8 @@ jobs:
             'https://github.com/cuipengdba/DbSphere/releases/download/v0.9.0/DbSphere-go-offline-0.9.0-linux-amd64.run'
           printf '%s  %s\n' \
             2a2c8563ec33e56aa3e012e08889d67609d3c728e067f1639b5664cb2f1ae2be \
-            "$previous" > "$previous.sha256"
-          sha256sum --check --strict "$previous.sha256"
+            "$(basename "$previous")" > "$previous.sha256"
+          (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"
       - name: Preserve tested Go offline and native packages
         if: success()

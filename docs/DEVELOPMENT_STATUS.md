@@ -2,6 +2,8 @@
 
 > 更新于 2026-11-19。此文只记录已实际实现或测试的内容；版本发布以 GitHub Release 为准。
 
+[V1.0.0 PostgreSQL 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.0)完成 PG14–18 已测 Linux/K8S 组合、Go B/S 静态服务端、独立 PG18 长期存储、一个事件 ID 的跨层证据与根因候选、可选 AI/无模型运行，以及 Linux x86_64 一键离线容器交付。最终 CI 在无外网 Docker 27 守护进程内对正式 V0.9.0 → V1.0.0 → V0.9.0 做同一 PG18 数据记录升级与回退验收。实际支持边界、镜像风险及未完成任务见[发布验收](V1_RELEASE_GATE.md)、[支持矩阵](SUPPORT_MATRIX.md)和[安全审查](V1_SECURITY_REVIEW.md)。
+
 [V0.9.0 Go 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.9.0)增加独立审批账号与事件工单：管理员申请、审批账号决定、管理员一次性执行只读采样，PG18 保存同事件证据与按账号角色区分的 API 操作审计。实库 HTTP 测试覆盖自批、过期、重复执行和权限拒绝；隔离 PG18 浏览器演练走通双账号流程，390px 无横向溢出、控制台无错误，并修复退出后密码和旧角色 DOM 残留。个人账号、组织权限、变更单和审计防篡改尚未完成，见[发布验收](V0.9_RELEASE_GATE.md)。
 
 [V0.8.0 Go 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v0.8.0)加入管理员在同一事件的脱敏证据问答；问题长度受限，答案必须引用本次证据包实际可见的 ID，问题和手动答案不入库。摘要、提问及严重告警自动建议共享 PG18 每日预算和同事件审计。模型关闭或失败时规则诊断、监控和报告独立运行；提前预测故障的 AI 预警与真实外部模型效果尚未验收，详见[本版发布验收](V0.8_RELEASE_GATE.md)。
