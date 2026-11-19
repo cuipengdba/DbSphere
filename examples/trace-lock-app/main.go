@@ -108,13 +108,17 @@ func runCheckout(ctx context.Context, cfg config, client *http.Client) (string, 
 	pid := 0
 	if err == nil {
 		defer conn.Close(context.Background())
-		err = conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid)
-	}
-	if err == nil {
-		_, err = conn.Exec(ctx, "SELECT pg_advisory_lock($1)", cfg.lockKey)
+		var tx pgx.Tx
+		tx, err = conn.Begin(ctx)
 		if err == nil {
-			_, unlockErr := conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", cfg.lockKey)
-			err = unlockErr
+			defer tx.Rollback(context.Background())
+			err = tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid)
+			if err == nil {
+				_, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", cfg.lockKey)
+			}
+			if err == nil {
+				err = tx.Commit(ctx)
+			}
 		}
 	}
 	dbEnd := time.Now().UTC()

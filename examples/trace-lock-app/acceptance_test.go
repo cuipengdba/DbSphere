@@ -22,6 +22,18 @@ import (
 // This drill starts a real Go HTTP application, a real Go DbSphere OTLP intake,
 // PostgreSQL 14–18 as the target and an isolated PostgreSQL 18 monitoring database.
 func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
+	runApplicationLockTraceUsesOneDbSphereEventID(t, false)
+}
+
+func TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID(t *testing.T) {
+	if os.Getenv("DBSPHERE_TEST_POOLER_URL") == "" {
+		t.Skip("PgBouncer endpoint is required")
+	}
+	runApplicationLockTraceUsesOneDbSphereEventID(t, true)
+}
+
+func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler bool) {
+	t.Helper()
 	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	portText := os.Getenv("DBSPHERE_TEST_PG_TARGET_PORT")
 	password := os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD")
@@ -64,9 +76,13 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 		}
 	}()
 	key := []byte("01234567890123456789012345678901")
-	created, err := pg.CreateAsset(ctx, assets.Input{Name: "Real HTTP lock drill", Host: "127.0.0.1",
+	assetInput := assets.Input{Name: "Real HTTP lock drill", Host: "127.0.0.1",
 		Port: port, Database: "postgres", Username: "postgres", Password: password,
-		SSLMode: "disable", Runtime: "linux"}, key)
+		SSLMode: "disable", Runtime: "linux"}
+	if viaPooler {
+		assetInput.PoolerURL = os.Getenv("DBSPHERE_TEST_POOLER_URL")
+	}
+	created, err := pg.CreateAsset(ctx, assetInput, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +103,17 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 	targetURL := (&url.URL{Scheme: "postgres", Host: "127.0.0.1:" + portText,
 		Path: "/postgres", User: url.UserPassword("postgres", password),
 		RawQuery: "sslmode=disable"}).String()
+	appURL := targetURL
+	poolerSecret := ""
+	if viaPooler {
+		parsedPooler, err := url.Parse(assetInput.PoolerURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolerSecret, _ = parsedPooler.User.Password()
+		parsedPooler.Path = "/postgres"
+		appURL = parsedPooler.String()
+	}
 	blocker, err := pgx.Connect(ctx, targetURL)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +127,7 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 	if _, err := blocker.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
 		t.Fatal(err)
 	}
-	app := httptest.NewServer(newHandler(config{pgURL: targetURL,
+	app := httptest.NewServer(newHandler(config{pgURL: appURL,
 		endpoint: receiver.URL + "/v1/traces", token: token, lockKey: lockKey},
 		&http.Client{Timeout: 5 * time.Second}))
 	defer app.Close()
@@ -111,6 +138,7 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 		err  error
 	}
 	done := make(chan response, 1)
+	traceID := ""
 	go func() {
 		res, err := http.Get(app.URL + "/checkout")
 		if err != nil {
@@ -164,11 +192,13 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 			t.Fatalf("HTTP request failed after lock release: %d %s %v", got.code, got.body, got.err)
 		}
 		var body struct {
-			BackendPID int `json:"backendPid"`
+			BackendPID int    `json:"backendPid"`
+			TraceID    string `json:"traceId"`
 		}
-		if json.Unmarshal(got.body, &body) != nil || body.BackendPID != waitingPID {
+		if json.Unmarshal(got.body, &body) != nil || body.BackendPID != waitingPID || len(body.TraceID) != 32 {
 			t.Fatalf("request PID did not match the locked backend: %s", got.body)
 		}
+		traceID = body.TraceID
 	case <-ctx.Done():
 		t.Fatal("HTTP request did not recover")
 	}
@@ -183,6 +213,33 @@ func TestApplicationLockTraceUsesOneDbSphereEventID(t *testing.T) {
 		if !strings.Contains(string(encoded), marker) {
 			t.Fatalf("real application lock evidence missing %s in one incident: %s", marker, encoded)
 		}
+	}
+	if viaPooler {
+		for _, marker := range []string{`"relation":"via_pooler"`, `"relation":"forwards_to"`,
+			`"type":"pgbouncer"`} {
+			if !strings.Contains(string(encoded), marker) {
+				t.Fatalf("real PgBouncer lock chain is missing %s: %s", marker, encoded)
+			}
+		}
+	}
+	rawTrace, err := pg.RawTrace(ctx, asset.ID, traceID)
+	if err != nil || rawTrace == nil {
+		t.Fatal("the application trace could not be opened from the same asset", err)
+	}
+	rawTraceJSON, _ := json.Marshal(rawTrace)
+	wantRoute := `"route":"direct"`
+	if viaPooler {
+		wantRoute = `"route":"pgbouncer"`
+	}
+	if !strings.Contains(string(rawTraceJSON), wantRoute) ||
+		strings.Contains(string(rawTraceJSON), "pg_advisory") ||
+		strings.Contains(string(rawTraceJSON), password) ||
+		(poolerSecret != "" && strings.Contains(string(rawTraceJSON), poolerSecret)) {
+		t.Fatalf("real application trace has an incorrect route or leaked a secret: %s", rawTraceJSON)
+	}
+	if report, err := pg.EventReport(ctx, eventID, "md"); err != nil ||
+		!strings.Contains(report, "匹配条件：PG 等待 PID") {
+		t.Fatal("incident report lost the exact lock evidence", err)
 	}
 	lastStatus := ""
 	for range 20 {

@@ -1027,6 +1027,10 @@ jobs:
 
   pgbouncer:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 15, 16, 17, 18]
     services:
       store:
         image: postgres:18-bookworm
@@ -1045,33 +1049,35 @@ jobs:
         with:
           node-version: '24'
       - name: Install dependencies
+        if: matrix.pg == 14
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-      - name: Start PostgreSQL 14 and PgBouncer
+      - name: Start PostgreSQL ${{ matrix.pg }} and PgBouncer
         run: |
           docker network create dbsphere-pooltest
-          docker run -d --rm --name dbsphere-pg14-pooltest --network dbsphere-pooltest \
-            -p 15435:5432 -e POSTGRES_PASSWORD=dbsphere-root-test postgres:14-bookworm
+          docker run -d --rm --name dbsphere-pg-pooltest --network dbsphere-pooltest \
+            -p 15435:5432 -e POSTGRES_PASSWORD=dbsphere-root-test postgres:${{ matrix.pg }}-bookworm
           for i in $(seq 1 60); do
-            if docker exec dbsphere-pg14-pooltest pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
+            if docker exec dbsphere-pg-pooltest pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
           done
-          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-pg14-pooltest \
+          docker exec -e PGPASSWORD=dbsphere-root-test dbsphere-pg-pooltest \
             psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE dbsphere_monitor LOGIN PASSWORD 'dbsphere-monitor-test'; GRANT pg_monitor TO dbsphere_monitor;"
           docker run -d --rm --name dbsphere-pooler-pgtest --network dbsphere-pooltest \
             -p 16433:5432 -e DB_USER=dbsphere_monitor -e DB_PASSWORD=dbsphere-monitor-test \
-            -e DB_HOST=dbsphere-pg14-pooltest -e DB_NAME=postgres \
+            -e DB_HOST=dbsphere-pg-pooltest -e DB_NAME=postgres \
             -e STATS_USERS=dbsphere_monitor -e AUTH_TYPE=scram-sha-256 \
             edoburu/pgbouncer:v1.26.1-p0
           for i in $(seq 1 60); do
             if docker exec dbsphere-pooler-pgtest pg_isready -h 127.0.0.1 -U dbsphere_monitor -d pgbouncer >/dev/null 2>&1; then break; fi
             sleep 1
           done
-          docker exec -e PGPASSWORD=dbsphere-monitor-test dbsphere-pg14-pooltest \
+          docker exec -e PGPASSWORD=dbsphere-monitor-test dbsphere-pg-pooltest \
             psql -h dbsphere-pooler-pgtest -U dbsphere_monitor -d postgres -v ON_ERROR_STOP=1 -c 'SELECT 1'
       - name: Check PgBouncer metrics and PG18 persistence
+        if: matrix.pg == 14
         env:
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
           DBSPHERE_TEST_DATA_DIR: ${{ runner.temp }}/dbsphere-pgbouncer-smoke
@@ -1088,3 +1094,10 @@ jobs:
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_POOLER_URL: postgres://dbsphere_monitor:dbsphere-monitor-test@127.0.0.1:16433/pgbouncer
         run: go test ./internal/collector ./internal/store -run 'TestPgBouncer|TestGoPgBouncerCombinedSampleInPG18|TestRealPgBouncerEndpointMapsApplicationTracePG18' -count=1
+      - name: Trace one real HTTP lock incident through PgBouncer
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_PG_TARGET_PORT: '15435'
+          DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
+          DBSPHERE_TEST_POOLER_URL: postgres://dbsphere_monitor:dbsphere-monitor-test@127.0.0.1:16433/pgbouncer
+        run: go test ./examples/trace-lock-app -run '^TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID$' -count=1 -v

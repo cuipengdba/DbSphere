@@ -1,6 +1,6 @@
 # Go 应用锁等待演练
 
-此独立测试服务用于 V0.7/V1.0 的“HTTP 请求 → PostgreSQL 等待会话 → 阻塞会话 → 同一事件 ID”验收。它只有两个入口：`GET /healthz` 和 `GET /checkout`。`/checkout` 在目标 PG14–18 上执行一次 advisory lock 查询，并把真实请求和数据库调用的父子 Span 发送到 DbSphere 的 `/v1/traces`。应用用 Go 标准库直接编码 OTLP/HTTP JSON。本机 kind 已另外通过官方 OpenTelemetry Collector 0.165.0 转发同一应用的真实请求 Span；[官方 Go SDK 探针](../otel-sdk-probe/README.md)也已验证经 Collector 的父子 Span，其他语言 SDK 仍需逐项验证。
+此独立测试服务用于 V0.7/V1.0 的“HTTP 请求 → PostgreSQL 等待会话 → 阻塞会话 → 同一事件 ID”验收。它只有两个入口：`GET /healthz` 和 `GET /checkout`。`/checkout` 在目标 PG14–18 的一个事务中读取真实后端 PID 并执行 `pg_advisory_xact_lock()`，随后把真实请求和数据库调用的父子 Span 发送到 DbSphere 的 `/v1/traces`。同一事务保持 PgBouncer 后端身份，便于精确匹配等待会话。应用用 Go 标准库直接编码 OTLP/HTTP JSON。本机 kind 已另外通过官方 OpenTelemetry Collector 0.165.0 转发同一应用的真实请求 Span；[官方 Go SDK 探针](../otel-sdk-probe/README.md)也已验证经 Collector 的父子 Span，其他语言 SDK 仍需逐项验证。
 
 同一程序也用于受控的 Kubernetes OOM 演练：当 PG Service 因 Pod OOMKilled 而无就绪端点时，`/checkout` 返回 502，并导出 `error` 服务/数据库 Span。`Dockerfile` 从项目根目录构建静态 Linux 容器，例如 `docker build -f examples/trace-lock-app/Dockerfile -t dbsphere/trace-lock-app:local .`。测试详情见[本机 kind 验收记录](../../docs/KIND_ACCEPTANCE.md)。
 
@@ -30,3 +30,5 @@ go run ./examples/trace-lock-app
 `go test ./examples/trace-lock-app` 在设置 `DBSPHERE_TEST_PG_TARGET_PORT`、`DBSPHERE_TEST_PG_TARGET_PASSWORD` 时，启动真实 HTTP 服务和临时 OTLP 接收器，对实际 PG 锁等待、请求完成、父子 Span、等待 PID 与脱敏作集成验证；未配置测试 PG 时跳过。
 
 同时设置 `DBSPHERE_TEST_PG18_URL` 会运行更完整的验收：测试在 PG18 新建并最终删除独立监控库，启动真实 Go DbSphere OTLP 接口，按真实锁告警创建事件，验证同一 ID 下服务→数据库 Span→等待 PID→阻塞 PID 的图与根因候选，解除锁后检查原事件恢复。此测试临时将隔离库中的锁告警持续时间设为 0，不改现有监控库规则。
+
+如额外设置 `DBSPHERE_TEST_POOLER_URL` 为同一 PgBouncer 实例的管理连接串，`TestApplicationLockTraceThroughPgBouncerUsesOneDbSphereEventID` 会把应用连接切换到该池的 `postgres` 数据库，验证服务 Span → 数据库 Span → PgBouncer → PG 等待与阻塞会话 → 根因候选及同一事件恢复。资产直连地址仍指向实际 PostgreSQL；管理端点与业务端点需有相同主机和端口。完整证据见[连接池事件验收](../../docs/TRACE_POOLER_INCIDENT.md)。
