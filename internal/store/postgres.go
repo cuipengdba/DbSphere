@@ -267,6 +267,21 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record asset event pagination migration: %w", err)
 		}
 	}
+	var assetPageMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=24)").Scan(&assetPageMigrated); err != nil {
+		return fmt.Errorf("check asset pagination migration: %w", err)
+	}
+	if !assetPageMigrated {
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS assets_page_order ON assets(created_at DESC,id DESC)"); err != nil {
+			return fmt.Errorf("index asset pagination order: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS assets_runtime_page_order ON assets(runtime,created_at DESC,id DESC)"); err != nil {
+			return fmt.Errorf("index asset pagination runtime: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(24) ON CONFLICT DO NOTHING"); err != nil {
+			return fmt.Errorf("record asset pagination migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

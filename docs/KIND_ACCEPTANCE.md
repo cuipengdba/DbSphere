@@ -133,3 +133,5 @@ Playwright Chromium 在恢复库 B/S 页面按 `Kind OOM PG18` 搜到 4 条；�
 同版静态页面在 Playwright Chromium 390px 视口实测：总览待处理数为 0，输入旧 OOM 事件完整 ID 后返回 1 条历史事件，打开详情显示 5 段全链路；页面无横向溢出，控制台 0 错误。后端再次读到该事件 `resolved`、8 条证据、24 个图节点、47 条关系和 OOM 候选。
 
 schema 23 的资产分页索引镜像继续只升级隔离 `dbsphere-go-restore`。Go Deployment 滚动升级成功，恢复 PG18 库的最高迁移版本为 23、`events_asset_page_order` 存在、原 17 条事件仍在。390px Chromium 再次验证总览待处理数为 0、旧 OOM 事件完整 ID 返回 1 条、详情 5 段全链路、无横向溢出及控制台错误。大批量查询耗时见[独立 PG18 容量初测](EVENT_SCALE_ACCEPTANCE.md)；kind 的 17 条事件仅验证升级兼容性。
+
+schema 24 的资产列表分页镜像继续只升级隔离 `dbsphere-go-restore`，Deployment 滚动升级成功；恢复 PG18 库最高迁移版本为 24、`assets_page_order` 存在、原 7 个资产及 17 条事件保留。390px Chromium 打开资产页显示 7 个资产，按一个现有资产名搜索并选择 K8S 运行环境后，页面与 API 返回一致；无横向溢出、控制台 0 错误。独立 PG18 测试库的 206 个资产验证五页游标和受限账号过滤；本机 kind 仅验证小库升级与页面交互。

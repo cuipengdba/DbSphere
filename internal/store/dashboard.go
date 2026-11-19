@@ -36,18 +36,7 @@ func (s *Postgres) ReadScopedCollection(ctx context.Context, path string, assetI
 
 func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []string) (any, bool, error) {
 	queries := map[string]struct{ key, sql string }{
-		"/api/assets": {"assets", `SELECT jsonb_build_object(
-			'id',id,'name',name,'host',host,'port',port,'database',database_name,
-			'username',username,'sslMode',ssl_mode,'runtime',runtime,
-			'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
-			'poolerConfigured',pooler_url_enc IS NOT NULL,
-			'patroniConfigured',patroni_url_enc IS NOT NULL,
-			'k8sCluster',k8s_cluster,'namespace',k8s_namespace,'workload',k8s_workload,
-			'pod',k8s_pod,'node',k8s_node,'createdAt',created_at,
-			'lastSampleAt',last_sample_at,'lastStatus',last_status,
-			'lastError',last_error,'versionNum',version_num,'role',role,
-			'pg14Eol',coalesce(version_num/10000=14,false))
-			FROM assets /*asset_scope*/ ORDER BY created_at DESC`},
+		"/api/assets": {"assets", "SELECT " + assetJSON + " FROM assets /*asset_scope*/ ORDER BY created_at DESC"},
 		"/api/events": {"events", `SELECT jsonb_build_object(
 			'id',e.id,'assetId',e.asset_id,'assetName',a.name,'kind',e.kind,
 			'eventGroup',e.event_group,'title',e.title,'status',e.status,

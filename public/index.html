@@ -53,7 +53,10 @@
       <div class="grid" data-view="assets">
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">ASSETS</p><h2>PostgreSQL 资产</h2></div><button id="refresh" class="ghost">刷新</button></div>
+          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索 PostgreSQL 资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></div>
+          <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <div id="asset-list" class="list"></div>
+          <div id="asset-page-controls" class="event-page-controls" hidden><button id="asset-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="asset-next" type="button" class="ghost small-button" disabled>下一页</button></div>
         </section>
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">ONBOARD</p><h2>新增只读纳管</h2></div></div>

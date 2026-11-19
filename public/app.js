@@ -5,6 +5,12 @@ let selectedAsset = null;
 let selectedAssetLayer = null;
 let selectedEvent = null;
 let recentEvents = [];
+let allAssets = [];
+let assetServerPaging = false;
+let assetCursors = [''];
+let assetPageIndex = 0;
+let assetPageRequest = 0;
+let assetSearchTimer = null;
 let eventServerPaging = false;
 let eventCursors = [''];
 let eventPageIndex = 0;
@@ -128,7 +134,11 @@ async function refresh() {
   $('event-count').textContent = eventOverview.openCount;
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
   renderOverview(assets, eventOverview.latestOpen);
-  renderAssets(assets);
+  allAssets = assets;
+  assetServerPaging = runtime?.backend === 'go';
+  $('asset-page-controls').hidden = !assetServerPaging;
+  if (assetServerPaging) await loadAssetPage();
+  else renderLegacyAssets();
   eventServerPaging = runtime?.backend === 'go';
   $('event-page-controls').hidden = !eventServerPaging;
   if (eventServerPaging) await loadEventPage();
@@ -246,10 +256,47 @@ function renderInspections(assets, templates, schedules, runs) {
   }
 }
 
-function renderAssets(assets) {
+function assetPagePath() {
+  const query = new URLSearchParams({ limit: '50', runtime: $('asset-runtime').value,
+    q: $('asset-search').value.trim() });
+  if (assetCursors[assetPageIndex]) query.set('cursor', assetCursors[assetPageIndex]);
+  return `/api/assets/page?${query}`;
+}
+
+async function loadAssetPage() {
+  const request = ++assetPageRequest;
+  const page = await api(assetPagePath());
+  if (request !== assetPageRequest) return;
+  assetCursors = assetCursors.slice(0, assetPageIndex + 1);
+  if (page.nextCursor) assetCursors.push(page.nextCursor);
+  renderAssets(page.assets,
+    `第 ${assetPageIndex + 1} 页 · 显示 ${page.assets.length} 个资产${page.hasMore ? '，还有更多' : ''}；搜索覆盖全部纳管资产。`);
+  $('asset-prev').disabled = assetPageIndex === 0;
+  $('asset-next').disabled = !page.hasMore;
+}
+
+function renderLegacyAssets() {
+  const query = $('asset-search').value.trim().toLocaleLowerCase('zh-CN');
+  const runtime = $('asset-runtime').value;
+  const filtered = allAssets.filter(asset => (runtime === 'all' || asset.runtime === runtime) &&
+    (!query || [asset.id, asset.name, asset.host].some(value =>
+      value.toLocaleLowerCase('zh-CN').includes(query))));
+  renderAssets(filtered, `显示 ${filtered.length} / ${allAssets.length} 个资产。`);
+}
+
+function resetAssetPage() {
+  if (!assetServerPaging) { renderLegacyAssets(); return; }
+  assetCursors = [''];
+  assetPageIndex = 0;
+  clearTimeout(assetSearchTimer);
+  assetSearchTimer = setTimeout(() => loadAssetPage().catch(error => notice(error.message, true)), 250);
+}
+
+function renderAssets(assets, summary = '') {
   const list = $('asset-list');
   list.replaceChildren();
-  if (!assets.length) { list.append(cell('p', '尚无资产。请先在右侧登记 PostgreSQL。', 'empty')); return; }
+  $('asset-filter-summary').textContent = summary;
+  if (!assets.length) { list.append(cell('p', allAssets.length ? '当前筛选没有匹配资产。' : '尚无资产。请先在右侧登记 PostgreSQL。', 'empty')); return; }
   for (const asset of assets) {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
@@ -1160,6 +1207,16 @@ async function boot() {
 
 for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click', () => setView(button.dataset.nav));
 for (const button of document.querySelectorAll('[data-open-view]')) button.addEventListener('click', () => setView(button.dataset.openView));
+$('asset-search').addEventListener('input', resetAssetPage);
+$('asset-runtime').addEventListener('change', resetAssetPage);
+$('asset-prev').addEventListener('click', () => {
+  if (assetPageIndex > 0) { assetPageIndex--; loadAssetPage().catch(error => notice(error.message, true)); }
+});
+$('asset-next').addEventListener('click', () => {
+  if (assetCursors[assetPageIndex + 1]) {
+    assetPageIndex++; loadAssetPage().catch(error => notice(error.message, true));
+  }
+});
 $('event-search').addEventListener('input', resetEventPage);
 $('event-status').addEventListener('change', resetEventPage);
 $('event-prev').addEventListener('click', () => {

@@ -36,6 +36,9 @@ type ScopedCollectionReader interface {
 type EventPager interface {
 	EventPage(context.Context, storepkg.EventPageQuery, []string) (any, error)
 }
+type AssetPager interface {
+	AssetPage(context.Context, storepkg.AssetPageQuery, []string) (any, error)
+}
 type EventOverviewReader interface {
 	EventOverview(context.Context, []string) (any, error)
 }
@@ -1067,6 +1070,38 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/assets/page" {
+				pager, ok := store.(AssetPager)
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Asset pagination unavailable"})
+					return
+				}
+				options := storepkg.AssetPageQuery{Search: r.URL.Query().Get("q"),
+					Runtime: r.URL.Query().Get("runtime"), Cursor: r.URL.Query().Get("cursor"), Limit: 50}
+				if raw := r.URL.Query().Get("limit"); raw != "" {
+					var err error
+					options.Limit, err = strconv.Atoi(raw)
+					if err != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset page query"})
+						return
+					}
+				}
+				var scopedIDs []string
+				if viewerScope != nil {
+					scopedIDs = credentials.ViewerAssetIDs
+				}
+				page, err := pager.AssetPage(r.Context(), options, scopedIDs)
+				if errors.Is(err, storepkg.ErrInvalidAssetPage) {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset page query"})
+					return
+				}
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset page unavailable"})
+					return
+				}
+				respond(w, http.StatusOK, page)
+				return
+			}
 			if r.URL.Path == "/api/events/overview" {
 				reader, ok := store.(EventOverviewReader)
 				if !ok {

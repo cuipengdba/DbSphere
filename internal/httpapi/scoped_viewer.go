@@ -58,7 +58,7 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 		return true
 	}
 	if path == "/api/ai/status" || path == "/api/alert-rules" || path == "/api/inspection-templates" ||
-		path == "/api/events/page" || path == "/api/events/overview" {
+		path == "/api/events/page" || path == "/api/events/overview" || path == "/api/assets/page" {
 		return true
 	}
 	if scopedCollectionKeys[path] != "" {

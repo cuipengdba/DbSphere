@@ -21,3 +21,5 @@ Go 版现支持可选的 `DBSPHERE_RETENTION_DAYS`（样本）与 `DBSPHERE_EVEN
 Go schema 22 给分区事件表新增 `(started_at DESC,id DESC)` 与 `(status,started_at DESC,id DESC)` 索引，用于事件页服务端稳定游标分页。旧库升级在启动迁移事务中建索引；本机 kind 的 17 条事件顺利迁移并保留原证据。大型历史分区的首次建索引时间、锁等待、文本搜索开销和磁盘增长尚未测量，升级前应备份并安排维护窗口；不能将小库迁移结果推广为生产容量验收。
 
 Go schema 23 再给分区事件表新增 `(asset_id,started_at DESC,id DESC)` 与 `(asset_id,status,started_at DESC,id DESC)`，服务按资产范围查询时可利用排序索引。[10 万事件容量初测](EVENT_SCALE_ACCEPTANCE.md)显示批量插入后统计信息过期会让首页及总览暂时变慢；执行 `ANALYZE events` 后平均分别为 2.7 ms 和 42 ms。此项仍是迁移事务内建索引，真实大库的锁等待、临时空间及回滚耗时未测；不能仅凭小库或单资产结果确定生产升级窗口。
+
+Go schema 24 给资产表新增 `(created_at DESC,id DESC)` 和 `(runtime,created_at DESC,id DESC)` 索引，供资产列表稳定分页和运行环境筛选。独立实库 206 资产五页无重复，本机 kind 的 7 资产恢复库升级后原事件仍可读；大规模资产、并发编辑时的列表一致性及索引构建成本仍未验收。

@@ -18,9 +18,10 @@ const scopeEventA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 const scopeEventB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 type scopedViewerStub struct {
-	collections   map[string]any
-	pageScope     []string
-	overviewScope []string
+	collections    map[string]any
+	pageScope      []string
+	overviewScope  []string
+	assetPageScope []string
 }
 
 func (*scopedViewerStub) Health(context.Context) error { return nil }
@@ -42,6 +43,14 @@ func (s *scopedViewerStub) EventOverview(_ context.Context, assetIDs []string) (
 	s.overviewScope = append([]string(nil), assetIDs...)
 	return map[string]any{"openCount": 1, "latestOpen": []any{map[string]any{
 		"id": scopeEventA, "assetId": scopeAssetA}}}, nil
+}
+func (s *scopedViewerStub) AssetPage(_ context.Context, query storepkg.AssetPageQuery, assetIDs []string) (any, error) {
+	if query.Runtime == "bad" {
+		return nil, storepkg.ErrInvalidAssetPage
+	}
+	s.assetPageScope = append([]string(nil), assetIDs...)
+	return map[string]any{"assets": []any{map[string]any{"id": scopeAssetA}},
+		"hasMore": false, "nextCursor": ""}, nil
 }
 
 func (*scopedViewerStub) AssetIDForResource(_ context.Context, kind, id string) (string, error) {
@@ -116,6 +125,14 @@ func TestScopedViewerCannotReadOtherAssetsOrAggregates(t *testing.T) {
 		strings.Contains(got.Body.String(), scopeAssetB) ||
 		len(stub.overviewScope) != 1 || stub.overviewScope[0] != scopeAssetA {
 		t.Fatalf("event overview scope missing: %d %s %+v", got.Code, got.Body.String(), stub.overviewScope)
+	}
+	if got := get("/api/assets/page?limit=20"); got.Code != http.StatusOK ||
+		strings.Contains(got.Body.String(), scopeAssetB) ||
+		len(stub.assetPageScope) != 1 || stub.assetPageScope[0] != scopeAssetA {
+		t.Fatalf("asset page scope missing: %d %s %+v", got.Code, got.Body.String(), stub.assetPageScope)
+	}
+	if got := get("/api/assets/page?runtime=bad"); got.Code != http.StatusBadRequest {
+		t.Fatalf("invalid asset runtime accepted: %d", got.Code)
 	}
 	if got := get("/api/notifications"); got.Code != http.StatusOK || strings.Contains(got.Body.String(), "private") {
 		t.Fatalf("notification leaked: %d %s", got.Code, got.Body.String())
