@@ -54,8 +54,8 @@ function setView(route, updateHash = true) {
   const [view, query] = route.split('?');
   const selected = Object.hasOwn(views, view) ? view : 'overview';
   const params = new URLSearchParams(query);
-  if (document.body.dataset.view !== selected) notice('');
-  document.body.dataset.view = selected;
+  if (document.body.dataset.activeView !== selected) notice('');
+  document.body.dataset.activeView = selected;
   if (selected !== 'assets' && $('asset-dialog').open) resetEdit();
   for (const section of document.querySelectorAll('[data-view]'))
     section.hidden = section.dataset.view !== selected ||
