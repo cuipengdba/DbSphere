@@ -149,3 +149,109 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .obs-coverage-details summary{cursor:pointer;color:#345d88;font-weight:600}
 @media(max-width:1080px){.incident-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:680px){.obs-trend-charts,.obs-metric-grid{grid-template-columns:1fr}.obs-panel{padding:10px}.obs-controls select,.obs-controls input{width:100%}}
+
+.monitor-workspace {
+  --monitor-bg: #0b1726;
+  --monitor-panel: #122238;
+  --monitor-border: #2b4059;
+  --monitor-text: #e0edf8;
+  --monitor-muted: #a5b8cc;
+  --monitor-accent: #6fdddc;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  color: var(--monitor-text);
+  background: var(--monitor-bg);
+  border-radius: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.monitor-workspace button:focus-visible, .monitor-workspace select:focus-visible, .monitor-plot:focus-visible {
+  outline: 2px solid var(--monitor-accent);
+  outline-offset: 2px;
+}
+.monitor-controls, .monitor-wait-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+.monitor-filter {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--monitor-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.monitor-filter select, .monitor-action, .monitor-tabs button {
+  border: 1px solid var(--monitor-border);
+  border-radius: 6px;
+  min-height: 35px;
+  max-width: 100%;
+  padding: 6px 11px;
+  background: #192b43;
+  color: var(--monitor-text);
+  font: inherit;
+  font-size: 13px;
+}
+.monitor-action:hover, .monitor-tabs button:hover { background: #263f5b; filter: none; }
+.monitor-panel { min-width: 0; padding: 14px; border: 1px solid var(--monitor-border); border-radius: 8px; background: var(--monitor-panel); }
+.monitor-panel h3 { margin: 0 0 10px; font-size: 15px; font-weight: 680; color: var(--monitor-text); overflow-wrap: anywhere; }
+.monitor-stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(137px,1fr)); gap: 8px; margin: 0 0 11px; }
+.monitor-stat { min-width: 0; padding: 10px; border: 1px solid var(--monitor-border); border-radius: 6px; background: #14283e; }
+.monitor-stat span { display: block; font-size: 12px; color: var(--monitor-muted); }
+.monitor-stat strong { display: block; margin-top: 7px; color: var(--monitor-accent); font-size: 20px; overflow-wrap: anywhere; }
+.monitor-stat strong.monitor-alert { color: #ffc285; }
+.monitor-table { margin-top: 9px; overflow: auto; }
+.monitor-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.monitor-table th { color: var(--monitor-muted); font-weight: 650; }
+.monitor-table th, .monitor-table td { border-bottom: 1px solid var(--monitor-border); padding: 7px 10px; }
+.monitor-table td { color: var(--monitor-text); }
+.monitor-table :is(th,td):first-child { padding-left: 3px; }
+.monitor-link { border: 0; padding: 2px; background: none; color: var(--monitor-accent); font: inherit; font-weight: 700; text-align: left; }
+.monitor-link:hover { text-decoration: underline; filter: none; }
+.monitor-state { white-space: nowrap; }
+.monitor-state::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #99aec7; }
+.monitor-state-ok::before, .monitor-state-manual::before { background: #49d4ab; }
+.monitor-state-error::before { background: #ff8d7b; }
+.monitor-state-stale::before { background: #f5c96f; }
+.monitor-instance, .monitor-content { min-width: 0; display: grid; gap: 10px; }
+.monitor-instance-title { margin: 3px 0 0; font-size: 19px; overflow-wrap: anywhere; }
+.monitor-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.monitor-tabs button[aria-pressed="true"] { border-color: #4fb3bc; background: #1b414c; color: #a7f5ef; }
+.monitor-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.monitor-plot { border-radius: 4px; }
+.monitor-plot svg { width: 100%; height: 155px; display: block; }
+.monitor-plot text { fill: #a5b8cc; font-size: 11px; }
+.monitor-gridline { stroke: var(--monitor-border); vector-effect: non-scaling-stroke; }
+.monitor-trendline { stroke-width: 2; vector-effect: non-scaling-stroke; }
+.monitor-event-marker { stroke: #ff926d; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.monitor-crosshair { stroke: #94b8d9; opacity: .48; vector-effect: non-scaling-stroke; pointer-events: none; }
+.monitor-cursor-value, .monitor-empty, .monitor-note, .monitor-range-caption, .monitor-warning {
+  margin: 6px 0;
+  color: var(--monitor-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.monitor-warning { color: #ffd49c; }
+.monitor-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.monitor-legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--monitor-border); border-radius: 5px; background: #172b42; color: var(--monitor-text); font: inherit; font-size: 12px; overflow-wrap: anywhere; }
+.monitor-legend button:hover { border-color: #67b5cd; filter: none; }
+.monitor-swatch { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
+.monitor-event { display: block; width: 100%; padding: 9px 10px; margin-top: 6px; text-align: left; background: #192e46; color: var(--monitor-text); border: 1px solid var(--monitor-border); border-radius: 5px; }
+.monitor-event small { display: block; margin-top: 4px; color: var(--monitor-muted); }
+.monitor-event-jump { margin-top: 10px; justify-content: flex-start; }
+.monitor-workspace .evidence, .monitor-workspace .diagnostic-list > div { background: #1a3149; color: var(--monitor-text); }
+.monitor-workspace .diagnostic-list :is(strong,span), .monitor-workspace .hint, .monitor-workspace .empty { color: var(--monitor-muted); }
+.monitor-workspace .warning { color: #ffdaaa; background: #483928; }
+@media(max-width: 850px) { .monitor-charts { grid-template-columns: 1fr; } }
+@media(max-width: 480px) {
+  .monitor-workspace { padding: 9px; }
+  .monitor-panel { padding: 10px; }
+  .monitor-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+  .monitor-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .monitor-stat strong { font-size: 16px; }
+}

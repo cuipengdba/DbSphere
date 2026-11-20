@@ -24,7 +24,15 @@ import { analyzeEvent, eventSampleIds } from './rca.js';
 import { parseOtlpTraces } from './otel.js';
 
 const publicDir = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
-const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
+const staticFiles = new Map([
+  ['/', ['index.html', 'text/html; charset=utf-8']],
+  ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+  ['/observability.js', ['observability.js', 'text/javascript; charset=utf-8']],
+  ['/monitoring.js', ['monitoring.js', 'text/javascript; charset=utf-8']],
+  ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/freshness.css', ['freshness.css', 'text/css; charset=utf-8']],
+  ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]
+]);
 
 function send(res, status, data, extra = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra });

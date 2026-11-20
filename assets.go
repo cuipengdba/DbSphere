@@ -7,7 +7,7 @@ import (
 
 // Assets contains the browser client, served directly by the Go binary.
 //
-//go:embed public/index.html public/app.js public/observability.js public/styles.css public/freshness.css public/favicon.svg
+//go:embed public/index.html public/app.js public/observability.js public/monitoring.js public/styles.css public/freshness.css public/favicon.svg
 var Assets embed.FS
 
 // Version is embedded in the binary from the same package manifest used to

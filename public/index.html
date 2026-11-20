@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/freshness.css">
   <script src="/observability.js" defer></script>
+  <script src="/monitoring.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -31,6 +32,7 @@
         <div class="sidebar-brand">DbSphere <small>数据库运维工作台</small></div>
         <nav class="workspace-nav">
           <button type="button" data-nav="overview">总览</button>
+          <button type="button" data-nav="monitoring">监控工作台</button>
           <button type="button" data-nav="incidents">问题事件</button>
           <button type="button" data-nav="assets">资产与实例</button>
           <button type="button" data-nav="alerts">告警与通知</button>
@@ -49,8 +51,9 @@
       </section>
       <div class="grid overview-grid" data-view="overview">
         <section class="panel"><div class="section-head"><div><p class="eyebrow">FOCUS</p><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">FLEET</p><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="assets">管理资产</button></div><div id="overview-assets" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><p class="eyebrow">FLEET</p><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div><div id="overview-assets" class="list"></div></section>
       </div>
+      <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
       <div class="grid" data-view="assets">
         <section class="panel">
           <div class="section-head"><div><p class="eyebrow">ASSETS</p><h2>PostgreSQL 资产</h2></div><button id="refresh" class="ghost">刷新</button></div>
@@ -63,6 +66,7 @@
           <div class="section-head"><div><p class="eyebrow">ONBOARD</p><h2>新增只读纳管</h2></div></div>
           <form id="asset-form" class="form-grid">
             <label>资产名称<input name="name" required maxlength="100" placeholder="生产主库"></label>
+            <label>PG 集群名（可选）<input name="clusterName" maxlength="100" placeholder="生产订单库"><span class="hint">同一 PostgreSQL 集群的主备填写相同名称。与 K8S 集群名独立。</span></label>
             <label>主机地址<input name="host" required placeholder="pg.example.internal"></label>
             <label>端口<input name="port" type="number" min="1" max="65535" value="5432" required></label>
             <label>数据库<input name="database" value="postgres" required></label>

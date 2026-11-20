@@ -18,6 +18,7 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 
 var scopedCollectionPredicates = map[string]string{
 	"/api/assets":               "WHERE id = ANY($1::uuid[])",
+	"/api/monitoring/instances": "WHERE a.id = ANY($1::uuid[])",
 	"/api/events":               "WHERE e.asset_id = ANY($1::uuid[])",
 	"/api/alerts":               "AND s.asset_id = ANY($1::uuid[])",
 	"/api/silences":             "WHERE asset_id = ANY($1::uuid[])",
@@ -36,7 +37,8 @@ func (s *Postgres) ReadScopedCollection(ctx context.Context, path string, assetI
 
 func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []string) (any, bool, error) {
 	queries := map[string]struct{ key, sql string }{
-		"/api/assets": {"assets", "SELECT " + assetJSON + " FROM assets /*asset_scope*/ ORDER BY created_at DESC"},
+		"/api/assets":               {"assets", "SELECT " + assetJSON + " FROM assets /*asset_scope*/ ORDER BY created_at DESC"},
+		"/api/monitoring/instances": {"instances", monitoringInstancesSQL},
 		"/api/events": {"events", `SELECT jsonb_build_object(
 			'id',e.id,'assetId',e.asset_id,'assetName',a.name,'kind',e.kind,
 			'eventGroup',e.event_group,'title',e.title,'status',e.status,

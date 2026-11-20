@@ -34,6 +34,7 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			SELECT coalesce(state,'unknown') AS state,coalesce(wait_event_type,'none') AS "waitType",
 			count(*)::int AS sessions FROM pg_stat_activity WHERE datname=current_database()
 			GROUP BY 1,2) q`},
+		{"activeWaits", activeWaitsSQL},
 		{"transactions", `SELECT to_jsonb(q) FROM (
 			SELECT count(*) FILTER (WHERE xact_start < now()-interval '5 minutes')::int AS "longTransactions",
 			count(*) FILTER (WHERE state='idle in transaction')::int AS "idleInTransaction"

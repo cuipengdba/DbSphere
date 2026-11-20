@@ -39,6 +39,7 @@ const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
   metric === growthMetric ? `${(Number(value) / (1024 ** 3)).toFixed(2)} GiB/日` : String(value);
 const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
+  monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
   assets: ['资产与实例', '纳管 PostgreSQL 14–18，并查看实例与基础设施状态。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
@@ -59,6 +60,7 @@ function setView(view, updateHash = true) {
   }
   $('view-title').textContent = views[selected][0];
   $('view-description').textContent = views[selected][1];
+  monitoring.setVisible(selected === 'monitoring');
   if (updateHash && location.hash !== `#${selected}`) location.hash = selected;
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
@@ -81,7 +83,10 @@ function renderOverview(assets, events) {
   for (const asset of assets.slice(0, 6)) {
     const health = assetHealth(asset);
     const button = cell('button', `${asset.name} · ${assetRuntimeLabel(asset)} · ${health.label}`, `event-button health-${health.kind}`);
-    button.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
+    button.addEventListener('click', () => {
+      if (assetServerPaging) { monitoring.openInstance(asset.id); setView('monitoring'); }
+      else { setView('assets'); void showAsset(asset.id); }
+    });
     fleet.append(button);
   }
 }
@@ -113,6 +118,11 @@ function cell(tag, text, cls) {
   if (cls) el.className = cls;
   return el;
 }
+
+const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
+  api, assetHealth, assetRuntimeLabel, formatTime, openEvent: id => showEvent(id),
+  openAssets: () => setView('assets'), renderSqlPerformance
+});
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
@@ -148,6 +158,7 @@ async function refresh() {
   renderOverview(assets, eventOverview.latestOpen);
   allAssets = assets;
   assetServerPaging = runtime?.backend === 'go';
+  monitoring.sync(assets, assetServerPaging);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
   else renderLegacyAssets();
@@ -976,7 +987,7 @@ function editAsset(asset) {
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
     linuxHost: asset.linuxHost, linuxExporterPort: asset.linuxExporterPort, k8sCluster: asset.k8sCluster, namespace: asset.namespace,
     workload: asset.workload, pod: asset.pod, node: asset.node,
-    poolerEndpoint: asset.poolerEndpoint
+    poolerEndpoint: asset.poolerEndpoint, clusterName: asset.clusterName
   })) form.elements[field].value = value ?? '';
   form.elements.password.value = '';
   form.elements.poolerUrl.value = '';
@@ -1012,6 +1023,13 @@ async function showEvent(id) {
   const target = $('event-detail'); target.replaceChildren();
   target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
   target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));
+  if (assetServerPaging) {
+    const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
+    jump.type = 'button';
+    jump.addEventListener('click', () => { monitoring.openIncident(event); setView('monitoring'); });
+    const actions = cell('div', '', 'actions monitor-event-jump');
+    actions.append(jump); target.append(actions);
+  }
   if (relatedEvents.length) {
     const related = document.createElement('details'); related.className = 'evidence';
     related.append(cell('summary', `查看共享原始样本的其他事件（${relatedEvents.length}）`));

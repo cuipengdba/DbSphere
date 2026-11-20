@@ -23,7 +23,18 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			FROM samples WHERE asset_id=$1 ORDER BY collected_at DESC LIMIT 100`, id)
 		return map[string]any{"samples": values}, err
 	case "sql":
+		if params.Get("from") != "" || params.Get("to") != "" {
+			from, to, err := timeRange(params, 0, 7*24*time.Hour)
+			if err != nil || len(params.Get("queryId")) > 32 {
+				return nil, ErrInvalidRange
+			}
+			return s.sqlSummary(ctx, id, &from, &to, params.Get("queryId"))
+		}
 		return s.SQLSummary(ctx, id)
+	case "wait-history":
+		return s.waitHistory(ctx, id, params)
+	case "monitoring-context":
+		return s.monitoringContext(ctx, id, params)
 	case "slow-logs":
 		from, to, err := timeRange(params, 24*time.Hour, 31*24*time.Hour)
 		if err != nil {
@@ -85,15 +96,27 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		if err != nil {
 			return nil, err
 		}
-		bucket := 1
+		bucket := 60
 		if params.Get("bucketHours") != "" {
 			bucket, err = strconv.Atoi(params.Get("bucketHours"))
 			if err != nil || bucket < 1 || bucket > 24 {
 				return nil, ErrInvalidRange
 			}
+			bucket *= 60
+		}
+		if raw := params.Get("bucketMinutes"); raw != "" {
+			bucket, err = strconv.Atoi(raw)
+			if err != nil || (bucket != 1 && bucket != 5 && bucket != 15 && bucket != 60) ||
+				params.Get("bucketHours") != "" || to.Sub(from) > time.Duration(bucket*400)*time.Minute {
+				return nil, ErrInvalidRange
+			}
 		}
 		values, err := s.queryJSON(ctx, `WITH observed AS (
 			SELECT id,collected_at,status,
+				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,cpu,usedPercent}')='number'
+					THEN (metrics_json#>>'{linux,cpu,usedPercent}')::numeric END AS linux_cpu,
+				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,memory,usedPercent}')='number'
+					THEN (metrics_json#>>'{linux,memory,usedPercent}')::numeric END AS linux_memory,
 				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'connections')='number'
 					THEN (metrics_json->>'connections')::numeric END AS connections,
 				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'max_connections')='number'
@@ -131,7 +154,7 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			FROM compared
 		)
 		SELECT jsonb_build_object(
-			'bucket',date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
+			'bucket',date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
 			'averageConnections',round(avg(connections),1),
 			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
@@ -139,10 +162,12 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			'averageLongTransactions',round(avg(long_transactions),1),
 			'averageDatabaseBytes',round(avg(database_bytes),0),
 			'averageReplicationLagBytes',round(avg(replication_lag_bytes),0),
+			'averageLinuxCpuPercent',round(avg(linux_cpu),1),
+			'averageLinuxMemoryPercent',round(avg(linux_memory),1),
 			'transactionsPerSecond',round(avg(transactions_per_second),2),
 			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
-		FROM rated GROUP BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
-		ORDER BY date_bin(make_interval(hours=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
+		FROM rated GROUP BY date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
+		ORDER BY date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
 		return map[string]any{"series": values}, err
 	case "capacity":
 		forecast, err := s.CapacityForecast(ctx, id)

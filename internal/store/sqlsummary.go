@@ -127,8 +127,13 @@ func sqlRegressionSignal(current, previous, older map[string]any) map[string]any
 }
 
 func (s *Postgres) SQLSummary(ctx context.Context, assetID string) (any, error) {
+	return s.sqlSummary(ctx, assetID, nil, nil, "")
+}
+
+func (s *Postgres) sqlSummary(ctx context.Context, assetID string, from, to *time.Time, queryID string) (any, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id::text,collected_at,status,metrics_json
-		FROM samples WHERE asset_id=$1 ORDER BY collected_at DESC LIMIT 12`, assetID)
+		FROM samples WHERE asset_id=$1 AND ($2::timestamptz IS NULL OR collected_at>=$2)
+		AND ($3::timestamptz IS NULL OR collected_at<$3) ORDER BY collected_at DESC,id DESC LIMIT 12`, assetID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +157,8 @@ func (s *Postgres) SQLSummary(ctx context.Context, assetID string) (any, error) 
 			latest = performance
 			first = false
 		}
-		if status == "ok" && stringValue(performance["status"]) == "ok" {
+		pgAvailable := status == "ok" || (from != nil && stringValue(object(metrics["collector"])["pgStatus"]) == "ok")
+		if pgAvailable && stringValue(performance["status"]) == "ok" {
 			snapshots = append(snapshots, sqlSnapshot{ID: id, At: at, Data: performance, Metrics: metrics})
 		}
 	}
@@ -161,8 +167,9 @@ func (s *Postgres) SQLSummary(ctx context.Context, assetID string) (any, error) 
 		return nil, err
 	}
 	rows.Close()
-	eventIDs, err := s.queryJSON(ctx, `SELECT to_jsonb(id::text) FROM events
-		WHERE asset_id=$1 AND status='open' ORDER BY started_at DESC LIMIT 100`, assetID)
+	eventIDs, err := s.queryJSON(ctx, `SELECT to_jsonb(id::text) FROM events WHERE asset_id=$1 AND
+		(($2::timestamptz IS NULL AND status='open') OR ($2 IS NOT NULL AND started_at<$3::timestamptz
+		AND (ended_at IS NULL OR ended_at>=$2))) ORDER BY started_at DESC LIMIT 100`, assetID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +203,9 @@ func (s *Postgres) SQLSummary(ctx context.Context, assetID string) (any, error) 
 	statements := []map[string]any{}
 	for _, raw := range list(current.Data["statements"]) {
 		original := object(raw)
+		if queryID != "" && stringValue(original["queryId"]) != queryID {
+			continue
+		}
 		row := make(map[string]any, len(original)+3)
 		for key, value := range original {
 			row[key] = value

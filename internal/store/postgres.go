@@ -387,6 +387,18 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record pending trace ingress migration: %w", err)
 		}
 	}
+	var clusterNameMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=32)").Scan(&clusterNameMigrated); err != nil {
+		return fmt.Errorf("check monitoring cluster migration: %w", err)
+	}
+	if !clusterNameMigrated {
+		if _, err = tx.Exec(ctx, "ALTER TABLE assets ADD COLUMN IF NOT EXISTS cluster_name text"); err != nil {
+			return fmt.Errorf("migrate monitoring cluster name: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(32)"); err != nil {
+			return fmt.Errorf("record monitoring cluster migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

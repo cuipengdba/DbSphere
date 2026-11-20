@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v1.0.13](https://img.shields.io/badge/当前版本-v1.0.13-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.13) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v1.1.0](https://img.shields.io/badge/当前版本-v1.1.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.1.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。第一阶段支持 PostgreSQL 14–18；“全域”是产品方向，不表示当前支持所有数据库。
 
@@ -10,6 +10,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 | 领域 | 功能 |
 |---|---|
+| 监控工作台 | 集群总览显示纳管实例、观测到的主备角色、复制回放差距及开放事件。共享时间范围贯穿实例指标、等待、SQL、锁与运行环境。等待分析支持按类型、事件和 Query ID 下钻，事件详情可跳回故障时段。支持 Linux CPU/内存趋势及 Kubernetes Pod、Node、PVC 快照。 |
 | 资产纳管 | 浏览器登记与管理 PostgreSQL 实例，区分 Linux 与 Kubernetes 运行环境；凭据加密保存。Go 版可按唯一 Deployment/StatefulSet 自动解析重建后的 Pod，歧义时明确报错。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni 只读 REST API、备份信息和应用 Trace。 |
 | 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。管理员可查看当前 Go 进程的自动采集批次、耗时和错误。 |
 | 图形可观测性 | 事件内的分层证据关系图可按应用、数据库、Linux/K8S 与根因证据筛选，点击节点追踪已观测关联及原始数据；分道时间轴显示故障与恢复记录。资产页提供 24 小时和 7 天的采样状态、连接占用、事务吞吐、阻塞会话、长事务、WAL 速率、数据库容量及可用的复制差距趋势；缺失时间桶留空。图的显示上限、数据边界和后续指标专题见[可观测性任务](docs/OBSERVABILITY_GRAPH.md)。 |
@@ -30,7 +31,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V1.0.13** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.13)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[发布验收](docs/V1_RELEASE_GATE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
+当前正式版 **V1.1.0** 提供 Go 静态服务端和[一键离线容器安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.1.0)。一个事件 ID 下可查看 PostgreSQL、SQL、Linux/Kubernetes、可选应用 Trace 的证据链、根因候选、工单审批及恢复记录；可选 AI 提供证据问答与严重告警解读。各信号需要对应数据源，候选不是自动证实的唯一根因。实际支持范围、断网交付验收和剩余风险见[监控工作台](docs/MONITORING_WORKSPACE.md)、[支持矩阵](docs/SUPPORT_MATRIX.md)与[安全审查](docs/V1_SECURITY_REVIEW.md)。
 
 ## 部署与接入
 

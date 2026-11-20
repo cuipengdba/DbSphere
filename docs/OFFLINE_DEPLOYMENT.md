@@ -1,6 +1,13 @@
 # Linux 一键离线部署
 
-当前版本可从 [V1.0.13 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.13)获取 `DbSphere-go-offline-1.0.13-linux-amd64.run` 与同名 `.sha256`；下文 V1.0.0 命令用于说明正式版首次交付的安装及升级/回退基线，安装最新版本时请替换为当前附件名。
+从 [V1.1.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.1.0)下载下列两个附件，传到已安装 Docker Engine 和 Compose v2 的 Linux x86_64 主机，放在同一目录执行：
+
+```bash
+sha256sum --check DbSphere-go-offline-1.1.0-linux-amd64.run.sha256
+bash DbSphere-go-offline-1.1.0-linux-amd64.run
+```
+
+一键脚本导入随包镜像并启动内嵌静态页面的 Go 服务及 PostgreSQL 18 长期监控库。默认入口为 `http://主机:8081`。下文 V1.0.0 命令用于说明首次正式版的安装及升级/回退基线。
 
 > [V1.0.0 正式版](https://github.com/cuipengdba/DbSphere/releases/tag/v1.0.0)提供 Go 一键离线包和静态 Go 程序。文末保留早期 Node.js 预览包说明，详见[迁移清单](GO_UI_MIGRATION.md)。
 

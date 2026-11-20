@@ -70,6 +70,7 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 
 var scopedCollectionKeys = map[string]string{
 	"/api/assets":               "assets",
+	"/api/monitoring/instances": "instances",
 	"/api/events":               "events",
 	"/api/alerts":               "alerts",
 	"/api/silences":             "silences",

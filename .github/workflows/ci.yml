@@ -404,11 +404,11 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous="$previous_dir/DbSphere-go-offline-0.9.0-linux-amd64.run"
+          previous="$previous_dir/DbSphere-go-offline-1.0.13-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
-            'https://github.com/cuipengdba/DbSphere/releases/download/v0.9.0/DbSphere-go-offline-0.9.0-linux-amd64.run'
+            'https://github.com/cuipengdba/DbSphere/releases/download/v1.0.13/DbSphere-go-offline-1.0.13-linux-amd64.run'
           printf '%s  %s\n' \
-            2a2c8563ec33e56aa3e012e08889d67609d3c728e067f1639b5664cb2f1ae2be \
+            593f7bdc91cd30a63cf9b1c3186335ab86c55ec8c72524acf23bea20275c281f \
             "$(basename "$previous")" > "$previous.sha256"
           (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"

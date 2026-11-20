@@ -40,7 +40,7 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	if !ok {
 		t.Fatal("PostgreSQL diagnostic sections missing")
 	}
-	for _, section := range []string{"activity", "transactions", "locks", "lockChain", "database",
+	for _, section := range []string{"activity", "activeWaits", "transactions", "locks", "lockChain", "database",
 		"wal", "archiver", "checkpoints", "vacuum", "tables", "slots", "freeze",
 		"slotDetails", "settings"} {
 		entry, ok := diagnostics[section].(map[string]any)
@@ -117,6 +117,9 @@ func TestRealAdvisoryLockChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer waiter.Close(context.Background())
+	if _, err := waiter.Exec(context.Background(), "SET compute_query_id=on"); err != nil {
+		t.Fatal(err)
+	}
 	var blockerPID, waiterPID int
 	if err := blocker.QueryRow(context.Background(), "SELECT pg_backend_pid()").Scan(&blockerPID); err != nil {
 		t.Fatal(err)
@@ -170,6 +173,24 @@ func TestRealAdvisoryLockChain(t *testing.T) {
 	}
 	if !linked {
 		t.Fatalf("Go diagnostics did not capture PID %d blocked by %d: %v", waiterPID, blockerPID, chain)
+	}
+	waits := diagnostics["activeWaits"].(map[string]any)
+	if waits["status"] != "ok" {
+		t.Fatalf("active waits unavailable: %v", waits)
+	}
+	var queryID string
+	if err := blocker.QueryRow(context.Background(), "SELECT query_id::text FROM pg_stat_activity WHERE pid=$1", waiterPID).Scan(&queryID); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, raw := range waits["data"].(map[string]any)["groups"].([]any) {
+		row := raw.(map[string]any)
+		if row["waitType"] == "Lock" && row["waitEvent"] == "advisory" && row["queryId"] == queryID {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("actual lock wait and query ID %s were not linked: %v", queryID, waits)
 	}
 	cancel()
 	select {

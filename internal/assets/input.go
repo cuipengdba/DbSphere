@@ -45,6 +45,7 @@ func (p *OptionalPort) UnmarshalJSON(data []byte) error {
 
 type Input struct {
 	Name              string       `json:"name"`
+	ClusterName       *string      `json:"clusterName"`
 	Host              string       `json:"host"`
 	Port              int          `json:"port"`
 	Database          string       `json:"database"`
@@ -71,6 +72,9 @@ func (a Input) Validate() error {
 		a.Port < 1 || a.Port > 65535 || a.Database == "" || len(a.Database) > 100 ||
 		a.Username == "" || len(a.Username) > 100 || len(a.Password) > 1024 {
 		return errors.New("invalid PostgreSQL asset fields")
+	}
+	if a.ClusterName != nil && (len(*a.ClusterName) > 150 || strings.ContainsAny(*a.ClusterName, "\x00\r\n\t")) {
+		return errors.New("invalid PostgreSQL cluster name")
 	}
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid PostgreSQL TLS mode")
@@ -122,6 +126,16 @@ func (a Input) Validate() error {
 		}
 	}
 	return nil
+}
+
+// MonitoringClusterName normalizes the optional grouping label. A nil input
+// on update means the caller did not send the field.
+func (a Input) MonitoringClusterName() *string {
+	if a.ClusterName == nil {
+		return nil
+	}
+	name := strings.TrimSpace(*a.ClusterName)
+	return &name
 }
 
 // ParsePoolerEndpoint accepts only a host and TCP port. It never interprets
