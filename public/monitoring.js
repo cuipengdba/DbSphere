@@ -527,7 +527,8 @@
 
     function eventList(events, title) {
       const card = panel(title);
-      if (!events.length && eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
+      if (eventAnchor && !events.some(event => event.id === eventAnchor))
+        card.append(button('返回事件证据', () => openEvent(eventAnchor)));
       if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
       for (const event of events) {
         const item = button(event.title, () => openEvent(event.id), 'monitor-event');

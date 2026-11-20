@@ -54,6 +54,8 @@ function setView(route, updateHash = true) {
   const [view, query] = route.split('?');
   const selected = Object.hasOwn(views, view) ? view : 'overview';
   const params = new URLSearchParams(query);
+  if (document.body.dataset.view !== selected) notice('');
+  document.body.dataset.view = selected;
   if (selected !== 'assets' && $('asset-dialog').open) resetEdit();
   for (const section of document.querySelectorAll('[data-view]'))
     section.hidden = section.dataset.view !== selected ||
@@ -358,7 +360,7 @@ function renderAssets(assets, summary = '') {
   const list = $('asset-list');
   list.replaceChildren();
   $('asset-filter-summary').textContent = summary;
-  if (!assets.length) { list.append(cell('p', allAssets.length ? '当前筛选没有匹配资产。' : '尚无资产。请先在右侧登记 PostgreSQL。', 'empty')); return; }
+  if (!assets.length) { list.append(cell('p', allAssets.length ? '当前筛选没有匹配资产。' : '尚无纳管资产。', 'empty')); return; }
   for (const asset of assets) {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
@@ -1035,7 +1037,7 @@ function editAsset(asset) {
   form.elements.patroniClear.checked = false;
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '更新资产';
-  $('cancel-edit').hidden = false;
+  $('asset-dialog').dataset.mode = 'edit';
   $('asset-dialog-title').textContent = '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
@@ -1049,7 +1051,8 @@ function resetEdit() {
   $('asset-form').reset();
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '保存资产';
-  $('cancel-edit').hidden = true;
+  $('asset-dialog').dataset.mode = 'new';
+  $('asset-integrations').open = false;
 }
 
 async function showEvent(id, updateHash = true) {
@@ -1645,11 +1648,14 @@ $('asset-form').addEventListener('submit', async (event) => {
   data.port = Number(data.port);
   data.poolerClear = data.poolerClear === 'on';
   data.patroniClear = data.patroniClear === 'on';
+  $('asset-error').textContent = '';
+  $('asset-submit').disabled = true;
   try {
     await api(editingAsset ? `/api/assets/${editingAsset}` : '/api/assets', editingAsset ? 'PATCH' : 'POST', data);
     resetEdit(); notice('资产已保存。点击“采集”验证连接。'); await refresh();
   }
   catch (e) { $('asset-error').textContent = e.message; }
+  finally { $('asset-submit').disabled = false; }
 });
 
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });

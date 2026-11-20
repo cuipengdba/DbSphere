@@ -42,7 +42,7 @@
           <button type="button" data-nav="inspections"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z M9 10h7 M9 14h7 M9 17h5"/></svg><span>巡检与报告</span></button>
           <button type="button" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>系统状态</span></button>
         </nav>
-        <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes · 托管 PG</div>
+        <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes</div>
       </aside>
       <div class="workspace-main">
       <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
@@ -78,13 +78,8 @@
             <label>密码<input name="password" type="password" autocomplete="new-password"></label>
             <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
             <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></label>
-            <label class="linux-field wide">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
-            <label class="linux-field wide">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
-            <label class="wide">PgBouncer 管理连接 URL（可选）<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
-            <label class="wide">应用访问 PgBouncer 的地址（可选）<input name="poolerEndpoint" maxlength="261" placeholder="pooler.example:6432"><span class="hint">业务代理地址与统计管理地址不同时填写 host:port；留空沿用管理连接地址。</span></label>
-            <label class="wide"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 统计连接</label>
-            <label class="wide">Patroni REST 地址（可选）<input name="patroniUrl" type="password" autocomplete="off" placeholder="https://监控用户:密码@patroni.internal:8008"></label>
-            <label class="wide"><input name="patroniClear" type="checkbox">清除已保存的 Patroni 连接</label>
+            <label class="linux-field">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
+            <label class="linux-field">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <div id="k8s-fields" class="nested wide" hidden>
               <label>K8S 集群<input name="k8sCluster" placeholder="production"></label>
               <label>Namespace<input name="namespace" placeholder="database"></label>
@@ -95,10 +90,19 @@
               <button id="discover-k8s" class="ghost" type="button">发现此 Namespace 的 PostgreSQL Pod</button>
               <div id="discovery-results" class="wide" aria-live="polite"></div>
             </div>
-            <button class="wide" id="asset-submit" type="submit">保存资产</button>
-            <button class="wide ghost" id="cancel-edit" type="button" hidden>取消编辑</button>
+            <details id="asset-integrations" class="wide settings-details">
+              <summary>PgBouncer 与 Patroni</summary>
+              <div class="form-grid">
+                <label class="wide">PgBouncer 管理连接 URL<input name="poolerUrl" type="password" autocomplete="off" placeholder="postgres://监控用户:密码@pooler:6432/pgbouncer"></label>
+                <label class="wide">应用访问 PgBouncer 的地址<input name="poolerEndpoint" maxlength="261" placeholder="pooler.example:6432"><span class="hint">留空沿用管理连接地址。</span></label>
+                <label class="wide edit-only"><input name="poolerClear" type="checkbox">清除已保存的 PgBouncer 统计连接</label>
+                <label class="wide">Patroni REST 地址<input name="patroniUrl" type="password" autocomplete="off" placeholder="https://监控用户:密码@patroni.internal:8008"></label>
+                <label class="wide edit-only"><input name="patroniClear" type="checkbox">清除已保存的 Patroni 连接</label>
+              </div>
+            </details>
+            <p class="hint wide">Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。</p>
           </form>
-          <p class="hint">Linux 主机指标需部署 node_exporter 并填写端口；K8S Pod/PVC 采集需只读 API 凭据；托管 PostgreSQL 仅采集数据库侧可见信号。请使用最小权限监控账号。</p>
+          <div class="drawer-actions"><button class="ghost" id="cancel-edit" type="button">取消</button><button id="asset-submit" form="asset-form" type="submit">保存资产</button></div>
         </dialog>
       </div>
       <section class="panel lower" data-view="assets"><div class="section-head"><div><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
@@ -107,7 +111,7 @@
           <div class="incident-filters"><input id="event-search" type="search" maxlength="128" aria-label="搜索问题事件" placeholder="标题、资产或事件 ID"><select id="event-status" aria-label="筛选事件状态"><option value="all">全部状态</option><option value="open">处理中</option><option value="resolved">已恢复</option></select></div>
           <p id="event-filter-summary" class="hint" aria-live="polite"></p><div id="event-list" class="list"></div>
           <div id="event-page-controls" class="event-page-controls" hidden><button id="event-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="event-next" type="button" class="ghost small-button" disabled>下一页</button></div></section>
-        <section class="panel"><div class="section-head"><div><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择左侧事件查看同一事件 ID 的全链路证据。</div></section>
+        <section class="panel"><div class="section-head"><div><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择事件查看它的全链路证据。</div></section>
       </div>
       <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button></div>
       <div class="section-stack" data-view="alerts">
