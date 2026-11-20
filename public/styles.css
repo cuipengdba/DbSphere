@@ -179,6 +179,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 }
 .monitor-filter {
   display: grid;
+  grid-template-columns: minmax(0,1fr);
   gap: 5px;
   min-width: 0;
   max-width: 100%;
@@ -256,6 +257,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
   .monitor-workspace { padding: 9px; }
   .monitor-panel { padding: 10px; }
   .monitor-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+  .monitor-controls select { width: 100%; min-width: 0; text-overflow: ellipsis; }
   .monitor-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .monitor-stat strong { font-size: 16px; }
 }
