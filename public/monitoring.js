@@ -3,11 +3,12 @@
 
   const minute = 60_000;
   const periods = [
-    ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
+    ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
   ];
-  const tabs = [['metrics', '核心指标'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'], ['infra', '运行环境']];
-  const waitColors = { NoWait: '#2ac9ad', IO: '#ad96f7', Lock: '#f59a61', LWLock: '#f1cf6a', Client: '#66a4ff', IPC: '#ec8ab4', Timeout: '#b3c6df' };
-  const palette = ['#56c8df', '#a899ff', '#ffac86', '#90d38a', '#ec8ab4', '#6d9ef4', '#eed078', '#9bb0c9', '#71d2b1', '#bdb7ff', '#f698a6', '#91a9ec'];
+  const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'], ['infra', '运行环境']];
+  const defaultPeriod = '1 小时';
+  const waitColors = { NoWait: 'var(--plot-teal)', IO: 'var(--plot-violet)', Lock: 'var(--plot-orange)', LWLock: 'var(--plot-gold)', Client: 'var(--plot-blue)', IPC: 'var(--plot-pink)', Timeout: 'var(--plot-gray)' };
+  const palette = ['blue', 'teal', 'violet', 'orange', 'pink'].map(key => `var(--plot-${key})`);
   const number = (value, digits = 1) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits }).format(value);
   const bytes = value => {
     for (const [unit, size] of [['TiB', 1024 ** 4], ['GiB', 1024 ** 3], ['MiB', 1024 ** 2], ['KiB', 1024]]) {
@@ -88,8 +89,8 @@
 
   function stats(values) {
     const wrapper = el('div', null, 'monitor-stats');
-    for (const [label, value, tone] of values) {
-      const card = el('div', null, 'monitor-stat');
+    for (const [label, value, tone, action] of values) {
+      const card = action ? button(null, action, 'monitor-stat') : el('div', null, 'monitor-stat');
       card.append(el('span', label), el('strong', value, tone || ''));
       wrapper.append(card);
     }
@@ -105,13 +106,15 @@
   function graph(title, window, buckets, events, format, stacked = false) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
-    const width = 600, height = 154, left = 85, right = 14, top = 12, bottom = 126;
+    const width = 600, height = 154, left = 92, right = 19, top = 13, bottom = 126;
     const area = width - left - right;
     const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
     const detail = el('p', null, 'monitor-cursor-value');
     const pointCount = buckets.length;
     const x = index => left + (index + .5) * area / pointCount;
-    const maximum = Math.max(0, ...buckets.map(point => point?.values.reduce((sum, item) => sum + item.value, 0) ?? 0));
+    const maximum = Math.max(0, ...buckets.map(point => point ? (stacked ?
+      point.values.reduce((sum, item) => sum + item.value, 0) :
+      Math.max(0, ...point.values.map(item => item.value))) : 0));
     const scale = maximum > 0 ? maximum : 1;
     const y = value => bottom - value * (bottom - top) / scale;
     const axis = el('div', null, 'monitor-axis');
@@ -131,6 +134,7 @@
       label.style[side] = `${offset * 100 / width}%`;
       axis.append(label);
     }
+    const marks = [];
     for (const event of events) {
       const started = Date.parse(event.startedAt);
       if (started < window.from || started > window.to) continue;
@@ -138,11 +142,15 @@
       const mark = svg('line', { x1: position, x2: position, y1: top, y2: bottom, class: 'monitor-event-marker' });
       const label = svg('title');
       label.textContent = event.title;
-      mark.append(label); chart.append(mark);
+      mark.append(label);
+      const marker = svg('g', { class: 'monitor-mark' });
+      marker.append(mark, svg('circle', { cx: position, cy: top, r: 4, fill: 'var(--issue-line)' }));
+      marker.addEventListener('click', () => window.openEvent(event.id));
+      marks.push(marker);
     }
-    let previous = null;
+    const previous = new Map();
     buckets.forEach((point, index) => {
-      if (!point) { previous = null; return; }
+      if (!point) { previous.clear(); return; }
       const cx = x(index);
       if (stacked) {
         let base = 0;
@@ -152,17 +160,24 @@
           chart.append(svg('rect', { x: cx - bar / 2, y: y(next), width: bar, height: y(base) - y(next), fill: value.color }));
           base = next;
         }
-        if (base === 0) chart.append(svg('circle', { cx, cy: bottom - 1, r: 1.6, fill: '#7192a9' }));
+        if (base === 0) chart.append(svg('circle', { cx, cy: bottom - 1, r: 1.6, fill: 'var(--plot-gray)' }));
       } else {
-        const value = point.values[0];
-        const cy = y(value.value);
-        if (previous) chart.append(svg('line', { x1: previous.x, x2: cx, y1: previous.y, y2: cy, stroke: value.color, class: 'monitor-trendline' }));
-        chart.append(svg('circle', { cx, cy, r: 2.3, fill: value.color }));
-        previous = { x: cx, y: cy };
+        const next = new Map();
+        for (const value of point.values) {
+          const cy = y(value.value);
+          const key = value.key || value.label;
+          const last = previous.get(key);
+          if (last) chart.append(svg('line', { x1: last.x, x2: cx, y1: last.y, y2: cy, stroke: value.color, class: 'monitor-trendline' }));
+          chart.append(svg('circle', { cx, cy, r: 2.3, fill: value.color }));
+          next.set(key, { x: cx, y: cy });
+        }
+        previous.clear();
+        for (const [label, location] of next) previous.set(label, location);
       }
     });
     const cursor = svg('line', { y1: top, y2: bottom, class: 'monitor-crosshair' });
-    chart.append(cursor);
+    const brush = svg('rect', { y: top, height: bottom - top, width: 0, class: 'monitor-brush' });
+    chart.append(cursor, brush, ...marks);
     frame.tabIndex = 0;
     frame.setAttribute('role', 'group');
     frame.setAttribute('aria-label', `${title}，用左右方向键查看时间桶`);
@@ -179,19 +194,47 @@
       const observed = point?.observed == null ? '' : ` · 有效采样 ${point.observed}/${point.samples}`;
       detail.textContent = `${timestamp} · ${point ? (values.join(' / ').trim() || format(0)) + observed : '该时间桶无可用采样'}`;
     };
-    frame.addEventListener('pointermove', event => {
+    let start = null;
+    const indexAt = event => {
       const rect = chart.getBoundingClientRect();
       const logical = (event.clientX - rect.left) * width / rect.width;
-      const index = Math.floor((logical - left) * pointCount / area);
-      if (selected !== index) show(index);
+      return Math.min(pointCount - 1, Math.max(0, Math.floor((logical - left) * pointCount / area)));
+    };
+    const move = index => {
+      for (const showCursor of window.cursors) showCursor(index);
+    };
+    frame.addEventListener('pointerdown', event => {
+      if (event.button || event.pointerType === 'touch' || event.target.closest('.monitor-mark')) return;
+      start = indexAt(event);
+      frame.setPointerCapture(event.pointerId);
     });
+    frame.addEventListener('pointermove', event => {
+      const index = indexAt(event);
+      if (selected !== index) move(index);
+      if (start === null) return;
+      brush.setAttribute('x', x(Math.min(start, index)) - area / pointCount / 2);
+      brush.setAttribute('width', (Math.abs(start - index) + 1) * area / pointCount);
+    });
+    frame.addEventListener('pointerup', event => {
+      if (start === null) return;
+      const index = indexAt(event);
+      if (index !== start) window.zoom(
+        Math.max(window.from, window.first + Math.min(start, index) * window.bucketMs),
+        Math.min(window.to, window.first + (Math.max(start, index) + 1) * window.bucketMs)
+      );
+      else move(index);
+      start = null;
+      brush.setAttribute('width', 0);
+    });
+    frame.addEventListener('pointercancel', () => { start = null; brush.setAttribute('width', 0); });
     frame.addEventListener('keydown', event => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();
-      show(selected + (event.key === 'ArrowLeft' ? -1 : 1));
+      move(selected + (event.key === 'ArrowLeft' ? -1 : 1));
     });
-    if (selected >= 0) {
-      show(selected);
+    if (selected >= 0 || marks.length) {
+      window.cursors.add(show);
+      show(selected >= 0 ? selected : 0);
       frame.append(chart, axis);
       card.append(frame, detail);
     } else card.append(el('p', '所选时段暂无此指标。', 'monitor-empty'));
@@ -199,14 +242,14 @@
   }
 
   function windowFor(range, fixed) {
-    const [, duration, bin] = periods.find(([name]) => name === range) || periods[0];
+    const [, duration, bin] = periods.find(([name]) => name === range) || periods[1];
     const to = fixed?.to ?? Date.now();
     const from = fixed?.from ?? to - duration * minute;
     const minutes = fixed ? [1, 5, 15, 60].find(size => to - from <= size * minute * 380) : bin;
     const bucketMs = minutes * minute;
     const first = Math.floor(from / bucketMs) * bucketMs;
     const params = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucketMinutes: String(minutes) });
-    return { from, to, first, bucketMs, params, count: Math.ceil((to - first) / bucketMs) };
+    return { from, to, first, bucketMs, params, count: Math.ceil((to - first) / bucketMs), cursors: new Set() };
   }
 
   function aligned(rows, window, map) {
@@ -250,9 +293,7 @@
       }
     }
     const groupList = [...catalog.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
-    groupList.forEach((group, index) => {
-      group.color = group.other ? '#7c90a3' : depth === 'type' && waitColors[group.waitType] || palette[index % palette.length];
-    });
+    for (const group of groupList) group.color = waitColors[group.waitType] || 'var(--plot-gray)';
     const byKey = new Map(groupList.map((group, index) => [waitKey(group), { ...group, index }]));
     const points = aligned(rows, window, row => row.observed ? {
       observed: row.observed, samples: row.samples,
@@ -263,17 +304,23 @@
       '此范围没有可用等待快照。升级后需要新采样，并为采集账号授予 pg_read_all_stats（也可用 pg_monitor）。';
     card.append(el('p', summary, 'monitor-note'));
     if (rows.some(row => row.truncated)) card.append(el('p', '部分采样达到分组上限，细分数值可能偏低。', 'monitor-warning'));
-    const legend = el('div', null, 'monitor-legend');
-    for (const group of groupList) {
+    card.classList.add('monitor-focus-chart');
+    const ranking = panel(depth === 'query' ? 'Query ID 排名' : '主要等待');
+    const total = groupList.reduce((sum, group) => sum + group.total, 0);
+    const ranked = groupList.slice(0, 24).map(group => {
       const enabled = !group.other && (depth === 'query' ? Boolean(group.queryId) : depth === 'type' || Boolean(group.waitEvent));
-      const label = enabled ? button(group.label, () => selectGroup(group), 'monitor-legend-item') : el('span', group.label, 'monitor-legend-item');
+      const label = enabled ? button(group.label, () => selectGroup(group), 'monitor-link') : el('span', group.label);
+      label.classList.add('monitor-rank-label');
       const mark = el('span', null, 'monitor-swatch');
       mark.style.backgroundColor = group.color;
       label.prepend(mark);
-      legend.append(label);
-    }
-    if (groupList.length) card.append(legend);
-    return card;
+      return [label, number(group.total / observed, 3), total ? percent(group.total * 100 / total) : '—'];
+    });
+    if (ranked.length) ranking.append(table(['分组', '平均会话', '占比'], ranked, '等待排行'));
+    else ranking.append(el('p', observed ? '有效快照内没有匹配的活跃会话。' : '没有可供排名的等待数据。', 'monitor-empty'));
+    const split = el('div', null, 'monitor-split monitor-rank');
+    split.append(card, ranking);
+    return split;
   }
 
   function clusterKey(asset) {
@@ -318,55 +365,232 @@
   }
 
   function create(root, actions) {
-    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, renderSqlPerformance } = actions;
-    let assets = [], summaries = new Map(), ready = false, enabled = false, visible = false;
-    let cluster = '', instance = '', range = '1 小时', fixed = null, mode = 'metrics';
-    let timeWindow = null;
+    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, openPlans, renderSqlPerformance } = actions;
+    let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
+    let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
+    let compare = null, abnormalOnly = false, fleetTime = null;
     const header = el('div', null, 'monitor-controls');
-    const fleet = el('div');
+    const fleet = el('div', null, 'monitor-fleet');
+    const charts = el('div', null, 'monitor-layout');
     const details = el('section', null, 'monitor-instance');
     const tablist = el('div', null, 'monitor-tabs');
     tablist.setAttribute('aria-label', '实例监控专题');
     const body = el('div', null, 'monitor-content');
     const instanceTitle = el('h2', null, 'monitor-instance-title');
     const timeLabel = el('div', null, 'monitor-range-caption');
-    const clusterSelect = select('PG 集群', value => { cluster = value; instance = ''; update(); });
-    const instanceSelect = select('数据库实例', value => { instance = value; resetWaitFilters(); update(); });
-    const rangeSelect = select('时间范围', value => { range = value; fixed = null; timeWindow = null; update(); });
-    header.append(labeled('PG 集群', clusterSelect), labeled('实例', instanceSelect), labeled('时间范围', rangeSelect),
-      button('刷新', () => { if (!fixed) timeWindow = null; refreshFleet(); update(); }));
-    for (const [key, label] of tabs) tablist.append(button(label, () => { mode = key; if (key === 'sql') queryId = ''; update(); }));
-    details.append(instanceTitle, timeLabel, tablist, body);
+    let activeWindow = null;
+    const fleetLabel = el('p', null, 'monitor-range-caption');
+    const clusterSelect = select('PG 集群', value => { cluster = value; instance = ''; database = ''; resetFleet(); change(); });
+    const instanceSelect = select('数据库实例', value => { if (value) openInstance(value); else backToFleet(); });
+    const databaseSelect = select('数据库', value => { database = value; instance = ''; resetFleet(); change(); });
+    const rangeSelect = select('时间范围', value => {
+      if (value === 'custom') {
+        openRange();
+        return;
+      }
+      period = value;
+      fixed = null;
+      activeWindow = null;
+      eventAnchor = '';
+      rangeForm.hidden = true;
+      change();
+    });
+    const rangeForm = el('form', null, 'monitor-fixed');
+    const fromField = el('input'), toField = el('input');
+    fromField.type = toField.type = 'datetime-local';
+    fromField.required = toField.required = true;
+    const apply = el('button', '应用范围', 'monitor-action');
+    apply.type = 'submit';
+    const errorLabel = el('span', '', 'monitor-warning');
+    errorLabel.setAttribute('role', 'alert');
+    rangeForm.append(labeled('开始时间', fromField), labeled('结束时间', toField), apply,
+      button('取消', () => { rangeForm.hidden = true; updatePeriodOptions(); }), errorLabel);
+    rangeForm.hidden = true;
+    rangeForm.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!validRange(Date.parse(fromField.value), Date.parse(toField.value))) {
+        errorLabel.textContent = '请选择至少 1 分钟、最多 7 天且结束时间不晚于当前的范围。';
+        return;
+      }
+      zoom(Date.parse(fromField.value), Date.parse(toField.value));
+    });
+    const editRange = button('编辑时段', openRange);
+    header.append(labeled('PG 集群', clusterSelect), labeled('实例', instanceSelect), labeled('数据库', databaseSelect),
+      labeled('时间范围', rangeSelect), editRange, button('刷新', () => {
+        if (!fixed) activeWindow = null;
+        update();
+        void refreshFleet();
+      }), rangeForm);
+    for (const [key, label] of tabs) tablist.append(button(label, () => { mode = key; if (key === 'sql') queryId = ''; change(); }));
+    details.append(button('← 集群总览', backToFleet, 'monitor-link monitor-breadcrumb'), instanceTitle, timeLabel, tablist, body);
     root.append(header, fleet, details);
 
-    function members() {
-      return assets.filter(asset => !cluster || clusterKey(asset) === cluster);
+    function validRange(from, to) {
+      return Number.isFinite(from) && Number.isFinite(to) && to <= Date.now() && to - from >= minute && to - from <= 10080 * minute;
     }
+
+    function route() {
+      const params = new URLSearchParams();
+      for (const [key, value, fallback] of [
+        ['cluster', cluster, ''], ['instance', instance, ''], ['database', database, ''],
+        ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
+        ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, '']
+      ]) if (value && value !== fallback) params.set(key, value);
+      if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
+      return params.size ? `monitoring?${params}` : 'monitoring';
+    }
+
+    function restore(params) {
+      cluster = params.get('cluster') || '';
+      instance = params.get('instance') || '';
+      database = params.get('database') || '';
+      period = periods.find(([name]) => params.get('period') === name)?.[0] || defaultPeriod;
+      mode = tabs.find(([name]) => params.get('tab') === name)?.[0] || 'metrics';
+      group = ['event', 'query'].includes(params.get('group')) ? params.get('group') : 'type';
+      waitType = (params.get('waitType') || '').slice(0, 64);
+      waitEvent = (params.get('waitEvent') || '').slice(0, 128);
+      queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
+      eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
+      const from = Date.parse(params.get('from'));
+      const to = Date.parse(params.get('to'));
+      fixed = validRange(from, to) ? { from, to } : null;
+      activeWindow = null;
+      rangeForm.hidden = true;
+      resetFleet();
+      if (visible) update();
+    }
+
+    function change() {
+      if (visible && /^#monitoring(?:\?|$)/.test(location.hash) && location.hash !== `#${route()}`)
+        history.pushState(null, '', `#${route()}`);
+      update();
+    }
+
+    function updatePeriodOptions() {
+      options(rangeSelect, [...periods.map(([name]) => [name, `最近 ${name}`]),
+        ['custom', fixed ? '固定时间范围' : '自定义范围…']], fixed ? 'custom' : period);
+      editRange.hidden = !fixed;
+    }
+
+    function openRange() {
+      const range = windowFor(period, fixed);
+      for (const [input, value] of [[fromField, range.from], [toField, range.to]]) {
+        const local = new Date(value - new Date(value).getTimezoneOffset() * minute);
+        input.value = local.toISOString().slice(0, 16);
+      }
+      errorLabel.textContent = '';
+      rangeForm.hidden = false;
+      fromField.focus();
+    }
+
+    function zoom(from, to) {
+      if (!validRange(from, to)) return;
+      fixed = { from, to };
+      activeWindow = null;
+      rangeForm.hidden = true;
+      change();
+    }
+
+    function members() {
+      return assets.filter(asset => (!cluster || clusterKey(asset) === cluster) && (!database || database === asset.database));
+    }
+
+    function resetFleet() { compare = null; abnormalOnly = false; }
+    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
+
+    function openInstance(id) {
+      const asset = assets.find(item => item.id === id);
+      if (!asset) return;
+      if (id !== instance) {
+        resetWaitFilters();
+        mode = 'metrics';
+        eventAnchor = '';
+      }
+      cluster = clusterKey(asset);
+      if (database && database !== asset.database) database = '';
+      instance = id;
+      change();
+    }
+
+    function backToFleet() { instance = ''; eventAnchor = ''; resetWaitFilters(); change(); }
 
     function health(asset) {
       const status = assetHealth(asset);
       return el('span', status.label, `monitor-state monitor-state-${status.kind}`);
     }
 
-    function renderFleet() {
-      const items = members();
-      const rows = items.map(asset => {
-        const values = summaries.get(asset.id);
-        const connection = finite(values?.connections) && values.maxConnections > 0 ? percent(values.connections * 100 / values.maxConnections) : '—';
-        return [button(asset.name, () => { openInstance(asset.id); }, 'monitor-link'), clusterLabel(asset),
-          roleLabels[asset.role] || '未知', health(asset), display(values?.replicationLagBytes, bytes), connection,
-          display(values?.openEvents), assetRuntimeLabel(asset)];
-      });
-      const card = panel(cluster ? '集群成员' : '集群总览');
+    function connection(asset) {
+      const values = summaries.get(asset.id);
+      return finite(values?.connections) && values.maxConnections > 0 ? values.connections * 100 / values.maxConnections : null;
+    }
+
+    function eventList(events, title) {
+      const card = panel(title);
+      if (!events.length && eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
+      if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
+      for (const event of events) {
+        const item = button(event.title, () => openEvent(event.id), 'monitor-event');
+        item.append(el('small', [event.status === 'open' ? '处理中' : '已恢复', event.assetName,
+          formatTime(event.startedAt), event.id.slice(0, 8)].filter(Boolean).join(' · ')));
+        if (event.id === eventAnchor) item.setAttribute('aria-current', 'true');
+        card.append(item);
+      }
+      return card;
+    }
+
+    function renderFleet(time) {
+      if (!time || instance) return;
+      const rank = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
+      const items = members().sort((a, b) => rank[assetHealth(a).kind] - rank[assetHealth(b).kind] ||
+        (summaries.get(b.id)?.openEvents ?? 0) - (summaries.get(a.id)?.openEvents ?? 0) ||
+        Number(b.role === 'primary') - Number(a.role === 'primary') || a.name.localeCompare(b.name, 'zh-CN'));
       const roles = items.filter(asset => ['ok', 'manual'].includes(assetHealth(asset).kind));
+      const abnormal = items.length - roles.length;
       const open = items.reduce((sum, asset) => sum + (summaries.get(asset.id)?.openEvents ?? 0), 0);
-      const lag = items.map(asset => summaries.get(asset.id)?.replicationLagBytes).filter(finite);
-      card.append(stats([['纳管实例', items.length], ['已观测主库 / 备库', `${roles.filter(a => a.role === 'primary').length} / ${roles.filter(a => a.role === 'standby').length}`],
-        ['最大回放差距', lag.length ? bytes(Math.max(...lag)) : '—'], ['开放事件', items.every(asset => summaries.has(asset.id)) && items.length ? open : '—', open ? 'monitor-alert' : '']]));
-      if (items.length) card.append(table(['实例', 'PG 集群', '最近角色', '采集状态', '回放差距', '连接占用', '事件', '环境'], rows, '集群成员'));
-      else card.append(el('p', '暂无纳管实例。', 'monitor-empty'), button('纳管 PostgreSQL', openAssets));
-      fleet.replaceChildren(card);
+      const peak = items.filter(asset => finite(connection(asset))).sort((a, b) => connection(b) - connection(a))[0];
+      const lag = items.filter(asset => finite(summaries.get(asset.id)?.replicationLagBytes)).sort(
+        (a, b) => summaries.get(b.id).replicationLagBytes - summaries.get(a.id).replicationLagBytes)[0];
+      const split = el('div', null, 'monitor-split');
+      const card = panel(abnormalOnly ? '异常成员' : '成员健康');
+      card.classList.add('monitor-members');
+      card.append(el('p', '最新采样 · 异常成员优先', 'monitor-note'));
+      const ids = new Set(items.map(asset => asset.id));
+      const matching = recent.filter(event => ids.has(event.assetId));
+      const active = matching.filter(event => event.status === 'open');
+      const resolved = matching.filter(event => event.status !== 'open' && Date.parse(event.startedAt) < time.to && Date.parse(event.endedAt) >= time.from);
+      const issues = eventList((active.length ? active : resolved).slice(0, 5), active.length ? '当前事件' : '所选区间最近恢复');
+      issues.classList.add('monitor-latest');
+      if (open > active.length) issues.append(el('p', '这里展示最近返回的事件。其余可在问题事件中查找。', 'monitor-note'));
+      const statsBar = stats([
+        ['异常实例', abnormal, abnormal ? 'monitor-alert' : '', () => {
+          abnormalOnly = !abnormalOnly;
+          renderFleet(time);
+          fleet.querySelector('.monitor-stat')?.focus({ preventScroll: true });
+        }],
+        ['开放事件', items.length && items.every(asset => summaries.has(asset.id)) ? open : '—', open ? 'monitor-alert' : '', () => issues.scrollIntoView({ block: 'nearest' })],
+        ['最近主库 / 备库', `${roles.filter(a => a.role === 'primary').length} / ${roles.filter(a => a.role === 'standby').length}`],
+        ['最高连接占用', display(peak && connection(peak), percent), '', peak && (() => openInstance(peak.id))],
+        ['最大回放差距', display(lag && summaries.get(lag.id).replicationLagBytes, bytes), '', lag && (() => openInstance(lag.id))]
+      ]);
+      statsBar.firstElementChild.setAttribute('aria-pressed', String(abnormalOnly));
+      const list = abnormalOnly ? items.filter(asset => !roles.includes(asset)) : items;
+      const rows = list.map(asset => {
+        const values = summaries.get(asset.id);
+        const conn = display(connection(asset), percent);
+        const replay = display(values?.replicationLagBytes, bytes);
+        const name = el('div');
+        name.append(button(asset.name, () => openInstance(asset.id), 'monitor-link'));
+        const mobile = el('details', null, 'monitor-mobile-detail');
+        mobile.append(el('summary', '采样详情'), el('small', `${formatTime(asset.lastSampleAt)} · 连接 ${conn} · 回放 ${replay}`));
+        name.append(mobile);
+        return [name, roleLabels[asset.role] || '未知', health(asset), formatTime(asset.lastSampleAt), conn, replay, assetRuntimeLabel(asset)];
+      });
+      if (list.length) card.append(table(['实例', '角色', '采集状态', '最近采样', '连接占用', '回放差距', '环境'], rows, '集群成员'));
+      else if (!items.length) card.append(el('p', '没有匹配的纳管实例。', 'monitor-empty'), button('查看资产', openAssets));
+      else card.append(el('p', '当前没有异常成员。', 'monitor-empty'));
+      split.append(card, issues);
+      fleet.replaceChildren(statsBar, split, fleetLabel, charts);
     }
 
     async function refreshFleet() {
@@ -376,39 +600,77 @@
         const payload = await api('/api/monitoring/instances');
         if (key !== fleetRequest || !visible) return;
         summaries = new Map(payload.instances.map(item => [item.assetId, item]));
-        renderFleet();
+        renderFleet(fleetTime);
       } catch (error) {
-        if (key === fleetRequest && visible) fleet.append(el('p', `实例摘要暂不可用 · ${error.message}`, 'monitor-warning'));
+        if (key === fleetRequest && visible && !instance) fleetLabel.textContent = `实例摘要暂不可用 · ${error.message}`;
       }
     }
 
-    function openInstance(id) {
-      const asset = assets.find(item => item.id === id);
-      if (!asset) return;
-      if (instance !== id) resetWaitFilters();
-      cluster = clusterKey(asset);
-      instance = id;
-      update();
+    async function compareTrends(time) {
+      const key = ++request;
+      const items = members();
+      compare ??= new Set([...items].sort((a, b) => Number(b.role === 'primary') - Number(a.role === 'primary') ||
+        Number(assetHealth(b).kind === 'error') - Number(assetHealth(a).kind === 'error')).slice(0, 3).map(asset => asset.id));
+      const selected = items.filter(asset => compare.has(asset.id));
+      const colors = new Map(selected.map((asset, i) => [asset.id, palette[i]]));
+      if (!items.length) { charts.replaceChildren(); return; }
+      const picker = panel('集群趋势');
+      const controls = el('div', null, 'monitor-selection');
+      picker.append(el('p', '比较最多 5 个实例，每条曲线对应一个实例。', 'monitor-note'), controls);
+      for (const asset of items) {
+        const checkbox = el('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = compare.has(asset.id);
+        checkbox.disabled = compare.size >= 5 && !checkbox.checked;
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) compare.add(asset.id); else compare.delete(asset.id);
+          void compareTrends(time);
+          [...charts.querySelectorAll('input')][items.indexOf(asset)]?.focus({ preventScroll: true });
+        });
+        const label = el('label');
+        label.append(checkbox);
+        if (checkbox.checked) {
+          const swatch = el('span', null, 'monitor-swatch');
+          swatch.style.backgroundColor = colors.get(asset.id);
+          label.append(swatch);
+        }
+        label.append(asset.name);
+        controls.append(label);
+      }
+      charts.replaceChildren(picker);
+      if (!selected.length) { picker.append(el('p', '选择实例以比较趋势。', 'monitor-empty')); return; }
+      const loading = el('p', '正在读取集群趋势…', 'monitor-note');
+      picker.append(loading);
+      const results = await Promise.allSettled(selected.map(asset => api(`/api/assets/${asset.id}/series?${time.params}`)));
+      if (key !== request || !visible || instance) return;
+      time.cursors.clear();
+      loading.remove();
+      const failures = results.flatMap((result, i) => result.status === 'rejected' ? [selected[i].name] : []);
+      if (failures.length) picker.append(el('p', `趋势读取失败 · ${failures.join('、')}`, 'monitor-warning'));
+      const ids = new Set(selected.map(asset => asset.id));
+      const events = recent.filter(event => ids.has(event.assetId));
+      const panels = el('div', null, 'monitor-charts');
+      for (const [metric, title, format] of [
+        ['transactionsPerSecond', '事务吞吐', rate], ['averageReplicationLagBytes', '复制回放差距', bytes]
+      ]) {
+        const points = Array.from({ length: time.count }, () => ({ values: [] }));
+        for (const [index, result] of results.entries()) {
+          if (result.status !== 'fulfilled') continue;
+          const { id: assetId, name: label } = selected[index];
+          for (const [i, point] of aligned(result.value.series, time, row => row[metric]).entries()) {
+            if (finite(point)) points[i].values.push({ key: assetId, value: point, label, color: colors.get(assetId) });
+          }
+        }
+        panels.append(graph(title, time, points.map(point => point.values.length ? point : null), events, format));
+      }
+      picker.append(panels);
     }
-
-    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
 
     function followWait(item) {
       if (group === 'type') { waitType = item.waitType; waitEvent = ''; group = 'event'; }
       else if (group === 'event') { waitType = item.waitType; waitEvent = item.waitEvent; group = 'query'; }
       else if (item.queryId) { queryId = item.queryId; mode = 'sql'; }
-      update();
-    }
-
-    function eventList(events) {
-      const card = panel('时段内的事件');
-      if (!events.length) card.append(el('p', '此实例在当前范围内没有关联事件。', 'monitor-empty'));
-      for (const event of events) {
-        const item = button(`${event.status === 'open' ? '处理中' : '已恢复'} · ${event.title}`, () => openEvent(event.id), 'monitor-event');
-        item.append(el('small', `${formatTime(event.startedAt)} · ${event.id.slice(0, 8)}`));
-        card.append(item);
-      }
-      return card;
+      change();
     }
 
     async function load(asset, time) {
@@ -427,32 +689,59 @@
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data] = await Promise.all([
-          api(`${path}monitoring-context?${time.params}`), section ? api(`${path}${section}?${query}`) : null
+        const [context, data, waits] = await Promise.all([
+          api(`${path}monitoring-context?${time.params}`), section ? api(`${path}${section}?${query}`) : null,
+          mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
-        const events = context.events;
+        const events = context.events.map(event => ({ ...event, assetName: asset.name }));
+        time.cursors.clear();
         const fragment = document.createDocumentFragment();
-        if (mode === 'metrics') fragment.append(metricCharts(data.series, time, events, [
-          ['transactionsPerSecond', '事务吞吐', rate, '#2ac9ad'], ['averageConnectionUsagePercent', '连接占用率', percent, '#72a5ff'],
-          ['averageReplicationLagBytes', '复制回放差距', bytes, '#f59a61'], ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, '#ad96f7'],
-          ['averageBlockedSessions', '阻塞会话', number, '#f3bc77'], ['averageLongTransactions', '长事务', number, '#e68cb6'],
-          ['averageDatabaseBytes', '数据库容量', bytes, '#7bc6e0'], ['averageConnections', '平均连接数', number, '#9dd19e']
-        ]));
+        if (mode === 'metrics') {
+          if (waits?.buckets.some(bucket => bucket.observed > 0)) {
+            fragment.append(waitChart(waits.buckets, time, events, 'type', item => {
+              resetWaitFilters(); mode = 'waits'; followWait(item);
+            }));
+          } else {
+            const load = metricCharts(data.series, time, events, [
+              ['transactionsPerSecond', '数据库负载 · 事务吞吐', rate, palette[0]]
+            ]).firstElementChild;
+            load.classList.add('monitor-focus-chart');
+            load.append(el('p', '此时段缺少等待采样。可在等待分析查看采集覆盖。', 'monitor-note'));
+            const split = el('div', null, 'monitor-split');
+            split.append(load, eventList(events, '此实例的问题事件')); fragment.append(split);
+          }
+          const indicators = el('details', null, 'monitor-panel monitor-topic');
+          indicators.append(el('summary', '连接、事务、WAL 与复制'), metricCharts(data.series, time, events, [
+          ['transactionsPerSecond', '事务吞吐', rate, 'var(--plot-teal)'], ['averageConnectionUsagePercent', '连接占用率', percent, 'var(--plot-blue)'],
+          ['averageReplicationLagBytes', '复制回放差距', bytes, 'var(--plot-orange)'], ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, 'var(--plot-violet)'],
+          ['averageBlockedSessions', '阻塞会话', number, 'var(--plot-orange)'], ['averageLongTransactions', '长事务', number, 'var(--plot-pink)'],
+          ['averageDatabaseBytes', '数据库容量', bytes, 'var(--plot-blue)'], ['averageConnections', '平均连接数', number, 'var(--plot-teal)']
+          ]));
+          fragment.append(indicators);
+        }
         if (mode === 'waits') {
           const filter = el('div', null, 'monitor-wait-controls');
-          const dimension = select('等待分组', value => { group = value; waitType = ''; waitEvent = ''; update(); });
+          const dimension = select('等待分组', value => { group = value; waitType = ''; waitEvent = ''; change(); });
           options(dimension, [['type', '等待类型'], ['event', '具体等待事件'], ['query', 'Query ID']], group);
           filter.append(labeled('分组方式', dimension));
-          if (waitType) filter.append(button(`清除筛选 · ${waitType}${waitEvent ? '/' + waitEvent : ''}`, () => { waitType = ''; waitEvent = ''; update(); }));
+          if (waitType) filter.append(button(`返回上一级 · ${waitType}${waitEvent ? '/' + waitEvent : ''}`, () => {
+            if (waitEvent) { waitEvent = ''; group = 'event'; }
+            else { resetWaitFilters(); }
+            change();
+          }));
           fragment.append(filter, waitChart(data.buckets, time, events, group, followWait));
         }
         if (mode === 'sql') {
           const sql = panel(queryId ? `Query ID ${queryId}` : '区间 SQL 性能');
-          if (queryId) sql.append(button('查看此范围内的 Top SQL', () => { queryId = ''; update(); }));
+          if (queryId) sql.append(button('查看此范围内的 Top SQL', () => { queryId = ''; change(); }));
           if (data.performance.status === 'ok' && queryId && !data.performance.statements.length) {
             sql.append(el('p', '该 Query ID 在此范围的 SQL 性能快照里没有匹配指纹。', 'monitor-empty'));
           } else renderSqlPerformance(sql, data.performance);
+          if (queryId) {
+            const source = button('查看此实例的执行计划证据', () => openPlans(asset.id));
+            sql.append(source);
+          }
           fragment.append(sql);
         }
         if (mode === 'locks') {
@@ -467,12 +756,12 @@
         }
         if (mode === 'infra') {
           if (data?.series) fragment.append(metricCharts(data.series, time, events, [
-            ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, '#2ac9ad'],
-            ['averageLinuxMemoryPercent', 'Linux 内存 · node_exporter', percent, '#72a5ff']
+            ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, 'var(--plot-teal)'],
+            ['averageLinuxMemoryPercent', 'Linux 内存 · node_exporter', percent, 'var(--plot-blue)']
           ]));
           fragment.append(renderInfra(context.snapshot, asset));
         }
-        fragment.append(eventList(events));
+        if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
       } catch (error) {
         if (key === request && visible) body.replaceChildren(el('p', `读取监控数据失败 · ${error.message}`, 'monitor-warning'));
@@ -484,34 +773,53 @@
     function update() {
       if (!visible || !ready) return;
       header.hidden = !enabled;
-      details.hidden = true;
-      if (!enabled) { fleet.replaceChildren(el('p', '监控工作台使用 Go 版和 PostgreSQL 18 长期存储。', 'monitor-note')); return; }
+      if (!enabled) {
+        details.hidden = true;
+        fleet.hidden = false;
+        fleet.replaceChildren(el('p', '监控工作台使用 Go 版和 PostgreSQL 18 长期存储。', 'monitor-note'));
+        return;
+      }
       const clusters = new Map(assets.map(asset => [clusterKey(asset), clusterLabel(asset)]));
       if (!clusters.has(cluster)) cluster = '';
-      const selected = members();
-      const asset = selected.find(item => item.id === instance);
+      const available = assets.filter(asset => !cluster || clusterKey(asset) === cluster);
+      const dbs = [...new Set(available.map(asset => asset.database))].filter(Boolean).sort();
+      if (!dbs.includes(database)) database = '';
+      const list = members();
+      const asset = list.find(asset => asset.id === instance);
       if (!asset) instance = '';
       options(clusterSelect, [['', '全部集群'], ...[...clusters].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'))], cluster);
-      options(instanceSelect, [['', '选择实例'], ...selected.map(item => [item.id, item.name])], instance);
-      options(rangeSelect, [...periods.map(([name]) => [name, `最近 ${name}`]), ...(fixed ? [['event', '事件时段']] : [])], fixed ? 'event' : range);
-      renderFleet();
-      if (!asset) { request++; return; }
-      details.hidden = false;
-      const currentWindow = timeWindow ??= windowFor(range, fixed);
-      instanceTitle.textContent = asset.name;
-      timeLabel.textContent = `${asset.name} · ${asset.database} · ${formatTime(currentWindow.from)} 至 ${formatTime(currentWindow.to)}`;
-      for (const [index, item] of [...tablist.children].entries()) item.setAttribute('aria-pressed', String(tabs[index][0] === mode));
-      void load(asset, currentWindow);
+      options(databaseSelect, [['', '全部数据库'], ...dbs.map(name => [name, name])], database);
+      options(instanceSelect, [['', '集群总览'], ...list.map(item => [item.id, item.name])], instance);
+      updatePeriodOptions();
+      const time = activeWindow ??= windowFor(period, fixed);
+      time.openEvent = openEvent;
+      time.zoom = zoom;
+      const caption = `${formatTime(time.from)} 至 ${formatTime(time.to)} · ${fixed ? '固定范围' : '滚动范围'}`;
+      fleet.hidden = !!asset;
+      details.hidden = !asset;
+      if (asset) {
+        instanceTitle.textContent = asset.name;
+        timeLabel.textContent = [clusterLabel(asset), asset.database, roleLabels[asset.role] || '角色未知', assetHealth(asset).label, caption].join(' · ');
+        for (const [i, item] of [...tablist.children].entries()) item.setAttribute('aria-pressed', String(tabs[i][0] === mode));
+        void load(asset, time);
+      } else {
+        fleetTime = time;
+        fleetLabel.textContent = caption;
+        renderFleet(time);
+        void compareTrends(time);
+      }
     }
 
     return {
-      sync(nextAssets, available) {
+      sync(nextAssets, available, events) {
+        const first = !ready;
         assets = nextAssets;
+        recent = events;
         ready = true;
         enabled = available;
         if (visible) {
-          if (![body, header].some(container => container.contains(document.activeElement))) {
-            if (!fixed) timeWindow = null;
+          if (first || (!fixed && !root.contains(document.activeElement))) {
+            if (!fixed) activeWindow = null;
             update();
           }
           void refreshFleet();
@@ -523,16 +831,21 @@
         if (value) { update(); void refreshFleet(); }
         else { request++; fleetRequest++; }
       },
-      openInstance,
+      route, restore, openInstance,
       openIncident(event) {
+        const asset = assets.find(item => item.id === event.assetId);
+        if (!asset) return;
         const start = Date.parse(event.startedAt);
         const to = Math.min(Date.now(), event.endedAt ? Date.parse(event.endedAt) + 15 * minute : Date.now());
-        if (Number.isFinite(start) && Number.isFinite(to)) {
-          fixed = { from: Math.min(to - minute, Math.max(to - 10080 * minute, start - 15 * minute)), to };
-        }
-        timeWindow = null;
-        mode = 'waits'; resetWaitFilters();
-        openInstance(event.assetId);
+        const from = Math.min(to - minute, Math.max(to - 10080 * minute, start - 15 * minute));
+        fixed = validRange(from, to) ? { from, to } : null;
+        activeWindow = null;
+        cluster = clusterKey(asset);
+        database = asset.database;
+        instance = asset.id;
+        mode = 'waits';
+        eventAnchor = event.id;
+        resetWaitFilters();
       }
     };
   }

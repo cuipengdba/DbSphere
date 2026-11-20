@@ -6,6 +6,9 @@ let selectedAsset = null;
 let selectedAssetLayer = null;
 let selectedAssetTrendHours = 24;
 let selectedEvent = null;
+let eventRequest = 0;
+let eventSection = 'evidence';
+const pageSections = { alerts: 'active', inspections: 'history', settings: 'storage' };
 let recentEvents = [];
 let allAssets = [];
 let assetServerPaging = false;
@@ -47,8 +50,11 @@ const views = {
   settings: ['系统状态', '检查监控数据存储与部署状态。']
 };
 
-function setView(view, updateHash = true) {
-  const selected = views[view] ? view : 'overview';
+function setView(route, updateHash = true) {
+  const [view, query] = route.split('?');
+  const selected = Object.hasOwn(views, view) ? view : 'overview';
+  const params = new URLSearchParams(query);
+  if (selected !== 'assets' && $('asset-dialog').open) resetEdit();
   for (const section of document.querySelectorAll('[data-view]'))
     section.hidden = section.dataset.view !== selected ||
       ((section.id === 'admin-audit-panel' || section.id === 'collector-status-panel') && currentRole !== 'admin');
@@ -60,9 +66,29 @@ function setView(view, updateHash = true) {
   }
   $('view-title').textContent = views[selected][0];
   $('view-description').textContent = views[selected][1];
+  if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
+  if (pageSections[selected]) showSection(selected, pageSections[selected]);
   monitoring.setVisible(selected === 'monitoring');
-  if (updateHash && location.hash !== `#${selected}`) location.hash = selected;
+  if (updateHash) {
+    const next = selected === 'monitoring' ? monitoring.route() : query ? route : selected;
+    if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
+  }
   window.scrollTo({ top: 0, behavior: 'instant' });
+  if (selected === 'incidents' && !updateHash) {
+    const id = params.get('event');
+    if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id || '')) void openEvent(id, false);
+  }
+}
+
+function showSection(view, section) {
+  if (view === 'settings' && currentRole !== 'admin') section = 'storage';
+  pageSections[view] = section;
+  for (const button of document.querySelectorAll(`[data-view="${view}"] [data-section]`)) {
+    button.setAttribute('aria-pressed', String(button.dataset.section === section));
+  }
+  for (const panel of document.querySelectorAll(`[data-view="${view}"][data-section-panel], [data-view="${view}"] [data-section-panel]`)) {
+    panel.hidden = panel.dataset.sectionPanel !== section || (panel.classList.contains('admin-only') && currentRole !== 'admin');
+  }
 }
 
 function assetRuntimeLabel(asset) {
@@ -75,14 +101,19 @@ function renderOverview(assets, events) {
   const open = events.slice(0, 5);
   if (!open.length) focus.append(cell('p', '当前没有待处理事件。', 'empty'));
   for (const event of open) {
-    const button = cell('button', `${event.assetName} · ${event.title} · ${formatTime(event.startedAt)}`, 'event-button event-open');
-    button.addEventListener('click', () => showEvent(event.id)); focus.append(button);
+    const button = cell('button', '', 'event-button event-open overview-row');
+    button.append(cell('strong', event.title), cell('small', `${event.assetName} · ${formatTime(event.startedAt)}`));
+    button.addEventListener('click', () => openEvent(event.id));
+    focus.append(button);
   }
   const fleet = $('overview-assets'); fleet.replaceChildren();
   if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
-  for (const asset of assets.slice(0, 6)) {
+  const healthOrder = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
+  const ordered = [...assets].sort((a, b) => healthOrder[assetHealth(a).kind] - healthOrder[assetHealth(b).kind]);
+  for (const asset of ordered.slice(0, 6)) {
     const health = assetHealth(asset);
-    const button = cell('button', `${asset.name} · ${assetRuntimeLabel(asset)} · ${health.label}`, `event-button health-${health.kind}`);
+    const button = cell('button', '', `event-button overview-row health-${health.kind}`);
+    button.append(cell('strong', asset.name), cell('small', `${assetRuntimeLabel(asset)} · ${health.label} · ${formatTime(asset.lastSampleAt)}`));
     button.addEventListener('click', () => {
       if (assetServerPaging) { monitoring.openInstance(asset.id); setView('monitoring'); }
       else { setView('assets'); void showAsset(asset.id); }
@@ -120,8 +151,14 @@ function cell(tag, text, cls) {
 }
 
 const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
-  api, assetHealth, assetRuntimeLabel, formatTime, openEvent: id => showEvent(id),
-  openAssets: () => setView('assets'), renderSqlPerformance
+  api, assetHealth, assetRuntimeLabel, formatTime, openEvent,
+  openAssets: () => setView('assets'),
+  openPlans: id => {
+    setView('assets');
+    showAsset(id, 'sql-plans').then(() => $('detail').scrollIntoView({ block: 'start' }))
+      .catch(error => notice(error.message, true));
+  },
+  renderSqlPerformance
 });
 
 async function refresh() {
@@ -158,7 +195,7 @@ async function refresh() {
   renderOverview(assets, eventOverview.latestOpen);
   allAssets = assets;
   assetServerPaging = runtime?.backend === 'go';
-  monitoring.sync(assets, assetServerPaging);
+  monitoring.sync(assets, assetServerPaging, [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
   else renderLegacyAssets();
@@ -172,8 +209,6 @@ async function refresh() {
   renderNotifications(notifications);
   pg18Store = storage.mode !== 'sqlite-preview';
   renderStorage(storage);
-  $('admin-audit-panel').hidden = currentRole !== 'admin' || location.hash.slice(1) !== 'settings';
-  $('collector-status-panel').hidden = currentRole !== 'admin' || location.hash.slice(1) !== 'settings';
   if (currentRole === 'admin') {
     renderAdminAudit(audit?.entries);
     renderCollectorStatus(collector);
@@ -352,8 +387,8 @@ function renderAssets(assets, summary = '') {
   }
 }
 
-async function showAsset(id) {
-  const preferredLayer = selectedAsset === id ? selectedAssetLayer : null;
+async function showAsset(id, layer) {
+  const preferredLayer = layer ?? (selectedAsset === id ? selectedAssetLayer : null);
   const restoreLayerFocus = selectedAsset === id && document.activeElement?.getAttribute('role') === 'tab';
   selectedAsset = id;
   const [{ asset }, { samples }, { performance }, { entries: slowLogs }, { plans }] = await Promise.all([
@@ -798,12 +833,16 @@ function renderEvents(events, hasMore, summary) {
   }
 }
 
-async function openEvent(id) {
+async function openEvent(id, updateHash = true) {
   try {
-    await showEvent(id);
-    if (matchMedia('(max-width: 1080px)').matches)
+    await showEvent(id, updateHash);
+    if (selectedEvent === id && matchMedia('(max-width: 1080px)').matches)
       $('event-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } catch (error) { notice(error.message, true); }
+  } catch (error) {
+    if (location.hash === `#incidents?event=${encodeURIComponent(id)}`)
+      $('event-detail').replaceChildren(cell('p', error.message, 'warning'));
+    else notice(error.message, true);
+  }
 }
 
 function renderAlerts(alerts) {
@@ -811,7 +850,7 @@ function renderAlerts(alerts) {
   if (!alerts.length) { list.append(cell('p', '当前没有触发中的告警。', 'empty')); return; }
   for (const alert of alerts) {
     const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${formatAlertValue(alert.rule.metric, alert.state.lastValue)}${alert.state.missingSince ? ' · 指标已失联' : ''}${alert.state.mutedBy ? ' · 通知已静默' : ''}`, 'event-button');
-    button.addEventListener('click', () => showEvent(alert.state.eventId));
+    button.addEventListener('click', () => openEvent(alert.state.eventId));
     list.append(button);
   }
 }
@@ -997,38 +1036,76 @@ function editAsset(asset) {
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '更新资产';
   $('cancel-edit').hidden = false;
-  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('asset-dialog-title').textContent = '编辑 PostgreSQL 实例';
+  $('asset-error').textContent = '';
+  if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
 
 function resetEdit() {
+  if ($('asset-dialog').open) $('asset-dialog').close();
   editingAsset = null;
+  $('asset-dialog-title').textContent = '纳管 PostgreSQL 实例';
+  $('asset-error').textContent = '';
   $('asset-form').reset();
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '保存资产';
   $('cancel-edit').hidden = true;
 }
 
-async function showEvent(id) {
-  setView('incidents');
+async function showEvent(id, updateHash = true) {
+  const request = ++eventRequest;
+  if (updateHash) setView(`incidents?event=${encodeURIComponent(id)}`);
+  const target = $('event-detail');
+  target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, relatedEvents = [] } = await api(`/api/events/${id}`);
   const eventAudit = currentRole === 'admin' ? await api(`/api/events/${id}/audit`).catch(() => null) : null;
   const workOrders = currentRole === 'admin' || currentRole === 'approver' ?
     await api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] };
+  if (request !== eventRequest) return;
+  if (selectedEvent !== id) eventSection = 'evidence';
   selectedEvent = id;
   for (const button of $('event-list').querySelectorAll('[data-event-id]')) {
     button.classList.toggle('selected', button.dataset.eventId === id);
     if (button.dataset.eventId === id) button.setAttribute('aria-current', 'true');
     else button.removeAttribute('aria-current');
   }
-  const target = $('event-detail'); target.replaceChildren();
-  target.append(cell('h3', `${event.title} · ${event.status === 'open' ? '处理中' : '已恢复'}`));
-  target.append(cell('small', `事件 ID ${event.id} · ${formatTime(event.startedAt)} 至 ${formatTime(event.endedAt)}`));
+  const summary = cell('div', '', 'incident-summary');
+  const status = cell('span', event.status === 'open' ? '处理中' : '已恢复', `incident-status is-${event.status}`);
+  const header = cell('div', '', 'incident-card-meta');
+  header.append(status, cell('span', event.assetName || allAssets.find(asset => asset.id === event.assetId)?.name || event.assetId));
+  summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ' · 恢复 ' + formatTime(event.endedAt) : ''}`),
+    cell('small', `事件 ID ${event.id}`));
+  target.replaceChildren(summary);
+  const sections = ['evidence', 'response', 'timeline'];
+  const content = new Map(sections.map(key => [key, cell('section', '', 'incident-content')]));
+  const evidencePanel = content.get('evidence');
+  const responsePanel = content.get('response');
+  const timelinePanel = content.get('timeline');
+  const sectionBar = cell('div', '', 'section-nav incident-nav');
+  sectionBar.setAttribute('aria-label', '事件工作区');
+  const labels = ['根因与证据', '处置', '时间线与报告'];
+  const sectionButtons = sections.map((key, index) => {
+    const button = cell('button', labels[index]);
+    button.type = 'button';
+    button.addEventListener('click', () => activate(key));
+    return button;
+  });
+  function activate(key) {
+    eventSection = key;
+    sections.forEach((item, index) => {
+      sectionButtons[index].setAttribute('aria-pressed', String(item === key));
+      content.get(item).hidden = item !== key;
+    });
+  }
+  sectionBar.append(...sectionButtons);
+  activate(eventSection);
+  target.append(sectionBar, ...content.values());
   if (assetServerPaging) {
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';
     jump.addEventListener('click', () => { monitoring.openIncident(event); setView('monitoring'); });
     const actions = cell('div', '', 'actions monitor-event-jump');
-    actions.append(jump); target.append(actions);
+    actions.append(jump); summary.append(actions);
   }
   if (relatedEvents.length) {
     const related = document.createElement('details'); related.className = 'evidence';
@@ -1041,7 +1118,7 @@ async function showEvent(id) {
       related.append(row);
     }
     related.append(cell('small', '共享样本表示两个事件记录了同一次采样，不证明它们具有相同根因。'));
-    target.append(related);
+    evidencePanel.append(related);
   }
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
@@ -1094,8 +1171,6 @@ async function showEvent(id) {
     if (analysis.traceCoverage.atLimit) impact.append(cell('small', '已达到 100 条 Span 显示上限，计数可能不完整。'));
     diagnosis.append(impact);
   }
-  diagnosis.append(window.DbSphereObservability.eventGraph(analysis.graph, event));
-  diagnosis.append(window.DbSphereObservability.incidentTimeline(event));
   const graphTypes = new Set(analysis.graph.nodes.map(node => node.type));
   const hasTrace = (analysis.traceCoverage?.spans ?? 0) > 0;
   const chain = document.createElement('div'); chain.className = 'flow-strip';
@@ -1121,7 +1196,6 @@ async function showEvent(id) {
   }
   const coverageDetails = document.createElement('details'); coverageDetails.className = 'obs-coverage-details';
   coverageDetails.append(cell('summary', '查看分层信号覆盖与缺口'), chain);
-  diagnosis.append(coverageDetails);
   const graphDetails = document.createElement('details');
   graphDetails.append(cell('summary', '查看证据关系'));
   const graphNodes = new Map(analysis.graph.nodes.map(node => [node.id, node]));
@@ -1150,7 +1224,6 @@ async function showEvent(id) {
     }
     graphDetails.append(relation);
   }
-  diagnosis.append(graphDetails);
   if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));
   for (const candidate of analysis.candidates) {
     const candidateCard = cell('section', '', 'rca-candidate');
@@ -1203,14 +1276,15 @@ async function showEvent(id) {
     diagnosis.append(candidateCard);
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
-  target.append(diagnosis);
+  evidencePanel.append(diagnosis, window.DbSphereObservability.eventGraph(analysis.graph, event), coverageDetails, graphDetails);
+  timelinePanel.append(window.DbSphereObservability.incidentTimeline(event));
   const reports = document.createElement('div'); reports.className = 'actions';
   for (const [format, label] of [['md', '下载事件报告 · Markdown'], ['html', '下载事件报告 · HTML']]) {
     const button = cell('button', label, 'ghost small-button');
     button.addEventListener('click', () => { window.location.href = `/api/events/${event.id}/report?format=${format}`; });
     reports.append(button);
   }
-  target.append(reports);
+  timelinePanel.append(reports);
   if (currentRole === 'admin' || currentRole === 'approver') {
     const panel = document.createElement('section'); panel.className = 'response-form';
     panel.append(cell('h4', '事件工单 · 双人审批'));
@@ -1261,14 +1335,14 @@ async function showEvent(id) {
       }
       panel.append(row);
     }
-    target.append(panel);
+    responsePanel.append(panel);
   }
   if (currentRole === 'admin') {
     const auditDetails = document.createElement('details'); auditDetails.className = 'settings-details';
     auditDetails.append(cell('summary', '查看该事件的操作记录'));
     const auditList = document.createElement('div'); auditList.className = 'list';
     renderAdminAudit(eventAudit?.entries, auditList);
-    auditDetails.append(auditList); target.append(auditDetails);
+    auditDetails.append(auditList); timelinePanel.append(auditDetails);
   }
   const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
   if (aiStatus.enabled && currentRole === 'admin') {
@@ -1307,16 +1381,16 @@ async function showEvent(id) {
       } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
       finally { ask.disabled = false; }
     });
-    target.append(analyze, questionForm, aiResult);
+    evidencePanel.append(analyze, questionForm, aiResult);
   }
-  if (event.acknowledgedAt) target.append(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
+  if (event.acknowledgedAt) responsePanel.prepend(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open') {
     const acknowledge = cell('button', '确认事件', 'ghost small-button write-action');
     acknowledge.addEventListener('click', async () => {
       try { await api(`/api/events/${event.id}/ack`, 'POST'); await showEvent(event.id); await refresh(); }
       catch (error) { notice(error.message, true); }
     });
-    target.append(acknowledge);
+    responsePanel.prepend(acknowledge);
   }
   const responseForm = document.createElement('form'); responseForm.className = 'response-form';
   responseForm.append(cell('h4', '处置与恢复验证'));
@@ -1351,7 +1425,9 @@ async function showEvent(id) {
       notice('处理记录已保存到当前事件。'); await showEvent(event.id); await refresh();
     } catch (error) { notice(error.message, true); }
   });
-  target.append(responseForm);
+  responsePanel.append(responseForm);
+  if (currentRole === 'viewer' && !event.acknowledgedAt)
+    responsePanel.append(cell('p', '此账号可以查看已记录的处置和恢复验证。', 'hint'));
   const condensedTimeline = event.evidence.length > 12;
   const highlights = document.createElement('div'); highlights.className = 'event-highlights';
   if (condensedTimeline) highlights.append(cell('h4', '关键时间节点'));
@@ -1359,8 +1435,8 @@ async function showEvent(id) {
   timeline.open = !condensedTimeline;
   timeline.append(cell('summary', `完整证据时间线（${event.evidence.length} 条）`));
   const timelineEntries = document.createElement('div'); timeline.append(timelineEntries);
-  if (condensedTimeline) target.append(highlights);
-  target.append(timeline);
+  if (condensedTimeline) timelinePanel.append(highlights);
+  timelinePanel.append(timeline);
   let highlightCount = 0;
   let highlightedNoLeader = false;
   for (const evidence of event.evidence) {
@@ -1399,8 +1475,10 @@ async function showEvent(id) {
     if (evidence.kind === 'work_order_requested') text = `管理员申请只读采样工单 ${evidence.payload.workOrderId}：${evidence.payload.reason}`;
     if (evidence.kind === 'work_order_decision') text = `独立审批账号${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
     if (evidence.kind === 'work_order_executed') text = `管理员执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
-    if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') text =
-      `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
+    if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') {
+      text = `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
+      responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
+    }
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence');
     timelineEntries.append(row);
     const noLeader = evidence.kind === 'patroni_state' && evidence.payload?.leaderCount === 0;
@@ -1433,6 +1511,20 @@ async function boot() {
 
 for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click', () => setView(button.dataset.nav));
 for (const button of document.querySelectorAll('[data-open-view]')) button.addEventListener('click', () => setView(button.dataset.openView));
+for (const bar of document.querySelectorAll('.section-nav')) {
+  for (const button of bar.querySelectorAll('[data-section]')) {
+    button.addEventListener('click', () => showSection(bar.dataset.view, button.dataset.section));
+  }
+}
+$('asset-add').addEventListener('click', () => {
+  resetEdit();
+  $('asset-dialog').showModal();
+});
+$('asset-close').addEventListener('click', resetEdit);
+$('asset-dialog').addEventListener('cancel', event => {
+  event.preventDefault();
+  resetEdit();
+});
 $('asset-search').addEventListener('input', resetAssetPage);
 $('asset-runtime').addEventListener('change', resetAssetPage);
 $('asset-prev').addEventListener('click', () => {
@@ -1463,8 +1555,9 @@ window.addEventListener('hashchange', () => setView(location.hash.slice(1), fals
 
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  $('login-error').textContent = '';
   try { const data = await api('/api/login', 'POST', { password: new FormData(event.target).get('password') }); event.target.reset(); csrf = data.csrf; await boot(); }
-  catch (e) { alert(e.message); }
+  catch (e) { $('login-error').textContent = e.message; }
 });
 
 $('logout').addEventListener('click', async () => {
@@ -1556,8 +1649,8 @@ $('asset-form').addEventListener('submit', async (event) => {
     await api(editingAsset ? `/api/assets/${editingAsset}` : '/api/assets', editingAsset ? 'PATCH' : 'POST', data);
     resetEdit(); notice('资产已保存。点击“采集”验证连接。'); await refresh();
   }
-  catch (e) { notice(e.message, true); }
+  catch (e) { $('asset-error').textContent = e.message; }
 });
 
-boot().catch(e => { $('login-panel').hidden = false; alert(e.message); });
+boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
 setInterval(() => { if (csrf) refresh().catch(() => {}); }, 30000);

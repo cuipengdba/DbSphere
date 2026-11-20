@@ -5,22 +5,25 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>DbSphere · 全域数据库智能运维管理平台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/freshness.css">
+  <link rel="stylesheet" href="/console.css">
   <script src="/observability.js" defer></script>
   <script src="/monitoring.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <div><strong class="brand">DbSphere</strong><span class="subtitle">全域数据库智能运维管理平台</span></div>
-    <div class="header-session"><span id="role-label" hidden></span><button id="logout" class="ghost" hidden>退出</button></div>
+    <div class="product"><span class="product-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 4 14 4 14 0V6M5 12c0 4 14 4 14 0"/></svg></span><strong class="brand">DbSphere</strong><span class="subtitle">全域数据库智能运维管理平台</span></div>
+    <div class="header-session"><label class="theme-field"><span class="sr-only">界面主题</span><select id="theme-select" aria-label="界面主题"><option value="light">浅色主题</option><option value="dark">深色主题</option></select></label><span id="role-label" hidden></span><button id="logout" class="ghost" hidden>退出</button></div>
   </header>
   <main>
     <section id="login-panel" class="panel login">
       <p class="eyebrow" id="release-label">DbSphere 控制台</p>
       <h1>登录运维控制台</h1>
-      <p>使用管理员、只读查看或独立审批账号密码。</p>
+      <p>输入账号密码进入数据库运维工作台。</p>
+      <p id="login-error" class="notice error" role="alert"></p>
       <form id="login-form">
         <label>登录密码<input name="password" type="password" required autocomplete="current-password"></label>
         <button type="submit">登录</button>
@@ -29,20 +32,20 @@
 
     <div id="workspace" class="workspace-shell" hidden>
       <aside class="workspace-sidebar" aria-label="主导航">
-        <div class="sidebar-brand">DbSphere <small>数据库运维工作台</small></div>
+        <div class="sidebar-brand">工作台</div>
         <nav class="workspace-nav">
-          <button type="button" data-nav="overview">总览</button>
-          <button type="button" data-nav="monitoring">监控工作台</button>
-          <button type="button" data-nav="incidents">问题事件</button>
-          <button type="button" data-nav="assets">资产与实例</button>
-          <button type="button" data-nav="alerts">告警与通知</button>
-          <button type="button" data-nav="inspections">巡检与报告</button>
-          <button type="button" data-nav="settings">系统状态</button>
+          <button type="button" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span>总览</span></button>
+          <button type="button" data-nav="monitoring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3v18h18 M5 14h4l3-7 3 10 3-5h4"/></svg><span>监控工作台</span></button>
+          <button type="button" data-nav="incidents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M12 3 2.8 19.5h18.4L12 3z M12 9v5 M12 16.5v1"/></svg><span>问题事件</span></button>
+          <button type="button" data-nav="assets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6 M4 12c0 4 16 4 16 0"/></svg><span>资产与实例</span></button>
+          <button type="button" data-nav="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3z M10 20h4"/></svg><span>告警与通知</span></button>
+          <button type="button" data-nav="inspections"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z M9 10h7 M9 14h7 M9 17h5"/></svg><span>巡检与报告</span></button>
+          <button type="button" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>系统状态</span></button>
         </nav>
         <div class="sidebar-foot">PostgreSQL 14–18<br>Linux · Kubernetes · 托管 PG</div>
       </aside>
       <div class="workspace-main">
-      <div class="workspace-heading"><div><p class="eyebrow">DBSPHERE CONTROL CENTER</p><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
+      <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
       <section class="summary" aria-label="总览" data-view="overview">
         <div class="stat"><span>纳管实例</span><strong id="asset-count">0</strong></div>
@@ -50,20 +53,21 @@
         <div class="stat"><span>开放事件</span><strong id="event-count">0</strong></div>
       </section>
       <div class="grid overview-grid" data-view="overview">
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">FOCUS</p><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">FLEET</p><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div><div id="overview-assets" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div><div id="overview-assets" class="list"></div></section>
       </div>
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
-      <div class="grid" data-view="assets">
+      <div data-view="assets">
         <section class="panel">
-          <div class="section-head"><div><p class="eyebrow">ASSETS</p><h2>PostgreSQL 资产</h2></div><button id="refresh" class="ghost">刷新</button></div>
+          <div class="section-head"><div><h2>PostgreSQL 资产</h2></div><div class="section-actions"><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
           <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索 PostgreSQL 资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></div>
           <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <div id="asset-list" class="list"></div>
           <div id="asset-page-controls" class="event-page-controls" hidden><button id="asset-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="asset-next" type="button" class="ghost small-button" disabled>下一页</button></div>
         </section>
-        <section class="panel">
-          <div class="section-head"><div><p class="eyebrow">ONBOARD</p><h2>新增只读纳管</h2></div></div>
+        <dialog id="asset-dialog" class="asset-drawer" aria-labelledby="asset-dialog-title">
+          <div class="section-head"><h2 id="asset-dialog-title">纳管 PostgreSQL 实例</h2><button id="asset-close" class="ghost" type="button">关闭</button></div>
+          <p id="asset-error" class="notice error" role="alert"></p>
           <form id="asset-form" class="form-grid">
             <label>资产名称<input name="name" required maxlength="100" placeholder="生产主库"></label>
             <label>PG 集群名（可选）<input name="clusterName" maxlength="100" placeholder="生产订单库"><span class="hint">同一 PostgreSQL 集群的主备填写相同名称。与 K8S 集群名独立。</span></label>
@@ -95,24 +99,25 @@
             <button class="wide ghost" id="cancel-edit" type="button" hidden>取消编辑</button>
           </form>
           <p class="hint">Linux 主机指标需部署 node_exporter 并填写端口；K8S Pod/PVC 采集需只读 API 凭据；托管 PostgreSQL 仅采集数据库侧可见信号。请使用最小权限监控账号。</p>
-        </section>
+        </dialog>
       </div>
-      <section class="panel lower" data-view="assets"><div class="section-head"><div><p class="eyebrow">DETAIL</p><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
+      <section class="panel lower" data-view="assets"><div class="section-head"><div><h2>实例详情</h2></div></div><div id="detail" class="empty">选择资产查看最新采样。</div></section>
       <div class="grid incident-grid" data-view="incidents">
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">INCIDENTS</p><h2>问题事件</h2></div></div>
+        <section class="panel"><div class="section-head"><div><h2>问题事件</h2></div></div>
           <div class="incident-filters"><input id="event-search" type="search" maxlength="128" aria-label="搜索问题事件" placeholder="标题、资产或事件 ID"><select id="event-status" aria-label="筛选事件状态"><option value="all">全部状态</option><option value="open">处理中</option><option value="resolved">已恢复</option></select></div>
           <p id="event-filter-summary" class="hint" aria-live="polite"></p><div id="event-list" class="list"></div>
           <div id="event-page-controls" class="event-page-controls" hidden><button id="event-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="event-next" type="button" class="ghost small-button" disabled>下一页</button></div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">EVIDENCE</p><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择左侧事件查看同一事件 ID 的全链路证据。</div></section>
+        <section class="panel"><div class="section-head"><div><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择左侧事件查看同一事件 ID 的全链路证据。</div></section>
       </div>
-      <div class="grid" data-view="alerts">
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">ALERTS</p><h2>当前告警</h2></div></div><div id="alert-list" class="list"></div></section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">DELIVERY</p><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
+      <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button></div>
+      <div class="section-stack" data-view="alerts">
+        <section class="panel" data-section-panel="active"><div class="section-head"><div><h2>当前告警</h2></div></div><div id="alert-list" class="list"></div></section>
+        <section class="panel" data-section-panel="delivery"><div class="section-head"><div><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
       </div>
-      <details class="panel lower settings-details" data-view="alerts"><summary>告警规则与阈值配置</summary><div id="rule-list" class="list"></div></details>
-      <div class="grid lower" data-view="alerts">
+      <section class="panel" data-view="alerts" data-section-panel="rules"><div class="section-head"><h2>告警规则与阈值</h2></div><div id="rule-list" class="list"></div></section>
+      <div class="grid" data-view="alerts" data-section-panel="silences">
         <section class="panel">
-          <div class="section-head"><div><p class="eyebrow">SILENCES</p><h2>静默与维护窗</h2></div></div>
+          <div class="section-head"><div><h2>静默与维护窗</h2></div></div>
           <form id="silence-form" class="form-grid">
             <label>类型<select name="kind"><option value="silence">告警静默</option><option value="maintenance">计划维护</option></select></label>
             <label>范围<select name="assetId" id="silence-asset"><option value="">全部资产</option></select></label>
@@ -123,11 +128,12 @@
           </form>
           <p class="hint">静默仅抑制通知；告警、问题事件和证据仍持续记录。新时间窗在下次采样时生效。</p>
         </section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">WINDOWS</p><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
+        <section class="panel"><div class="section-head"><div><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
       </div>
-      <div class="grid" data-view="inspections">
-        <section class="panel">
-          <div class="section-head"><div><p class="eyebrow">INSPECT</p><h2>巡检模板与计划</h2></div></div>
+      <div class="section-nav" data-view="inspections" aria-label="巡检专题"><button type="button" data-section="history">巡检历史</button><button type="button" data-section="schedules">巡检计划</button><button type="button" data-section="templates">巡检模板</button></div>
+      <div class="section-stack" data-view="inspections">
+        <section class="panel" data-section-panel="schedules">
+          <div class="section-head"><div><h2>巡检计划</h2></div></div>
           <form id="inspection-form" class="form-grid">
             <label>资产<select name="assetId" id="inspection-asset" required></select></label>
             <label>模板<select name="templateId" id="inspection-template" required></select></label>
@@ -138,13 +144,14 @@
           </form>
           <p class="hint">巡检会重新采样；采集失败和缺失信号记录为未知。模板版本随阈值修改递增。</p>
           <div id="inspection-schedules" class="list"></div>
-          <details class="settings-details"><summary>巡检模板与阈值配置</summary><div id="inspection-templates" class="list"></div></details>
         </section>
-        <section class="panel"><div class="section-head"><div><p class="eyebrow">HISTORY</p><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
+        <section class="panel" data-section-panel="templates"><div class="section-head"><h2>巡检模板与阈值</h2></div><div id="inspection-templates" class="list"></div></section>
+        <section class="panel" data-section-panel="history"><div class="section-head"><div><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
       </div>
-      <section class="panel" data-view="settings"><div class="section-head"><div><p class="eyebrow">STORAGE</p><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
-      <section class="panel lower" data-view="settings" id="collector-status-panel"><div class="section-head"><div><p class="eyebrow">COLLECTOR</p><h2>自动采集运行状态</h2></div></div><div id="collector-status-detail" class="empty">正在读取当前进程的采集状态。</div></section>
-      <section class="panel lower" data-view="settings" id="admin-audit-panel"><div class="section-head"><div><p class="eyebrow">AUDIT</p><h2>管理员操作记录</h2></div></div><p class="hint">最近 100 次已认证的写入请求。记录请求路径与 HTTP 结果，不包含密码或请求正文。</p><div id="admin-audit-list" class="list"></div></section>
+      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="collector">采集器</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <section class="panel" data-view="settings" data-section-panel="storage"><div class="section-head"><div><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
+      <section class="panel admin-only" data-view="settings" data-section-panel="collector" id="collector-status-panel"><div class="section-head"><div><h2>自动采集运行状态</h2></div></div><div id="collector-status-detail" class="empty">正在读取当前进程的采集状态。</div></section>
+      <section class="panel admin-only" data-view="settings" data-section-panel="audit" id="admin-audit-panel"><div class="section-head"><div><h2>管理员操作记录</h2></div></div><p class="hint">最近 100 次已认证的写入请求。记录请求路径与 HTTP 结果，不包含密码或请求正文。</p><div id="admin-audit-list" class="list"></div></section>
       </div>
     </div>
   </main>

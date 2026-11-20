@@ -61,7 +61,7 @@
     infra: new Set(['postgres', 'sample', 'linux', 'pod', 'app_pod', 'k8s_node', 'pvc', 'pvc_status']),
     cause: new Set(['event', 'evidence', 'candidate', 'sample', 'postgres'])
   };
-  const accent = ['#3382bd', '#6b70b8', '#268a72', '#a66b40', '#c56845'];
+  const accent = ['var(--plot-blue)', 'var(--plot-violet)', 'var(--plot-teal)', 'var(--plot-orange)', 'var(--plot-orange)'];
   const important = new Set(['parent_of', 'calls', 'calls_service', 'via_pooler', 'routes_to',
     'same_backend_pid', 'blocked_by', 'query_id_matches', 'supported_by',
     'hypothesizes', 'originated_from', 'scheduled_on', 'references_pvc', 'observed_pvc_status']);
@@ -181,13 +181,13 @@
       const defs = svg('defs');
       const marker = svg('marker', { id: markerID, markerWidth: 7, markerHeight: 7,
         refX: 6, refY: 3.5, orient: 'auto', markerUnits: 'userSpaceOnUse' });
-      marker.append(svg('path', { d: 'M 0 0 L 7 3.5 L 0 7 z', fill: '#8e9ebb' }));
+      marker.append(svg('path', { d: 'M 0 0 L 7 3.5 L 0 7 z', fill: 'var(--plot-gray)' }));
       defs.append(marker); canvas.append(defs);
       const positions = new Map();
       for (let lane = 0; lane < activeLanes.length; lane++) {
         const { bucket, index: stageIndex } = activeLanes[lane];
         canvas.append(svg('rect', { x: lane * laneWidth + 3, y: 4, width: laneWidth - 6,
-          height: height - 8, rx: 12, fill: lane % 2 ? '#f8faff' : '#f1f6fb' }));
+          height: height - 8, rx: 12, fill: lane % 2 ? 'var(--soft)' : 'var(--bg)' }));
         const title = svg('text', { x: lane * laneWidth + 17, y: 30, class: 'obs-lane-title' });
         title.textContent = stages[stageIndex]; canvas.append(title);
         bucket.forEach((node, row) => positions.set(node.id,
@@ -199,7 +199,7 @@
         const x2 = to.x; const y2 = to.y + 25;
         const mid = (x1 + x2) / 2;
         const line = svg('path', { d: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`,
-          fill: 'none', stroke: important.has(edge.relation) ? '#8e9ebb' : '#c8d3e3',
+          fill: 'none', stroke: important.has(edge.relation) ? 'var(--plot-gray)' : 'var(--border)',
           'stroke-width': important.has(edge.relation) ? 1.8 : 1.2,
           'marker-end': `url(#${markerID})`,
           class: selected && edge.from !== selected && edge.to !== selected ? 'obs-muted' : '' });
@@ -211,7 +211,7 @@
         const group = svg('g', { class: `obs-graph-node${selected === node.id ? ' is-selected' : ''}`,
           role: 'button', tabindex: 0, 'aria-label': `${typeLabel[node.type] || node.type} ${displayLabel(node)}` });
         group.append(svg('rect', { x: at.x, y: at.y, width: 208, height: 52, rx: 9,
-          fill: selected === node.id ? '#e8efff' : '#fff', stroke: accent[at.stageIndex], 'stroke-width': selected === node.id ? 2.7 : 1.3 }));
+          fill: selected === node.id ? 'var(--selected)' : 'var(--surface)', stroke: accent[at.stageIndex], 'stroke-width': selected === node.id ? 2.7 : 1.3 }));
         const label = svg('text', { x: at.x + 11, y: at.y + 20, class: 'obs-node-label' });
         label.textContent = short(displayLabel(node), 24); group.append(label);
         const kind = svg('text', { x: at.x + 11, y: at.y + 39, class: 'obs-node-kind' });
@@ -261,7 +261,7 @@
       const label = svg('text', { x: 9, y: y + 5, class: 'obs-time-label' });
       label.textContent = lanes[i]; canvas.append(label);
       canvas.append(svg('line', { x1: left, x2: width - right, y1: y, y2: y,
-        stroke: '#d5dfeb', 'stroke-width': 1 }));
+        stroke: 'var(--border)', 'stroke-width': 1 }));
     }
     const overlaps = new Map();
     for (const point of points) {
@@ -271,8 +271,8 @@
       const x = position + Math.floor(overlap / 3) * 8;
       const y = 36 + point.lane * 41 + (overlap % 3 - 1) * 8;
       const marker = svg('circle', { cx: x, cy: y, r: 6.5,
-        fill: point.item.kind.includes('recovered') ? '#2f9874' :
-          point.item.kind.includes('error') || point.item.kind.includes('firing') ? '#db6c47' : '#426fb3' });
+        fill: point.item.kind.includes('recovered') ? 'var(--ok-line)' :
+          point.item.kind.includes('error') || point.item.kind.includes('firing') ? 'var(--issue-line)' : 'var(--plot-blue)' });
       marker.append(titleNode(`${time(point.item.observedAt)} · ${evidenceLabel[point.item.kind] || point.item.kind}`));
       const group = svg('g', { role: 'button', tabindex: 0,
         'aria-label': `${time(point.item.observedAt)} ${evidenceLabel[point.item.kind] || point.item.kind}` });
@@ -322,7 +322,7 @@
       const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width,
         role: 'img', 'aria-label': `${title}，${hours} 小时` });
       for (const y of [24, 66, 108, 150]) canvas.append(svg('line', {
-        x1: left, x2: width - right, y1: y, y2: y, stroke: '#e4ebf4' }));
+        x1: left, x2: width - right, y1: y, y2: y, stroke: 'var(--border)' }));
       const top = svg('text', { x: left - 7, y: 29, 'text-anchor': 'end', class: 'obs-axis-label' });
       top.textContent = String(kind === 'samples' ? maxSamples : maxConnections); canvas.append(top);
       const zero = svg('text', { x: left - 7, y: 154, 'text-anchor': 'end', class: 'obs-axis-label' });
@@ -340,11 +340,11 @@
           const group = svg('g');
           if (point) {
             group.append(svg('rect', { x: x - barWidth / 2, y: 150 - success * unit,
-              width: barWidth, height: Math.max(success * unit, 1), fill: '#4e86bb' }));
+              width: barWidth, height: Math.max(success * unit, 1), fill: 'var(--plot-blue)' }));
             if (errors) group.append(svg('rect', { x: x - barWidth / 2,
-              y: 150 - samples * unit, width: barWidth, height: errors * unit, fill: '#df7958' }));
+              y: 150 - samples * unit, width: barWidth, height: errors * unit, fill: 'var(--issue-line)' }));
           } else group.append(svg('line', { x1: x - 4, x2: x + 4, y1: 148, y2: 148,
-            stroke: '#aab9c8', 'stroke-width': 2 }));
+            stroke: 'var(--plot-gray)', 'stroke-width': 2 }));
           group.append(titleNode(`${time(stamp)} · ${point ? `成功 ${success}、失败 ${errors}` : '无采样'}`));
           canvas.append(group);
         } else {
@@ -352,8 +352,8 @@
           if (Number.isFinite(value)) {
             const y = 150 - value / maxConnections * 122;
             if (previous) canvas.append(svg('line', { x1: previous.x, y1: previous.y,
-              x2: x, y2: y, stroke: '#5570ba', 'stroke-width': 2.5 }));
-            const dot = svg('circle', { cx: x, cy: y, r: 3.6, fill: '#315ea4' });
+              x2: x, y2: y, stroke: 'var(--plot-violet)', 'stroke-width': 2.5 }));
+            const dot = svg('circle', { cx: x, cy: y, r: 3.6, fill: 'var(--plot-blue)' });
             dot.append(titleNode(`${time(stamp)} · 平均连接 ${value}`));
             canvas.append(dot); previous = { x, y };
           } else previous = null;
@@ -395,13 +395,13 @@
           `${value.toFixed(value > 0 && value < 1 ? 2 : 0)} B`;
     const count = value => Number(value).toFixed(1);
     const specs = [
-      { key: 'averageConnectionUsagePercent', title: '连接占用率', format: value => `${value.toFixed(1)}%`, color: '#3979ad' },
-      { key: 'transactionsPerSecond', title: '事务吞吐', format: value => `${value.toFixed(2)} 次/秒`, color: '#6475bb' },
-      { key: 'averageBlockedSessions', title: '阻塞会话', format: value => `${count(value)} 个`, color: '#c06f4d' },
-      { key: 'averageLongTransactions', title: '长事务', format: value => `${count(value)} 个`, color: '#a166a6' },
-      { key: 'walBytesPerSecond', title: 'WAL 产生速率', format: value => `${bytes(value)}/s`, color: '#438a86' },
-      { key: 'averageDatabaseBytes', title: '数据库容量', format: bytes, color: '#6181a6' },
-      { key: 'averageReplicationLagBytes', title: '复制回放差距', format: bytes, color: '#ad7855' }
+      { key: 'averageConnectionUsagePercent', title: '连接占用率', format: value => `${value.toFixed(1)}%`, color: 'var(--plot-blue)' },
+      { key: 'transactionsPerSecond', title: '事务吞吐', format: value => `${value.toFixed(2)} 次/秒`, color: 'var(--plot-violet)' },
+      { key: 'averageBlockedSessions', title: '阻塞会话', format: value => `${count(value)} 个`, color: 'var(--plot-orange)' },
+      { key: 'averageLongTransactions', title: '长事务', format: value => `${count(value)} 个`, color: 'var(--plot-pink)' },
+      { key: 'walBytesPerSecond', title: 'WAL 产生速率', format: value => `${bytes(value)}/s`, color: 'var(--plot-teal)' },
+      { key: 'averageDatabaseBytes', title: '数据库容量', format: bytes, color: 'var(--plot-gray)' },
+      { key: 'averageReplicationLagBytes', title: '复制回放差距', format: bytes, color: 'var(--plot-orange)' }
     ];
     const grid = make('div', 'obs-metric-grid');
     const missing = [];
@@ -419,7 +419,7 @@
       const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, width, height,
         role: 'img', 'aria-label': `${spec.title}，${hours} 小时` });
       for (const y of [24, 66, 108, 150]) canvas.append(svg('line', {
-        x1: left, x2: width - right, y1: y, y2: y, stroke: '#e4ebf4' }));
+        x1: left, x2: width - right, y1: y, y2: y, stroke: 'var(--border)' }));
       const topLabel = svg('text', { x: left, y: 16, class: 'obs-axis-label' });
       topLabel.textContent = spec.format(observedMax); canvas.append(topLabel);
       const zero = svg('text', { x: left - 5, y: 154, 'text-anchor': 'end', class: 'obs-axis-label' });

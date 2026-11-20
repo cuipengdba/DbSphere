@@ -29,8 +29,10 @@ const staticFiles = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/observability.js', ['observability.js', 'text/javascript; charset=utf-8']],
   ['/monitoring.js', ['monitoring.js', 'text/javascript; charset=utf-8']],
+  ['/theme.js', ['theme.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/freshness.css', ['freshness.css', 'text/css; charset=utf-8']],
+  ['/console.css', ['console.css', 'text/css; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]
 ]);
 
