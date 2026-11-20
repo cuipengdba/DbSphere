@@ -159,6 +159,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
   --monitor-accent: #6fdddc;
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0,1fr);
   gap: 14px;
   padding: 16px;
   color: var(--monitor-text);
@@ -206,6 +207,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .monitor-stat strong.monitor-alert { color: #ffc285; }
 .monitor-table { margin-top: 9px; overflow: auto; }
 .monitor-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.monitor-table table[aria-label="集群成员"] { min-width: 600px; }
 .monitor-table th { color: var(--monitor-muted); font-weight: 650; }
 .monitor-table th, .monitor-table td { border-bottom: 1px solid var(--monitor-border); padding: 7px 10px; }
 .monitor-table td { color: var(--monitor-text); }
@@ -222,9 +224,11 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .monitor-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .monitor-tabs button[aria-pressed="true"] { border-color: #4fb3bc; background: #1b414c; color: #a7f5ef; }
 .monitor-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
-.monitor-plot { border-radius: 4px; }
+.monitor-plot { position: relative; border-radius: 4px; }
 .monitor-plot svg { width: 100%; height: 155px; display: block; }
-.monitor-plot text { fill: #a5b8cc; font-size: 11px; }
+.monitor-axis { position: absolute; inset: 0; pointer-events: none; color: var(--monitor-muted); font-size: 11px; white-space: nowrap; }
+.monitor-y-tick { position: absolute; transform: translate(calc(-100% - 5px),-50%); }
+.monitor-x-tick { position: absolute; bottom: 1px; }
 .monitor-gridline { stroke: var(--monitor-border); vector-effect: non-scaling-stroke; }
 .monitor-trendline { stroke-width: 2; vector-effect: non-scaling-stroke; }
 .monitor-event-marker { stroke: #ff926d; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }

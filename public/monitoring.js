@@ -105,7 +105,7 @@
   function graph(title, window, buckets, events, format, stacked = false) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
-    const width = 600, height = 154, left = 72, right = 14, top = 12, bottom = 126;
+    const width = 600, height = 154, left = 85, right = 14, top = 12, bottom = 126;
     const area = width - left - right;
     const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
     const detail = el('p', null, 'monitor-cursor-value');
@@ -114,19 +114,22 @@
     const maximum = Math.max(0, ...buckets.map(point => point?.values.reduce((sum, item) => sum + item.value, 0) ?? 0));
     const scale = maximum > 0 ? maximum : 1;
     const y = value => bottom - value * (bottom - top) / scale;
+    const axis = el('div', null, 'monitor-axis');
+    axis.setAttribute('aria-hidden', 'true');
     for (const ratio of [0, .5, 1]) {
       const heightAt = y(scale * ratio);
       chart.append(svg('line', { x1: left, x2: width - right, y1: heightAt, y2: heightAt, class: 'monitor-gridline' }));
       if (maximum > 0 || ratio === 0) {
-        const label = svg('text', { x: left - 6, y: heightAt + 4, 'text-anchor': 'end' });
-        label.textContent = format(scale * ratio);
-        chart.append(label);
+        const label = el('span', format(scale * ratio), 'monitor-y-tick');
+        label.style.left = `${left * 100 / width}%`;
+        label.style.top = `${heightAt * 100 / height}%`;
+        axis.append(label);
       }
     }
-    for (const [at, anchor, px] of [[window.from, 'start', left], [window.to, 'end', width - right]]) {
-      const label = svg('text', { x: px, y: 147, 'text-anchor': anchor });
-      label.textContent = new Date(at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-      chart.append(label);
+    for (const [at, side, offset] of [[window.from, 'left', left], [window.to, 'right', right]]) {
+      const label = el('span', new Date(at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), 'monitor-x-tick');
+      label.style[side] = `${offset * 100 / width}%`;
+      axis.append(label);
     }
     for (const event of events) {
       const started = Date.parse(event.startedAt);
@@ -189,7 +192,7 @@
     });
     if (selected >= 0) {
       show(selected);
-      frame.append(chart);
+      frame.append(chart, axis);
       card.append(frame, detail);
     } else card.append(el('p', '所选时段暂无此指标。', 'monitor-empty'));
     return card;
@@ -507,7 +510,10 @@
         ready = true;
         enabled = available;
         if (visible) {
-          if (!root.contains(document.activeElement)) { if (!fixed) timeWindow = null; update(); }
+          if (![body, header].some(container => container.contains(document.activeElement))) {
+            if (!fixed) timeWindow = null;
+            update();
+          }
           void refreshFleet();
         }
       },
