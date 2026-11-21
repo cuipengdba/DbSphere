@@ -42,7 +42,7 @@
 
 「运行环境」在同一时间范围呈现 PostgreSQL 连通性、环境变化、最近快照和资源趋势。点击变化记录或故障标记可以打开原始采样或原事件。Linux 使用 `node_exporter` 提供 CPU、内存、文件系统占用、磁盘和网络吞吐，以及可用时的 CPU、内存和 I/O 压力。CPU 和吞吐按相邻样本读取，主机启动时间变化、计数回退或缺采切断增量。
 
-Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和已挂载的 PVC。按观测时间记录就绪、调度、重启计数、节点压力和 PVC 状态变化。同名 Pod 重建时按 UID 区分，资源图按 UID 分段。已启用 `metrics.k8s.io` 时保存可核对的 Pod CPU 与内存，PVC 容量和已用量分别注明来源。资源接口缺失或受限时，已取得的 Kubernetes 对象状态和 PostgreSQL 证据继续可用。
+Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和已挂载的 PVC。按观测时间记录就绪、调度、重启计数、节点压力和 PVC 状态变化。同名 Pod 重建时按 UID 区分，资源图按 UID 分段。已启用 `metrics.k8s.io` 时可切换 Pod 总量和单容器 CPU 与内存，PVC 容量和已用量分别注明来源。资源接口缺失或受限时，已取得的 Kubernetes 对象状态和 PostgreSQL 证据继续可用。
 
 ## 交付
 

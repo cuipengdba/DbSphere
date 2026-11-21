@@ -11,16 +11,20 @@ type kubeUsageTotals struct {
 	cpuCores, memoryBytes             float64
 }
 
-func (u *kubeUsageTotals) add(cpu, memory string) {
+func (u *kubeUsageTotals) add(cpu, memory string) map[string]any {
 	u.containers++
+	values := map[string]any{}
 	if cores, ok := kubeCPUCores(cpu); ok {
 		u.cpuCount++
 		u.cpuCores += cores
+		values["cpuCores"] = cores
 	}
 	if bytes, err := KubernetesQuantityBytes(memory); err == nil || memory == "0" {
 		u.memoryCount++
 		u.memoryBytes += bytes
+		values["memoryBytes"] = bytes
 	}
+	return values
 }
 
 func (u kubeUsageTotals) values() map[string]any {

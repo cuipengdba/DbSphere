@@ -1199,7 +1199,29 @@
         ['pressureMemory', '内存压力 · PSI', percent, palette[1]], ['pressureIO', 'I/O 压力 · PSI', percent, palette[2]]
       ];
       const resources = panel(kubernetes ? '容器资源历史' : 'Linux 资源历史 · node_exporter');
-      resources.append(metricCharts(data.series, time, events, resourceCharts));
+      let graphs;
+      let graphCursors = [];
+      const drawResources = name => {
+        for (const cursor of graphCursors) time.cursors.delete(cursor);
+        const previous = new Set(time.cursors);
+        const selected = data.containers.find(item => item.name === name);
+        const rendered = metricCharts(selected?.series || data.series, time, events, selected ? [
+          ['cpuCores', '容器 CPU · metrics.k8s.io', value => `${number(value, 3)} 核`, palette[0], 'podUid'],
+          ['memoryBytes', '容器内存 · metrics.k8s.io', bytes, palette[1], 'podUid']
+        ] : resourceCharts);
+        graphCursors = [...time.cursors].filter(cursor => !previous.has(cursor));
+        if (graphs) graphs.replaceWith(rendered);
+        else resources.append(rendered);
+        graphs = rendered;
+      };
+      if (kubernetes && data.containers.length) {
+        const container = select('容器资源', drawResources);
+        options(container, [['', 'Pod 总量'], ...data.containers.map(item => [item.name, item.name])], '');
+        const controls = el('div', null, 'monitor-wait-controls');
+        controls.append(labeled('容器', container));
+        resources.append(controls);
+      }
+      drawResources('');
       if (kubernetes && !data.series.some(row => finite(row.podCPUCores) || finite(row.podMemoryBytes)))
         resources.append(el('p', '此时段无可用的 Pod 资源指标。就绪、调度、重启和卷状态来自 Kubernetes 对象采样。', 'monitor-note'));
       result.append(timeline, history, renderInfra(snapshot, asset), resources);

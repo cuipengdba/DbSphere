@@ -210,9 +210,10 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		t.Fatalf("Pod labels did not select the matching Service: %+v", services)
 	}
 	resources := kubeObject(value["resourceMetrics"])
-	if resources["source"] != "metrics.k8s.io" || len(kubeList(resources["containers"])) != 1 ||
+	usageRows := kubeList(resources["containers"])
+	if resources["source"] != "metrics.k8s.io" || len(usageRows) != 1 ||
 		kubeObject(resources["node"])["memory"] != "512Mi" || kubeObject(resources["podUsage"])["cpuCores"] != 0.02 ||
-		kubeObject(resources["podUsage"])["memoryBytes"] != float64(128*1024*1024) {
+		kubeObject(resources["podUsage"])["memoryBytes"] != float64(128*1024*1024) || kubeObject(usageRows[0])["cpuCores"] != 0.02 {
 		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
 	}
 	if len(paths) != 8 {

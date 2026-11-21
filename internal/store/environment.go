@@ -19,8 +19,29 @@ func (s *Postgres) environmentHistory(ctx context.Context, id string, params url
 		return nil, err
 	}
 	changes, err := s.queryJSON(ctx, environmentChangesSQL, id, from, to)
-	return map[string]any{"series": series, "changes": changes}, err
+	if err != nil {
+		return nil, err
+	}
+	containers, err := s.queryJSON(ctx, containerSeriesSQL, id, from, to, minutes)
+	return map[string]any{"series": series, "changes": changes, "containers": containers}, err
 }
+
+const containerSeriesSQL = `WITH observed AS (
+	SELECT date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz) AS bucket,
+		metrics_json#>>'{k8s,pod,uid}' AS uid,metrics_json#>'{k8s,resourceMetrics,containers}' AS containers
+	FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+	AND metrics_json#>'{k8s,resourceMetrics,podUsage}' IS NOT NULL
+), grouped AS (
+	SELECT bucket,name,min(uid) AS uid,avg("cpuCores") AS cpu,avg("memoryBytes") AS memory
+	FROM observed CROSS JOIN LATERAL jsonb_to_recordset(containers) AS c(name text,"cpuCores" numeric,"memoryBytes" numeric)
+	WHERE uid IS NOT NULL AND name IS NOT NULL AND ("cpuCores" IS NOT NULL OR "memoryBytes" IS NOT NULL)
+	GROUP BY bucket,name HAVING count(DISTINCT uid)=1
+), chosen AS (
+	SELECT name FROM grouped GROUP BY name ORDER BY count(*) DESC,name LIMIT 20
+)
+SELECT jsonb_build_object('name',name,'series',jsonb_agg(jsonb_build_object('bucket',bucket,'podUid',uid,
+	'cpuCores',round(cpu,4),'memoryBytes',round(memory,0)) ORDER BY bucket))
+FROM grouped JOIN chosen USING(name) GROUP BY name ORDER BY name`
 
 const environmentSeriesSQL = `WITH binned AS (
 	SELECT date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz) AS bucket,

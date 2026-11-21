@@ -656,9 +656,9 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		for _, raw := range kubeList(podMetrics["containers"]) {
 			container := kubeObject(raw)
 			resources := kubeObject(container["usage"])
-			totals.add(kubeString(resources["cpu"]), kubeString(resources["memory"]))
-			usage = append(usage, map[string]any{"name": container["name"],
-				"cpu": resources["cpu"], "memory": resources["memory"]})
+			value := totals.add(kubeString(resources["cpu"]), kubeString(resources["memory"]))
+			value["name"], value["cpu"], value["memory"] = container["name"], resources["cpu"], resources["memory"]
+			usage = append(usage, value)
 		}
 		result["resourceMetrics"] = map[string]any{"source": "metrics.k8s.io",
 			"observedAt": podMetrics["timestamp"], "window": podMetrics["window"], "containers": usage, "node": nil}
