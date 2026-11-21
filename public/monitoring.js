@@ -5,7 +5,8 @@
   const periods = [
     ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
   ];
-  const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'], ['infra', '运行环境']];
+  const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'],
+    ['replication', '复制与高可用'], ['infra', '运行环境']];
   const defaultPeriod = '1 小时';
   const sqlOrders = [['time', '总耗时'], ['calls', '调用频率'], ['latency', '平均耗时'], ['reads', '读取共享块'], ['temp', '写入临时块']];
   const milliseconds = value => `${number(value, 2)} ms`;
@@ -87,6 +88,14 @@
     const section = el('section', null, 'monitor-panel');
     section.append(el('h3', title));
     return section;
+  }
+
+  function sampleLink(assetId, sampleId, label = '原始采样') {
+    const link = el('a', label, 'monitor-link');
+    link.href = `/api/assets/${assetId}/samples/${sampleId}`;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    return link;
   }
 
   function stats(values) {
@@ -601,7 +610,7 @@
         stats([
           ['已观测可用', memberCount],
           ['观测主库', cluster ? leaderName : String(leaders.length), cluster && leaders.length > 1 ? 'monitor-alert' : '',
-            cluster && leaders.length === 1 ? () => openInstance(leaders[0].id) : null],
+            cluster && leaders.length === 1 ? () => openInstance(leaders[0].id, 'replication') : null],
           ['开放事件', identitiesLoaded(items) ? count : '—', count ? 'monitor-alert' : '', () => issues.scrollIntoView({ block: 'nearest' })]
         ]));
       const row = el('div', null, 'cluster-grid');
@@ -629,7 +638,8 @@
         name.append(mobile);
         const badge = el('span', pgLabels[pg], `cluster-state cluster-state-${pg}`);
         const connectionCell = finite(connection(asset)) ? button(conn, () => openInstance(asset.id), 'monitor-link') : conn;
-        return [name, roleLabels[asset.role] || '未知', badge, health(asset), connectionCell, replay];
+        const replayCell = finite(values?.replicationLagBytes) ? button(replay, () => openInstance(asset.id, 'replication'), 'monitor-link') : replay;
+        return [name, roleLabels[asset.role] || '未知', badge, health(asset), connectionCell, replayCell];
       });
       if (rows.length) card.append(table(['实例', '角色', 'PG 状态', '采集状态', '连接', '回放'], rows, '集群成员'));
       else if (!items.length) card.append(el('p', '没有匹配的纳管实例。', 'monitor-empty'), button('查看资产', openAssets));
@@ -703,7 +713,8 @@
         const show = value => {
           index = Math.min(time.count - 1, Math.max(0, value));
           for (const displayCursor of time.cursors) displayCursor(index);
-          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · ${states[statesAt[index]]}`;
+          const role = roleLabels[bins[index]?.observedRole];
+          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · ${states[statesAt[index]]}${role ? ` · ${role}` : ''}`;
         };
         track.addEventListener('pointermove', event => {
           const rect = track.getBoundingClientRect();
@@ -891,6 +902,109 @@
       return split;
     }
 
+    function replicationPanel(asset, history, rows, time, events) {
+      const result = document.createDocumentFragment();
+      const charts = metricCharts(rows, time, events, [
+        ['averageReplicationLagBytes', '发送端最大回放差距', bytes, palette[2]],
+        ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, palette[0]],
+        ['xidUsedPercent', 'XID 年龄 / 冻结阈值', percent, palette[1]]
+      ]);
+      const observation = panel('复制链路与 WAL 位置');
+      const view = el('div');
+      const [latest, peak] = history.observations;
+      if (latest && peak) {
+        const choices = select('复制采样', value => describe(value === 'peak' ? peak : latest));
+        options(choices, [['latest', '区间末次采样'], ['peak', '区间回放差距峰值']], 'latest');
+        observation.append(labeled('采样', choices));
+      }
+      observation.append(view);
+
+      function describe(sample) {
+        view.replaceChildren();
+        if (!sample) {
+          view.append(el('p', '所选时段没有采样。', 'monitor-empty'));
+          return;
+        }
+        const heading = el('p', `${formatTime(sample.collectedAt)} · ${roleLabels[sample.role] || 'PG 角色未知'} · `, 'monitor-note');
+        heading.append(sampleLink(asset.id, sample.id));
+        view.append(heading);
+        const position = sample.position?.data;
+        if (position) view.append(stats([
+          ['WAL 位置', position.position || '—'], ['时间线', position.timeline || '—'],
+          ['服务启动', formatTime(position.startedAt)]
+        ]));
+        const links = sample.links?.data;
+        if (links?.links.length) {
+          view.append(table(['发送会话', '客户端', '状态 / 同步', '发送 LSN', '写入 LSN', '刷盘 LSN', '回放 LSN',
+            '回放差距', '写入 / 刷盘 / 回放耗时'], links.links.map(link => [
+            `${link.application || '—'} · PID ${link.pid}`, link.clientAddress,
+            [link.state, link.syncState].filter(Boolean).join(' / '), link.sentLsn, link.writeLsn, link.flushLsn,
+            link.replayLsn, display(link.replayGapBytes, bytes), [link.writeLagSeconds, link.flushLagSeconds, link.replayLagSeconds]
+              .map(value => display(value, seconds => `${number(seconds, 3)} s`)).join(' / ')
+          ]), 'WAL 发送会话'));
+          if (links.total > links.links.length) view.append(el('p', `显示 ${links.links.length} / ${links.total} 条发送会话。`, 'monitor-note'));
+          view.append(el('p', '来源 pg_stat_replication。耗时对应近期 WAL 确认，空闲或不可见时留空。', 'monitor-note'));
+        } else if (sample.role === 'standby') {
+          const receiver = sample.receiver?.data;
+          view.append(stats([
+            ['WAL 接收', receiver?.status || sample.receiverState || '—'], ['本地回放差距', display(position?.localReplayGapBytes, bytes)],
+            ['回放暂停', typeof position?.replayPaused === 'boolean' ? (position.replayPaused ? '是' : '否') : '—']
+          ]));
+          if (receiver) view.append(table(['上游', '复制槽', '收到的 LSN', '刷盘的 LSN', '上游 LSN', '收到消息'], [[
+            receiver.senderHost && `${receiver.senderHost}:${receiver.senderPort}`, receiver.slot, receiver.writtenLsn,
+            receiver.flushedLsn, receiver.senderLsn, formatTime(receiver.lastMessageAt)
+          ]], 'WAL 接收会话'));
+        } else view.append(el('p', links ? '本次未观测到 WAL 发送会话。' : '缺少可见的 WAL 发送采样。', 'monitor-empty'));
+        const storage = panel('复制槽、归档与冻结');
+        const archive = sample.archive?.data;
+        const freeze = sample.freeze?.data;
+        storage.append(stats([
+          ['累计成功归档', display(archive?.archivedCount)], ['累计归档失败', display(archive?.failedCount)],
+          ['最近归档失败', formatTime(archive?.lastFailedAt)], ['当前连接库 XID 年龄', display(freeze?.xidAge)]
+        ]));
+        if (sample.slots?.data.length) storage.append(table(['复制槽', '活动', 'WAL 状态', '保留 WAL', '可用预算'],
+          sample.slots.data.map(slot => [slot.name, slot.active ? '是' : '否', slot.walStatus,
+            slot.retainedBytes != null ? display(Number(slot.retainedBytes), bytes) : '—',
+            slot.safeWalBytes != null ? display(Number(slot.safeWalBytes), bytes) : '—']), '复制槽保留量'));
+        else storage.append(el('p', sample.slots?.status === 'ok' ? '未观测到复制槽。' : '复制槽样本缺失。', 'monitor-note'));
+        view.append(storage, servicesPanel(asset, sample));
+      }
+      describe(latest);
+
+      const changes = panel('角色与时间线变化');
+      if (history.changes.length) changes.append(table(['首次观测时间', '角色变化', '时间线变化', '边界', '采样'], history.changes.map(row => [
+        formatTime(row.collectedAt), `${roleLabels[row.priorRole] || '未知'} → ${roleLabels[row.role] || '未知'}`,
+        row.timeline !== row.priorTimeline ? `${row.priorTimeline || '—'} → ${row.timeline || '—'}` : row.timeline,
+        [row.restarted && '重启', row.walReset && 'WAL 统计重置', row.archiveReset && '归档统计重置',
+          row.gapSeconds > 600 && '采样间隔超过 10 分钟'].filter(Boolean).join(' · ') || '—', sampleLink(asset.id, row.id)
+      ]), '复制角色变化'));
+      else changes.append(el('p', '所选时段未观测到角色、时间线或采集边界变化。', 'monitor-note'));
+      result.append(observation, charts, changes);
+      return result;
+    }
+
+    function servicesPanel(asset, sample) {
+      const card = panel('高可用与连接池');
+      const patroni = sample.patroni;
+      const pooler = sample.pooler;
+      card.append(el('p', patroni?.status === 'ok'
+        ? `Patroni · leader ${patroni.leaderCount} · ${formatTime(patroni.observedAt)}`
+        : `Patroni · ${asset.patroniConfigured ? '此采样不可用' : '未配置'}`, 'monitor-note'));
+      if (patroni?.members?.length) card.append(table(['Patroni 成员', '角色', '状态', '时间线', '回放差距'],
+        patroni.members.map(member => {
+          const matches = members().filter(item => item.host === member.host && item.port === member.port);
+          return [matches.length === 1 ? button(member.name, () => openInstance(matches[0].id, 'replication'), 'monitor-link') : member.name,
+            member.role, member.state, member.timeline > 0 ? member.timeline : null, display(member.replayLagBytes ?? member.lagBytes, bytes)];
+        }), 'Patroni 成员'));
+      const poolerState = pooler?.status === 'ok' ? `${pooler.database} · ${formatTime(pooler.observedAt)}` :
+        pooler?.status === 'unmapped' ? '未匹配到纳管数据库' : asset.poolerConfigured ? '此采样不可用' : '未配置统计采集';
+      card.append(el('p', `PgBouncer · ${poolerState}${asset.poolerEndpoint ? ` · 配置的应用端点 ${asset.poolerEndpoint}` : ''}`, 'monitor-note'));
+      if (pooler?.pools?.length) card.append(table(['用户', '模式', '活动客户端', '等待客户端', '活动服务端', '最大等待'],
+        pooler.pools.map(row => [row.user, row.mode, row.clientActive, row.clientWaiting, row.serverActive,
+          display(row.maxWaitSeconds, value => `${number(value, 3)} s`)]), 'PgBouncer 连接池'));
+      return card;
+    }
+
     function followWait(item) {
       if (group === 'type') { waitType = item.waitType; waitEvent = ''; group = 'event'; }
       else if (group === 'event') { waitType = item.waitType; waitEvent = item.waitEvent; group = 'query'; }
@@ -903,7 +1017,7 @@
       const path = `/api/assets/${asset.id}/`;
       const query = new URLSearchParams(time.params);
       let section;
-      if (mode === 'metrics' || (mode === 'infra' && asset.runtime === 'linux')) section = 'series';
+      if (mode === 'metrics' || mode === 'replication' || (mode === 'infra' && asset.runtime === 'linux')) section = 'series';
       if (mode === 'waits') {
         section = 'wait-history';
         query.set('group', group);
@@ -921,11 +1035,12 @@
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data, waits, slow, plans] = await Promise.all([
+        const [context, data, waits, slow, plans, replication] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
-          linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null
+          linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
+          mode === 'replication' ? api(`${path}replication?${time.params}`) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -977,6 +1092,7 @@
         }
         if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans }, path, time));
         if (mode === 'locks') fragment.append(lockPanel(context, asset));
+        if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events));
         if (mode === 'infra') {
           if (data?.series) fragment.append(metricCharts(data.series, time, events, [
             ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, 'var(--plot-teal)'],

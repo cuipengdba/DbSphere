@@ -37,6 +37,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.sqlWindow(ctx, id, params)
 	case "monitoring-context":
 		return s.monitoringContext(ctx, id, params)
+	case "replication":
+		return s.replicationHistory(ctx, id, params)
 	case "slow-logs":
 		from, to, err := timeRange(params, 24*time.Hour, 31*24*time.Hour)
 		if err != nil {
@@ -129,6 +131,12 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 	return s.queryJSON(ctx, `WITH observed AS (
 			SELECT id,asset_id,collected_at,status,
 				metrics_json#>>'{collector,pgStatus}' AS pg_status,
+				CASE WHEN status='ok' THEN metrics_json->>'role' END AS pg_role,
+				metrics_json#>>'{diagnostics,wal,data,statsReset}' AS wal_reset,
+				metrics_json#>>'{diagnostics,walPosition,data,startedAt}' AS server_started,
+				metrics_json#>>'{diagnostics,walPosition,data,timeline}' AS wal_timeline,
+				CASE WHEN jsonb_typeof(metrics_json#>'{diagnostics,freeze,data,usedPercent}')='number'
+					THEN (metrics_json#>>'{diagnostics,freeze,data,usedPercent}')::numeric END AS xid_used,
 				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,cpu,usedPercent}')='number'
 					THEN (metrics_json#>>'{linux,cpu,usedPercent}')::numeric END AS linux_cpu,
 				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,memory,usedPercent}')='number'
@@ -163,7 +171,11 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 				lag(commits) OVER observed_order AS prior_commits,
 				lag(rollbacks) OVER observed_order AS prior_rollbacks,
 				lag(deadlocks) OVER observed_order AS prior_deadlocks,
-				lag(wal_bytes) OVER observed_order AS prior_wal_bytes
+				lag(wal_bytes) OVER observed_order AS prior_wal_bytes,
+				lag(wal_reset) OVER observed_order AS prior_wal_reset,
+				lag(server_started) OVER observed_order AS prior_started,
+				lag(wal_timeline) OVER observed_order AS prior_timeline,
+				lag(pg_role) OVER observed_order AS prior_role
 			FROM observed WINDOW observed_order AS (PARTITION BY asset_id ORDER BY collected_at,id)
 		), rated AS (
 			SELECT *,CASE WHEN commits>=prior_commits AND rollbacks>=prior_rollbacks
@@ -173,6 +185,8 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 				CASE WHEN deadlocks>=prior_deadlocks AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
 					THEN deadlocks-prior_deadlocks END AS deadlock_delta,
 				CASE WHEN wal_bytes>=prior_wal_bytes
+				AND wal_reset IS NOT DISTINCT FROM prior_wal_reset AND server_started IS NOT DISTINCT FROM prior_started
+				AND wal_timeline IS NOT DISTINCT FROM prior_timeline AND pg_role IS NOT DISTINCT FROM prior_role
 				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
 				THEN (wal_bytes-prior_wal_bytes) /
 					extract(epoch FROM collected_at-prior_at) END AS wal_bytes_per_second
@@ -183,6 +197,8 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
 			'pgAvailable',count(*) FILTER (WHERE status='ok' OR pg_status='ok')::int,
 			'pgUnavailable',count(*) FILTER (WHERE pg_status='availability')::int,
+			'observedRole',CASE WHEN count(DISTINCT pg_role)=1 AND count(pg_role)=count(*) THEN min(pg_role) END,
+			'xidUsedPercent',round(max(xid_used),1),
 			'averageConnections',round(avg(connections),1),
 			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
 			'averageBlockedSessions',round(avg(blocked_sessions),1),

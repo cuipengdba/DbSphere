@@ -26,8 +26,21 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 	}
 	retained := `CASE WHEN restart_lsn IS NOT NULL THEN
 		pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::text END`
+	replication := diagnosticQuery{"replicationLinks", replicationLinksSQL}
+	walPosition := diagnosticQuery{"walPosition", `SELECT jsonb_build_object(
+		'position',pg_current_wal_lsn()::text,'timeline',left(pg_walfile_name(pg_current_wal_lsn()),8),
+		'timelineSource','pg_walfile_name','startedAt',pg_postmaster_start_time())`}
 	if inRecovery {
 		retained = `NULL::text`
+		replication = diagnosticQuery{"walReceiver", `SELECT to_jsonb(q) FROM (
+			SELECT status, sender_host AS "senderHost", sender_port AS "senderPort", slot_name AS slot,
+			written_lsn::text AS "writtenLsn",flushed_lsn::text AS "flushedLsn",latest_end_lsn::text AS "senderLsn",
+			last_msg_receipt_time AS "lastMessageAt" FROM pg_stat_wal_receiver) q`}
+		walPosition.sql = `SELECT jsonb_build_object('position',pg_last_wal_replay_lsn()::text,
+			'received',pg_last_wal_receive_lsn()::text,'replayPaused',pg_is_wal_replay_paused(),
+			'localReplayGapBytes',pg_wal_lsn_diff(pg_last_wal_receive_lsn(),pg_last_wal_replay_lsn()),
+			'timeline',(SELECT upper(lpad(to_hex(received_tli),8,'0')) FROM pg_stat_wal_receiver),
+			'timelineSource','pg_stat_wal_receiver.received_tli','startedAt',pg_postmaster_start_time())`
 	}
 	queries := []diagnosticQuery{
 		{"activity", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
@@ -57,11 +70,12 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			temp_bytes AS "tempBytes" FROM pg_stat_database WHERE datname=current_database()) q`},
 		{"wal", `SELECT to_jsonb(q) FROM (
 			SELECT wal_bytes::text AS bytes,wal_records AS records,wal_fpi AS "fullPageImages",
-			wal_buffers_full AS "buffersFull" FROM pg_stat_wal) q`},
+			wal_buffers_full AS "buffersFull",stats_reset AS "statsReset" FROM pg_stat_wal) q`},
 		{"archiver", `SELECT to_jsonb(q) FROM (
 			SELECT archived_count AS "archivedCount",failed_count AS "failedCount",
-			last_archived_time AS "lastArchivedAt",last_failed_time AS "lastFailedAt"
+			last_archived_time AS "lastArchivedAt",last_failed_time AS "lastFailedAt",stats_reset AS "statsReset"
 			FROM pg_stat_archiver) q`},
+		replication, walPosition,
 		{"checkpoints", checkpoint},
 		{"vacuum", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
 			SELECT schemaname AS schema,relname AS "table",n_live_tup AS "liveRowsEstimate",
@@ -118,3 +132,13 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 	}
 	return result
 }
+
+const replicationLinksSQL = `SELECT jsonb_build_object('links',coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."replayGapBytes" DESC NULLS LAST,q.pid),'[]'::jsonb),
+	'total',(SELECT count(*) FROM pg_stat_replication)) FROM (
+	SELECT pid,application_name AS application,host(client_addr) AS "clientAddress",backend_start AS "connectedAt",
+		state,sync_state AS "syncState",sent_lsn::text AS "sentLsn",write_lsn::text AS "writeLsn",
+		flush_lsn::text AS "flushLsn",replay_lsn::text AS "replayLsn",reply_time AS "lastReplyAt",
+		pg_wal_lsn_diff(pg_current_wal_lsn(),replay_lsn) AS "replayGapBytes",
+		extract(epoch FROM write_lag) AS "writeLagSeconds",extract(epoch FROM flush_lag) AS "flushLagSeconds",
+		extract(epoch FROM replay_lag) AS "replayLagSeconds"
+	FROM pg_stat_replication ORDER BY "replayGapBytes" DESC NULLS LAST,pid LIMIT 50) q`

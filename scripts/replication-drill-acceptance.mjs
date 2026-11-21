@@ -91,6 +91,9 @@ assert.equal(baselinePrimary.metrics.monitor_role, true);
 assert.equal(baselinePrimary.metrics.privileged_role, false);
 assert.equal(baselineStandby.metrics.role, 'standby');
 assert.equal(baselineStandby.metrics.wal_receiver, 'streaming');
+assert.equal(baselinePrimary.metrics.diagnostics.replicationLinks.data.links.length, 1);
+assert.match(baselinePrimary.metrics.diagnostics.walPosition.data.timeline, /^[0-9A-F]{8}$/);
+assert.equal(baselineStandby.metrics.diagnostics.walReceiver.data.status, 'streaming');
 
 let eventId = '';
 let faultSampleId = '';
@@ -107,6 +110,13 @@ try {
   const first = await check(primaryId);
   assert.ok(Number.isFinite(first.sample.metrics.replication_lag_bytes) &&
     first.sample.metrics.replication_lag_bytes >= 64 * 1024 * 1024);
+  const link = first.sample.metrics.diagnostics.replicationLinks.data.links[0];
+  assert.ok(link.replayGapBytes >= 64 * 1024 * 1024);
+  for (const point of ['sentLsn', 'writeLsn', 'flushLsn', 'replayLsn']) assert.match(link[point], /^[0-9A-F]+\/[0-9A-F]+$/);
+  const range = new URLSearchParams({ from: baselinePrimary.collectedAt, to: new Date().toISOString() });
+  const history = (await api(`/api/assets/${primaryId}/replication?${range}`)).body;
+  assert.equal(history.observations[0].id, first.sample.id);
+  assert.equal(history.observations[0].links.data.links[0].replayLsn, link.replayLsn);
   await delay(125000); // Default pg_replication_lag rule requires 120 s.
   const fault = await check(primaryId);
   faultSampleId = fault.result.sampleId;

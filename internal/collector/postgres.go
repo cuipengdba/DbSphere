@@ -86,7 +86,7 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 		var replicas int
 		var lag *float64
 		if err := conn.QueryRow(connectCtx, `SELECT count(*)::int,
-			max(greatest(0,pg_wal_lsn_diff(pg_current_wal_lsn(),replay_lsn)))::float8
+			max(pg_wal_lsn_diff(pg_current_wal_lsn(),replay_lsn))::float8
 			FROM pg_stat_replication`).Scan(&replicas, &lag); err == nil {
 			metrics["replicas"] = replicas
 			if lag != nil {
