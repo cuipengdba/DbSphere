@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -56,6 +57,34 @@ func (s *Postgres) loadIncidentSamples(ctx context.Context, assetID string, ids 
 		result[sample.ID] = sample
 	}
 	return result, rows.Err()
+}
+
+// Legacy state rows omitted the sample ID. Restore links only when the original
+// sample referenced by this event has the same timestamp and identical state.
+func linkLegacyLayerEvidence(item *eventEvidence, samplesAt map[int64][]sampleObservation) string {
+	section := map[string]string{"k8s_state": "k8s", "linux_state": "linux", "pgbouncer_state": "pgbouncer", "patroni_state": "patroni"}[item.Kind]
+	if section == "" {
+		return ""
+	}
+	var payload map[string]any
+	if json.Unmarshal(item.Payload, &payload) != nil || len(payload) == 0 || payload["sampleId"] != nil {
+		return ""
+	}
+	matched := ""
+	for _, sample := range samplesAt[item.ObservedAt.UnixNano()] {
+		if !reflect.DeepEqual(payload, sample.Metrics[section]) {
+			continue
+		}
+		if matched != "" {
+			return ""
+		}
+		matched = sample.ID
+	}
+	if matched != "" {
+		payload["sampleId"] = matched
+		item.Payload, _ = json.Marshal(payload)
+	}
+	return matched
 }
 
 type replayPoint struct {

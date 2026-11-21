@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"strings"
@@ -387,7 +388,7 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			return CheckResult{}, err
 		}
 		if k8s := object(metrics["k8s"]); len(k8s) != 0 {
-			k8sPayload, _ := json.Marshal(k8s)
+			k8sPayload := encodeStateEvidence(k8s, sampleID)
 			var k8sEvidenceID string
 			if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'k8s_state',$2,$3) RETURNING id::text`,
@@ -422,21 +423,21 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			}
 		}
 		if linux := object(metrics["linux"]); len(linux) != 0 {
-			linuxPayload, _ := json.Marshal(linux)
+			linuxPayload := encodeStateEvidence(linux, sampleID)
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'linux_state',$2,$3)`, eventID, now, linuxPayload); err != nil {
 				return CheckResult{}, err
 			}
 		}
 		if pooler := object(metrics["pgbouncer"]); len(pooler) != 0 {
-			poolerPayload, _ := json.Marshal(pooler)
+			poolerPayload := encodeStateEvidence(pooler, sampleID)
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'pgbouncer_state',$2,$3)`, eventID, now, poolerPayload); err != nil {
 				return CheckResult{}, err
 			}
 		}
 		if patroni := object(metrics["patroni"]); len(patroni) != 0 {
-			patroniPayload, _ := json.Marshal(patroni)
+			patroniPayload := encodeStateEvidence(patroni, sampleID)
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'patroni_state',$2,$3)`, eventID, now, patroniPayload); err != nil {
 				return CheckResult{}, err
@@ -457,6 +458,13 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 		return CheckResult{}, err
 	}
 	return CheckResult{SampleID: sampleID, Status: status, CollectedAt: now}, nil
+}
+
+func encodeStateEvidence(state map[string]any, sampleID string) []byte {
+	payload := maps.Clone(state)
+	payload["sampleId"] = sampleID
+	encoded, _ := json.Marshal(payload)
+	return encoded
 }
 
 func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup string, now time.Time) error {

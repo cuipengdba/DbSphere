@@ -36,3 +36,21 @@ func TestReplayDoesNotPromoteSimultaneousHostPressureToDirectCause(t *testing.T)
 		t.Fatalf("replay lost the original event or recovery sample: %v", replay)
 	}
 }
+
+func TestLegacyReplayLinksOnlyIdenticalStateAtTheExactSampleTime(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	payload := json.RawMessage(`{"status":"ok","pod":{"uid":"expected-uid"}}`)
+	item := eventEvidence{Kind: "k8s_state", ObservedAt: at, Payload: payload}
+	known := sampleObservation{ID: "current", At: at, Metrics: map[string]any{
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "expected-uid"}},
+	}}
+	other := sampleObservation{ID: "nearby", At: at, Metrics: map[string]any{
+		"k8s": map[string]any{"status": "ok", "pod": map[string]any{"uid": "different-uid"}},
+	}}
+	if result := linkLegacyLayerEvidence(&item, map[int64][]sampleObservation{at.UnixNano(): {other}}); result != "" {
+		t.Fatalf("unrelated state was linked at the same time: %s", result)
+	}
+	if result := linkLegacyLayerEvidence(&item, map[int64][]sampleObservation{at.UnixNano(): {known}}); result != known.ID {
+		t.Fatalf("identical archived state did not link: %s", result)
+	}
+}

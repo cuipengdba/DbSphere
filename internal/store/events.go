@@ -189,6 +189,17 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	samplesAt := make(map[int64][]sampleObservation, len(samples))
+	for _, sample := range samples {
+		at := sample.At.UnixNano()
+		samplesAt[at] = append(samplesAt[at], sample)
+	}
+	for i := range event.Evidence {
+		item := &event.Evidence[i]
+		if id := linkLegacyLayerEvidence(item, samplesAt); id != "" {
+			references[item.ID] = append(references[item.ID], sampleReference{id, "observed_in"})
+		}
+	}
 	for _, item := range event.Evidence {
 		evidenceNode := "evidence:" + item.ID
 		addNode(evidenceNode, "evidence", item.Kind, "/api/events/"+event.ID, item.ObservedAt)
