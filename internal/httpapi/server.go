@@ -43,6 +43,9 @@ type AssetPager interface {
 type EventOverviewReader interface {
 	EventOverview(context.Context, []string) (any, error)
 }
+type MonitoringSeriesReader interface {
+	MonitoringSeries(context.Context, []string, url.Values) (any, error)
+}
 type AssetStore interface {
 	AssetByID(context.Context, string) (json.RawMessage, error)
 	CreateAsset(context.Context, assets.Input, []byte) (json.RawMessage, error)
@@ -1254,6 +1257,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/monitoring/series" {
+				readMonitoringSeries(w, r, store, viewerScope)
+				return
+			}
 			if r.URL.Path == "/api/assets/page" {
 				pager, ok := store.(AssetPager)
 				if !ok {

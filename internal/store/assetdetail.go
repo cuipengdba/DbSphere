@@ -111,8 +111,20 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 				return nil, ErrInvalidRange
 			}
 		}
-		values, err := s.queryJSON(ctx, `WITH observed AS (
-			SELECT id,collected_at,status,
+		values, err := s.readMonitoringBuckets(ctx, []string{id}, from, to, bucket)
+		return map[string]any{"series": values}, err
+	case "capacity":
+		forecast, err := s.CapacityForecast(ctx, id)
+		return map[string]any{"forecast": forecast}, err
+	default:
+		return nil, fmt.Errorf("unsupported asset section")
+	}
+}
+
+func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
+	return s.queryJSON(ctx, `WITH observed AS (
+			SELECT id,asset_id,collected_at,status,
+				metrics_json#>>'{collector,pgStatus}' AS pg_status,
 				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,cpu,usedPercent}')='number'
 					THEN (metrics_json#>>'{linux,cpu,usedPercent}')::numeric END AS linux_cpu,
 				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,memory,usedPercent}')='number'
@@ -135,13 +147,13 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 					THEN (metrics_json->>'xact_rollback')::numeric END AS rollbacks,
 				CASE WHEN status='ok' AND (metrics_json#>>'{diagnostics,wal,data,bytes}') ~ '^[0-9]+([.][0-9]+)?$'
 					THEN (metrics_json#>>'{diagnostics,wal,data,bytes}')::numeric END AS wal_bytes
-			FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+			FROM samples WHERE asset_id=ANY($1::uuid[]) AND collected_at>=$2 AND collected_at<$3
 		), compared AS (
 			SELECT *,lag(collected_at) OVER observed_order AS prior_at,
 				lag(commits) OVER observed_order AS prior_commits,
 				lag(rollbacks) OVER observed_order AS prior_rollbacks,
 				lag(wal_bytes) OVER observed_order AS prior_wal_bytes
-			FROM observed WINDOW observed_order AS (ORDER BY collected_at,id)
+			FROM observed WINDOW observed_order AS (PARTITION BY asset_id ORDER BY collected_at,id)
 		), rated AS (
 			SELECT *,CASE WHEN commits>=prior_commits AND rollbacks>=prior_rollbacks
 				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
@@ -154,8 +166,10 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			FROM compared
 		)
 		SELECT jsonb_build_object(
-			'bucket',date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
+			'assetId',asset_id,'bucket',date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
+			'pgAvailable',count(*) FILTER (WHERE status='ok' OR pg_status='ok')::int,
+			'pgUnavailable',count(*) FILTER (WHERE pg_status='availability')::int,
 			'averageConnections',round(avg(connections),1),
 			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
 			'averageBlockedSessions',round(avg(blocked_sessions),1),
@@ -166,15 +180,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			'averageLinuxMemoryPercent',round(avg(linux_memory),1),
 			'transactionsPerSecond',round(avg(transactions_per_second),2),
 			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
-		FROM rated GROUP BY date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
-		ORDER BY date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, id, from, to, bucket)
-		return map[string]any{"series": values}, err
-	case "capacity":
-		forecast, err := s.CapacityForecast(ctx, id)
-		return map[string]any{"forecast": forecast}, err
-	default:
-		return nil, fmt.Errorf("unsupported asset section")
-	}
+		FROM rated GROUP BY asset_id,date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
+		ORDER BY asset_id,date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, ids, from, to, bucket)
 }
 
 func (s *Postgres) queryJSON(ctx context.Context, query string, args ...any) ([]json.RawMessage, error) {

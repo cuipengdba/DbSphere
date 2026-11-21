@@ -103,6 +103,13 @@
     return item;
   }
 
+  function eventPoints(events, time) {
+    return events.flatMap(event => [
+      { event, at: Date.parse(event.startedAt), end: false },
+      { event, at: Date.parse(event.endedAt), end: true }
+    ].filter(point => point.at >= time.from && point.at <= time.to));
+  }
+
   function graph(title, window, buckets, events, format, stacked = false) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
@@ -135,16 +142,13 @@
       axis.append(label);
     }
     const marks = [];
-    for (const event of events) {
-      const started = Date.parse(event.startedAt);
-      if (started < window.from || started > window.to) continue;
-      const position = left + (started - window.first) / (window.bucketMs * pointCount) * area;
-      const mark = svg('line', { x1: position, x2: position, y1: top, y2: bottom, class: 'monitor-event-marker' });
+    for (const { event, at, end } of eventPoints(events, window)) {
+      const position = left + (at - window.first) / (window.bucketMs * pointCount) * area;
+      const mark = svg('line', { x1: position, x2: position, y1: top, y2: bottom, class: end ? 'monitor-recovery-marker' : 'monitor-event-marker' });
       const label = svg('title');
-      label.textContent = event.title;
-      mark.append(label);
+      label.textContent = `${event.title} · ${end ? '恢复' : '开始'}`;
       const marker = svg('g', { class: 'monitor-mark' });
-      marker.append(mark, svg('circle', { cx: position, cy: top, r: 4, fill: 'var(--issue-line)' }));
+      marker.append(label, mark, svg('circle', { cx: position, cy: top, r: 4, fill: end ? 'var(--ok-line)' : 'var(--issue-line)' }));
       marker.addEventListener('click', () => window.openEvent(event.id));
       marks.push(marker);
     }
@@ -369,10 +373,13 @@
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
-    let compare = null, abnormalOnly = false, fleetTime = null;
+    let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
+    let rangeEvents = [];
     const header = el('div', null, 'monitor-controls');
     const fleet = el('div', null, 'monitor-fleet');
+    const overview = el('div', null, 'cluster-overview');
     const charts = el('div', null, 'monitor-layout');
+    fleet.append(overview, charts);
     const details = el('section', null, 'monitor-instance');
     const tablist = el('div', null, 'monitor-tabs');
     tablist.setAttribute('aria-label', '实例监控专题');
@@ -381,7 +388,13 @@
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
     const fleetLabel = el('p', null, 'monitor-range-caption');
-    const clusterSelect = select('PG 集群', value => { cluster = value; instance = ''; database = ''; resetFleet(); change(); });
+    const clusterSelect = select('PG 集群', value => {
+      cluster = value; instance = ''; database = ''; chooseCluster = false;
+      if (cluster) {
+        try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
+      }
+      resetFleet(); change();
+    });
     const instanceSelect = select('数据库实例', value => { if (value) openInstance(value); else backToFleet(); });
     const databaseSelect = select('数据库', value => { database = value; instance = ''; resetFleet(); change(); });
     const rangeSelect = select('时间范围', value => {
@@ -433,7 +446,7 @@
     function route() {
       const params = new URLSearchParams();
       for (const [key, value, fallback] of [
-        ['cluster', cluster, ''], ['instance', instance, ''], ['database', database, ''],
+        ['cluster', cluster || (!chooseCluster && ready ? 'all' : ''), ''], ['instance', instance, ''], ['database', database, ''],
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, '']
       ]) if (value && value !== fallback) params.set(key, value);
@@ -442,7 +455,8 @@
     }
 
     function restore(params) {
-      cluster = params.get('cluster') || '';
+      chooseCluster = !params.has('cluster');
+      cluster = params.get('cluster') === 'all' ? '' : params.get('cluster') || '';
       instance = params.get('instance') || '';
       database = params.get('database') || '';
       period = periods.find(([name]) => params.get('period') === name)?.[0] || defaultPeriod;
@@ -496,10 +510,10 @@
       return assets.filter(asset => (!cluster || clusterKey(asset) === cluster) && (!database || database === asset.database));
     }
 
-    function resetFleet() { compare = null; abnormalOnly = false; }
+    function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
 
-    function openInstance(id) {
+    function openInstance(id, topic) {
       const asset = assets.find(item => item.id === id);
       if (!asset) return;
       if (id !== instance) {
@@ -507,6 +521,7 @@
         mode = 'metrics';
         eventAnchor = '';
       }
+      if (topic) mode = topic;
       cluster = clusterKey(asset);
       if (database && database !== asset.database) database = '';
       instance = id;
@@ -540,84 +555,182 @@
       return card;
     }
 
+    const healthRank = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
+    const pgLabels = { available: '可用', unavailable: '不可用', unknown: '待确认' };
+
+    function state(asset) {
+      if (['stale', 'pending'].includes(assetHealth(asset).kind)) return 'unknown';
+      return summaries.get(asset.id)?.postgresState || 'unknown';
+    }
+
+    function rankedMembers() {
+      return members().sort((a, b) => Number(state(b) === 'unavailable') - Number(state(a) === 'unavailable') ||
+        (summaries.get(b.id)?.openEvents ?? 0) - (summaries.get(a.id)?.openEvents ?? 0) ||
+        healthRank[assetHealth(a).kind] - healthRank[assetHealth(b).kind] ||
+        Number(b.role === 'primary') - Number(a.role === 'primary') || a.name.localeCompare(b.name, 'zh-CN'));
+    }
+
     function renderFleet(time) {
       if (!time || instance) return;
-      const rank = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
-      const items = members().sort((a, b) => rank[assetHealth(a).kind] - rank[assetHealth(b).kind] ||
-        (summaries.get(b.id)?.openEvents ?? 0) - (summaries.get(a.id)?.openEvents ?? 0) ||
-        Number(b.role === 'primary') - Number(a.role === 'primary') || a.name.localeCompare(b.name, 'zh-CN'));
-      const roles = items.filter(asset => ['ok', 'manual'].includes(assetHealth(asset).kind));
-      const abnormal = items.length - roles.length;
-      const open = items.reduce((sum, asset) => sum + (summaries.get(asset.id)?.openEvents ?? 0), 0);
-      const peak = items.filter(asset => finite(connection(asset))).sort((a, b) => connection(b) - connection(a))[0];
-      const lag = items.filter(asset => finite(summaries.get(asset.id)?.replicationLagBytes)).sort(
-        (a, b) => summaries.get(b.id).replicationLagBytes - summaries.get(a.id).replicationLagBytes)[0];
-      const split = el('div', null, 'monitor-split');
-      const card = panel(abnormalOnly ? '异常成员' : '成员健康');
-      card.classList.add('monitor-members');
-      card.append(el('p', '最新采样 · 异常成员优先', 'monitor-note'));
+      const items = rankedMembers();
+      const selected = items.filter(asset => state(asset) === 'available');
+      const leaders = selected.filter(asset => asset.role === 'primary');
       const ids = new Set(items.map(asset => asset.id));
-      const matching = recent.filter(event => ids.has(event.assetId));
+      const matching = [...new Map([...recent, ...rangeEvents].map(event => [event.id, event])).values()]
+        .filter(event => ids.has(event.assetId)).sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
       const active = matching.filter(event => event.status === 'open');
-      const resolved = matching.filter(event => event.status !== 'open' && Date.parse(event.startedAt) < time.to && Date.parse(event.endedAt) >= time.from);
-      const issues = eventList((active.length ? active : resolved).slice(0, 5), active.length ? '当前事件' : '所选区间最近恢复');
-      issues.classList.add('monitor-latest');
-      if (open > active.length) issues.append(el('p', '这里展示最近返回的事件。其余可在问题事件中查找。', 'monitor-note'));
-      const statsBar = stats([
-        ['异常实例', abnormal, abnormal ? 'monitor-alert' : '', () => {
-          abnormalOnly = !abnormalOnly;
-          renderFleet(time);
-          fleet.querySelector('.monitor-stat')?.focus({ preventScroll: true });
-        }],
-        ['开放事件', items.length && items.every(asset => summaries.has(asset.id)) ? open : '—', open ? 'monitor-alert' : '', () => issues.scrollIntoView({ block: 'nearest' })],
-        ['最近主库 / 备库', `${roles.filter(a => a.role === 'primary').length} / ${roles.filter(a => a.role === 'standby').length}`],
-        ['最高连接占用', display(peak && connection(peak), percent), '', peak && (() => openInstance(peak.id))],
-        ['最大回放差距', display(lag && summaries.get(lag.id).replicationLagBytes, bytes), '', lag && (() => openInstance(lag.id))]
-      ]);
-      statsBar.firstElementChild.setAttribute('aria-pressed', String(abnormalOnly));
-      const list = abnormalOnly ? items.filter(asset => !roles.includes(asset)) : items;
-      const rows = list.map(asset => {
+      const resolved = matching.filter(event => event.status !== 'open' &&
+        Date.parse(event.startedAt) < time.to && Date.parse(event.endedAt) >= time.from);
+      const issues = eventList((active.length ? active : resolved).slice(0, 3), active.length ? '当前事件' : '区间内已恢复');
+      issues.classList.add('monitor-latest', 'cluster-issues');
+      const card = panel('成员 · 最新观测');
+      card.classList.add('monitor-members', 'cluster-members');
+      const count = items.reduce((sum, asset) => sum + (summaries.get(asset.id)?.openEvents ?? 0), 0);
+      if (count > active.length) issues.append(el('p', '更多开放事件可从问题事件页查看。', 'monitor-note'));
+      const leaderName = leaders.length === 1 ? leaders[0].name : leaders.length > 1 ? `${leaders.length} 个主库信号` : '待确认';
+      const identity = panel(cluster ? clusterLabel(items[0] ?? assets.find(asset => clusterKey(asset) === cluster)) : '全部集群');
+      identity.classList.add('cluster-identity', 'monitor-identity');
+      const versions = [...new Set(items.map(asset => Math.floor(asset.versionNum / 10000)).filter(value => value > 0))].sort((a, b) => a - b);
+      const memberCount = identitiesLoaded(items) ? `${selected.length} / ${items.length}` : '—';
+      identity.append(el('p', versions.length ? `PostgreSQL ${versions.join(' / ')}` : 'PostgreSQL', 'monitor-note'),
+        stats([
+          ['已观测可用', memberCount],
+          ['观测主库', cluster ? leaderName : String(leaders.length), cluster && leaders.length > 1 ? 'monitor-alert' : '',
+            cluster && leaders.length === 1 ? () => openInstance(leaders[0].id) : null],
+          ['开放事件', identitiesLoaded(items) ? count : '—', count ? 'monitor-alert' : '', () => issues.scrollIntoView({ block: 'nearest' })]
+        ]));
+      const row = el('div', null, 'cluster-grid');
+      const abnormal = asset => state(asset) === 'unavailable' || !['ok', 'manual'].includes(assetHealth(asset).kind) || summaries.get(asset.id)?.openEvents > 0;
+      const toolbar = el('div', null, 'cluster-tools');
+      const toggle = button(abnormalOnly ? '显示全部' : '只看异常', () => {
+        abnormalOnly = !abnormalOnly;
+        renderFleet(time);
+        overview.querySelector('.cluster-tools button')?.focus({ preventScroll: true });
+      });
+      toggle.setAttribute('aria-pressed', String(abnormalOnly));
+      toolbar.append(toggle);
+      if (items.length) card.append(toolbar);
+      const rows = (abnormalOnly ? items.filter(abnormal) : items).map(asset => {
         const values = summaries.get(asset.id);
         const conn = display(connection(asset), percent);
         const replay = display(values?.replicationLagBytes, bytes);
-        const name = el('div');
-        name.append(button(asset.name, () => openInstance(asset.id), 'monitor-link'));
+        const pg = state(asset);
+        const name = el('div', null, 'cluster-member-name');
+        name.append(button(asset.name, () => openInstance(asset.id, abnormal(asset) ? 'waits' : 'metrics'), 'monitor-link'));
         const mobile = el('details', null, 'monitor-mobile-detail');
-        mobile.append(el('summary', '采样详情'), el('small', `${formatTime(asset.lastSampleAt)} · 连接 ${conn} · 回放 ${replay}`));
+        mobile.append(el('summary', '采集详情'), el('small', [
+          health(asset).textContent, formatTime(asset.lastSampleAt), `连接 ${conn}`, `回放 ${replay}`
+        ].join(' · ')));
         name.append(mobile);
-        return [name, roleLabels[asset.role] || '未知', health(asset), formatTime(asset.lastSampleAt), conn, replay, assetRuntimeLabel(asset)];
+        const badge = el('span', pgLabels[pg], `cluster-state cluster-state-${pg}`);
+        const connectionCell = finite(connection(asset)) ? button(conn, () => openInstance(asset.id), 'monitor-link') : conn;
+        return [name, roleLabels[asset.role] || '未知', badge, health(asset), connectionCell, replay];
       });
-      if (list.length) card.append(table(['实例', '角色', '采集状态', '最近采样', '连接占用', '回放差距', '环境'], rows, '集群成员'));
+      if (rows.length) card.append(table(['实例', '角色', 'PG 状态', '采集状态', '连接', '回放'], rows, '集群成员'));
       else if (!items.length) card.append(el('p', '没有匹配的纳管实例。', 'monitor-empty'), button('查看资产', openAssets));
       else card.append(el('p', '当前没有异常成员。', 'monitor-empty'));
-      split.append(card, issues);
-      fleet.replaceChildren(statsBar, split, fleetLabel, charts);
+      row.append(identity, card, issues);
+      overview.replaceChildren(row);
+    }
+
+    function identitiesLoaded(items) {
+      return items.length > 0 && items.every(asset => summaries.has(asset.id));
     }
 
     async function refreshFleet() {
-      if (!visible || !enabled) return;
+      if (!visible || !enabled || instance) return;
       const key = ++fleetRequest;
       try {
         const payload = await api('/api/monitoring/instances');
-        if (key !== fleetRequest || !visible) return;
+        if (key !== fleetRequest || !visible || instance) return;
         summaries = new Map(payload.instances.map(item => [item.assetId, item]));
-        renderFleet(fleetTime);
+        if (!overview.contains(document.activeElement)) renderFleet(fleetTime);
       } catch (error) {
         if (key === fleetRequest && visible && !instance) fleetLabel.textContent = `实例摘要暂不可用 · ${error.message}`;
       }
     }
 
+    function fleetTimeline(time, selected, records, events) {
+      const card = panel('可用性与事件时间条');
+      card.classList.add('cluster-timeline');
+      card.append(fleetLabel);
+      const legend = el('div', null, 'cluster-legend');
+      const states = { available: '可用', unavailable: '不可用', mixed: '时段内变化', unknown: '证据不足', gap: '无采样' };
+      for (const [value, label] of Object.entries(states)) legend.append(el('span', label, `cluster-state cluster-state-${value}`));
+      const tracks = el('div', null, 'cluster-tracks');
+      const footer = el('p', null, 'monitor-note');
+      for (const asset of selected) {
+        const row = el('div', null, 'cluster-track-row');
+        const track = el('div', null, 'cluster-track');
+        const plot = svg('svg', { viewBox: `0 0 ${time.count} 12`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+        const bins = aligned(records.get(asset.id), time, bucket => bucket);
+        const statesAt = bins.map(bucket => {
+          if (!bucket) return 'gap';
+          if (bucket.pgUnavailable && bucket.pgAvailable) return 'mixed';
+          if (bucket.pgUnavailable) return 'unavailable';
+          if (bucket.pgAvailable === bucket.samples) return 'available';
+          return 'unknown';
+        });
+        let start = 0;
+        for (let end = 1; end <= statesAt.length; end++) {
+          if (statesAt[end] === statesAt[start]) continue;
+          plot.append(svg('rect', { x: start, y: 0, width: end - start, height: 12, class: `cluster-fill-${statesAt[start]}` }));
+          start = end;
+        }
+        const cursor = svg('line', { x1: 0, x2: 0, y1: 0, y2: 12, class: 'cluster-cursor' });
+        plot.append(cursor);
+        track.append(plot);
+        const eventsForAsset = events.filter(event => event.assetId === asset.id);
+        for (const { event, at, end } of eventPoints(eventsForAsset, time)) {
+          const mark = button(end ? '恢复' : '故障', () => openEvent(event.id), `cluster-marker ${end ? 'recovered' : ''}`);
+          mark.setAttribute('aria-label', `${event.title} · ${end ? '恢复' : '开始'} · ${formatTime(at)}`);
+          mark.title = mark.getAttribute('aria-label');
+          mark.style.left = `${(at - time.first) * 100 / (time.count * time.bucketMs)}%`;
+          track.append(mark);
+        }
+        time.cursors.add(index => {
+          cursor.setAttribute('x1', index + 0.5);
+          cursor.setAttribute('x2', index + 0.5);
+        });
+        track.tabIndex = 0;
+        track.setAttribute('aria-label', `${asset.name} PostgreSQL 状态时间条`);
+        let index = 0;
+        const show = value => {
+          index = Math.min(time.count - 1, Math.max(0, value));
+          for (const displayCursor of time.cursors) displayCursor(index);
+          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · ${states[statesAt[index]]}`;
+        };
+        track.addEventListener('pointermove', event => {
+          const rect = track.getBoundingClientRect();
+          show(Math.floor((event.clientX - rect.left) * time.count / rect.width));
+        });
+        track.addEventListener('focus', () => show(index));
+        track.addEventListener('keydown', event => {
+          if (event.target !== track || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+          event.preventDefault();
+          show(index + (event.key === 'ArrowLeft' ? -1 : 1));
+        });
+        row.append(button(asset.name, () => openInstance(asset.id), 'monitor-link'), track);
+        tracks.append(row);
+      }
+      footer.setAttribute('aria-live', 'polite');
+      card.append(tracks, legend, footer);
+      return card;
+    }
+
     async function compareTrends(time) {
       const key = ++request;
-      const items = members();
-      compare ??= new Set([...items].sort((a, b) => Number(b.role === 'primary') - Number(a.role === 'primary') ||
-        Number(assetHealth(b).kind === 'error') - Number(assetHealth(a).kind === 'error')).slice(0, 3).map(asset => asset.id));
+      const items = rankedMembers();
+      const primary = items.filter(asset => asset.role === 'primary' && !['stale', 'pending'].includes(assetHealth(asset).kind));
+      const lead = cluster && primary.length === 1 ? primary[0] : null;
+      compare ??= new Set([lead, ...items].filter(Boolean).map(asset => asset.id).filter((id, i, ids) => ids.indexOf(id) === i).slice(0, 3));
       const selected = items.filter(asset => compare.has(asset.id));
       const colors = new Map(selected.map((asset, i) => [asset.id, palette[i]]));
       if (!items.length) { charts.replaceChildren(); return; }
-      const picker = panel('集群趋势');
+      const picker = el('details', null, 'monitor-panel monitor-topic cluster-picker');
+      picker.append(el('summary', `比较成员 · ${selected.length} / 5`));
       const controls = el('div', null, 'monitor-selection');
-      picker.append(el('p', '比较最多 5 个实例，每条曲线对应一个实例。', 'monitor-note'), controls);
+      picker.append(controls);
       for (const asset of items) {
         const checkbox = el('input');
         checkbox.type = 'checkbox';
@@ -626,7 +739,9 @@
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) compare.add(asset.id); else compare.delete(asset.id);
           void compareTrends(time);
-          [...charts.querySelectorAll('input')][items.indexOf(asset)]?.focus({ preventScroll: true });
+          const replacement = charts.querySelector('details');
+          replacement.open = true;
+          replacement.querySelectorAll('input')[items.indexOf(asset)]?.focus({ preventScroll: true });
         });
         const label = el('label');
         label.append(checkbox);
@@ -638,33 +753,50 @@
         label.append(asset.name);
         controls.append(label);
       }
-      charts.replaceChildren(picker);
-      if (!selected.length) { picker.append(el('p', '选择实例以比较趋势。', 'monitor-empty')); return; }
-      const loading = el('p', '正在读取集群趋势…', 'monitor-note');
-      picker.append(loading);
-      const results = await Promise.allSettled(selected.map(asset => api(`/api/assets/${asset.id}/series?${time.params}`)));
-      if (key !== request || !visible || instance) return;
-      time.cursors.clear();
-      loading.remove();
-      const failures = results.flatMap((result, i) => result.status === 'rejected' ? [selected[i].name] : []);
-      if (failures.length) picker.append(el('p', `趋势读取失败 · ${failures.join('、')}`, 'monitor-warning'));
-      const ids = new Set(selected.map(asset => asset.id));
-      const events = recent.filter(event => ids.has(event.assetId));
-      const panels = el('div', null, 'monitor-charts');
-      for (const [metric, title, format] of [
-        ['transactionsPerSecond', '事务吞吐', rate], ['averageReplicationLagBytes', '复制回放差距', bytes]
-      ]) {
-        const points = Array.from({ length: time.count }, () => ({ values: [] }));
-        for (const [index, result] of results.entries()) {
-          if (result.status !== 'fulfilled') continue;
-          const { id: assetId, name: label } = selected[index];
-          for (const [i, point] of aligned(result.value.series, time, row => row[metric]).entries()) {
-            if (finite(point)) points[i].values.push({ key: assetId, value: point, label, color: colors.get(assetId) });
+      const seriesPanels = el('div', null, 'cluster-charts');
+      const loading = el('p', selected.length ? '正在读取所选成员的时间序列…' : '选中成员以比较趋势。', 'monitor-note');
+      charts.replaceChildren(loading, picker);
+      if (!selected.length) return;
+      const params = new URLSearchParams(time.params);
+      for (const asset of selected) params.append('asset', asset.id);
+      try {
+        const { series, events } = await api(`/api/monitoring/series?${params}`);
+        if (key !== request || !visible || instance) return;
+        rangeEvents = events;
+        if (!overview.contains(document.activeElement)) renderFleet(time);
+        time.cursors.clear();
+        const records = new Map(selected.map(asset => [asset.id, []]));
+        for (const row of series) records.get(row.assetId)?.push(row);
+        const flow = fleetTimeline(time, selected, records, events);
+        for (const [metric, title, format, trendAssets] of [
+          ['transactionsPerSecond', lead && compare.has(lead.id) ? '当前主库 TPS' : '事务吞吐 · TPS', rate,
+            lead && compare.has(lead.id) ? [lead] : selected],
+          ['averageConnectionUsagePercent', '连接压力', percent, selected],
+          ['averageReplicationLagBytes', '复制回放差距', bytes, selected]
+        ]) {
+          const points = Array.from({ length: time.count }, () => ({ values: [] }));
+          for (const { id, name: label } of trendAssets) {
+            for (const [i, point] of aligned(records.get(id), time, row => row[metric]).entries()) {
+              if (finite(point)) points[i].values.push({ key: id, value: point, label, color: colors.get(id) });
+            }
           }
+          const trend = graph(title, time, points.map(point => point.values.length ? point : null), events, format);
+          const latest = points.findLast(point => point.values.length);
+          if (latest) {
+            const top = latest.values.reduce((a, b) => a.value >= b.value ? a : b);
+            const label = el('p', null, 'cluster-trend-number');
+            label.append(el('strong', format(top.value)), el('span', top.label));
+            trend.insertBefore(label, trend.children[1] ?? null);
+          }
+          seriesPanels.append(trend);
         }
-        panels.append(graph(title, time, points.map(point => point.values.length ? point : null), events, format));
+        loading.replaceWith(flow, seriesPanels);
+      } catch (error) {
+        if (key === request && visible && !instance) {
+          loading.textContent = `趋势读取失败 · ${error.message}`;
+          loading.className = 'monitor-warning';
+        }
       }
-      picker.append(panels);
     }
 
     function followWait(item) {
@@ -777,11 +909,19 @@
       if (!enabled) {
         details.hidden = true;
         fleet.hidden = false;
-        fleet.replaceChildren(el('p', '监控工作台使用 Go 版和 PostgreSQL 18 长期存储。', 'monitor-note'));
+        overview.replaceChildren(el('p', '监控工作台使用 Go 版和 PostgreSQL 18 长期存储。', 'monitor-note'));
+        charts.replaceChildren();
         return;
       }
       const clusters = new Map(assets.map(asset => [clusterKey(asset), clusterLabel(asset)]));
-      if (!clusters.has(cluster)) cluster = '';
+      if (cluster && !clusters.has(cluster)) { cluster = ''; chooseCluster = true; }
+      if (chooseCluster && clusters.size) {
+        let previous;
+        try { previous = localStorage.getItem('dbsphere.lastCluster'); } catch {}
+        cluster = clusters.has(previous) ? previous : [...clusters].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'))[0][0];
+        chooseCluster = false;
+        if (/^#monitoring(?:\?|$)/.test(location.hash)) history.replaceState(null, '', `#${route()}`);
+      }
       const available = assets.filter(asset => !cluster || clusterKey(asset) === cluster);
       const dbs = [...new Set(available.map(asset => asset.database))].filter(Boolean).sort();
       if (!dbs.includes(database)) database = '';

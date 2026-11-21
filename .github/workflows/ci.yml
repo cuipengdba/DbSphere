@@ -404,12 +404,12 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous="$previous_dir/DbSphere-go-offline-1.1.0-linux-amd64.run"
+          previous_version='1.2.0'
+          previous_sha='83d66a0915efd0f806079aec901fa84535f7cbf0fd7066b47faa087d3bb5f816'
+          previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
-            'https://github.com/cuipengdba/DbSphere/releases/download/v1.1.0/DbSphere-go-offline-1.1.0-linux-amd64.run'
-          printf '%s  %s\n' \
-            5d5811e52747c1eb7910609025724950b387038df7b47531f5056e04a4b6f714 \
-            "$(basename "$previous")" > "$previous.sha256"
+            "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
+          printf '%s  %s\n' "$previous_sha" "$(basename "$previous")" > "$previous.sha256"
           (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"
       - name: Preserve tested Go offline and native packages

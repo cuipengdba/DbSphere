@@ -147,3 +147,72 @@ body:not([data-role="admin"]) .admin-only { display: none !important; }
 @media (min-width: 701px) {
   .monitor-mobile-detail { display: none; }
 }
+
+/* Cluster dashboard */
+body[data-active-view="monitoring"] .workspace-heading { margin-bottom: 10px; }
+body[data-active-view="monitoring"] .workspace-heading h1 { font-size: 20px; }
+body[data-active-view="monitoring"] #view-description { display: none; }
+.cluster-grid {
+  display: grid;
+  grid-template-columns: minmax(146px, 0.76fr) minmax(0, 2.85fr) minmax(170px, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.cluster-grid .monitor-panel { padding: 12px; }
+.cluster-identity { background: var(--selected); border-color: var(--accent-line); }
+.cluster-identity h3 { font-size: 20px; margin-bottom: 0; }
+.cluster-identity .monitor-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 6px 0 0; }
+.cluster-identity .monitor-stat { border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; padding: 7px 0; }
+.cluster-identity .monitor-stat strong { font-size: 17px; margin-top: 3px; }
+.cluster-identity .monitor-stat:is(button):hover { color: var(--accent); background: var(--soft); }
+.cluster-members { position: relative; }
+.cluster-members .monitor-table { max-height: 164px; margin-top: 4px; }
+.cluster-members .monitor-table table[aria-label="集群成员"] { min-width: 0; }
+.cluster-members .monitor-table thead { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.cluster-members .monitor-table :is(th, td) { padding: 6px; }
+.cluster-members h3 { padding-right: 84px; }
+.cluster-member-name { overflow-wrap: anywhere; }
+.cluster-tools { position: absolute; top: 8px; right: 10px; }
+.cluster-tools button { font-size: 12px; min-height: 26px; padding: 3px 7px; }
+.cluster-issues { max-height: 230px; overflow: auto; }
+.cluster-issues .monitor-event { padding: 6px 8px; font-size: 13px; }
+.cluster-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.cluster-state::before { content: ''; width: 7px; height: 7px; border-radius: 2px; background: var(--plot-gray); }
+.cluster-state-available::before { background: var(--ok-line); }
+.cluster-state-unavailable::before { background: var(--issue-line); }
+.cluster-state-mixed::before { background: var(--warn-line); }
+.cluster-state-gap::before { background: var(--border); }
+.cluster-timeline { padding: 10px 12px; }
+.cluster-timeline h3 { margin-bottom: 3px; }
+.cluster-legend { display: flex; flex-wrap: wrap; gap: 3px 13px; font-size: 11px; color: var(--muted); margin-top: 5px; }
+.cluster-tracks { display: grid; gap: 2px; margin-top: 5px; }
+.cluster-track-row { display: grid; grid-template-columns: minmax(85px, 136px) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; }
+.cluster-track-row button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cluster-track { position: relative; min-width: 0; min-height: 15px; }
+.cluster-track svg { display: block; width: 100%; height: 15px; border-radius: 4px; }
+.cluster-fill-available { fill: var(--ok-line); }
+.cluster-fill-unavailable { fill: var(--issue-line); }
+.cluster-fill-mixed { fill: var(--warn-line); }
+.cluster-fill-unknown { fill: var(--plot-gray); }
+.cluster-fill-gap { fill: var(--border); }
+.cluster-cursor { stroke: var(--text); vector-effect: non-scaling-stroke; }
+.cluster-track .cluster-marker { position: absolute; width: 11px; height: 14px; top: 0; border: 1px solid var(--surface); background: var(--issue-line); color: transparent; padding: 0; font-size: 0; border-radius: 2px; transform: translateX(-50%); }
+.cluster-track .cluster-marker.recovered { background: var(--ok); }
+.monitor-recovery-marker { stroke: var(--ok-line); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.cluster-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cluster-charts .monitor-panel { padding: 11px; }
+.cluster-charts h3 { margin-bottom: 5px; }
+.cluster-charts .monitor-plot svg { height: 123px; }
+.cluster-trend-number { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 4px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.cluster-trend-number strong { color: var(--accent); font-size: 18px; }
+@media (max-width: 940px) {
+  .cluster-grid { grid-template-columns: minmax(150px, .8fr) minmax(0, 2fr); }
+  .cluster-issues { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
+  .cluster-grid, .cluster-charts { grid-template-columns: minmax(0, 1fr); }
+  .cluster-issues { grid-area: 2 / 1; }
+  .cluster-identity .monitor-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .cluster-identity .monitor-stat { padding-inline: 3px; }
+  .cluster-track-row { grid-template-columns: minmax(0, 87px) minmax(0, 1fr); }
+}

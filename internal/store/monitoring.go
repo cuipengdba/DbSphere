@@ -12,14 +12,38 @@ import (
 )
 
 const monitoringInstancesSQL = `SELECT jsonb_build_object(
-	'assetId',a.id,'openEvents',e.total,'replicationLagBytes',m.metrics_json->'replication_lag_bytes',
+	'assetId',a.id,'openEvents',e.total,
+	'postgresState',CASE WHEN m.status='ok' OR m.metrics_json#>>'{collector,pgStatus}'='ok' THEN 'available'
+		WHEN m.metrics_json#>>'{collector,pgStatus}'='availability' THEN 'unavailable' ELSE 'unknown' END,
+	'replicationLagBytes',m.metrics_json->'replication_lag_bytes',
 	'connections',m.metrics_json->'connections','maxConnections',m.metrics_json->'max_connections')
 	FROM assets a LEFT JOIN LATERAL (
-		SELECT metrics_json FROM samples WHERE asset_id=a.id AND collected_at=a.last_sample_at
-		AND (status='ok' OR metrics_json#>>'{collector,pgStatus}'='ok') ORDER BY id DESC LIMIT 1
+		SELECT status,metrics_json FROM samples WHERE asset_id=a.id AND collected_at=a.last_sample_at
+		ORDER BY id DESC LIMIT 1
 	) m ON true LEFT JOIN LATERAL (
 		SELECT count(*)::int AS total FROM open_event_groups WHERE asset_id=a.id
 	) e ON true /*asset_scope*/ ORDER BY a.id`
+
+// MonitoringSeries reads one bounded set of time buckets for authorized assets.
+func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params url.Values) (any, error) {
+	from, to, err := timeRange(params, 0, 7*24*time.Hour)
+	minutes, parseErr := strconv.Atoi(params.Get("bucketMinutes"))
+	if err != nil || parseErr != nil || params.Get("to") == "" || len(ids) < 1 || len(ids) > 5 ||
+		(minutes != 1 && minutes != 5 && minutes != 15 && minutes != 60) ||
+		to.Sub(from) > time.Duration(minutes*400)*time.Minute {
+		return nil, ErrInvalidRange
+	}
+	values, err := s.readMonitoringBuckets(ctx, ids, from, to, minutes)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',e.id,'assetId',e.asset_id,
+		'assetName',a.name,'title',e.title,'status',e.status,'startedAt',e.started_at,'endedAt',e.ended_at)
+		FROM events e JOIN assets a ON a.id=e.asset_id WHERE e.asset_id=ANY($1::uuid[])
+		AND e.started_at<$3 AND (e.ended_at IS NULL OR e.ended_at >= $2)
+		ORDER BY (e.status='open') DESC,e.started_at DESC,e.id LIMIT 40`, ids, from, to)
+	return map[string]any{"series": values, "events": events}, err
+}
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {
 	from, to, err := timeRange(params, 0, 7*24*time.Hour)

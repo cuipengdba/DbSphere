@@ -107,4 +107,46 @@ func TestMetricSeriesPreservesGapsAndCounterResets(t *testing.T) {
 	check("averageReplicationLagBytes", 1024)
 	check("transactionsPerSecond", 1.42)
 	check("walBytesPerSecond", 13.3)
+
+	other, err := pg.CreateAsset(ctx, assets.Input{Name: "Other metric series", Host: "127.0.0.2",
+		Port: 1, Database: "postgres", Username: "monitor", Password: "test-secret",
+		SSLMode: "disable", Runtime: "linux"}, []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otherAsset struct{ ID string }
+	if err := json.Unmarshal(other, &otherAsset); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteAsset(ctx, otherAsset.ID)
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+		VALUES(gen_random_uuid(),$1,$2,'error','{"collector":{"pgStatus":"availability"}}')`, otherAsset.ID, base); err != nil {
+		t.Fatal(err)
+	}
+	params.Del("bucketHours")
+	params.Set("bucketMinutes", "60")
+	batch, err := pg.MonitoringSeries(ctx, []string{asset.ID, otherAsset.ID}, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byAsset := make(map[string]struct {
+		AssetID       string
+		PgAvailable   int
+		PgUnavailable int
+	})
+	for _, raw := range batch.(map[string]any)["series"].([]json.RawMessage) {
+		var result struct {
+			AssetID       string
+			PgAvailable   int
+			PgUnavailable int
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			t.Fatal(err)
+		}
+		byAsset[result.AssetID] = result
+	}
+	if len(byAsset) != 2 || byAsset[asset.ID].PgAvailable != 5 || byAsset[asset.ID].PgUnavailable != 0 ||
+		byAsset[otherAsset.ID].PgAvailable != 0 || byAsset[otherAsset.ID].PgUnavailable != 1 {
+		t.Fatalf("batch crossed asset boundaries or misclassified a probe: %+v", byAsset)
+	}
 }
