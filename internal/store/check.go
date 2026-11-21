@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -217,6 +219,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 				group, reason = "telemetry", "Linux node_exporter collection failed"
 			}
 		} else {
+			linux["endpoint"] = net.JoinHostPort(*linuxHost, strconv.Itoa(*exporterPort))
 			metrics["linux"] = linux
 		}
 	} else if runtime == "linux" {
@@ -291,6 +294,7 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, fmt.Errorf("read previous monitoring sample: %w", err)
 	}
+	recordLinuxInterval(object(metrics["linux"]), object(previous["linux"]), now.Sub(previousAt))
 	status := "ok"
 	if reason != "" {
 		status = "error"

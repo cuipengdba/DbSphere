@@ -534,10 +534,17 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	}
 	result := map[string]any{"status": "ok", "cluster": target.Cluster, "namespace": target.Namespace,
 		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"],
-			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName,
+			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName, "createdAt": metadata["creationTimestamp"],
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
 		"node": nil, "services": []any{}, "resourceMetrics": nil,
-		"resourceMetricsError": "metrics.k8s.io adapter is not available in Go"}
+		"observedAt": time.Now().UTC()}
+	for _, raw := range kubeList(metadata["ownerReferences"]) {
+		owner := kubeObject(raw)
+		if owner["controller"] == true {
+			result["owner"] = map[string]any{"kind": owner["kind"], "name": owner["name"], "uid": owner["uid"]}
+			break
+		}
+	}
 	if podName != target.Pod {
 		result["podMapping"] = map[string]any{"configured": target.Pod, "resolved": podName,
 			"workload": target.Workload, "source": "workload_selector"}
@@ -545,7 +552,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	if nodeName != "" && kubeName.MatchString(nodeName) {
 		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
 			info := kubeObject(node["status"])
-			result["node"] = map[string]any{"name": nodeName, "conditions": info["conditions"],
+			result["node"] = map[string]any{"name": nodeName, "uid": kubeObject(node["metadata"])["uid"], "conditions": info["conditions"],
 				"allocatable": info["allocatable"]}
 		} else {
 			result["nodeError"] = err.Error()
@@ -569,7 +576,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			continue
 		}
 		pvcSpec := kubeObject(pvc["spec"])
-		entry := map[string]any{"name": name, "namespace": target.Namespace,
+		entry := map[string]any{"name": name, "uid": kubeObject(pvc["metadata"])["uid"], "namespace": target.Namespace,
 			"phase":     kubeObject(pvc["status"])["phase"],
 			"capacity":  kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
 			"requested": kubeObject(kubeObject(pvcSpec["resources"])["requests"])["storage"],
@@ -633,7 +640,8 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 				if at == nil {
 					at = kubeObject(item["metadata"])["creationTimestamp"]
 				}
-				items = append(items, map[string]any{"reason": item["reason"], "message": kubeShort(item["message"]), "at": at})
+				items = append(items, map[string]any{"id": kubeObject(item["metadata"])["uid"], "objectUID": uid,
+					"reason": item["reason"], "message": kubeShort(item["message"]), "at": at})
 			}
 			result["events"] = items
 		} else {
@@ -644,15 +652,25 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	if podMetrics, err := k.get(ctx, metricPath+"/namespaces/"+url.PathEscape(target.Namespace)+
 		"/pods/"+url.PathEscape(podName), nil); err == nil {
 		usage := []any{}
+		totals := kubeUsageTotals{}
 		for _, raw := range kubeList(podMetrics["containers"]) {
 			container := kubeObject(raw)
 			resources := kubeObject(container["usage"])
+			totals.add(kubeString(resources["cpu"]), kubeString(resources["memory"]))
 			usage = append(usage, map[string]any{"name": container["name"],
 				"cpu": resources["cpu"], "memory": resources["memory"]})
 		}
 		result["resourceMetrics"] = map[string]any{"source": "metrics.k8s.io",
-			"observedAt": podMetrics["timestamp"], "containers": usage, "node": nil}
-		delete(result, "resourceMetricsError")
+			"observedAt": podMetrics["timestamp"], "window": podMetrics["window"], "containers": usage, "node": nil}
+		metricUID := kubeString(kubeObject(podMetrics["metadata"])["uid"])
+		created, _ := time.Parse(time.RFC3339Nano, kubeString(metadata["creationTimestamp"]))
+		observed, observedErr := time.Parse(time.RFC3339Nano, kubeString(podMetrics["timestamp"]))
+		if observedErr == nil && (metricUID == "" || metricUID == uid) && !observed.Before(created) {
+			kubeObject(result["resourceMetrics"])["podUsage"] = totals.values()
+		} else {
+			result["resourceMetricsError"] = "Pod metrics identity or observation timestamp could not be verified"
+			kubeObject(result["resourceMetrics"])["containers"] = []any{}
+		}
 	} else {
 		result["resourceMetricsError"] = err.Error()
 	}

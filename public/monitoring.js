@@ -277,8 +277,9 @@
 
   function metricCharts(series, window, events, specs) {
     const grid = el('div', null, 'monitor-charts');
-    for (const [key, label, formatter, color] of specs) {
-      const points = aligned(series, window, row => finite(row[key]) ? { values: [{ label: '', value: row[key], color }] } : null);
+    for (const [key, label, formatter, color, seriesKey] of specs) {
+      const points = aligned(series, window, row => finite(row[key]) ?
+        { values: [{ key: seriesKey ? row[seriesKey] : '', label: '', value: row[key], color }] } : null);
       grid.append(graph(label, window, points, events, formatter));
     }
     return grid;
@@ -350,13 +351,16 @@
   function renderInfra(snapshot, asset) {
     const info = panel('所选时段最近的环境快照');
     if (!snapshot) { info.append(el('p', '此范围没有采样。', 'monitor-empty')); return info; }
-    info.append(el('p', new Date(snapshot.collectedAt).toLocaleString('zh-CN'), 'monitor-note'));
+    const caption = el('p', `${new Date(snapshot.collectedAt).toLocaleString('zh-CN')} · `, 'monitor-note');
+    caption.append(sampleLink(asset.id, snapshot.id));
+    info.append(caption);
     if (asset.runtime === 'managed') {
       info.append(el('p', '托管实例仅可见数据库侧信号。', 'monitor-note'));
     } else if (asset.runtime === 'linux') {
       const linux = snapshot.linux;
-      if (linux?.status !== 'ok') info.append(el('p', '无 Linux 资源快照，请检查 node_exporter 配置和采样能力。', 'monitor-empty'));
+      if (linux?.status !== 'ok') info.append(el('p', linux?.reason || '无 Linux 资源快照。', 'monitor-empty'));
       else {
+        info.append(el('p', `${linux.source}${linux.endpoint ? ' · ' + linux.endpoint : ''}`, 'monitor-note'));
         info.append(stats([['CPU', display(linux.cpu?.usedPercent, percent)], ['内存', display(linux.memory?.usedPercent, percent)], ['1 分钟负载', display(linux.cpu?.load1)]]));
         if (linux.filesystems?.length) info.append(table(['挂载点', '已用', '容量'], linux.filesystems.map(fs =>
           [fs.mountpoint, display(fs.usedPercent, percent), display(fs.sizeBytes, bytes)]), 'Linux 文件系统'));
@@ -365,7 +369,11 @@
       const k8s = snapshot.k8s;
       if (k8s?.status !== 'ok') info.append(el('p', '无 K8S 快照，请检查 Pod 映射与只读权限。', 'monitor-empty'));
       else {
-        info.append(stats([['Pod', k8s.pod?.name || '—'], ['状态', k8s.pod?.phase || '—'], ['Node', k8s.node?.name || k8s.pod?.node || '—']]));
+        const ready = k8s.pod?.conditions?.find(item => item.type === 'Ready')?.status;
+        info.append(stats([['Pod', k8s.pod?.name || '—'], ['就绪', ready === 'True' ? '就绪' : ready === 'False' ? '未就绪' : '未知'],
+          ['Node', k8s.node?.name || k8s.pod?.node || '—']]));
+        const owner = k8s.owner ? `${k8s.owner.kind}/${k8s.owner.name}` : k8s.podMapping?.workload;
+        info.append(el('p', [k8s.cluster, k8s.namespace, owner, k8s.pod?.uid].filter(Boolean).join(' · '), 'monitor-note'));
         const usage = new Map((k8s.resourceMetrics?.containers || []).map(item => [item.name, item]));
         if (k8s.containers?.length) info.append(table(['容器', '重启', '最近终止原因', 'CPU', '内存'], k8s.containers.map(item =>
           [item.name, item.restartCount, item.terminatedReason, usage.get(item.name)?.cpu, usage.get(item.name)?.memory]), 'Pod 容器'));
@@ -373,7 +381,9 @@
           [pvc.name, pvc.phase, display(pvc.usage?.usedBytes, bytes), pvc.capacity]), 'PVC 状态'));
         if (k8s.events?.length) info.append(table(['时间', '原因', '信息'], k8s.events.slice(0, 12).map(item =>
           [item.at ? new Date(item.at).toLocaleString('zh-CN') : null, item.reason, item.message]), 'Kubernetes 事件'));
-        if (!k8s.resourceMetrics) info.append(el('p', '无 metrics.k8s.io 资源数据，Pod、Node 和 PVC 状态仍可查看。', 'monitor-note'));
+        if (k8s.resourceMetricsError || !k8s.resourceMetrics) info.append(el('p', `metrics.k8s.io · ${k8s.resourceMetricsError || '未取得资源指标'}`, 'monitor-note'));
+        for (const [name, issue] of [['Node', k8s.nodeError], ['PVC', k8s.pvcError], ['Event', k8s.eventsError]])
+          if (issue) info.append(el('p', `${name} · ${issue}`, 'monitor-note'));
       }
     }
     return info;
@@ -1145,6 +1155,57 @@
       return card;
     }
 
+    function environmentPanel(asset, snapshot, data, time, events) {
+      const result = document.createDocumentFragment();
+      if (!data) { result.append(renderInfra(snapshot, asset)); return result; }
+      const kubernetes = asset.runtime === 'k8s';
+      const timeline = panel('PostgreSQL 与环境同窗');
+      const charts = el('div', null, 'monitor-charts');
+      const statusGraph = (title, positive, negative) => graph(title, time, aligned(data.series, time, row => {
+        const values = [[positive, '可用', 'var(--ok-line)'], [negative, '异常', 'var(--issue-line)']]
+          .filter(([key]) => row[key] > 0).map(([key, label, color]) => ({ label, color, value: row[key] }));
+        return values.length ? { values } : null;
+      }), events, value => `${number(value)} 次采样`, true);
+      charts.append(statusGraph('PostgreSQL 连通性', 'pgAvailable', 'pgUnavailable'));
+      if (kubernetes) charts.append(statusGraph('Pod 就绪状态', 'podReady', 'podUnready'));
+      else charts.append(metricCharts(data.series, time, events, [['cpuPercent', 'Linux CPU 占用', percent, palette[0]]]).firstElementChild);
+      timeline.append(charts);
+
+      const history = panel(kubernetes ? 'Pod、Node 与 PVC 状态变化' : '主机与数据库状态变化');
+      if (data.changes.length) history.append(table(kubernetes ? ['观测时间', 'PG 状态', 'Pod / UID', '就绪 / 调度', 'Node / 压力', '重启计数', 'PVC', '采样'] :
+        ['观测时间', 'PG 状态', '主机记录', '采样'], data.changes.map(row => {
+        const pg = row.pg === 'ok' ? '可用' : row.pg === 'availability' ? '不可用' : '未知';
+        const origin = sampleLink(asset.id, row.id);
+        if (!kubernetes) return [formatTime(row.collectedAt), pg, row.hostRestart ? '主机启动时间变化' : '—', origin];
+        const pod = [row.pod, row.uid];
+        if (row.uid && row.previousUID && row.uid !== row.previousUID) pod.push(`前一 UID ${row.previousUID}`);
+        const summary = pairs => Object.entries(pairs || {}).map(([key, value]) => `${key} ${value ?? '未知'}`).join(' · ');
+        const ready = row.ready === 'True' ? '就绪' : row.ready === 'False' ? '未就绪' : '未知';
+        const scheduled = row.scheduled === 'True' ? '已调度' : row.scheduled === 'False' ? '调度失败' : '未知';
+        return [formatTime(row.collectedAt), pg, pod.filter(Boolean).join(' · '), `${ready} / ${scheduled}`,
+          [row.node, row.nodePressure].filter(Boolean).join(' · '), summary(row.restarts), summary(row.pvcs), origin];
+      }), kubernetes ? 'Pod UID 历史' : 'Linux 环境历史'));
+      else history.append(el('p', '此时段没有环境历史采样。', 'monitor-empty'));
+
+      const bySecond = value => `${bytes(value)}/s`;
+      const resourceCharts = kubernetes ? [
+        ['podCPUCores', 'Pod CPU · metrics.k8s.io', value => `${number(value, 3)} 核`, palette[0], 'podUid'],
+        ['podMemoryBytes', 'Pod 内存 · metrics.k8s.io', bytes, palette[1], 'podUid']
+      ] : [
+        ['memoryPercent', 'Linux 内存占用', percent, palette[1]], ['cpuLoad', 'Linux 1 分钟负载', number, palette[0]],
+        ['diskUsedPercent', '文件系统最高占用', percent, palette[2]], ['diskReadBps', '磁盘读取', bySecond, palette[0]],
+        ['diskWriteBps', '磁盘写入', bySecond, palette[2]], ['networkReceiveBps', '网络接收', bySecond, palette[0]],
+        ['networkTransmitBps', '网络发送', bySecond, palette[1]], ['pressureCPU', 'CPU 压力 · PSI', percent, palette[2]],
+        ['pressureMemory', '内存压力 · PSI', percent, palette[1]], ['pressureIO', 'I/O 压力 · PSI', percent, palette[2]]
+      ];
+      const resources = panel(kubernetes ? '容器资源历史' : 'Linux 资源历史 · node_exporter');
+      resources.append(metricCharts(data.series, time, events, resourceCharts));
+      if (kubernetes && !data.series.some(row => finite(row.podCPUCores) || finite(row.podMemoryBytes)))
+        resources.append(el('p', '此时段无可用的 Pod 资源指标。就绪、调度、重启和卷状态来自 Kubernetes 对象采样。', 'monitor-note'));
+      result.append(timeline, history, renderInfra(snapshot, asset), resources);
+      return result;
+    }
+
     function followWait(item) {
       if (group === 'type') { waitType = item.waitType; waitEvent = ''; group = 'event'; }
       else if (group === 'event') { waitType = item.waitType; waitEvent = item.waitEvent; group = 'query'; }
@@ -1157,7 +1218,8 @@
       const path = `/api/assets/${asset.id}/`;
       const query = new URLSearchParams(time.params);
       let section;
-      if (mode === 'metrics' || mode === 'replication' || (mode === 'infra' && asset.runtime === 'linux')) section = 'series';
+      if (mode === 'metrics' || mode === 'replication') section = 'series';
+      if (mode === 'infra' && asset.runtime !== 'managed') section = 'environment';
       if (mode === 'waits') {
         section = 'wait-history';
         query.set('group', group);
@@ -1239,13 +1301,7 @@
         if (mode === 'locks') fragment.append(lockPanel(context, asset));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events));
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
-        if (mode === 'infra') {
-          if (data?.series) fragment.append(metricCharts(data.series, time, events, [
-            ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, 'var(--plot-teal)'],
-            ['averageLinuxMemoryPercent', 'Linux 内存 · node_exporter', percent, 'var(--plot-blue)']
-          ]));
-          fragment.append(renderInfra(context.snapshot, asset));
-        }
+        if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
         if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
       } catch (error) {

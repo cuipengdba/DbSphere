@@ -41,6 +41,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.replicationHistory(ctx, id, params)
 	case "catalog":
 		return s.databaseCatalog(ctx, id, params)
+	case "environment":
+		return s.environmentHistory(ctx, id, params)
 	case "slow-logs":
 		from, to, err := timeRange(params, 24*time.Hour, 31*24*time.Hour)
 		if err != nil {

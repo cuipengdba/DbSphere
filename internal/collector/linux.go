@@ -46,6 +46,7 @@ func parseMetricLabels(raw string) map[string]string {
 func parseNodeExporter(raw string) (map[string]any, error) {
 	scalar := map[string]float64{}
 	filesystems := map[string]*filesystemSample{}
+	collected := map[string]bool{}
 	var cpuTotal, cpuIdle, diskRead, diskWritten, netReceive, netTransmit float64
 	for _, line := range strings.Split(raw, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -70,21 +71,25 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 			if !strings.HasPrefix(labels["device"], "loop") && !strings.HasPrefix(labels["device"], "ram") &&
 				!strings.HasPrefix(labels["device"], "zram") {
 				diskRead += value
+				collected[match[1]] = true
 			}
 		case "node_disk_written_bytes_total":
 			if !strings.HasPrefix(labels["device"], "loop") && !strings.HasPrefix(labels["device"], "ram") &&
 				!strings.HasPrefix(labels["device"], "zram") {
 				diskWritten += value
+				collected[match[1]] = true
 			}
 		case "node_network_receive_bytes_total":
 			if !strings.HasPrefix(labels["device"], "lo") && !strings.HasPrefix(labels["device"], "veth") &&
 				!strings.HasPrefix(labels["device"], "docker") {
 				netReceive += value
+				collected[match[1]] = true
 			}
 		case "node_network_transmit_bytes_total":
 			if !strings.HasPrefix(labels["device"], "lo") && !strings.HasPrefix(labels["device"], "veth") &&
 				!strings.HasPrefix(labels["device"], "docker") {
 				netTransmit += value
+				collected[match[1]] = true
 			}
 		case "node_filesystem_size_bytes", "node_filesystem_avail_bytes":
 			mount := labels["mountpoint"]
@@ -130,14 +135,31 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 			memoryUsed = math.Round((1-available/total)*1000) / 10
 		}
 	}
+	metric := func(name string) any {
+		if value, ok := scalar[name]; ok {
+			return value
+		}
+		return nil
+	}
+	counter := func(name string, value float64) any {
+		if collected[name] {
+			return value
+		}
+		return nil
+	}
 	return map[string]any{"status": "ok", "source": "node_exporter", "observedAt": time.Now().UTC(),
+		"bootTimeSeconds": metric("node_boot_time_seconds"),
 		"cpu": map[string]any{"totalSeconds": cpuTotal, "idleSeconds": cpuIdle,
-			"load1": scalar["node_load1"]},
+			"load1": metric("node_load1")},
 		"memory": map[string]any{"totalBytes": scalar["node_memory_MemTotal_bytes"],
 			"availableBytes": scalar["node_memory_MemAvailable_bytes"], "usedPercent": memoryUsed},
 		"filesystems": fs,
-		"disk":        map[string]any{"readBytesTotal": diskRead, "writtenBytesTotal": diskWritten},
-		"network":     map[string]any{"receiveBytesTotal": netReceive, "transmitBytesTotal": netTransmit}}, nil
+		"pressure": map[string]any{"cpuWaitSeconds": metric("node_pressure_cpu_waiting_seconds_total"),
+			"memoryWaitSeconds": metric("node_pressure_memory_waiting_seconds_total"), "ioWaitSeconds": metric("node_pressure_io_waiting_seconds_total")},
+		"disk": map[string]any{"readBytesTotal": counter("node_disk_read_bytes_total", diskRead),
+			"writtenBytesTotal": counter("node_disk_written_bytes_total", diskWritten)},
+		"network": map[string]any{"receiveBytesTotal": counter("node_network_receive_bytes_total", netReceive),
+			"transmitBytesTotal": counter("node_network_transmit_bytes_total", netTransmit)}}, nil
 }
 
 func Linux(ctx context.Context, host string, port int) (map[string]any, error) {

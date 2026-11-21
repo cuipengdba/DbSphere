@@ -211,7 +211,8 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	}
 	resources := kubeObject(value["resourceMetrics"])
 	if resources["source"] != "metrics.k8s.io" || len(kubeList(resources["containers"])) != 1 ||
-		kubeObject(resources["node"])["memory"] != "512Mi" {
+		kubeObject(resources["node"])["memory"] != "512Mi" || kubeObject(resources["podUsage"])["cpuCores"] != 0.02 ||
+		kubeObject(resources["podUsage"])["memoryBytes"] != float64(128*1024*1024) {
 		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
 	}
 	if len(paths) != 8 {
