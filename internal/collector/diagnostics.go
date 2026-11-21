@@ -105,6 +105,12 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			SELECT name,setting AS value,unit,source FROM pg_settings
 			WHERE name IN ('archive_mode','autovacuum','max_connections','max_slot_wal_keep_size','wal_level')
 			ORDER BY name) q`},
+		{"databaseInventory", databaseInventorySQL},
+		{"tableInventory", tableInventorySQL},
+		{"indexInventory", indexInventorySQL},
+	}
+	if major >= 16 {
+		queries = append(queries, diagnosticQuery{"instanceIO", instanceIOSQL})
 	}
 	result := make(map[string]any, len(queries))
 	for _, query := range queries {

@@ -6,7 +6,7 @@
     ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
   ];
   const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'],
-    ['replication', '复制与高可用'], ['infra', '运行环境']];
+    ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境']];
   const defaultPeriod = '1 小时';
   const sqlOrders = [['time', '总耗时'], ['calls', '调用频率'], ['latency', '平均耗时'], ['reads', '读取共享块'], ['temp', '写入临时块']];
   const milliseconds = value => `${number(value, 2)} ms`;
@@ -399,16 +399,18 @@
     const instanceTitle = el('h2', null, 'monitor-instance-title');
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
+    let dbOid = '', objectOid = '', objectKind = '';
     const fleetLabel = el('p', null, 'monitor-range-caption');
     const clusterSelect = select('PG 集群', value => {
       cluster = value; instance = ''; database = ''; chooseCluster = false;
+      resetCatalog();
       if (cluster) {
         try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
       }
       resetFleet(); change();
     });
     const instanceSelect = select('数据库实例', value => { if (value) openInstance(value); else backToFleet(); });
-    const databaseSelect = select('数据库', value => { database = value; instance = ''; resetFleet(); change(); });
+    const databaseSelect = select('纳管连接库', value => { database = value; instance = ''; resetCatalog(); resetFleet(); change(); });
     const rangeSelect = select('时间范围', value => {
       if (value === 'custom') {
         openRange();
@@ -441,7 +443,7 @@
       zoom(Date.parse(fromField.value), Date.parse(toField.value));
     });
     const editRange = button('编辑时段', openRange);
-    header.append(labeled('PG 集群', clusterSelect), labeled('实例', instanceSelect), labeled('数据库', databaseSelect),
+    header.append(labeled('PG 集群', clusterSelect), labeled('实例', instanceSelect), labeled('纳管连接库', databaseSelect),
       labeled('时间范围', rangeSelect), editRange, button('刷新', () => {
         if (!fixed) activeWindow = null;
         update();
@@ -461,7 +463,7 @@
         ['cluster', cluster || (!chooseCluster && ready ? 'all' : ''), ''], ['instance', instance, ''], ['database', database, ''],
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
-        ['sqlOrder', sqlOrder, 'time']
+        ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -480,6 +482,10 @@
       queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
       eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
       sqlOrder = sqlOrders.some(([key]) => key === params.get('sqlOrder')) ? params.get('sqlOrder') : 'time';
+      dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
+      objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
+      objectKind = objectOid && ['table', 'index'].includes(params.get('objectKind')) ? params.get('objectKind') : '';
+      if (!objectKind) objectOid = '';
       const from = Date.parse(params.get('from'));
       const to = Date.parse(params.get('to'));
       fixed = validRange(from, to) ? { from, to } : null;
@@ -525,6 +531,7 @@
     }
 
     function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; }
+    function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
 
     function openInstance(id, topic) {
@@ -532,6 +539,7 @@
       if (!asset) return;
       if (id !== instance) {
         resetWaitFilters();
+        resetCatalog();
         mode = 'metrics';
         eventAnchor = '';
       }
@@ -542,7 +550,7 @@
       change();
     }
 
-    function backToFleet() { instance = ''; eventAnchor = ''; resetWaitFilters(); change(); }
+    function backToFleet() { instance = ''; eventAnchor = ''; resetWaitFilters(); resetCatalog(); change(); }
 
     function health(asset) {
       const status = assetHealth(asset);
@@ -1005,6 +1013,138 @@
       return card;
     }
 
+    function catalogPanel(asset, data, time, events) {
+      const result = document.createDocumentFragment();
+      const sample = data.snapshot;
+      const inventory = sample?.databases?.data;
+      const databases = inventory?.databases || [];
+      const selected = databases.find(row => row.oid === dbOid);
+      const catalog = panel('实例内数据库');
+      const activeDB = databases.find(row => row.connected);
+      const summary = el('p', `来源 pg_stat_database · ${formatTime(sample?.collectedAt)}${inventory ? ` · ${databases.length} / ${inventory.total} 个可连接库` : ''}`, 'monitor-note');
+      if (sample) summary.append(' · ', sampleLink(asset.id, sample.id));
+      catalog.append(summary);
+      if (!inventory) catalog.append(el('p', '此时段没有可用的数据库清单采样。', 'monitor-empty'));
+      if (databases.length) {
+        const rank = el('div');
+        const order = select('数据库排行', key => drawRank(key));
+        const chooser = select('实例内数据库', oid => chooseDatabase(oid));
+        const controls = el('div', null, 'monitor-wait-controls');
+        options(order, [['bytes', '容量'], ['sessions', '连接']], 'bytes');
+        options(chooser, [['', '查看数据库排行'], ...databases.map(row => [row.oid, row.name])], selected?.oid || '');
+        controls.append(labeled('数据库', chooser), labeled('排行', order));
+        catalog.append(controls, rank);
+        const drawRank = key => {
+          const sorted = [...databases].sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1) || a.name.localeCompare(b.name));
+          rank.replaceChildren(table(['数据库', '容量', '连接', '读取块', '命中块'], sorted.map(row => [
+            button(row.name, () => chooseDatabase(row.oid), 'monitor-link'), display(row.bytes, bytes), display(row.sessions),
+            display(row.blocksRead), display(row.blocksHit)
+          ]), '数据库排行'));
+        };
+        drawRank('bytes');
+      }
+      if (inventory && !databases.length) catalog.append(el('p', '本次采样没有可连接的数据库。', 'monitor-empty'));
+      result.append(catalog);
+
+      if (dbOid) {
+        const databasePanel = panel(selected?.name || `数据库 OID ${dbOid}`);
+        if (!selected) databasePanel.append(el('p', '此库缺少末次采样。保留历史观测。', 'monitor-note'));
+        const rows = data.series.map(row => ({ ...row,
+          writesPerSecond: [row.rates?.rowsInserted, row.rates?.rowsUpdated, row.rates?.rowsDeleted].every(finite)
+            ? row.rates.rowsInserted + row.rates.rowsUpdated + row.rates.rowsDeleted : null,
+          rowsReturnedPerSecond: row.rates?.rowsReturned, fetchedPerSecond: row.rates?.rowsFetched,
+          temporaryBytes: row.deltas?.tempBytes, temporaryFiles: row.deltas?.tempFiles, deadlocks: row.deltas?.deadlocks
+        }));
+        databasePanel.append(metricCharts(rows, time, events, [
+          ['transactionsPerSecond', '事务吞吐', rate, palette[0]], ['sessions', '平均连接', number, palette[1]],
+          ['bytes', '数据库容量', bytes, palette[2]], ['cacheHitPercent', '读块缓存命中率', percent, palette[0]],
+          ['rowsReturnedPerSecond', '扫描返回行 / 秒', number, palette[1]], ['fetchedPerSecond', '索引取回行 / 秒', number, palette[1]],
+          ['writesPerSecond', '增删改行 / 秒', number, palette[2]], ['deadlocks', '死锁增量', number, 'var(--issue-line)'],
+          ['temporaryFiles', '临时文件增量', number, palette[1]], ['temporaryBytes', '临时写入增量', bytes, palette[2]]
+        ]));
+        if (!rows.some(row => row.observed)) databasePanel.append(el('p', '所选 OID 在此时间范围内无可见样本。', 'monitor-note'));
+        result.append(databasePanel);
+        if (selected && !selected.connected) {
+          const configured = assets.filter(item => clusterKey(item) === clusterKey(asset) && item.host === asset.host &&
+            item.port === asset.port && item.database === selected.name);
+          const link = panel('表与索引');
+          link.append(el('p', configured.length === 1 ? '对象统计从该库的纳管连接读取。' : `对象统计仅覆盖当前纳管连接 ${asset.database}。`, 'monitor-note'));
+          if (configured.length === 1) link.append(button(`打开 ${selected.name} 的对象采样`, () => openInstance(configured[0].id, 'catalog')));
+          result.append(link);
+        }
+      }
+      if (activeDB && (!dbOid || dbOid === activeDB.oid)) {
+        if (objectOid) {
+          const kind = objectKind === 'table' ? sample.tables : sample.indexes;
+          const object = kind?.data?.objects.find(row => row.oid === objectOid);
+          const focus = panel(object ? `${object.schema}.${object.name}` : `对象 OID ${objectOid}`);
+          focus.append(button('返回对象排行', () => { objectOid = ''; objectKind = ''; change(); }));
+          focus.append(metricCharts(data.objectSeries, time, events, [
+            ['bytes', '对象容量', bytes, palette[2]], ['deadRows', '死元组估计', number, palette[1]],
+            ['blocksRead', '累计读取块', number, palette[0]]
+          ].filter(([key]) => key !== 'deadRows' || objectKind === 'table')));
+          const last = data.objectSeries.findLast(row => finite(row.bytes));
+          if (last) focus.append(sampleLink(asset.id, last.sampleId, '对象原始采样'));
+          result.append(focus);
+        }
+        result.append(objectRanking(sample.tables, activeDB, 'table'), objectRanking(sample.indexes, activeDB, 'index'));
+      }
+      const io = sample?.instanceIO?.data;
+      const major = Math.floor((sample?.versionNum || asset.versionNum || 0) / 10000);
+      const ioCard = panel('I/O 采样范围');
+      ioCard.append(el('p', io ? 'pg_stat_io · 实例级客户端关系 I/O 累计值。库与对象的读块来自各自统计视图。' :
+        major >= 16 ? '本次未取得实例级 pg_stat_io。' : '此版本使用库与对象的块读取与命中统计。', 'monitor-note'));
+      if (io) ioCard.append(stats([['读取', display(io.reads)], ['写入', display(io.writes)], ['同步', display(io.fsyncs)]]));
+      result.append(ioCard);
+      return result;
+    }
+
+    function chooseDatabase(oid) {
+      dbOid = oid; objectOid = ''; objectKind = ''; change();
+    }
+
+    function objectRanking(inventory, db, kind) {
+      const isTable = kind === 'table';
+      const title = isTable ? '表排行' : '索引排行';
+      const card = panel(`${title} · ${db.name}`);
+      const objects = inventory?.data?.objects || [];
+      if (!objects.length) {
+        card.append(el('p', inventory?.status === 'ok' ? '未观测到可读对象。' : '此时段缺少对象采样。', 'monitor-empty'));
+        return card;
+      }
+      const controls = el('div', null, 'monitor-wait-controls');
+      const order = select(`${title}排序`, value => { by = value; currentPage = 0; render(); });
+      const output = el('div');
+      let by = 'bytes', currentPage = 0;
+      const pageSize = 10;
+      const labels = isTable ? ['容量', '表级读取块', '死元组', '累计写入'] : ['容量', '索引读取块', '累计扫描'];
+      const fields = isTable ? ['bytes', 'blocksRead', 'deadRows', 'writes'] : ['bytes', 'blocksRead', 'scans'];
+      options(order, fields.map((field, i) => [field, labels[i]]), by);
+      controls.append(labeled('排序', order));
+      card.append(el('p', `已采样 ${objects.length} / ${inventory.data.total} 个可见对象 · 依容量、活动和维护信号选取`, 'monitor-note'), controls, output);
+      function render() {
+        const rows = [...objects].sort((a, b) => (b[by] ?? -1) - (a[by] ?? -1) || a.name.localeCompare(b.name));
+        output.replaceChildren(table(isTable ? ['表', '容量', '读取块', '死元组', '累计写入', '最近 Vacuum', '最近 Analyze'] :
+          ['索引', '所属表', '容量', '读取块', '累计扫描'], rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(row => {
+          const name = button(`${row.schema}.${row.name}`, () => { dbOid = db.oid; objectOid = row.oid; objectKind = kind; change(); }, 'monitor-link');
+          return isTable ? [name, display(row.bytes, bytes), display(row.blocksRead), display(row.deadRows), display(row.writes),
+            formatTime(row.lastVacuumAt), formatTime(row.lastAnalyzeAt)] :
+            [name, row.table, display(row.bytes, bytes), display(row.blocksRead), display(row.scans)];
+        }), title));
+        if (objects.length > pageSize) {
+          const nav = el('div', null, 'monitor-wait-controls');
+          const previous = button('上一页', () => { currentPage--; render(); });
+          const next = button('下一页', () => { currentPage++; render(); });
+          previous.disabled = currentPage === 0;
+          next.disabled = (currentPage + 1) * pageSize >= objects.length;
+          nav.append(previous, el('span', `${currentPage + 1} / ${Math.ceil(objects.length / pageSize)}`, 'monitor-note'), next);
+          output.append(nav);
+        }
+      }
+      render();
+      return card;
+    }
+
     function followWait(item) {
       if (group === 'type') { waitType = item.waitType; waitEvent = ''; group = 'event'; }
       else if (group === 'event') { waitType = item.waitType; waitEvent = item.waitEvent; group = 'query'; }
@@ -1028,6 +1168,11 @@
         section = 'sql-window';
         query.set('order', sqlOrder);
         if (queryId) query.set('queryId', queryId);
+      }
+      if (mode === 'catalog') {
+        section = 'catalog';
+        if (dbOid) query.set('dbOid', dbOid);
+        if (objectOid) { query.set('objectOid', objectOid); query.set('objectKind', objectKind); }
       }
       const contextParams = new URLSearchParams(time.params);
       if (['metrics', 'waits', 'locks'].includes(mode)) contextParams.set('blocking', 'true');
@@ -1093,6 +1238,7 @@
         if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans }, path, time));
         if (mode === 'locks') fragment.append(lockPanel(context, asset));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events));
+        if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
         if (mode === 'infra') {
           if (data?.series) fragment.append(metricCharts(data.series, time, events, [
             ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, 'var(--plot-teal)'],

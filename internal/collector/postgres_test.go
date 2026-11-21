@@ -40,9 +40,13 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	if !ok {
 		t.Fatal("PostgreSQL diagnostic sections missing")
 	}
-	for _, section := range []string{"activity", "activeWaits", "transactions", "locks", "lockChain", "database",
+	sections := []string{"activity", "activeWaits", "transactions", "locks", "lockChain", "database",
 		"wal", "archiver", "checkpoints", "vacuum", "tables", "slots", "freeze",
-		"slotDetails", "settings"} {
+		"slotDetails", "settings", "databaseInventory", "tableInventory", "indexInventory"}
+	if version >= 160000 {
+		sections = append(sections, "instanceIO")
+	}
+	for _, section := range sections {
 		entry, ok := diagnostics[section].(map[string]any)
 		if !ok || entry["status"] != "ok" {
 			t.Fatalf("PostgreSQL %d diagnostic %s unavailable: %v", version/10000, section, entry)
