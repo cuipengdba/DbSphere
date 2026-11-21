@@ -1070,7 +1070,7 @@ function replaySampleLink(assetId, sampleId) {
   return link;
 }
 
-function incidentReplayPanel(event, replay, analysis) {
+function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   const panel = cell('section', '', 'incident-replay');
   panel.append(cell('h4', '全链路故障回放'));
   const jump = point => {
@@ -1101,7 +1101,7 @@ function incidentReplayPanel(event, replay, analysis) {
   const scope = cell('div', '', 'incident-replay-milestone');
   scope.append(cell('span', '影响实例'), cell('strong', event.assetName || event.assetId),
     cell('small', layers.length ? layers.join(' · ') : '暂缺有原始采样的信号'),
-    cell('small', aiStatus.enabled ? '规则诊断 · 已启用可选 AI' : '规则诊断 · AI 未启用'));
+    cell('small', aiEnabled ? '规则诊断 · 已启用可选 AI' : '规则诊断 · AI 未启用'));
   milestones.append(milestone('首次发现', replay.detection, '待确认'), scope, milestone('恢复观测', replay.recovery, '仍在处理中'));
   panel.append(milestones);
 
@@ -1149,9 +1149,10 @@ async function showEvent(id, updateHash = true) {
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, replay, relatedEvents = [] } = await api(`/api/events/${id}`);
-  const [eventAudit, workOrders] = await Promise.all([
+  const [eventAudit, workOrders, aiStatus] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
-    currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] }
+    currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
+    api('/api/ai/status').catch(() => ({ enabled: false }))
   ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
@@ -1192,7 +1193,7 @@ async function showEvent(id, updateHash = true) {
   sectionBar.append(...sectionButtons);
   activate(eventSection);
   target.append(sectionBar, ...content.values());
-  if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis));
+  if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis, aiStatus.enabled));
   if (assetServerPaging) {
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';
@@ -1437,7 +1438,6 @@ async function showEvent(id, updateHash = true) {
     renderAdminAudit(eventAudit?.entries, auditList);
     auditDetails.append(auditList); timelinePanel.append(auditDetails);
   }
-  const aiStatus = await api('/api/ai/status').catch(() => ({ enabled: false }));
   if (aiStatus.enabled && currentRole === 'admin') {
     const aiResult = document.createElement('div'); aiResult.className = 'evidence';
     const showAIResult = result => {
