@@ -394,6 +394,7 @@
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
+    let focusAt = null, focusSample = '';
     let sqlOrder = 'time';
     let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
     let rangeEvents = [];
@@ -414,6 +415,7 @@
     const clusterSelect = select('PG 集群', value => {
       cluster = value; instance = ''; database = ''; chooseCluster = false;
       resetCatalog();
+      focusAt = null; focusSample = '';
       if (cluster) {
         try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
       }
@@ -430,6 +432,7 @@
       fixed = null;
       activeWindow = null;
       eventAnchor = '';
+      focusAt = null; focusSample = '';
       rangeForm.hidden = true;
       change();
     });
@@ -473,7 +476,8 @@
         ['cluster', cluster || (!chooseCluster && ready ? 'all' : ''), ''], ['instance', instance, ''], ['database', database, ''],
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
-        ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, '']
+        ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
+        ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -491,6 +495,9 @@
       waitEvent = (params.get('waitEvent') || '').slice(0, 128);
       queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
       eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
+      const evidenceTime = Date.parse(params.get('at'));
+      focusAt = eventAnchor && Number.isFinite(evidenceTime) ? evidenceTime : null;
+      focusSample = focusAt != null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('sample') || '') ? params.get('sample') : '';
       sqlOrder = sqlOrders.some(([key]) => key === params.get('sqlOrder')) ? params.get('sqlOrder') : 'time';
       dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
       objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
@@ -552,6 +559,7 @@
         resetCatalog();
         mode = 'metrics';
         eventAnchor = '';
+        focusAt = null; focusSample = '';
       }
       if (topic) mode = topic;
       cluster = clusterKey(asset);
@@ -560,7 +568,7 @@
       change();
     }
 
-    function backToFleet() { instance = ''; eventAnchor = ''; resetWaitFilters(); resetCatalog(); change(); }
+    function backToFleet() { instance = ''; eventAnchor = ''; focusAt = null; focusSample = ''; resetWaitFilters(); resetCatalog(); change(); }
 
     function health(asset) {
       const status = assetHealth(asset);
@@ -574,8 +582,7 @@
 
     function eventList(events, title) {
       const card = panel(title);
-      if (eventAnchor && !events.some(event => event.id === eventAnchor))
-        card.append(button('返回事件证据', () => openEvent(eventAnchor)));
+      if (eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
       if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
       for (const event of events) {
         const item = button(event.title, () => openEvent(event.id), 'monitor-event');
@@ -1275,6 +1282,13 @@
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
         time.cursors.clear();
         const fragment = document.createDocumentFragment();
+        if (eventAnchor) {
+          const context = el('div', null, 'monitor-wait-controls');
+          context.append(button('返回原事件', () => openEvent(eventAnchor), 'monitor-link'));
+          if (focusAt != null) context.append(el('span', `证据时刻 ${formatTime(focusAt)}`, 'monitor-note'));
+          if (focusSample) context.append(sampleLink(asset.id, focusSample));
+          fragment.append(context);
+        }
         if (mode === 'metrics') {
           const latest = context.snapshot;
           const strip = stats([
@@ -1326,6 +1340,10 @@
         if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
         if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
+        if (focusAt != null && focusAt >= time.from && focusAt < time.to) {
+          const index = Math.floor((focusAt - time.first) / time.bucketMs);
+          for (const cursor of time.cursors) cursor(index);
+        }
       } catch (error) {
         if (key === request && visible) body.replaceChildren(el('p', `读取监控数据失败 · ${error.message}`, 'monitor-warning'));
       } finally {
@@ -1403,20 +1421,28 @@
         else { request++; fleetRequest++; }
       },
       route, restore, openInstance,
-      openIncident(event) {
+      openIncident(event, topic = 'waits', point = null) {
         const asset = assets.find(item => item.id === event.assetId);
         if (!asset) return;
         const start = Date.parse(event.startedAt);
-        const to = Math.min(Date.now(), event.endedAt ? Date.parse(event.endedAt) + 15 * minute : Date.now());
-        const from = Math.min(to - minute, Math.max(to - 10080 * minute, start - 15 * minute));
+        const selectedAt = Date.parse(point?.sampleAt || point?.at);
+        let to = Math.min(Date.now(), event.endedAt ? Date.parse(event.endedAt) + 15 * minute : Date.now());
+        let from = Math.min(to - minute, Math.max(to - 10080 * minute, start - 15 * minute));
+        if (Number.isFinite(selectedAt) && (selectedAt < from || selectedAt >= to)) {
+          to = Math.min(Date.now(), selectedAt + 15 * minute);
+          from = selectedAt - 15 * minute;
+        }
         fixed = validRange(from, to) ? { from, to } : null;
         activeWindow = null;
         cluster = clusterKey(asset);
         database = asset.database;
         instance = asset.id;
-        mode = 'waits';
+        mode = tabs.some(([name]) => name === topic) ? topic : 'waits';
         eventAnchor = event.id;
         resetWaitFilters();
+        resetCatalog();
+        focusAt = Number.isFinite(selectedAt) ? selectedAt : null;
+        focusSample = point?.sampleId || '';
       }
     };
   }

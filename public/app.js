@@ -1055,15 +1055,104 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
+const replayLayers = { postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用',
+  pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
+const replayStrength = { direct: '直接证据', correlated: '时间相关', insufficient: '证据不足', record: '事件记录' };
+const replayKinds = { event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+  collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
+  linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
+  event_acknowledged: '事件确认', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
+
+function replaySampleLink(assetId, sampleId) {
+  const link = cell('a', '原始采样', 'monitor-link');
+  link.href = `/api/assets/${assetId}/samples/${sampleId}`;
+  link.target = '_blank'; link.rel = 'noopener';
+  return link;
+}
+
+function incidentReplayPanel(event, replay, analysis) {
+  const panel = cell('section', '', 'incident-replay');
+  panel.append(cell('h4', '全链路故障回放'));
+  const jump = point => {
+    const topic = point.signal === 'pg.blocked_sessions' ? 'locks' : { k8s: 'infra', linux: 'infra', replication: 'replication',
+      pooler: 'replication', sql: 'sql' }[point.layer] || 'metrics';
+    monitoring.openIncident(event, topic, point);
+    setView('monitoring');
+  };
+  const pointActions = point => {
+    const actions = cell('div', '', 'incident-replay-actions');
+    if (assetServerPaging && point.stage !== 'response') {
+      const button = cell('button', '定位同窗', 'ghost small-button');
+      button.type = 'button'; button.addEventListener('click', () => jump(point));
+      actions.append(button);
+    }
+    if (point.sampleId) actions.append(replaySampleLink(event.assetId, point.sampleId));
+    return actions;
+  };
+  const milestones = cell('div', '', 'incident-replay-milestones');
+  const milestone = (label, point, empty) => {
+    const item = cell('div', '', 'incident-replay-milestone');
+    item.append(cell('span', label), cell('strong', point ? formatTime(point.at) : empty));
+    if (point) item.append(cell('small', replayKinds[point.kind] || point.kind), pointActions(point));
+    return item;
+  };
+  const layers = Object.keys(replay.observedLayers).map(key => replayLayers[key]).filter(Boolean);
+  if (analysis.traceCoverage?.spans) layers.push('应用 Trace');
+  const scope = cell('div', '', 'incident-replay-milestone');
+  scope.append(cell('span', '影响实例'), cell('strong', event.assetName || event.assetId),
+    cell('small', layers.length ? layers.join(' · ') : '暂缺有原始采样的信号'),
+    cell('small', aiStatus.enabled ? '规则诊断 · 已启用可选 AI' : '规则诊断 · AI 未启用'));
+  milestones.append(milestone('首次发现', replay.detection, '待确认'), scope, milestone('恢复观测', replay.recovery, '仍在处理中'));
+  panel.append(milestones);
+
+  const body = cell('div', '', 'incident-replay-rows');
+  const toolbar = cell('div', '', 'incident-replay-actions');
+  const label = cell('label', '证据来源 ');
+  const filter = cell('select', ''); filter.setAttribute('aria-label', '回放证据来源');
+  for (const [key, title] of [['', '全部'], ...Object.entries(replayLayers).filter(([key]) => replay.points.some(point => point.layer === key))]) {
+    const option = cell('option', title); option.value = key; filter.append(option);
+  }
+  label.append(filter); toolbar.append(label); panel.append(toolbar, body);
+  let offset = 0;
+  const pageSize = 8;
+  const show = () => {
+    const points = replay.points.filter(point => !filter.value || point.layer === filter.value);
+    body.replaceChildren();
+    for (const point of points.slice(offset, offset + pageSize)) {
+      const row = cell('div', '', 'incident-replay-row');
+      const text = cell('div', '');
+      text.append(cell('strong', `${replayLayers[point.layer]} · ${replayKinds[point.kind] || point.kind}`),
+        cell('small', [formatTime(point.at), point.source, point.signal, replayStrength[point.strength]].filter(Boolean).join(' · ')));
+      row.dataset.evidenceId = point.evidenceId || '';
+      row.append(text, pointActions(point));
+      body.append(row);
+    }
+    if (!points.length) body.append(cell('p', '当前事件没有相关的原始信号记录。', 'empty'));
+    if (points.length <= pageSize) return;
+    const nav = cell('div', '', 'incident-replay-actions');
+    const previous = cell('button', '上一页证据', 'ghost small-button');
+    const next = cell('button', '下一页证据', 'ghost small-button');
+    previous.disabled = offset === 0; next.disabled = offset + pageSize >= points.length;
+    previous.addEventListener('click', () => { offset -= pageSize; show(); });
+    next.addEventListener('click', () => { offset += pageSize; show(); });
+    nav.append(previous, cell('small', `${offset + 1}–${Math.min(points.length, offset + pageSize)} / ${points.length}`), next);
+    body.append(nav);
+  };
+  filter.addEventListener('change', () => { offset = 0; show(); });
+  show();
+  return panel;
+}
+
 async function showEvent(id, updateHash = true) {
   const request = ++eventRequest;
   if (updateHash) setView(`incidents?event=${encodeURIComponent(id)}`);
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
-  const { event, analysis, relatedEvents = [] } = await api(`/api/events/${id}`);
-  const eventAudit = currentRole === 'admin' ? await api(`/api/events/${id}/audit`).catch(() => null) : null;
-  const workOrders = currentRole === 'admin' || currentRole === 'approver' ?
-    await api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] };
+  const { event, analysis, replay, relatedEvents = [] } = await api(`/api/events/${id}`);
+  const [eventAudit, workOrders] = await Promise.all([
+    currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
+    currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] }
+  ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
   selectedEvent = id;
@@ -1103,6 +1192,7 @@ async function showEvent(id, updateHash = true) {
   sectionBar.append(...sectionButtons);
   activate(eventSection);
   target.append(sectionBar, ...content.values());
+  if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis));
   if (assetServerPaging) {
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';
@@ -1231,7 +1321,7 @@ async function showEvent(id, updateHash = true) {
   for (const candidate of analysis.candidates) {
     const candidateCard = cell('section', '', 'rca-candidate');
     candidateCard.append(cell('h5', candidate.title),
-      cell('p', `置信级别 ${candidate.confidence} · ${candidate.limitation}`, 'rca-candidate-interpretation'));
+      cell('p', `${replayStrength[candidate.evidenceStrength] || '时间相关'} · ${candidate.limitation}`, 'rca-candidate-interpretation'));
     const facts = cell('div', '', 'rca-facts');
     const supports = document.createElement('details');
     supports.append(cell('summary', `查看支持证据（${candidate.supports.length} 条）`));
@@ -1354,6 +1444,13 @@ async function showEvent(id, updateHash = true) {
       aiResult.replaceChildren(cell('h4', 'AI 建议 · 待人工核验'),
         cell('p', result.summary), cell('p', `证据 ID：${result.evidenceIds.join('、') || '未引用'}`),
         cell('p', `不确定性：${result.uncertainty || '模型未提供'}`));
+      for (const id of result.evidenceIds) {
+        const point = replay?.points.find(item => item.evidenceId === id);
+        if (!point?.sampleId) continue;
+        const item = cell('p', `${replayLayers[point.layer]} · ${formatTime(point.at)} · `);
+        item.append(replaySampleLink(event.assetId, point.sampleId));
+        aiResult.append(item);
+      }
       for (const check of result.suggestedChecks) aiResult.append(cell('p', `待检查：${check}`));
       aiResult.append(cell('small', result.notice));
     };

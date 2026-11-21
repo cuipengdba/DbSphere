@@ -70,6 +70,20 @@ body:not([data-role="admin"]) .admin-only { display: none !important; }
 .incident-summary > * { margin: 0; }
 .incident-summary h3 { font-size: 18px; color: var(--text); }
 .incident-summary small { overflow-wrap: anywhere; }
+.incident-replay { display: grid; gap: 10px; min-width: 0; margin-block: 12px; }
+.incident-replay h4 { margin: 0; }
+.incident-replay-milestones { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr); }
+.incident-replay-milestone { display: grid; align-content: start; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--soft); }
+.incident-replay-milestone > span { color: var(--muted); font-size: 12px; }
+.incident-replay-milestone > strong { color: var(--text); overflow-wrap: anywhere; }
+.incident-replay-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.incident-replay-rows { display: grid; min-width: 0; }
+.incident-replay-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.incident-replay-row > div:first-child { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.incident-replay-rows > .incident-replay-actions { margin-top: 6px; }
+@media (max-width: 640px) {
+  .incident-replay-milestones { grid-template-columns: minmax(0, 1fr); }
+}
 .incident-nav { margin-top: 12px; }
 .incident-content { min-width: 0; }
 .incident-content > .evidence { padding: 12px; margin-top: 10px; }

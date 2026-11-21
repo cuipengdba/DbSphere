@@ -20,7 +20,11 @@ var ErrAIEventNotEligible = errors.New("event is not eligible for automatic AI a
 type eventReportData struct {
 	Event         eventRecord          `json:"event"`
 	RelatedEvents []relatedEventRecord `json:"relatedEvents"`
-	Analysis      struct {
+	Replay        struct {
+		Detection *replayPoint `json:"detection"`
+		Recovery  *replayPoint `json:"recovery"`
+	} `json:"replay"`
+	Analysis struct {
 		Status         string   `json:"status"`
 		MissingSignals []string `json:"missingSignals"`
 		TraceCoverage  struct {
@@ -37,6 +41,7 @@ type eventReportData struct {
 			Code              string   `json:"code"`
 			Title             string   `json:"title"`
 			Confidence        string   `json:"confidence"`
+			EvidenceStrength  string   `json:"evidenceStrength"`
 			Supports          []string `json:"supports"`
 			Against           []string `json:"against"`
 			Missing           []string `json:"missing"`
@@ -420,10 +425,14 @@ func renderEventMarkdown(data eventReportData) string {
 		out.WriteString("未定位：当前证据不足以支持根因候选。\n\n")
 	}
 	for _, candidate := range data.Analysis.Candidates {
+		strength := map[string]string{"direct": "直接证据", "correlated": "时间相关", "insufficient": "证据不足"}[candidate.EvidenceStrength]
 		fmt.Fprintf(&out, "### %s（%s）\n\n置信级别：%s  \n支持证据 ID：%s  \n首次观测：%s（%s）  \n局限：%s\n\n",
 			reportText(candidate.Title), reportText(candidate.Code), reportText(candidate.Confidence),
 			reportText(strings.Join(candidate.Supports, "、")), reportTime(&candidate.TimeOrder.FirstObservedAt),
 			reportText(candidate.TimeOrder.Relation), reportText(candidate.Limitation))
+		if strength != "" {
+			fmt.Fprintf(&out, "证据关系：%s\n\n", strength)
+		}
 		if len(candidate.Against) > 0 {
 			fmt.Fprintf(&out, "反证：%s\n\n", reportText(strings.Join(candidate.Against, "；")))
 		}
@@ -499,6 +508,23 @@ func renderEventMarkdown(data eventReportData) string {
 			fmt.Fprintf(&out, "- %s\n", reportText(missing))
 		}
 		out.WriteString("\n")
+	}
+	if data.Replay.Detection != nil || data.Replay.Recovery != nil {
+		out.WriteString("## 故障回放\n\n")
+		for _, milestone := range []struct {
+			label string
+			point *replayPoint
+		}{{"首次发现", data.Replay.Detection}, {"恢复观测", data.Replay.Recovery}} {
+			if milestone.point == nil {
+				continue
+			}
+			fmt.Fprintf(&out, "- %s %s", milestone.label, reportTime(&milestone.point.At))
+			if milestone.point.SampleID != "" {
+				fmt.Fprintf(&out, " · [原始采样 %s](/api/assets/%s/samples/%s)", milestone.point.SampleID, event.AssetID, milestone.point.SampleID)
+			}
+			out.WriteByte('\n')
+		}
+		out.WriteByte('\n')
 	}
 	out.WriteString("## 证据时间线\n\n| 时间 | 证据 ID | 类型 | 样本 ID / 规则 ID |\n|---|---|---|---|\n")
 	for _, evidence := range event.Evidence {

@@ -238,6 +238,35 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			[]string{"容器日志和探针与数据库故障的先后顺序未完全验证"},
 			stringValue(payload["limitation"]), nil, causeAt, nil)
 	}
+	for _, item := range event.Evidence {
+		if item.Kind != "k8s_state" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(item.Payload, &payload) != nil {
+			continue
+		}
+		sampleID := stringValue(payload["sampleId"])
+		sample := samples[sampleID]
+		if stringValue(object(sample.Metrics["collector"])["pgStatus"]) != "availability" {
+			continue
+		}
+		k8s := object(sample.Metrics["k8s"])
+		pod := object(k8s["pod"])
+		if stringValue(k8s["status"]) != "ok" || stringValue(pod["uid"]) == "" {
+			continue
+		}
+		for _, raw := range list(pod["conditions"]) {
+			state := object(raw)
+			if state["type"] == "Ready" && state["status"] == "False" {
+				addCandidate("k8s_pod_not_ready", "PostgreSQL 连通异常时观测到 Pod 未就绪", "low",
+					[]string{item.ID, "sample:" + sampleID}, []string{"缺少可验证探针失败与连通异常先后顺序的记录"},
+					"Pod 未就绪和数据库异常由同一次采样记录。", map[string]any{"pod": pod["name"], "uid": pod["uid"], "reason": state["reason"]},
+					sample.At, map[string]any{"metric": "Pod Ready", "observed": "False", "sampleId": sampleID})
+				break
+			}
+		}
+	}
 	type storageSignal struct {
 		evidenceID, sampleID, metric string
 		at                           time.Time
