@@ -205,6 +205,11 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .cluster-charts .monitor-plot svg { height: 123px; }
 .cluster-trend-number { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 4px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .cluster-trend-number strong { color: var(--accent); font-size: 18px; }
+.activity-stats { margin-bottom: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.activity-stats .monitor-stat { padding: 7px 10px; }
+.activity-stats .monitor-stat strong { margin-top: 3px; font-size: 18px; }
+.monitor-content .monitor-panel > .monitor-panel { margin-top: 12px; background: var(--soft); }
+.monitor-content [aria-label="SQL 区间排行"] { min-width: 610px; }
 @media (max-width: 940px) {
   .cluster-grid { grid-template-columns: minmax(150px, .8fr) minmax(0, 2fr); }
   .cluster-issues { grid-column: 1 / -1; }

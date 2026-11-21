@@ -46,6 +46,8 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 		{"lockChain", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
 			SELECT a.pid AS "waitingPid",b.blocker_pid AS "blockerPid",
 			a.wait_event_type AS "waitType",a.wait_event AS "waitEvent",
+			a.query_id::text AS "waitingQueryId",
+			CASE WHEN blocker.datid=a.datid THEN blocker.query_id::text END AS "blockerQueryId",
 			a.xact_start AS "waitingSince",blocker.xact_start AS "blockerXactStart"
 			FROM pg_stat_activity a CROSS JOIN LATERAL unnest(pg_blocking_pids(a.pid)) AS b(blocker_pid)
 			LEFT JOIN pg_stat_activity blocker ON blocker.pid=b.blocker_pid

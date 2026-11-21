@@ -33,6 +33,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.SQLSummary(ctx, id)
 	case "wait-history":
 		return s.waitHistory(ctx, id, params)
+	case "sql-window":
+		return s.sqlWindow(ctx, id, params)
 	case "monitoring-context":
 		return s.monitoringContext(ctx, id, params)
 	case "slow-logs":
@@ -47,7 +49,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 				WHERE e.asset_id=l.asset_id AND e.started_at<=l.observed_at+interval '5 minutes'
 				AND (e.ended_at IS NULL OR e.ended_at>=l.observed_at-interval '5 minutes')),'[]'::jsonb))
 			FROM slow_log_entries l WHERE l.asset_id=$1 AND l.observed_at>=$2 AND l.observed_at<$3
-			ORDER BY l.observed_at DESC LIMIT 100`, id, from, to)
+			AND ($4::text='' OR l.query_id=$4)
+			ORDER BY l.observed_at DESC LIMIT 100`, id, from, to, params.Get("queryId"))
 		return map[string]any{"entries": values}, err
 	case "sql-plans":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
@@ -57,7 +60,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 			'eventIds',coalesce((SELECT jsonb_agg(e.id) FROM events e
 				WHERE e.asset_id=p.asset_id AND e.started_at<=p.observed_at+interval '5 minutes'
 				AND (e.ended_at IS NULL OR e.ended_at>=p.observed_at-interval '5 minutes')),'[]'::jsonb))
-			FROM sql_plan_snapshots p WHERE p.asset_id=$1 ORDER BY p.observed_at DESC LIMIT 50`, id)
+			FROM sql_plan_snapshots p WHERE p.asset_id=$1
+			AND ($2::text='' OR p.query_id=$2) ORDER BY p.observed_at DESC LIMIT 50`, id, params.Get("queryId"))
 		if err != nil {
 			return nil, err
 		}
@@ -141,6 +145,12 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 					THEN (metrics_json#>>'{diagnostics,locks,data,blockedSessions}')::numeric END AS blocked_sessions,
 				CASE WHEN status='ok' AND jsonb_typeof(metrics_json#>'{diagnostics,transactions,data,longTransactions}')='number'
 					THEN (metrics_json#>>'{diagnostics,transactions,data,longTransactions}')::numeric END AS long_transactions,
+				CASE WHEN metrics_json#>>'{diagnostics,transactions,status}'='ok'
+					AND jsonb_typeof(metrics_json#>'{diagnostics,transactions,data,idleInTransaction}')='number'
+					THEN (metrics_json#>>'{diagnostics,transactions,data,idleInTransaction}')::numeric END AS idle_in_transaction,
+				CASE WHEN metrics_json#>>'{diagnostics,database,status}'='ok'
+					AND jsonb_typeof(metrics_json#>'{diagnostics,database,data,deadlocks}')='number'
+					THEN (metrics_json#>>'{diagnostics,database,data,deadlocks}')::numeric END AS deadlocks,
 				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_commit')='number'
 					THEN (metrics_json->>'xact_commit')::numeric END AS commits,
 				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_rollback')='number'
@@ -152,6 +162,7 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			SELECT *,lag(collected_at) OVER observed_order AS prior_at,
 				lag(commits) OVER observed_order AS prior_commits,
 				lag(rollbacks) OVER observed_order AS prior_rollbacks,
+				lag(deadlocks) OVER observed_order AS prior_deadlocks,
 				lag(wal_bytes) OVER observed_order AS prior_wal_bytes
 			FROM observed WINDOW observed_order AS (PARTITION BY asset_id ORDER BY collected_at,id)
 		), rated AS (
@@ -159,6 +170,8 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
 				THEN ((commits-prior_commits)+(rollbacks-prior_rollbacks)) /
 					extract(epoch FROM collected_at-prior_at) END AS transactions_per_second,
+				CASE WHEN deadlocks>=prior_deadlocks AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
+					THEN deadlocks-prior_deadlocks END AS deadlock_delta,
 				CASE WHEN wal_bytes>=prior_wal_bytes
 				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
 				THEN (wal_bytes-prior_wal_bytes) /
@@ -174,6 +187,8 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
 			'averageBlockedSessions',round(avg(blocked_sessions),1),
 			'averageLongTransactions',round(avg(long_transactions),1),
+			'averageIdleInTransaction',round(avg(idle_in_transaction),1),
+			'deadlockDelta',sum(deadlock_delta),
 			'averageDatabaseBytes',round(avg(database_bytes),0),
 			'averageReplicationLagBytes',round(avg(replication_lag_bytes),0),
 			'averageLinuxCpuPercent',round(avg(linux_cpu),1),

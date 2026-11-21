@@ -54,16 +54,32 @@ func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.
 	err = s.pool.QueryRow(ctx, `SELECT jsonb_build_object(
 		'id',id,'collectedAt',collected_at,'status',status,
 		'role',metrics_json->'role','locks',metrics_json#>'{diagnostics,lockChain}',
+		'activity',metrics_json#>'{diagnostics,activity}',
+		'blocked',metrics_json#>'{diagnostics,locks}',
+		'transactions',metrics_json#>'{diagnostics,transactions}',
 		'linux',metrics_json->'linux','k8s',metrics_json->'k8s')
 		FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
 		ORDER BY collected_at DESC,id DESC LIMIT 1`, id, from, to).Scan(&snapshot)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	var blockingSample json.RawMessage
+	if params.Get("blocking") == "true" {
+		err = s.pool.QueryRow(ctx, `SELECT jsonb_build_object('id',id,'collectedAt',collected_at,
+			'locks',metrics_json#>'{diagnostics,lockChain}')
+			FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+			AND metrics_json#>>'{diagnostics,lockChain,status}'='ok'
+			AND CASE WHEN jsonb_typeof(metrics_json#>'{diagnostics,lockChain,data}')='array'
+			  THEN jsonb_array_length(metrics_json#>'{diagnostics,lockChain,data}') > 0 ELSE false END
+			ORDER BY collected_at DESC,id DESC LIMIT 1`, id, from, to).Scan(&blockingSample)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
 	events, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'title',title,'status',status,
 		'startedAt',started_at,'endedAt',ended_at) FROM events WHERE asset_id=$1 AND started_at<$3
 		AND (ended_at IS NULL OR ended_at >= $2) ORDER BY (status='open') DESC,started_at DESC LIMIT 12`, id, from, to)
-	return map[string]any{"snapshot": snapshot, "events": events}, err
+	return map[string]any{"snapshot": snapshot, "blockingSample": blockingSample, "events": events}, err
 }
 
 func (s *Postgres) waitHistory(ctx context.Context, id string, params url.Values) (any, error) {

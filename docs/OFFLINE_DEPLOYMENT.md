@@ -1,10 +1,10 @@
 # Linux 一键离线部署
 
-从 [V1.3.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.3.0)下载离线包及同名校验文件。传到已安装 Docker Engine 和 Compose v2 的 Linux x86_64 主机，在同一目录执行以下命令。
+从 [V1.4.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.4.0)下载离线包及同名校验文件。传到已安装 Docker Engine 和 Compose v2 的 Linux x86_64 主机，在同一目录执行以下命令。
 
 ```bash
-sha256sum --check DbSphere-go-offline-1.3.0-linux-amd64.run.sha256
-bash DbSphere-go-offline-1.3.0-linux-amd64.run
+sha256sum --check DbSphere-go-offline-1.4.0-linux-amd64.run.sha256
+bash DbSphere-go-offline-1.4.0-linux-amd64.run
 ```
 
 一键脚本导入随包镜像并启动内嵌静态页面的 Go 服务及 PostgreSQL 18 长期监控库。默认入口为 `http://主机:8081`。下文 V1.0.0 命令用于说明首次正式版的安装及升级/回退基线。

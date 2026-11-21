@@ -7,6 +7,8 @@
   ];
   const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'], ['infra', '运行环境']];
   const defaultPeriod = '1 小时';
+  const sqlOrders = [['time', '总耗时'], ['calls', '调用频率'], ['latency', '平均耗时'], ['reads', '读取共享块'], ['temp', '写入临时块']];
+  const milliseconds = value => `${number(value, 2)} ms`;
   const waitColors = { NoWait: 'var(--plot-teal)', IO: 'var(--plot-violet)', Lock: 'var(--plot-orange)', LWLock: 'var(--plot-gold)', Client: 'var(--plot-blue)', IPC: 'var(--plot-pink)', Timeout: 'var(--plot-gray)' };
   const palette = ['blue', 'teal', 'violet', 'orange', 'pink'].map(key => `var(--plot-${key})`);
   const number = (value, digits = 1) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits }).format(value);
@@ -369,10 +371,11 @@
   }
 
   function create(root, actions) {
-    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, openPlans, renderSqlPerformance } = actions;
+    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, openPlans } = actions;
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
+    let sqlOrder = 'time';
     let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
     let rangeEvents = [];
     const header = el('div', null, 'monitor-controls');
@@ -448,7 +451,8 @@
       for (const [key, value, fallback] of [
         ['cluster', cluster || (!chooseCluster && ready ? 'all' : ''), ''], ['instance', instance, ''], ['database', database, ''],
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
-        ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, '']
+        ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
+        ['sqlOrder', sqlOrder, 'time']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -466,6 +470,7 @@
       waitEvent = (params.get('waitEvent') || '').slice(0, 128);
       queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
       eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
+      sqlOrder = sqlOrders.some(([key]) => key === params.get('sqlOrder')) ? params.get('sqlOrder') : 'time';
       const from = Date.parse(params.get('from'));
       const to = Date.parse(params.get('to'));
       fixed = validRange(from, to) ? { from, to } : null;
@@ -799,10 +804,97 @@
       }
     }
 
+    function openQuery(value) {
+      queryId = value;
+      mode = 'sql';
+      change();
+    }
+
+    function lockPanel(context, asset) {
+      const panelNode = panel('锁阻塞链');
+      const snapshot = context.blockingSample || context.snapshot;
+      if (snapshot) {
+        const source = el('a', '原始采样', 'monitor-link');
+        source.href = `/api/assets/${asset.id}/samples/${snapshot.id}`;
+        source.target = '_blank';
+        source.rel = 'noopener';
+        const label = context.blockingSample ? '区间最后一次观测到阻塞' : '区间最后一次采样';
+        const caption = el('p', `${label} · ${formatTime(snapshot.collectedAt)} · `, 'monitor-note');
+        caption.append(source);
+        panelNode.append(caption);
+      }
+      const sample = snapshot?.locks;
+      if (sample?.status !== 'ok') panelNode.append(el('p', '所选时段无可用锁链采样。', 'monitor-empty'));
+      else if (!sample.data.length) panelNode.append(el('p', '最后一次采样时没有观测到阻塞关系。', 'monitor-empty'));
+      else {
+        const queryLink = value => value ? button(value, () => openQuery(value), 'monitor-link') : '—';
+        panelNode.append(table(['阻塞 PID', '阻塞 Query ID', '等待 PID', '等待 Query ID', '等待事件', '事务开始'],
+          sample.data.map(edge => [edge.blockerPid, queryLink(edge.blockerQueryId), edge.waitingPid, queryLink(edge.waitingQueryId),
+            [edge.waitType, edge.waitEvent].filter(Boolean).join(' / '), edge.waitingSince && formatTime(edge.waitingSince)]), '锁阻塞关系'));
+      }
+      return panelNode;
+    }
+
+    function rankSQL(performance, evidence, path, time) {
+      const card = panel(queryId ? `Query ID ${queryId}` : '区间 SQL 排名');
+      const controls = el('div', null, 'monitor-wait-controls');
+      const order = select('SQL 排序', value => { sqlOrder = value; change(); });
+      options(order, sqlOrders, sqlOrder);
+      controls.append(labeled('排序', order));
+      if (queryId) controls.append(button('返回 SQL 排名', () => { queryId = ''; change(); }));
+      if (queryId && group === 'query') controls.append(button('返回等待排行', () => { mode = 'waits'; queryId = ''; change(); }));
+      card.append(controls);
+      const observed = performance.firstSampleAt && performance.lastSampleAt
+        ? `${formatTime(performance.firstSampleAt)} 至 ${formatTime(performance.lastSampleAt)}` : '无采样';
+      card.append(el('p', `来源 pg_stat_statements · ${observed} · ${performance.comparablePairs} 个可比区间`, 'monitor-note'));
+      if (!performance.statements.length) {
+        card.append(el('p', performance.reason || (queryId ? '该 Query ID 在所选时段没有可比较的执行增量。' :
+          '此范围没有可比较的 SQL 执行增量。统计重置、样本缺失和未配置扩展会影响覆盖。'), 'monitor-empty'));
+      }
+      if (performance.truncated || performance.collectionLimited || performance.total > 50)
+        card.append(el('p', '已达到采样或排行上限，排名只包含已覆盖的指纹和区间。', 'monitor-warning'));
+      if (performance.statements.length) {
+        card.append(table(['Query ID', '角色 OID', '调用/s', '总耗时', '平均耗时', '共享块读', '临时块写', '覆盖时长'],
+          performance.statements.map(row => [
+            queryId ? row.queryId : button(row.queryId, () => openQuery(row.queryId), 'monitor-link'),
+            row.userOid, number(row.callsPerSecond, 2), milliseconds(row.totalExecMs), milliseconds(row.averageExecMs),
+            number(row.sharedBlocksRead, 0), number(row.tempBlocksWritten, 0), `${number(row.coveredSeconds)} s`
+          ]), 'SQL 区间排行'));
+      }
+      if (!queryId) return card;
+      const trail = panel('同窗慢日志与计划');
+      for (const [kind, items] of [
+        ['slow-logs', evidence?.entries || []],
+        ['sql-plans', (evidence?.plans || []).filter(plan => Date.parse(plan.observedAt) >= time.from && Date.parse(plan.observedAt) < time.to)]
+      ]) {
+        for (const item of items.slice(0, 8)) {
+          const link = el('a', kind === 'slow-logs' ? '慢日志证据' : '执行计划证据', 'monitor-link');
+          link.href = `${path}${kind}/${item.id}`;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          const duration = item.durationMs ?? item.summary?.executionMs;
+          const row = el('p', `${formatTime(item.observedAt)}${finite(duration) ? ' · ' + milliseconds(duration) : ''} · `, 'monitor-note');
+          row.append(link);
+          trail.append(row);
+        }
+      }
+      if (trail.children.length === 1) trail.append(el('p', '所选时段没有已纳管的匹配证据。', 'monitor-empty'));
+      trail.append(button('查看实例的执行计划留存', () => openPlans(instance)));
+      card.append(trail);
+      return card;
+    }
+
+    function waitOverview(rows, time, events, depth, callback, context) {
+      const split = waitChart(rows, time, events, depth, callback);
+      const locked = context.blockingSample?.locks?.data?.length;
+      if (locked) split.lastElementChild.append(button(`查看区间锁链 · ${locked} 条关系`, () => { mode = 'locks'; change(); }));
+      return split;
+    }
+
     function followWait(item) {
       if (group === 'type') { waitType = item.waitType; waitEvent = ''; group = 'event'; }
       else if (group === 'event') { waitType = item.waitType; waitEvent = item.waitEvent; group = 'query'; }
-      else if (item.queryId) { queryId = item.queryId; mode = 'sql'; }
+      else if (item.queryId) { openQuery(item.queryId); return; }
       change();
     }
 
@@ -818,23 +910,40 @@
         query.set('waitType', waitType);
         query.set('waitEvent', waitEvent);
       }
-      if (mode === 'sql') { section = 'sql'; if (queryId) query.set('queryId', queryId); }
+      if (mode === 'sql') {
+        section = 'sql-window';
+        query.set('order', sqlOrder);
+        if (queryId) query.set('queryId', queryId);
+      }
+      const contextParams = new URLSearchParams(time.params);
+      if (['metrics', 'waits', 'locks'].includes(mode)) contextParams.set('blocking', 'true');
+      const linkedSQL = mode === 'sql' && queryId;
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data, waits] = await Promise.all([
-          api(`${path}monitoring-context?${time.params}`), section ? api(`${path}${section}?${query}`) : null,
-          mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null
+        const [context, data, waits, slow, plans] = await Promise.all([
+          api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
+          mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
+          linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
+          linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
         time.cursors.clear();
         const fragment = document.createDocumentFragment();
         if (mode === 'metrics') {
+          const latest = context.snapshot;
+          const strip = stats([
+            ['最近采样的阻塞会话', display(latest?.blocked?.data?.blockedSessions), '', () => { mode = 'locks'; change(); }],
+            ['长事务', display(latest?.transactions?.data?.longTransactions)],
+            ['空闲事务', display(latest?.transactions?.data?.idleInTransaction)]
+          ]);
+          strip.classList.add('activity-stats');
+          fragment.append(strip);
           if (waits?.buckets.some(bucket => bucket.observed > 0)) {
-            fragment.append(waitChart(waits.buckets, time, events, 'type', item => {
+            fragment.append(waitOverview(waits.buckets, time, events, 'type', item => {
               resetWaitFilters(); mode = 'waits'; followWait(item);
-            }));
+            }, context));
           } else {
             const load = metricCharts(data.series, time, events, [
               ['transactionsPerSecond', '数据库负载 · 事务吞吐', rate, palette[0]]
@@ -845,10 +954,11 @@
             split.append(load, eventList(events, '此实例的问题事件')); fragment.append(split);
           }
           const indicators = el('details', null, 'monitor-panel monitor-topic');
-          indicators.append(el('summary', '连接、事务、WAL 与复制'), metricCharts(data.series, time, events, [
+          indicators.append(el('summary', '连接、事务、长事务与死锁'), metricCharts(data.series, time, events, [
           ['transactionsPerSecond', '事务吞吐', rate, 'var(--plot-teal)'], ['averageConnectionUsagePercent', '连接占用率', percent, 'var(--plot-blue)'],
           ['averageReplicationLagBytes', '复制回放差距', bytes, 'var(--plot-orange)'], ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, 'var(--plot-violet)'],
           ['averageBlockedSessions', '阻塞会话', number, 'var(--plot-orange)'], ['averageLongTransactions', '长事务', number, 'var(--plot-pink)'],
+          ['averageIdleInTransaction', '空闲事务', number, 'var(--plot-gold)'], ['deadlockDelta', '区间死锁增量', number, 'var(--issue-line)'],
           ['averageDatabaseBytes', '数据库容量', bytes, 'var(--plot-blue)'], ['averageConnections', '平均连接数', number, 'var(--plot-teal)']
           ]));
           fragment.append(indicators);
@@ -863,30 +973,10 @@
             else { resetWaitFilters(); }
             change();
           }));
-          fragment.append(filter, waitChart(data.buckets, time, events, group, followWait));
+          fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context));
         }
-        if (mode === 'sql') {
-          const sql = panel(queryId ? `Query ID ${queryId}` : '区间 SQL 性能');
-          if (queryId) sql.append(button('查看此范围内的 Top SQL', () => { queryId = ''; change(); }));
-          if (data.performance.status === 'ok' && queryId && !data.performance.statements.length) {
-            sql.append(el('p', '该 Query ID 在此范围的 SQL 性能快照里没有匹配指纹。', 'monitor-empty'));
-          } else renderSqlPerformance(sql, data.performance);
-          if (queryId) {
-            const source = button('查看此实例的执行计划证据', () => openPlans(asset.id));
-            sql.append(source);
-          }
-          fragment.append(sql);
-        }
-        if (mode === 'locks') {
-          const locks = panel('锁阻塞链');
-          if (context.snapshot) locks.append(el('p', `区间最后一次采样 · ${formatTime(context.snapshot.collectedAt)}`, 'monitor-note'));
-          const sample = context.snapshot?.locks;
-          if (sample?.status !== 'ok') locks.append(el('p', '此范围最后一次采样没有锁链数据，可从事件核对故障时刻的证据。', 'monitor-empty'));
-          else if (!sample.data.length) locks.append(el('p', '采样时没有观测到阻塞关系。', 'monitor-empty'));
-          else locks.append(table(['阻塞 PID', '等待 PID', '等待事件', '等待事务开始时间'], sample.data.map(edge =>
-            [edge.blockerPid, edge.waitingPid, [edge.waitType, edge.waitEvent].filter(Boolean).join(' / '), edge.waitingSince && formatTime(edge.waitingSince)]), '锁阻塞关系'));
-          fragment.append(locks);
-        }
+        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans }, path, time));
+        if (mode === 'locks') fragment.append(lockPanel(context, asset));
         if (mode === 'infra') {
           if (data?.series) fragment.append(metricCharts(data.series, time, events, [
             ['averageLinuxCpuPercent', 'Linux CPU · node_exporter', percent, 'var(--plot-teal)'],

@@ -50,6 +50,10 @@ func sqlStatementRows(value any) []map[string]any {
 }
 
 func sqlDelta(newer, older map[string]any) map[string]map[string]any {
+	return sqlIntervalDelta(newer, older, false)
+}
+
+func sqlIntervalDelta(newer, older map[string]any, includeIdle bool) map[string]map[string]any {
 	if sqlResetAt(newer["resetAt"]) == "" ||
 		sqlResetAt(newer["resetAt"]) != sqlResetAt(older["resetAt"]) {
 		return nil
@@ -76,8 +80,11 @@ func sqlDelta(newer, older map[string]any) map[string]map[string]any {
 			}
 			change[field] = afterNumber - beforeNumber
 		}
-		if valid && number(change["calls"]) > 0 {
-			change["averageExecMs"] = number(change["totalExecMs"]) / number(change["calls"])
+		calls := number(change["calls"])
+		if valid && (includeIdle || calls > 0) {
+			if calls > 0 {
+				change["averageExecMs"] = number(change["totalExecMs"]) / calls
+			}
 			result[fingerprint] = change
 		}
 	}
