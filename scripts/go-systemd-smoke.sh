@@ -22,6 +22,7 @@ test ! -e /etc/systemd/system/dbsphere-native.service
 test ! -e /etc/dbsphere-native/dbsphere.env
 test ! -e /opt/dbsphere-native/dbsphere
 trap 'finish "$?"' EXIT
+bash "$archive" --sample-config | grep '^DBSPHERE_DATABASE_URL=' >/dev/null
 pg_password="$(openssl rand -hex 24)"
 admin_password="$(openssl rand -hex 24)"
 master_key="$(openssl rand -base64 32)"

@@ -454,15 +454,22 @@ jobs:
           version="$(jq -er .version package.json)"
           out="$RUNNER_TEMP/dbsphere-go-arm64"
           bash scripts/build-go-offline-bundle.sh "$out"
-          docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm --format '{{.Architecture}}' |
-            awk '$0 != "arm64" { exit 1 } END { if (NR != 2) exit 1 }'
+          postgres_arch="$(docker run --rm --platform linux/arm64 --pull never --entrypoint uname postgres:18-bookworm -m)"
+          echo "PostgreSQL kernel architecture: $postgres_arch"
+          test "$postgres_arch" = aarch64
           binary="$out/DbSphere-go-$version-linux-arm64"
           container="$(docker create "dbsphere/offline-go-app:$version")"
           trap 'docker rm "$container" >/dev/null' EXIT
           docker cp "$container:/dbsphere" "$binary"
           chmod 0755 "$binary"
-          file -b "$binary" | grep -Fq 'statically linked'
-          readelf -h "$binary" | grep -Eq 'Machine:[[:space:]]+AArch64'
+          file -b "$binary"
+          binary_machine="$(readelf -h "$binary" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2}')"
+          echo "DbSphere ELF machine: $binary_machine"
+          test "$binary_machine" = AArch64
+          if readelf -l "$binary" | grep -q 'INTERP'; then
+            echo 'DbSphere unexpectedly requires a dynamic linker' >&2
+            exit 1
+          fi
           (cd "$out" && sha256sum "$(basename "$binary")" > "$(basename "$binary").sha256")
           bash scripts/build-go-systemd-bundle.sh "$binary" "$out"
           (cd "$out" && sha256sum --check --strict ./*.sha256)

@@ -2,9 +2,15 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: sudo bash DbSphere-go-systemd-*.run [--check] [/absolute/dbsphere.env]' >&2
+  echo 'Usage: bash DbSphere-go-systemd-*.run --sample-config, or sudo bash DbSphere-go-systemd-*.run [--check] [/absolute/dbsphere.env]' >&2
   exit 1
 }
+payload="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+(cd -- "$payload" && sha256sum --check --strict --quiet SHA256SUMS)
+if [[ $# -eq 1 && "$1" == --sample-config ]]; then
+  cat -- "$payload/dbsphere.env.example"
+  exit 0
+fi
 check_only=false
 if [[ "${1:-}" == --check ]]; then check_only=true; shift; fi
 if [[ $# -gt 1 || ( $# -eq 1 && "$1" != /* ) ]]; then usage; fi
@@ -13,8 +19,6 @@ if [[ $EUID -ne 0 || ! -d /run/systemd/system ]]; then
   exit 1
 fi
 
-payload="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-(cd -- "$payload" && sha256sum --check --strict --quiet SHA256SUMS)
 case "$(uname -m):$(cat -- "$payload/architecture")" in
   x86_64:amd64|aarch64:arm64|arm64:arm64) ;;
   *) echo 'The native package architecture does not match this host.' >&2; exit 1 ;;
