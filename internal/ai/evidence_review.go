@@ -26,6 +26,7 @@ type ReviewClaim struct {
 	Kind        string   `json:"kind"`
 	Text        string   `json:"text"`
 	EvidenceIDs []string `json:"evidenceIds"`
+	Origin      string   `json:"origin,omitempty"`
 }
 
 type EvidenceReview struct {
@@ -101,7 +102,9 @@ func (c *Client) ReviewEvidence(ctx context.Context, sources []ReviewSource) (Ev
 		allowed[id] = true
 	}
 	verification := false
-	for _, claim := range result.Claims {
+	for i := range result.Claims {
+		claim := &result.Claims[i]
+		claim.Origin = "model"
 		switch claim.Kind {
 		case "candidate", "counterevidence":
 		case "verification":
@@ -121,7 +124,9 @@ func (c *Client) ReviewEvidence(ctx context.Context, sources []ReviewSource) (Ev
 		}
 	}
 	if !verification {
-		return EvidenceReview{}, ErrUnavailable
+		result.Claims = append(result.Claims, ReviewClaim{Kind: "verification", Origin: "rule",
+			Text:        "打开引用的原始记录，核对采样时间和同期数据库信号。",
+			EvidenceIDs: []string{result.Claims[0].EvidenceIDs[0]}})
 	}
 	result.Model = c.model
 	return result, nil

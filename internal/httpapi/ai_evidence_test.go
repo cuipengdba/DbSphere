@@ -168,7 +168,6 @@ func TestPG18AIEvidenceReviewModesAndOrgBoundary(t *testing.T) {
 		report := ai.EvidenceReview{Uncertainty: "已有观测，需要人工核对。", Claims: []ai.ReviewClaim{
 			{Kind: "candidate", Text: "采集异常可能与连接路径有关。", EvidenceIDs: []string{cite}},
 			{Kind: "counterevidence", Text: "当前样本只证明采集失败，证据范围有限。", EvidenceIDs: []string{cite}},
-			{Kind: "verification", Text: "结合原始采样核对故障时点。", EvidenceIDs: []string{cite}},
 		}}
 		data, _ := json.Marshal(report)
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{
@@ -183,6 +182,12 @@ func TestPG18AIEvidenceReviewModesAndOrgBoundary(t *testing.T) {
 	withModel := build(client)
 	_ = read(withModel, adminA, "POST", empty, "insufficient")
 	accepted := read(withModel, adminA, "POST", local, "model")
+	acceptedBody, _ := json.Marshal(accepted["result"])
+	var audited ai.EvidenceReview
+	if json.Unmarshal(acceptedBody, &audited) != nil || len(audited.Claims) != 3 ||
+		audited.Claims[0].Origin != "model" || audited.Claims[2].Origin != "rule" || audited.Claims[2].EvidenceIDs[0] != known {
+		t.Fatalf("model claim or deterministic verification provenance was lost: %s", acceptedBody)
+	}
 	_ = read(withModel, adminA, "GET", local, "model_saved")
 	_ = read(withModel, adminA, "POST", local, "model_unavailable")
 	_ = read(withModel, adminA, "POST", local, "invalid_citations")

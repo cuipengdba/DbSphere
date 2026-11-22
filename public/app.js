@@ -2161,7 +2161,7 @@ function evidenceReviewPanel(event, showSource) {
       const sources = new Map(review.sources.map(source => [source.id,source]));
       for (const claim of review.result.claims) {
         const row = cell('article', '', 'evidence');
-        row.append(cell('strong', kinds[claim.kind]), cell('p', claim.text));
+        row.append(cell('strong', kinds[claim.kind] + (claim.origin === 'rule' ? ' · 规则补充' : '')), cell('p', claim.text));
         const actions = cell('div', '', 'actions');
         for (const id of claim.evidenceIds) {
           const source = sources.get(id);
