@@ -404,8 +404,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.15.0'
-          previous_sha='4b505e61b174023e2d975114f44b012fadf5d6438ed415cbf4f2f9cf49b49c38'
+          previous_version='1.16.0'
+          previous_sha='eb917df99d454879c1423419739d91956b6430ad7c2078b90318a2272b68ecc5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"

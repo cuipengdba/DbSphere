@@ -744,3 +744,42 @@ func (k *kubeClient) endpointRoutes(ctx context.Context, namespace, podUID strin
 	}
 	return map[string]any{"status": "ok", "slices": routes, "truncated": kubeString(kubeObject(list["metadata"])["continue"]) != ""}
 }
+
+// DiscoverAssetPod previews identity using the configured read-only Kubernetes access.
+func DiscoverAssetPod(ctx context.Context, target KubernetesTarget, port int) map[string]any {
+	unknown := map[string]any{"status": "unavailable", "namespace": target.Namespace, "workload": target.Workload, "port": port}
+	if !kubeName.MatchString(target.Namespace) || len(target.Namespace) > 63 {
+		return unknown
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	client, err := kubeCredentials(target)
+	if err != nil {
+		return unknown
+	}
+	name := target.Pod
+	if name == "" && target.Workload != "" {
+		name, err = client.resolveWorkloadPod(ctx, target.Namespace, target.Workload)
+	}
+	if err != nil || !kubeName.MatchString(name) || len(name) > 253 {
+		return unknown
+	}
+	pod, err := client.get(ctx, "/api/v1/namespaces/"+url.PathEscape(target.Namespace)+"/pods/"+url.PathEscape(name), nil)
+	if err != nil {
+		return unknown
+	}
+	metadata := kubeObject(pod["metadata"])
+	if metadata["namespace"] != target.Namespace || metadata["name"] != name || !kubeUID.MatchString(kubeString(metadata["uid"])) {
+		return unknown
+	}
+	unknown["portDeclared"] = false
+	for _, item := range kubeList(kubeObject(pod["spec"])["containers"]) {
+		for _, raw := range kubeList(kubeObject(item)["ports"]) {
+			if kubeObject(raw)["containerPort"] == float64(port) {
+				unknown["portDeclared"] = true
+			}
+		}
+	}
+	unknown["status"], unknown["pod"], unknown["uid"] = "observed", name, metadata["uid"]
+	return unknown
+}

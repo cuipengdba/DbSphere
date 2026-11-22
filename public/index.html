@@ -81,6 +81,21 @@
           <div id="asset-list" class="list"></div>
           <div id="asset-page-controls" class="event-page-controls" hidden><button id="asset-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="asset-next" type="button" class="ghost small-button" disabled>下一页</button></div>
         </section>
+        <details id="asset-import-panel" class="panel admin-only asset-import">
+          <summary>批量纳管与清单导出</summary>
+          <form id="asset-import-form" class="form-grid">
+            <label>清单格式<select name="format"><option value="yaml">DbSphere YAML</option><option value="csv">DbSphere CSV</option><option value="pigsty">Pigsty Inventory</option></select></label>
+            <label>默认监控用户名<input name="username" maxlength="63" autocomplete="off" placeholder="dbsphere_monitor"></label>
+            <label class="wide">默认凭据引用<input name="credentialRef" maxlength="100" autocomplete="off" placeholder="env:DBSPHERE_IMPORT_MONITOR"></label>
+            <label class="wide">资产清单<textarea name="content" rows="7" maxlength="262144" spellcheck="false" required></textarea></label>
+            <label class="wide"><input type="checkbox" name="discover">预览 Kubernetes Pod 身份和端口</label>
+            <div class="section-actions wide"><button type="submit">预览变更</button><button id="asset-import-apply" type="button" disabled>应用清单</button><button id="asset-import-export" class="ghost" type="button">导出 YAML</button><a href="#settings?section=collector">采集运维</a></div>
+          </form>
+          <p id="asset-import-status" class="hint" aria-live="polite"></p>
+          <div id="asset-import-plan" class="monitor-table"></div>
+          <div class="section-actions"><button id="asset-import-probe" class="ghost" type="button" hidden>分批检查连接与权限</button></div>
+          <div id="asset-import-results" class="monitor-table"></div>
+        </details>
         <dialog id="asset-dialog" class="asset-drawer" aria-labelledby="asset-dialog-title">
           <div class="section-head"><h2 id="asset-dialog-title">纳管 PostgreSQL 实例</h2><button id="asset-close" class="ghost" type="button">关闭</button></div>
           <p id="asset-error" class="notice error" role="alert"></p>

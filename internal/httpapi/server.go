@@ -471,6 +471,29 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusOK, credentials.CollectorState.Snapshot(time.Now()))
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector/coverage" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "需要管理员权限"})
+				return
+			}
+			coverage, ok := store.(interface {
+				CollectionCoverage(context.Context, int) (any, error)
+			})
+			if !ok || credentials.CollectorState == nil {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "采集覆盖暂不可用"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+			defer cancel()
+			status := credentials.CollectorState.Snapshot(time.Now())
+			result, err := coverage.CollectionCoverage(ctx, status.IntervalSeconds)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "采集覆盖暂不可用"})
+				return
+			}
+			respond(w, http.StatusOK, result)
+			return
+		}
 		if r.Method == http.MethodGet {
 			if match := eventAuditPath.FindStringSubmatch(r.URL.Path); match != nil {
 				if role != "admin" {
@@ -988,6 +1011,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				return
 			}
+		}
+		if handleAssetImport(w, r, store, role, credentials.MasterKey) {
+			return
 		}
 		if assetsDB, ok := store.(AssetStore); ok {
 			if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {

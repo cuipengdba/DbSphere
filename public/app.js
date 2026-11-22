@@ -69,7 +69,7 @@ function setView(route, updateHash = true) {
   $('view-title').textContent = views[selected][0];
   $('view-description').textContent = views[selected][1];
   if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
-  if (pageSections[selected]) showSection(selected, pageSections[selected]);
+  if (pageSections[selected]) showSection(selected, selected === 'settings' && params.get('section') === 'collector' ? 'collector' : pageSections[selected]);
   monitoring.setVisible(selected === 'monitoring');
   if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
   if (updateHash) {
@@ -1091,6 +1091,21 @@ function renderCollectorStatus(status) {
   if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
   if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮达到 ${status.batchLimit} 个资产的批次上限；是否存在积压尚未测量。`, 'warning'));
   target.append(cell('p', '这些计数只覆盖当前 Go 进程；重启后归零。目标采集失败与采集器执行错误分开统计。', 'hint'));
+  const loadCoverage = cell('button', '查看近 7 天采集覆盖', 'ghost small-button');
+  const report = document.createElement('div');
+  loadCoverage.addEventListener('click', async () => {
+    loadCoverage.disabled = true;
+    try {
+      const coverage = await api('/api/admin/collector/coverage');
+      report.replaceChildren(cell('p', `当前资产 ${coverage.targets} · 已到采集时间 ${coverage.due} · 近两周期有效 ${coverage.fresh}`, 'hint'));
+      const rows = coverage.days.map(day => [day.day.slice(0, 10), day.observed, day.samples, day.postgresOK,
+        day.samples ? `${(100 * day.failed / day.samples).toFixed(1)}%` : '无样本', `${(day.sampleBytes / 1048576).toFixed(2)} MiB`]);
+      report.append(importTable(['日期 UTC', '覆盖资产', '采样数', 'PG 有效采样', '失败占比', '指标载荷'], rows));
+    } catch (error) { report.replaceChildren(cell('p', error.message, 'warning')); }
+    finally { loadCoverage.disabled = false; }
+  });
+  report.className = 'monitor-table';
+  target.append(loadCoverage, report);
 }
 
 function renderRules(rules) {
@@ -1133,6 +1148,110 @@ function renderRules(rules) {
     details.append(form); list.append(details);
   }
 }
+
+function importTable(headings, rows) {
+  const table = document.createElement('table');
+  const head = table.createTHead().insertRow();
+  for (const label of headings) {
+    const field = cell('th', label); field.scope = 'col'; head.append(field);
+  }
+  const body = table.createTBody();
+  for (const values of rows) {
+    const row = body.insertRow();
+    for (const value of values) {
+      const field = row.insertCell();
+      if (value instanceof Node) field.append(value); else field.textContent = value;
+    }
+  }
+  return table;
+}
+
+function setupAssetImport() {
+  const form = $('asset-import-form'), apply = $('asset-import-apply'), probe = $('asset-import-probe');
+  const output = $('asset-import-plan'), results = $('asset-import-results'), status = $('asset-import-status');
+  const download = $('asset-import-export');
+  let plan, checkedIDs = [], nextExport = '', exportPage = 1;
+  const payload = () => ({ format: form.elements.format.value, content: form.elements.content.value,
+    username: form.elements.username.value.trim(), credentialRef: form.elements.credentialRef.value.trim(),
+    discover: form.elements.discover.checked });
+  const labels = { create: '新增', update: '更新', unchanged: '保持', conflict: '冲突', invalid: '无效' };
+  const print = response => output.replaceChildren(importTable(['资产', '数据库目标', '变更', '核对项'], response.rows.map(row => {
+    const discovery = row.discovery;
+    const location = discovery?.status === 'observed'
+      ? `${discovery.namespace}/${discovery.pod} · ${discovery.port} ${discovery.portDeclared ? '已声明' : '未声明'}`
+      : discovery ? `${discovery.namespace || '未知命名空间'} · 未取得 Kubernetes 观测` : '';
+    return [row.name || `第 ${row.index} 项`, row.endpoint, labels[row.action],
+      [row.reason, row.changes?.join('、'), location].filter(Boolean).join(' · ')];
+  })));
+  form.addEventListener('input', () => { plan = null; apply.disabled = true; output.replaceChildren(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const input = payload();
+    apply.disabled = true;
+    status.textContent = '正在预览清单';
+    try {
+      const response = await api('/api/assets/import/preview', 'POST', input);
+      if (JSON.stringify(input) !== JSON.stringify(payload())) { status.textContent = '清单已修改，请重新预览'; return; }
+      plan = { ...input, revision: response.revision };
+      print(response);
+      apply.disabled = !response.canApply;
+      status.textContent = `${response.rows.length} 项 · ${response.canApply ? '可应用' : '请修正冲突或无效项'}`;
+    } catch (error) { status.textContent = error.message; }
+  });
+  apply.addEventListener('click', async () => {
+    if (!plan) return;
+    apply.disabled = true;
+    try {
+      const response = await api('/api/assets/import/apply', 'POST', plan);
+      print(response);
+      checkedIDs = response.rows.map(row => row.id);
+      nextExport = ''; exportPage = 1; download.textContent = '导出 YAML';
+      probe.textContent = '分批检查连接与权限'; probe.hidden = false;
+      results.replaceChildren();
+      status.textContent = `已应用 ${checkedIDs.length} 项`;
+      await refresh();
+    } catch (error) { status.textContent = error.message; }
+    finally { plan = null; }
+  });
+  probe.addEventListener('click', async () => {
+    probe.disabled = true; apply.disabled = true;
+    const failed = [], rows = [];
+    for (let offset = 0; offset < checkedIDs.length; offset += 5) {
+      const ids = checkedIDs.slice(offset, offset + 5);
+      status.textContent = `正在检查 ${offset + 1}–${offset + ids.length} / ${checkedIDs.length}`;
+      try {
+        const response = await api('/api/assets/import/probe', 'POST', { ids });
+        for (const result of response.results) {
+          const pg = result.postgres;
+          if (result.status !== 'ok' && pg?.pgStatus !== 'ok') failed.push(result.id);
+          const evidence = result.sampleId ? replaySampleLink(result.id, result.sampleId) : '无样本';
+          rows.push([result.id, pg?.pgStatus === 'ok' ? 'PostgreSQL 已连接' : '连接或基础采集未通过',
+            pg?.monitorRole === true ? 'pg_monitor' : pg?.monitorRole === false ? '缺少 pg_monitor' : '未知',
+            pg?.reason || (result.status !== 'ok' && pg?.pgStatus === 'ok' ? '可选采集源异常' : ''), evidence]);
+        }
+      } catch (error) { failed.push(...ids); rows.push([ids.join('、'), '批次未完成', '', error.message, '']); }
+      results.replaceChildren(importTable(['资产 ID', '连接', '权限', '状态说明', '证据'], rows));
+    }
+    checkedIDs = failed;
+    status.textContent = failed.length ? `${failed.length} 项待重试` : '连接检查完成';
+    probe.textContent = '重试失败项'; probe.hidden = !failed.length; probe.disabled = false;
+  });
+  download.addEventListener('click', async () => {
+    download.disabled = true;
+    try {
+      const result = await api(`/api/assets/import/export?after=${encodeURIComponent(nextExport)}`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify({ assets: result.assets }, null, 2)], {type:'application/yaml'}));
+      const link = document.createElement('a'); link.href = url; link.download = `dbsphere-assets-${exportPage}.yaml`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      nextExport = result.next; exportPage = nextExport ? exportPage + 1 : 1;
+      download.textContent = nextExport ? '导出下一批 YAML' : '导出 YAML';
+      status.textContent = `已导出 ${result.assets.length} 项及凭据引用`;
+    } catch (error) { status.textContent = error.message; }
+    finally { download.disabled = false; }
+  });
+}
+
+setupAssetImport();
 
 function editAsset(asset) {
   editingAsset = asset.id;

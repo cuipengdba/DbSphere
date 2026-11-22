@@ -215,6 +215,7 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .obs-chart g[role="button"]:focus-visible circle{stroke:var(--focus);stroke-width:3}
 .obs-coverage-details{margin:10px 0}
 .obs-coverage-details summary{cursor:pointer;color:var(--accent);font-weight:600}
+.asset-import{margin-top:14px}.asset-import summary{cursor:pointer;color:var(--accent);font-weight:650}.asset-import form{margin-top:14px}.asset-import textarea{width:100%;min-width:0;resize:vertical;border:1px solid var(--control-border);border-radius:8px;padding:10px;background:var(--surface);color:var(--text);font:inherit}.asset-import table{min-width:560px}.asset-import .section-actions{flex-wrap:wrap}.asset-import button:disabled{opacity:.55;cursor:default}
 @media(max-width:1080px){.incident-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:680px){.obs-trend-charts,.obs-metric-grid{grid-template-columns:1fr}.obs-panel{padding:10px}.obs-controls select,.obs-controls input{width:100%}}
 

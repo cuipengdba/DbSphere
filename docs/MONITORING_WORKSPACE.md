@@ -79,3 +79,26 @@ Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和�
 ## 交付
 
 监控工作台由 Go 服务内嵌的静态页面提供，长期监控数据存放在独立 PostgreSQL 18。浏览器可以在离线环境正常加载页面和图表。见[一键离线部署](OFFLINE_DEPLOYMENT.md)。
+
+## 批量纳管与采集覆盖
+
+管理员在「资产与实例 → 批量纳管与清单导出」粘贴 DbSphere YAML、CSV 或 Pigsty Inventory。每批至多 100 项及 256 KiB。先预览新增、更新、保持和冲突，确认后原子应用该批。应用前若资产配置变化，重新预览。相同 ID 或唯一主机、端口及数据库组合匹配原资产。更新保留资产 ID 及历史记录。清单可使用以下格式。
+
+```yaml
+assets:
+  - name: 订单主库
+    host: pg-orders.internal
+    port: 5432
+    database: orders
+    username: dbsphere_monitor
+    sslMode: require
+    runtime: linux
+    clusterName: orders
+    credentialRef: env:DBSPHERE_IMPORT_MONITOR
+```
+
+CSV 使用同名表头，`tags` 以 `|` 分隔。省略端口、数据库、TLS 或运行形态时分别使用 `5432`、`postgres`、`require`、`managed`。Pigsty Inventory 读取 `all.children` 下的集群、`pg_cluster`、成员 `pg_seq`、`pg_role`、`pg_port` 及可选的 `ansible_host`。在界面填写默认用户名及凭据引用。已有资产可引用 `asset:<UUID>` 的同名用户凭据；环境变量引用通过 Go 服务进程环境传入。容器安装时可使用 Compose 覆盖文件的服务 `env_file` 挂入仅管理员可读的本地环境文件，更新后重建服务进程。
+
+导出的 YAML 可导入同一部署；迁往其他存储时填写新的默认凭据引用。清单包含资产 ID、连接配置和凭据引用，PgBouncer、Patroni 连接密钥可在目标环境的资产表单重新配置。监控历史及完整凭据迁移仍使用 PG18 存储备份。Kubernetes 预览按配置的只读权限查找已指定的 Pod 或 Workload，核对对象 UID 及目标端口声明。数据库分批预检最多并发 5 个，错误保留采样或单项状态，完成后可重试失败项。PG 基础采集可以在可选资源源缺失时成功。
+
+「系统状态 → 采集器」显示采集间隔、执行队列和近两周期新鲜度。近七日覆盖按 UTC 记录观测资产、PG 有效采样、整条采集的失败比例和指标载荷大小。PG18 的实际磁盘空间与保留策略可在「长期存储」查看。
