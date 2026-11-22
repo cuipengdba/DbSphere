@@ -681,6 +681,7 @@ function renderRoutingSettings(detail, asset, settings, sample) {
   const form = cell('form', '', 'form-grid routing-form');
   const field = (name, control) => {
     const label = cell('label', name);
+    control.setAttribute('aria-label', name);
     label.append(control);
     form.append(label);
   };

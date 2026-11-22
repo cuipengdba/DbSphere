@@ -1443,8 +1443,11 @@ jobs:
             -p 16435:5433 -p 16436:5434 -p 16437:8404 \
             --mount "type=bind,source=$RUNNER_TEMP/dbsphere-route-haproxy.cfg,target=/usr/local/etc/haproxy/haproxy.cfg,readonly" \
             haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb
-          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 \
-            --user reader:route-stats-test 'http://127.0.0.1:16437/stats;csv' -o "$RUNNER_TEMP/dbsphere-route-haproxy-stats.csv"
+          if ! curl -fsS --retry 10 --retry-connrefused --retry-all-errors --retry-delay 1 \
+            --user reader:route-stats-test 'http://127.0.0.1:16437/stats;csv' -o "$RUNNER_TEMP/dbsphere-route-haproxy-stats.csv"; then
+            docker logs dbsphere-route-haproxy
+            exit 1
+          fi
           go test ./internal/store -run '^TestReal(PgBouncerPoolExhaustion|HAProxyRouteMismatch)KeepsOneEvent$' -count=1 -v
       - uses: actions/upload-artifact@v4
         with:
