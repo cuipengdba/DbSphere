@@ -1958,6 +1958,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   routing_observed: '入口诊断更新',
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
+  external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
@@ -2865,6 +2866,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       const status = {pending: '等待重试', delivered: '已送达', skipped: '已跳过', failed: '失败'}[delivery.status] || delivery.status;
       text = `${delivery.channel} · ${status} · 投递 ID ${delivery.deliveryId}`;
     }
+    const external = ['external_alert_firing', 'external_alert_resolved', 'external_ticket_linked'].includes(evidence.kind);
+    if (external) {
+      const input = evidence.payload;
+      text = [input.source, input.externalId, input.title].filter(Boolean).join(' · ');
+    }
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
@@ -2877,13 +2883,21 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const row = cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence');
+    const label = external ? replayKinds[evidence.kind] : evidence.kind;
+    const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
+    if (external && evidence.payload.url?.startsWith('https://')) {
+      const link = cell('a', '打开外部记录', 'monitor-link');
+      link.href = evidence.payload.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      row.append(document.createTextNode(' · '), link);
+    }
     timelineEntries.append(row);
     const noLeader = evidence.kind === 'patroni_state' && evidence.payload?.leaderCount === 0;
     if (condensedTimeline && highlightCount < 8 && (
       evidence.kind === 'alert_firing' || evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered' ||
       evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' ||
-      (noLeader && !highlightedNoLeader))) {
+      external || (noLeader && !highlightedNoLeader))) {
       highlights.append(row.cloneNode(true));
       highlightCount++;
       if (noLeader) highlightedNoLeader = true;

@@ -132,6 +132,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	operations, err := httpapi.LoadOperationsConfig()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	pg, err := store.Open(ctx, cfg.DatabaseURL)
@@ -143,6 +147,10 @@ func run(log *slog.Logger) error {
 	notifyConfig, err := notify.Load()
 	if err != nil {
 		return err
+	}
+	if notifyConfig.OperationsWebhookURL != nil {
+		notifyConfig.OperationsWebhookOrganization = operations.Organization
+		pg.ConfigureOperationsWebhook(operations.Organization)
 	}
 	passwordHash, err := pg.AdminPasswordHash(ctx, cfg.AdminPass)
 	if err != nil {
@@ -195,6 +203,7 @@ func run(log *slog.Logger) error {
 			ReplicaID:            replica.ID,
 			WorkOrderProfiles:    workProfiles,
 			OIDC:                 oidcProvider,
+			Operations:           operations,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

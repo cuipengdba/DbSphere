@@ -722,7 +722,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 				return err
 			}
 			if transition == "firing" || transition == "unsuppressed" {
-				if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
+				if err := s.queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
 					return err
 				}
 			}
@@ -792,7 +792,7 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 				return err
 			}
 			if transition == "recovered" && old.MutedBy == nil {
-				return queueGoNotifications(ctx, tx, evidenceID, now)
+				return s.queueGoNotifications(ctx, tx, evidenceID, now)
 			}
 		}
 	}

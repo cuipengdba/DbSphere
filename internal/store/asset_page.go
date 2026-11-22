@@ -14,10 +14,11 @@ import (
 var ErrInvalidAssetPage = errors.New("invalid asset page query")
 
 type AssetPageQuery struct {
-	Search  string
-	Runtime string
-	Cursor  string
-	Limit   int
+	Search         string
+	Runtime        string
+	Cursor         string
+	Limit          int
+	OrganizationID string
 }
 
 const assetJSON = `jsonb_build_object(
@@ -69,6 +70,9 @@ func (s *Postgres) AssetPage(ctx context.Context, query AssetPageQuery, assetIDs
 	}
 	if assetIDs != nil {
 		conditions = append(conditions, "id=ANY("+parameter(assetIDs)+"::uuid[])")
+	}
+	if query.OrganizationID != "" {
+		conditions = append(conditions, "organization_id="+parameter(query.OrganizationID)+"::uuid")
 	}
 	if query.Runtime != "" && query.Runtime != "all" {
 		conditions = append(conditions, "runtime="+parameter(query.Runtime))

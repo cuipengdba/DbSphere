@@ -26,18 +26,21 @@ import (
 )
 
 type Config struct {
-	WebhookURL *url.URL
-	Secret     []byte
-	WebhookMin string
-	EmailMin   string
-	SMTPHost   string
-	SMTPPort   int
-	SMTPFrom   *mail.Address
-	SMTPTo     []*mail.Address
-	SMTPUser   string
-	SMTPPass   string
-	AllowPlain bool
-	Client     *http.Client
+	WebhookURL                    *url.URL
+	Secret                        []byte
+	OperationsWebhookURL          *url.URL
+	OperationsWebhookSecret       []byte
+	OperationsWebhookOrganization string
+	WebhookMin                    string
+	EmailMin                      string
+	SMTPHost                      string
+	SMTPPort                      int
+	SMTPFrom                      *mail.Address
+	SMTPTo                        []*mail.Address
+	SMTPUser                      string
+	SMTPPass                      string
+	AllowPlain                    bool
+	Client                        *http.Client
 }
 
 func severityRank(value string) int {
@@ -78,6 +81,18 @@ func Load() (Config, error) {
 			return Config{}, errors.New("invalid webhook URL or insecure transport")
 		}
 		cfg.WebhookURL = parsed
+	}
+	if raw := os.Getenv("DBSPHERE_OPS_WEBHOOK_URL"); raw != "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" ||
+			(parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback(parsed.Hostname()))) {
+			return Config{}, errors.New("invalid operations webhook URL or insecure transport")
+		}
+		cfg.OperationsWebhookURL = parsed
+		cfg.OperationsWebhookSecret = []byte(os.Getenv("DBSPHERE_OPS_WEBHOOK_SECRET"))
+		if len(cfg.OperationsWebhookSecret) < 24 || len(cfg.OperationsWebhookSecret) > 256 {
+			return Config{}, errors.New("DBSPHERE_OPS_WEBHOOK_SECRET must be 24 to 256 bytes")
+		}
 	}
 	cfg.SMTPHost = os.Getenv("DBSPHERE_SMTP_HOST")
 	from, to := os.Getenv("DBSPHERE_SMTP_FROM"), os.Getenv("DBSPHERE_SMTP_TO")
@@ -121,6 +136,24 @@ func loopback(host string) bool {
 	return host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
 }
 
+type webhookResponseError struct {
+	status     int
+	retryAfter time.Duration
+}
+
+func (e webhookResponseError) Error() string             { return fmt.Sprintf("webhook HTTP %d", e.status) }
+func (e webhookResponseError) RetryAfter() time.Duration { return e.retryAfter }
+
+func retryAfterHeader(raw string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseUint(raw, 10, 32); err == nil {
+		return time.Duration(min(seconds, 3600)) * time.Second
+	}
+	if at, err := http.ParseTime(raw); err == nil {
+		return max(0, min(at.Sub(now), time.Hour))
+	}
+	return 0
+}
+
 func (cfg Config) Send(ctx context.Context, item store.Notification) (string, error) {
 	var payload map[string]any
 	if json.Unmarshal(item.Payload, &payload) != nil {
@@ -140,20 +173,29 @@ func (cfg Config) Send(ctx context.Context, item store.Notification) (string, er
 		"observedAt": item.ObservedAt, "ruleId": payload["ruleId"],
 		"severity": severity, "value": payload["value"], "source": payload["source"]}
 	switch item.Channel {
-	case "webhook":
-		if cfg.WebhookURL == nil {
+	case "webhook", "operations_webhook":
+		endpoint, secret := cfg.WebhookURL, cfg.Secret
+		if item.Channel == "operations_webhook" {
+			if item.OrganizationID != cfg.OperationsWebhookOrganization {
+				return "skipped", nil
+			}
+			endpoint, secret = cfg.OperationsWebhookURL, cfg.OperationsWebhookSecret
+			message["organizationId"] = item.OrganizationID
+			message["consolePath"] = "/#incidents?event=" + item.EventID
+		}
+		if endpoint == nil {
 			return "skipped", nil
 		}
 		body, _ := json.Marshal(message)
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.WebhookURL.String(), bytes.NewReader(body))
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 		if err != nil {
 			return "", errors.New("webhook request failed")
 		}
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("X-DbSphere-Delivery-Id", item.ID)
 		request.Header.Set("Idempotency-Key", item.ID)
-		if len(cfg.Secret) != 0 {
-			mac := hmac.New(sha256.New, cfg.Secret)
+		if len(secret) != 0 {
+			mac := hmac.New(sha256.New, secret)
 			_, _ = mac.Write(body)
 			request.Header.Set("X-DbSphere-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 		}
@@ -164,7 +206,11 @@ func (cfg Config) Send(ctx context.Context, item store.Notification) (string, er
 		defer response.Body.Close()
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return "", fmt.Errorf("webhook HTTP %d", response.StatusCode)
+			due := time.Duration(0)
+			if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable {
+				due = retryAfterHeader(response.Header.Get("Retry-After"), time.Now())
+			}
+			return "", webhookResponseError{response.StatusCode, due}
 		}
 		return "delivered", nil
 	case "email":

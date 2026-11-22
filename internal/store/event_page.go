@@ -14,10 +14,11 @@ import (
 var ErrInvalidEventPage = errors.New("invalid event page query")
 
 type EventPageQuery struct {
-	Status string
-	Search string
-	Cursor string
-	Limit  int
+	Status         string
+	Search         string
+	Cursor         string
+	Limit          int
+	OrganizationID string
 }
 
 // EventOverview counts all open events and returns their five most recent rows.
@@ -96,6 +97,9 @@ func (s *Postgres) EventPage(ctx context.Context, query EventPageQuery, assetIDs
 	}
 	if assetIDs != nil {
 		conditions = append(conditions, "e.asset_id = ANY("+parameter(assetIDs)+"::uuid[])")
+	}
+	if query.OrganizationID != "" {
+		conditions = append(conditions, "a.organization_id="+parameter(query.OrganizationID)+"::uuid")
 	}
 	if status != "all" {
 		conditions = append(conditions, "e.status = "+parameter(status))

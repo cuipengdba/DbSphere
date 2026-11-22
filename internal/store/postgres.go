@@ -14,12 +14,13 @@ import (
 )
 
 type Postgres struct {
-	pool                *pgxpool.Pool
-	platformReplicaID   string
-	sampleRetentionDays int
-	eventRetentionDays  int
-	tracePodMu          sync.Mutex
-	tracePodCache       map[string]tracePodCacheEntry
+	pool                          *pgxpool.Pool
+	platformReplicaID             string
+	sampleRetentionDays           int
+	eventRetentionDays            int
+	operationsWebhookOrganization string
+	tracePodMu                    sync.Mutex
+	tracePodCache                 map[string]tracePodCacheEntry
 }
 
 // SetPlatformReplica records the local collector identity before starting workers.
@@ -457,6 +458,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	}
 	if err := migrateOrganizations(ctx, tx); err != nil {
 		return fmt.Errorf("migrate organizations and signed audit: %w", err)
+	}
+	if err := migrateOperations(ctx, tx); err != nil {
+		return fmt.Errorf("migrate operations integration: %w", err)
 	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)

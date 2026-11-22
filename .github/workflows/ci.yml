@@ -32,6 +32,13 @@ jobs:
         run: |
           go test -p 1 ./...
           go vet ./...
+      - name: Verify two webhook receivers and scoped external incident receipts
+        env:
+          DBSPHERE_TEST_OPS_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/operations_acceptance
+          PG18_CONTAINER: ${{ job.services.pg18.id }}
+        run: |
+          docker exec "$PG18_CONTAINER" createdb -U postgres operations_acceptance
+          go test ./internal/httpapi -run '^TestPG18OperationsWebhookRetryAndExternalIncident$' -count=1 -v
       - name: Build official OpenTelemetry Go SDK acceptance probe
         run: |
           cd examples/otel-sdk-probe
@@ -413,8 +420,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.39.0'
-          previous_sha='765ea838fe352960483bd9a22481d33fa766bc764f7e96b387bd9876425f5293'
+          previous_version='1.40.0'
+          previous_sha='d283ad7d86d9bc6589816e85090d960a0c06bd10f13a5ab5e10a6c7d02509562'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -483,8 +490,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.39.0'
-          previous_arm_sha='14099a306b39f54624a1247cf5a35f80b6f7f66a39db00cc8eb1478905c38133'
+          previous_version='1.40.0'
+          previous_arm_sha='319ec01e543291cf3136c608fac3bd6596c9d9f30fa273f219e8abe944a91f08'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

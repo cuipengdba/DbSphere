@@ -11,29 +11,38 @@ import (
 )
 
 type Notification struct {
-	ID          string          `json:"deliveryId"`
-	Channel     string          `json:"-"`
-	Kind        string          `json:"kind"`
-	ObservedAt  time.Time       `json:"observedAt"`
-	EventID     string          `json:"eventId"`
-	EventTitle  string          `json:"eventTitle"`
-	EventStatus string          `json:"eventStatus"`
-	AssetID     string          `json:"assetId"`
-	AssetName   string          `json:"assetName"`
-	Payload     json.RawMessage `json:"-"`
+	ID             string          `json:"deliveryId"`
+	Channel        string          `json:"-"`
+	Kind           string          `json:"kind"`
+	ObservedAt     time.Time       `json:"observedAt"`
+	EventID        string          `json:"eventId"`
+	EventTitle     string          `json:"eventTitle"`
+	EventStatus    string          `json:"eventStatus"`
+	AssetID        string          `json:"assetId"`
+	AssetName      string          `json:"assetName"`
+	Payload        json.RawMessage `json:"-"`
+	OrganizationID string          `json:"-"`
 }
 
-func queueGoNotifications(ctx context.Context, tx pgx.Tx, evidenceID string, now time.Time) error {
+// ConfigureOperationsWebhook is called before starting the collector.
+func (s *Postgres) ConfigureOperationsWebhook(organization string) {
+	s.operationsWebhookOrganization = organization
+}
+
+func (s *Postgres) queueGoNotifications(ctx context.Context, tx pgx.Tx, evidenceID string, now time.Time) error {
 	_, err := tx.Exec(ctx, `INSERT INTO notification_outbox(id,evidence_id,channel,next_attempt_at)
 		SELECT gen_random_uuid(),source.id,route.channel,$2
-		FROM evidence source CROSS JOIN unnest(ARRAY['webhook','email']) AS route(channel)
-		WHERE source.id=$1 AND NOT EXISTS (
+		FROM evidence source JOIN event_keys target ON target.id=source.event_id
+		JOIN assets a ON a.id=target.asset_id
+		CROSS JOIN unnest(ARRAY['webhook','email','operations_webhook']) AS route(channel)
+		WHERE source.id=$1 AND (route.channel<>'operations_webhook' OR a.organization_id=$3::uuid)
+		AND NOT EXISTS (
 			SELECT FROM evidence prior JOIN notification_outbox queued ON queued.evidence_id=prior.id
 			WHERE prior.event_id=source.event_id AND queued.channel=route.channel
 			AND ((source.kind='alert_recovered' AND prior.kind='alert_recovered')
 				OR (source.kind IN ('alert_firing','alert_unsuppressed') AND prior.kind IN ('alert_firing','alert_unsuppressed')
 					AND source.payload_json->>'ruleId'=prior.payload_json->>'ruleId')))
-		ON CONFLICT(evidence_id,channel) DO NOTHING`, evidenceID, now)
+		ON CONFLICT(evidence_id,channel) DO NOTHING`, evidenceID, now, nullable(s.operationsWebhookOrganization))
 	return err
 }
 
@@ -54,7 +63,7 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 		var item Notification
 		var attempts int
 		err = tx.QueryRow(ctx, `SELECT n.id::text,n.channel,n.attempts,e.kind,e.observed_at,
-			v.id::text,v.title,v.status,a.id::text,a.name,e.payload_json
+			v.id::text,v.title,v.status,a.id::text,a.name,e.payload_json,a.organization_id::text
 			FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
 			JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
 			WHERE n.status='pending' AND n.next_attempt_at<=now()
@@ -65,7 +74,7 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			ORDER BY n.next_attempt_at,n.id LIMIT 1 FOR UPDATE OF n SKIP LOCKED`).
 			Scan(&item.ID, &item.Channel, &attempts, &item.Kind, &item.ObservedAt,
 				&item.EventID, &item.EventTitle, &item.EventStatus, &item.AssetID,
-				&item.AssetName, &item.Payload)
+				&item.AssetName, &item.Payload, &item.OrganizationID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_ = tx.Rollback(ctx)
 			break
@@ -87,9 +96,11 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 		} else {
 			attempts++
 			backoff := 30 * time.Second << min(attempts-1, 7)
-			if backoff > time.Hour {
-				backoff = time.Hour
+			var retryAfter interface{ RetryAfter() time.Duration }
+			if errors.As(sendErr, &retryAfter) {
+				backoff = max(backoff, retryAfter.RetryAfter())
 			}
+			backoff = min(backoff, time.Hour)
 			status = "pending"
 			if attempts >= 5 {
 				status = "failed"
@@ -220,7 +231,7 @@ func (s *Postgres) QueueCriticalEscalations(ctx context.Context, now time.Time, 
 			eventID, now, payload).Scan(&evidenceID); err != nil {
 			return 0, err
 		}
-		if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
+		if err := s.queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
 			return 0, err
 		}
 		queued++

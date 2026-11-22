@@ -625,7 +625,7 @@ func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sample
 			AND kind='alert_recovered' AND payload_json->>'silenceId' IS NULL
 			ORDER BY observed_at DESC,id DESC LIMIT 1`, eventID).Scan(&alertRecoveryID)
 		if err == nil {
-			if err := queueGoNotifications(ctx, tx, alertRecoveryID, now); err != nil {
+			if err := s.queueGoNotifications(ctx, tx, alertRecoveryID, now); err != nil {
 				return err
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
