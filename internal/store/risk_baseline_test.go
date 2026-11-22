@@ -160,8 +160,8 @@ func TestPG18RiskShadowReviewAndSameEvent(t *testing.T) {
 		asset.ID).Scan(&actual); err != nil || actual != event {
 		t.Fatalf("the observed capacity alert did not reuse the forecast event: %v %s %s", err, actual, event)
 	}
-	if _, err := pg.pool.Exec(ctx, `INSERT INTO silences(id,kind,asset_id,starts_at,ends_at,reason)
-		VALUES(gen_random_uuid(),'maintenance',$1,$2,$3,'forecast maintenance fixture')`, asset.ID, next, next.Add(4*time.Hour)); err != nil {
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO silences(id,kind,asset_id,starts_at,ends_at,reason,created_at)
+		VALUES(gen_random_uuid(),'maintenance',$1,$2,$3,'forecast maintenance fixture',now())`, asset.ID, next, next.Add(4*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pg.AdvanceRiskBaseline(ctx, next.Add(time.Hour), 10); err != nil {
