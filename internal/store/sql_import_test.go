@@ -60,6 +60,15 @@ func TestSlowLogAndPlanSanitization(t *testing.T) {
 			t.Fatalf("plan summary leaked %s", secret)
 		}
 	}
+	const exactID = "-9109839164256363985"
+	identified := json.RawMessage(`{"Plan":{"Node Type":"Hash Join","Join Type":"Left"},"Query Identifier":` + exactID + `}`)
+	if _, _, summary, err := sanitizeSQLPlan(exactID, "2026-11-18T00:00:00Z", identified); err != nil ||
+		!strings.Contains(string(summary), `"queryIdentity":"explain"`) || !strings.Contains(string(summary), `"joinType":"Left"`) {
+		t.Fatalf("64-bit Query Identifier was not verified: %s %v", summary, err)
+	}
+	if _, _, _, err := sanitizeSQLPlan("42", "2026-11-18T00:00:00Z", identified); !errors.Is(err, ErrInvalidSQLPlan) {
+		t.Fatal("a mismatched EXPLAIN Query Identifier was accepted")
+	}
 	for _, invalid := range []string{`{}`, `{"Plan":{"Node Type":"Seq Scan","Plans":["bad"]}}`, `{"Plan":{"Node Type":"Seq Scan;DROP"}}`} {
 		if _, _, _, err := sanitizeSQLPlan("42", "2026-11-18T00:00:00Z", json.RawMessage(invalid)); !errors.Is(err, ErrInvalidSQLPlan) {
 			t.Fatalf("invalid plan accepted: %s", invalid)
@@ -89,7 +98,8 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pg.DeleteAsset(ctx, asset.ID)
-	line := `{"timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","dbname":"sql_import_fixture","message":"duration: 1500 ms  statement: SELECT confidential_value","query_id":"42"}`
+	logAt := time.Now().UTC().Truncate(time.Millisecond)
+	line := `{"timestamp":"` + logAt.Format(time.RFC3339Nano) + `","dbname":"sql_import_fixture","message":"duration: 1500 ms  statement: SELECT confidential_value","query_id":"42","session_id":"abc.123","line_num":7}`
 	first, err := pg.ImportSlowLogs(ctx, asset.ID, "jsonlog", line)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +111,16 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 	if first.(map[string]any)["imported"] != 1 || second.(map[string]any)["duplicates"] != 1 {
 		t.Fatal("slow log deduplication failed")
 	}
+	csvLine := make([]string, 26)
+	csvLine[0], csvLine[2], csvLine[5], csvLine[6] = logAt.Format("2006-01-02 15:04:05.000 MST"), "sql_import_fixture", "abc.123", "7"
+	csvLine[13], csvLine[25] = "duration: 1500 ms  statement: confidential_value", "42"
+	replayed, err := pg.ImportSlowLogs(ctx, asset.ID, "csvlog", strings.Join(csvLine, ",")+"\n")
+	if err != nil || replayed.(map[string]any)["duplicates"] != 1 {
+		t.Fatalf("CSV re-export duplicated the original PostgreSQL session record: %v %v", replayed, err)
+	}
+	if _, err := pg.ImportScopedSQLPlan(ctx, asset.ID, "different_database", "42", "", json.RawMessage(`{"Plan":{"Node Type":"Seq Scan"}}`)); !errors.Is(err, ErrInvalidSQLPlan) {
+		t.Fatal("a plan carrying a different database identity was accepted")
+	}
 	plan, err := pg.ImportSQLPlan(ctx, asset.ID, "42", time.Now().UTC().Format(time.RFC3339Nano), json.RawMessage(`{"Plan":{"Node Type":"Seq Scan","Filter":"confidential_value = 1","Actual Rows":1},"Execution Time":1500}`))
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +130,7 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 		t.Fatal("plan leaked raw predicate or lost identity")
 	}
 	_, err = pg.ImportSQLPlan(ctx, asset.ID, "42", time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
-		json.RawMessage(`{"Plan":{"Node Type":"Index Scan","Index Name":"confidential_index"},"Execution Time":3000}`))
+		json.RawMessage(`{"Plan":{"Node Type":"Index Scan","Index Name":"confidential_index","Plan Rows":10,"Actual Rows":40,"Temp Read Blocks":2,"Temp Written Blocks":3},"Execution Time":3000}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +141,9 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 	listedJSON, _ := json.Marshal(listed)
 	if strings.Contains(string(listedJSON), "confidential_index") ||
 		!strings.Contains(string(listedJSON), `"shapeChanged":true`) ||
-		!strings.Contains(string(listedJSON), `"executionRatio":2`) {
+		!strings.Contains(string(listedJSON), `"executionRatio":2`) ||
+		!strings.Contains(string(listedJSON), `"after":4,"before":null,"name":"estimateFactor"`) ||
+		!strings.Contains(string(listedJSON), `"after":3,"before":null,"name":"tempWrittenBlocks"`) {
 		t.Fatalf("safe plan comparison missing: %s", listedJSON)
 	}
 	eventStart := time.Now().UTC().Add(-2 * time.Minute)
@@ -221,6 +243,38 @@ func TestSQLImportsPersistOnlySafeEvidenceInPG18(t *testing.T) {
 	}
 	if !matchingCandidate {
 		t.Fatal("exact Query ID did not restore the corroborated SQL candidate")
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE assets SET database_name='new_database' WHERE id=$1`, asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ImportScopedSQLPlan(ctx, asset.ID, "new_database", "42", time.Now().UTC().Add(2*time.Second).Format(time.RFC3339Nano),
+		json.RawMessage(`{"Plan":{"Node Type":"Bitmap Heap Scan"},"Execution Time":7000}`)); err != nil {
+		t.Fatal(err)
+	}
+	importHistory, err := pg.ReadAssetSection(ctx, asset.ID, "sql-plans", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPlan := importHistory.(map[string]any)["plans"].([]map[string]any)[0]
+	if newPlan["database"] != "new_database" || newPlan["comparison"] != nil {
+		t.Fatalf("the plan compared an identical Query ID across databases: %v", newPlan)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE assets SET database_name='sql_import_fixture' WHERE id=$1`, asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+		VALUES(gen_random_uuid(),$1,$2,'ok',jsonb_build_object('databaseName','sql_import_fixture','sqlPerformance',jsonb_build_object('resetAt',$3::text)))`,
+		asset.ID, eventStart.Add(time.Second), eventStart.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	resetDetail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range object(resetDetail.(map[string]any)["analysis"])["candidates"].([]map[string]any) {
+		if candidate["code"] == "sql_plan_regression" {
+			t.Fatal("regression RCA crossed a known pg_stat_statements reset")
+		}
 	}
 	var queryID string
 	var count int

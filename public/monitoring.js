@@ -1205,7 +1205,7 @@
         ['slow-logs', evidence?.entries || []],
         ['sql-plans', (evidence?.plans || []).filter(plan => Date.parse(plan.observedAt) >= time.from && Date.parse(plan.observedAt) < time.to)]
       ]) {
-        for (const item of items.slice(0, 8)) {
+        for (const item of items.filter(row => !row.database || row.database === evidence.database).slice(0, 8)) {
           const link = el('a', kind === 'slow-logs' ? '慢日志证据' : '执行计划证据', 'monitor-link');
           link.href = `${path}${kind}/${item.id}`;
           link.target = '_blank';
@@ -2094,7 +2094,7 @@
           }));
           fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context));
         }
-        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, baseline: prior?.performance }, path, time));
+        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, database: asset.database, baseline: prior?.performance }, path, time));
         if (mode === 'locks') fragment.append(lockPanel(asset, data, time));
         if (showWaitCaptures && captures) fragment.append(waitCapturePanel(asset, captures.captures || [], capture, events));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events,

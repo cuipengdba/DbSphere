@@ -799,10 +799,52 @@ function renderRelatedEventButtons(target, eventIds = []) {
   target.append(events);
 }
 
+async function* slowLogRecords(file, csv) {
+  const reader = file.stream().pipeThrough(new TextDecoderStream('utf-8', { fatal: true })).getReader();
+  let record = '', quoted = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const char of value) {
+        record += char;
+        if (record.length > 60000) throw new Error('一条日志超过 60 KB。');
+        if (csv && char === '"') quoted = !quoted;
+        if (char === '\n' && !quoted) {
+          if (record.trim()) yield record;
+          record = '';
+        }
+      }
+    }
+    if (quoted) throw new Error('CSV 日志末尾存在未完整写入的记录。');
+    if (record.trim()) yield record;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+async function* slowLogBatches(file, format) {
+  const encoder = new TextEncoder();
+  let records = [], bytes = 0;
+  for await (const record of slowLogRecords(file, format === 'csvlog')) {
+    const size = encoder.encode(record).byteLength;
+    if (size > 60000) throw new Error('一条日志超过 60 KB。');
+    if (records.length === 200 || bytes + size > 60000) {
+      yield records.join('');
+      records = []; bytes = 0;
+    }
+    records.push(record);
+    bytes += size;
+  }
+  if (records.length) yield records.join('');
+}
+
 function renderSlowLogs(target, asset, entries) {
   const heading = cell('h3', '慢 SQL 日志'); heading.id = 'slow-logs'; target.append(heading);
-  target.append(cell('p', '导入 PostgreSQL csvlog（PG14 起）或 jsonlog（PG15 起）的已轮转片段。每批不超过 60 KiB；仅保存时间、耗时和 Query ID，语句正文与参数在导入时丢弃。', 'hint'));
+  target.append(cell('p', '选择 UTF-8 的 PostgreSQL csvlog 或 jsonlog。文件按完整记录分批导入，重跑时自动跳过已导入的记录。日志正文和参数在导入时丢弃。', 'hint'));
   const form = document.createElement('form'); form.className = 'actions';
+  form.hidden = currentRole !== 'admin';
   const format = document.createElement('select');
   for (const value of ['csvlog', 'jsonlog']) {
     const option = document.createElement('option'); option.value = value; option.textContent = value;
@@ -810,25 +852,34 @@ function renderSlowLogs(target, asset, entries) {
   }
   const file = document.createElement('input'); file.type = 'file'; file.required = true;
   file.accept = '.csv,.json,.log,.txt';
-  const submit = cell('button', '导入片段'); submit.type = 'submit';
+  const submit = cell('button', '增量导入'); submit.type = 'submit';
+  const progress = cell('p', '', 'hint'); progress.setAttribute('aria-live', 'polite');
   form.append(format, file, submit);
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (!file.files?.[0]) return;
+    const selected = file.files[0], source = format.value;
+    const totals = { scanned: 0, imported: 0, duplicates: 0, ignored: 0 };
+    const report = () => `已扫描 ${totals.scanned} 条，新增 ${totals.imported} 条，重复 ${totals.duplicates} 条，忽略 ${totals.ignored} 条。`;
+    submit.disabled = true; file.disabled = true; format.disabled = true;
     try {
-      if (file.files[0].size > 60000) throw new Error('文件超过 60 KiB，请按日志记录拆分批次。');
-      const result = await api(`/api/assets/${asset.id}/slow-logs/import`, 'POST', {
-        format: format.value, content: await file.files[0].text()
-      });
-      notice(`扫描 ${result.scanned} 条，导入 ${result.imported} 条，重复 ${result.duplicates} 条。`);
-      await showAsset(asset.id);
-    } catch (error) { notice(error.message, true); }
+      for await (const content of slowLogBatches(selected, source)) {
+        const result = await api(`/api/assets/${asset.id}/slow-logs/import`, 'POST', { format: source, content });
+        for (const key of Object.keys(totals)) totals[key] += result[key];
+        progress.textContent = report();
+      }
+      notice(report());
+      if (target.isConnected) await showAsset(asset.id, 'slow-logs');
+    } catch (error) {
+      progress.textContent = `${report()} ${error.message}`;
+      notice(progress.textContent, true);
+    } finally { submit.disabled = false; file.disabled = false; format.disabled = false; }
   });
-  target.append(form);
+  target.append(form, progress);
   if (!entries.length) target.append(cell('p', '近 24 小时没有导入的慢 SQL 记录。', 'empty'));
   for (const row of entries.slice(0, 30)) {
     const item = document.createElement('div'); item.className = 'evidence';
-    item.append(cell('span', `${formatTime(row.observedAt)} · ${row.durationMs.toFixed(1)} ms · ${row.queryId ? `Query ID ${row.queryId}` : 'Query ID 未提供'} · ${row.sourceFormat}`));
+    item.append(cell('span', `${formatTime(row.observedAt)} · ${row.database || '库名待核对'} · ${row.durationMs.toFixed(1)} ms · ${row.queryId ? `Query ID ${row.queryId}` : 'Query ID 未提供'} · ${row.sourceFormat}`));
     for (const id of row.eventIds) {
       const link = cell('button', `事件 ${id.slice(0, 8)}`, 'ghost small-button');
       link.addEventListener('click', () => showEvent(id)); item.append(link);
@@ -837,10 +888,29 @@ function renderSlowLogs(target, asset, entries) {
   }
 }
 
+function renderPlanComparison(comparison, assetId, currentId) {
+  const detail = cell('details', '', 'evidence');
+  detail.append(cell('summary', '查看计划前后对照'));
+  const labels = { executionMs: '执行耗时 ms', estimateFactor: '最大行数估算偏差倍数', tempReadBlocks: '根节点临时读块', tempWrittenBlocks: '根节点临时写块' };
+  const display = value => typeof value === 'number' ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
+  const rows = [...(comparison.operations || []), ...(comparison.measurements || [])].map(row => [labels[row.name] || row.name, display(row.before), display(row.after)]);
+  const table = importTable(['扫描、连接与指标', '事前', '事后'], rows);
+  table.setAttribute('aria-label', 'SQL 执行计划前后对照');
+  const wrap = cell('div', '', 'monitor-table'); wrap.append(table); detail.append(wrap);
+  const references = cell('div', '', 'actions');
+  for (const [label, id] of [['事前计划摘要', comparison.priorId], ['事后计划摘要', currentId]]) {
+    const link = cell('a', label, 'monitor-link'); link.href = `/api/assets/${assetId}/sql-plans/${id}`;
+    references.append(link);
+  }
+  detail.append(references);
+  return detail;
+}
+
 function renderSqlPlans(target, asset, plans) {
   const heading = cell('h3', '执行计划证据'); heading.id = 'sql-plans'; target.append(heading);
-  target.append(cell('p', '手动导入已有的 EXPLAIN (FORMAT JSON) 结果。DbSphere 不向生产数据库自动执行 EXPLAIN ANALYZE；仅保留节点类型和数值，过滤条件、SQL 正文与参数不入库。', 'hint'));
+  target.append(cell('p', `导入从 ${asset.database} 取得的 EXPLAIN JSON。带 Query Identifier 的计划会核对该标识。保存的摘要仅包含节点和统计数值。`, 'hint'));
   const form = document.createElement('form'); form.className = 'actions';
+  form.hidden = currentRole !== 'admin';
   const queryId = document.createElement('input'); queryId.placeholder = 'Query ID';
   queryId.required = true; queryId.pattern = '-?[0-9]{1,20}';
   const file = document.createElement('input'); file.type = 'file'; file.accept = '.json'; file.required = true;
@@ -850,9 +920,8 @@ function renderSqlPlans(target, asset, plans) {
     event.preventDefault();
     try {
       if (file.files[0].size > 50000) throw new Error('计划文件超过 50 KiB。');
-      const plan = JSON.parse(await file.files[0].text());
       await api(`/api/assets/${asset.id}/sql-plans`, 'POST', {
-        queryId: queryId.value, observedAt: new Date().toISOString(), plan
+        queryId: queryId.value, database: asset.database, observedAt: new Date().toISOString(), plan: (await file.files[0].text()).replace(/^\uFEFF/, '')
       });
       notice('执行计划摘要已导入。'); await showAsset(asset.id);
     } catch (error) { notice(error.message, true); }
@@ -861,9 +930,11 @@ function renderSqlPlans(target, asset, plans) {
   if (!plans.length) target.append(cell('p', '尚无执行计划证据。', 'empty'));
   for (const plan of plans.slice(0, 20)) {
     const item = document.createElement('div'); item.className = 'evidence';
-    item.append(cell('span', `Query ID ${plan.queryId} · ${formatTime(plan.observedAt)} · ${plan.summary.nodeCount} 个节点 · ${plan.summary.executionMs == null ? '无实际执行时间' : `${plan.summary.executionMs.toFixed(1)} ms`}`));
+    item.append(cell('span', `Query ID ${plan.queryId} · ${plan.database || '库名待核对'} · ${formatTime(plan.observedAt)} · ${plan.summary.nodeCount} 个节点 · ${plan.summary.executionMs == null ? '无实际执行时间' : `${plan.summary.executionMs.toFixed(1)} ms`}`));
+    if (plan.summary.queryIdentity === 'explain') item.append(cell('small', '已核对计划 Query Identifier'));
     if (plan.comparison?.shapeChanged) item.append(cell('span', '计划结构较上一份变化', 'warning'));
     if (plan.comparison?.executionRatio >= 2) item.append(cell('span', `导入计划的执行时间比前次高 ${plan.comparison.executionRatio.toFixed(1)} 倍，请结合采样复核。`, 'warning'));
+    if (plan.comparison) item.append(renderPlanComparison(plan.comparison, asset.id, plan.id));
     for (const id of plan.eventIds) {
       const link = cell('button', `事件 ${id.slice(0, 8)}`, 'ghost small-button');
       link.addEventListener('click', () => showEvent(id)); item.append(link);

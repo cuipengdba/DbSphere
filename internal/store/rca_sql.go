@@ -4,12 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 )
 
+func observedSQLDatabase(start time.Time, samples map[string]sampleObservation) string {
+	var name string
+	var latestAt time.Time
+	var id string
+	for _, sample := range samples {
+		database := stringValue(sample.Metrics["databaseName"])
+		if database == "" || sample.At.After(start) {
+			continue
+		}
+		if sample.At.After(latestAt) || (sample.At.Equal(latestAt) && sample.ID < id) {
+			name, latestAt, id = database, sample.At, sample.ID
+		}
+	}
+	return name
+}
+
 // sqlPlanCandidate requires a pre-incident baseline, a contemporaneous plan,
 // and a slow log for the same exact Query ID. It remains a hypothesis.
-func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
+func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord, database string,
 	add graphAdder, edges *[]map[string]string) (map[string]any, error) {
 	queryIDs := make([]string, 0)
 	seenQueryIDs := map[string]bool{}
@@ -22,8 +39,8 @@ func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
 			stringValue(payload["metric"]) != "pg.sql_regression_ratio" {
 			continue
 		}
-		queryID := stringValue(object(object(payload["detail"])["worst"])["queryId"])
-		if slowQueryID.MatchString(queryID) && queryID != "0" && !seenQueryIDs[queryID] {
+		queryID := canonicalSQLQueryID(stringValue(object(object(payload["detail"])["worst"])["queryId"]))
+		if queryID != "" && !seenQueryIDs[queryID] {
 			seenQueryIDs[queryID] = true
 			queryIDs = append(queryIDs, queryID)
 		}
@@ -31,35 +48,44 @@ func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
 	if event.Kind != "sql_performance" && len(queryIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT p.id::text,p.observed_at,p.query_id,p.shape_hash,p.summary_json,
+	rows, err := s.pool.Query(ctx, `SELECT p.id::text,p.observed_at,p.query_id,p.shape_hash,p.summary_json,p.database_name,
 		prior.id::text,prior.observed_at,prior.shape_hash,prior.summary_json,
 		log.id::text,log.observed_at,log.duration_ms
-		FROM sql_plan_snapshots p
+		FROM sql_plan_snapshots p JOIN assets a ON a.id=p.asset_id
 		JOIN LATERAL (SELECT id,observed_at,shape_hash,summary_json FROM sql_plan_snapshots
 			WHERE asset_id=p.asset_id AND query_id=p.query_id
+			AND database_name IS NOT DISTINCT FROM p.database_name
 			AND observed_at < $2::timestamptz-interval '5 minutes'
 			AND observed_at >= $2::timestamptz-interval '30 days'
 			ORDER BY observed_at DESC LIMIT 1) prior ON true
 		JOIN LATERAL (SELECT id,observed_at,duration_ms FROM slow_log_entries
 			WHERE asset_id=p.asset_id AND query_id=p.query_id AND duration_ms>=1000
+			AND database_name IS NOT DISTINCT FROM p.database_name
 			AND observed_at >= $2 AND observed_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 			AND observed_at BETWEEN p.observed_at-interval '5 minutes' AND p.observed_at+interval '5 minutes'
 			ORDER BY observed_at DESC LIMIT 1) log ON true
+		LEFT JOIN LATERAL (SELECT (m.metrics_json#>>'{sqlPerformance,resetAt}')::timestamptz AS reset_at
+			FROM samples m WHERE m.asset_id=p.asset_id AND m.collected_at>=prior.observed_at AND m.collected_at<=p.observed_at
+			AND pg_input_is_valid(m.metrics_json#>>'{sqlPerformance,resetAt}','timestamp with time zone')
+			ORDER BY m.collected_at DESC,m.id DESC LIMIT 1) stat ON true
 		WHERE p.asset_id=$1 AND ($4::boolean OR p.query_id=ANY($5::text[]))
+		AND (p.database_name IS NULL OR p.database_name=coalesce(nullif($6,''),a.database_name))
+		AND (stat.reset_at IS NULL OR stat.reset_at<=prior.observed_at)
 		AND p.observed_at >= $2
 		AND p.observed_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY p.observed_at DESC LIMIT 20`, event.AssetID, event.StartedAt, event.EndedAt,
-		event.Kind == "sql_performance", queryIDs)
+		event.Kind == "sql_performance", queryIDs, database)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var currentID, queryID, currentShape, priorID, priorShape, logID string
+		var planDatabase *string
 		var currentAt, priorAt, logAt time.Time
 		var currentRaw, priorRaw []byte
 		var slowDuration float64
-		if err := rows.Scan(&currentID, &currentAt, &queryID, &currentShape, &currentRaw,
+		if err := rows.Scan(&currentID, &currentAt, &queryID, &currentShape, &currentRaw, &planDatabase,
 			&priorID, &priorAt, &priorShape, &priorRaw, &logID, &logAt, &slowDuration); err != nil {
 			return nil, err
 		}
@@ -70,7 +96,9 @@ func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
 		currentMs, priorMs := number(current["executionMs"]), number(prior["executionMs"])
 		ratio := 0.0
 		if currentMs > 0 && priorMs > 0 {
-			ratio = currentMs / priorMs
+			if measured := currentMs / priorMs; !math.IsInf(measured, 0) {
+				ratio = measured
+			}
 		}
 		shapeChanged := currentShape != priorShape
 		if !shapeChanged && ratio < 2 {
@@ -114,7 +142,7 @@ func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
 		return map[string]any{"code": code, "title": title, "confidence": "low", "supports": supports,
 			"against": []string{}, "missing": []string{"应用请求与 Query ID 的直接链路需核对", "Query ID 复用或统计重置未排除"},
 			"limitation": "同 Query ID 的计划变化、执行时间与慢日志同期出现，仅能作为排查线索，不能证明唯一根因。",
-			"detail":     map[string]any{"queryId": queryID, "shapeChanged": shapeChanged, "executionRatio": ratio, "slowDurationMs": slowDuration},
+			"detail":     map[string]any{"queryId": queryID, "database": planDatabase, "shapeChanged": shapeChanged, "executionRatio": ratio, "slowDurationMs": slowDuration},
 			"state":      "hypothesis", "matchedConditions": []any{
 				"事前计划、事中计划和慢日志的 Query ID 精确一致",
 				"事中计划形态变化或已有执行时间至少增加两倍",
@@ -126,10 +154,13 @@ func (s *Postgres) sqlPlanCandidate(ctx context.Context, event *eventRecord,
 	return nil, rows.Err()
 }
 
-func (s *Postgres) addSQLEvidenceGraph(ctx context.Context, event *eventRecord,
+func (s *Postgres) addSQLEvidenceGraph(ctx context.Context, event *eventRecord, database string,
 	samples map[string]sampleObservation, add graphAdder, edges *[]map[string]string) error {
 	sqlNodes := map[string][]string{}
 	for _, sample := range samples {
+		if name := stringValue(sample.Metrics["databaseName"]); database != "" && name != "" && name != database {
+			continue
+		}
 		performance := object(sample.Metrics["sqlPerformance"])
 		if sample.Status != "ok" || stringValue(performance["status"]) != "ok" {
 			continue
@@ -145,9 +176,10 @@ func (s *Postgres) addSQLEvidenceGraph(ctx context.Context, event *eventRecord,
 	}
 	logs, err := s.pool.Query(ctx, `SELECT id::text,observed_at,duration_ms,query_id
 		FROM slow_log_entries WHERE asset_id=$1
+		AND (database_name IS NULL OR database_name=coalesce(nullif($4,''),(SELECT database_name FROM assets WHERE id=$1)))
 		AND observed_at >= $2::timestamptz-interval '10 minutes'
 		AND observed_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
-		ORDER BY observed_at DESC LIMIT 50`, event.AssetID, event.StartedAt, event.EndedAt)
+		ORDER BY observed_at DESC LIMIT 50`, event.AssetID, event.StartedAt, event.EndedAt, database)
 	if err != nil {
 		return err
 	}
@@ -179,9 +211,10 @@ func (s *Postgres) addSQLEvidenceGraph(ctx context.Context, event *eventRecord,
 	logs.Close()
 	plans, err := s.pool.Query(ctx, `SELECT id::text,observed_at,query_id,summary_json
 		FROM sql_plan_snapshots WHERE asset_id=$1
+		AND (database_name IS NULL OR database_name=coalesce(nullif($4,''),(SELECT database_name FROM assets WHERE id=$1)))
 		AND observed_at >= $2::timestamptz-interval '10 minutes'
 		AND observed_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
-		ORDER BY observed_at DESC LIMIT 50`, event.AssetID, event.StartedAt, event.EndedAt)
+		ORDER BY observed_at DESC LIMIT 50`, event.AssetID, event.StartedAt, event.EndedAt, database)
 	if err != nil {
 		return err
 	}

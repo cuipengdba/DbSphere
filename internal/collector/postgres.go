@@ -64,7 +64,7 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	var version, connections, maxConnections int
 	var recovery, monitor, readStats, super, createDB, createRole, replicationRole bool
 	var commits, rollbacks, databaseBytes int64
-	var serverAddress string
+	var serverAddress, databaseName string
 	var serverPort int
 	err = conn.QueryRow(connectCtx, `SELECT current_setting('server_version_num')::int,
 		pg_is_in_recovery(),pg_has_role(current_user,'pg_monitor','member'),
@@ -72,10 +72,10 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 		r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,
 		coalesce(s.numbackends,0)::int,coalesce(s.xact_commit,0)::bigint,
 		coalesce(s.xact_rollback,0)::bigint,pg_database_size(current_database())::bigint,
-		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0)
+		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0),current_database()
 		FROM pg_roles r LEFT JOIN pg_stat_database s ON s.datname=current_database()
 		WHERE r.rolname=current_user`).Scan(&version, &recovery, &monitor, &readStats, &super, &createDB, &createRole,
-		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort)
+		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +89,7 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	}
 	metrics := map[string]any{
 		"version_num": version, "pg14_eol": major == 14, "role": role,
+		"databaseName":     databaseName,
 		"postgresEndpoint": map[string]any{"address": serverAddress, "port": serverPort, "source": "inet_server_addr/port"},
 		"monitor_role":     monitor, "privileged_role": super || createDB || createRole || replicationRole,
 		"connections": connections, "max_connections": maxConnections,

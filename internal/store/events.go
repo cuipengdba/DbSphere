@@ -247,11 +247,12 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			addSampleLayers(event.AssetID, sample, addNode, &edges)
 		}
 	}
-	if err := s.addSQLEvidenceGraph(ctx, event, samples, addNode, &edges); err != nil {
+	sqlDatabase := observedSQLDatabase(event.StartedAt, samples)
+	if err := s.addSQLEvidenceGraph(ctx, event, sqlDatabase, samples, addNode, &edges); err != nil {
 		return nil, err
 	}
 	candidates := analyzeCandidates(event, samples, addNode, &edges)
-	planCandidate, err := s.sqlPlanCandidate(ctx, event, addNode, &edges)
+	planCandidate, err := s.sqlPlanCandidate(ctx, event, sqlDatabase, addNode, &edges)
 	if err != nil {
 		return nil, err
 	}

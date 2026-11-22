@@ -60,9 +60,10 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		}
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',l.id,'assetId',l.asset_id,'observedAt',l.observed_at,
-			'durationMs',l.duration_ms,'queryId',l.query_id,'sourceFormat',l.source_format,
+			'durationMs',l.duration_ms,'queryId',l.query_id,'sourceFormat',l.source_format,'database',l.database_name,
 			'eventIds',coalesce((SELECT jsonb_agg(e.id) FROM events e
 				WHERE e.asset_id=l.asset_id AND e.started_at<=l.observed_at+interval '5 minutes'
+				AND (l.database_name IS NULL OR l.database_name=(SELECT database_name FROM assets WHERE id=l.asset_id))
 				AND (e.ended_at IS NULL OR e.ended_at>=l.observed_at-interval '5 minutes')),'[]'::jsonb))
 			FROM slow_log_entries l WHERE l.asset_id=$1 AND l.observed_at>=$2 AND l.observed_at<$3
 			AND ($4::text='' OR l.query_id=$4)
@@ -71,13 +72,14 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 	case "sql-plans":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',p.id,'assetId',p.asset_id,'queryId',p.query_id,
-			'observedAt',p.observed_at,'source',p.source,'shapeHash',p.shape_hash,
+			'observedAt',p.observed_at,'source',p.source,'shapeHash',p.shape_hash,'database',p.database_name,
 			'summary',p.summary_json,
 			'eventIds',coalesce((SELECT jsonb_agg(e.id) FROM events e
 				WHERE e.asset_id=p.asset_id AND e.started_at<=p.observed_at+interval '5 minutes'
+				AND (p.database_name IS NULL OR p.database_name=(SELECT database_name FROM assets WHERE id=p.asset_id))
 				AND (e.ended_at IS NULL OR e.ended_at>=p.observed_at-interval '5 minutes')),'[]'::jsonb))
 			FROM sql_plan_snapshots p WHERE p.asset_id=$1
-			AND ($2::text='' OR p.query_id=$2) ORDER BY p.observed_at DESC LIMIT 50`, id, params.Get("queryId"))
+			AND ($2::text='' OR p.query_id=$2) ORDER BY p.observed_at DESC,p.id DESC LIMIT 50`, id, params.Get("queryId"))
 		if err != nil {
 			return nil, err
 		}
@@ -90,22 +92,13 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		prior := map[string]map[string]any{}
 		for i := len(plans) - 1; i >= 0; i-- {
 			current := plans[i]
-			queryID, _ := current["queryId"].(string)
-			if old := prior[queryID]; old != nil {
-				comparison := map[string]any{"priorId": old["id"],
-					"shapeChanged": old["shapeHash"] != current["shapeHash"], "executionRatio": nil}
-				currentSummary, _ := current["summary"].(map[string]any)
-				priorSummary, _ := old["summary"].(map[string]any)
-				currentMs, _ := currentSummary["executionMs"].(float64)
-				priorMs, _ := priorSummary["executionMs"].(float64)
-				if currentMs > 0 && priorMs > 0 {
-					comparison["executionRatio"] = currentMs / priorMs
-				}
-				current["comparison"] = comparison
+			key := stringValue(current["database"]) + "\x00" + stringValue(current["queryId"])
+			if old := prior[key]; old != nil {
+				current["comparison"] = compareSQLPlans(current, old)
 			} else {
 				current["comparison"] = nil
 			}
-			prior[queryID] = current
+			prior[key] = current
 		}
 		return map[string]any{"plans": plans}, nil
 	case "series":
@@ -259,12 +252,12 @@ func (s *Postgres) RawSQLEvidence(ctx context.Context, assetID, kind, id string)
 	switch kind {
 	case "slow-logs":
 		query = `SELECT jsonb_build_object('id',id,'assetId',asset_id,'observedAt',observed_at,
-			'durationMs',duration_ms,'queryId',query_id,'sourceFormat',source_format)
+			'durationMs',duration_ms,'queryId',query_id,'sourceFormat',source_format,'database',database_name)
 			FROM slow_log_entries WHERE asset_id=$1 AND id=$2`
 		key = "log"
 	case "sql-plans":
 		query = `SELECT jsonb_build_object('id',id,'assetId',asset_id,'queryId',query_id,
-			'observedAt',observed_at,'source',source,'shapeHash',shape_hash,'summary',summary_json)
+			'observedAt',observed_at,'source',source,'shapeHash',shape_hash,'summary',summary_json,'database',database_name)
 			FROM sql_plan_snapshots WHERE asset_id=$1 AND id=$2`
 		key = "plan"
 	default:

@@ -143,7 +143,7 @@ type SlowLogImporter interface {
 	ImportSlowLogs(context.Context, string, string, string) (any, error)
 }
 type PlanImporter interface {
-	ImportSQLPlan(context.Context, string, string, string, json.RawMessage) (any, error)
+	ImportScopedSQLPlan(context.Context, string, string, string, string, json.RawMessage) (any, error)
 }
 type AlertRuleStore interface {
 	UpdateAlertRule(context.Context, string, storepkg.AlertRulePatch) (any, error)
@@ -698,7 +698,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					Format  string `json:"format"`
 					Content string `json:"content"`
 				}
-				if readJSONLimit(w, r, &input, 128<<10) != nil {
+				if readJSONLimit(w, r, &input, 384<<10) != nil {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid slow log payload"})
 					return
 				}
@@ -723,14 +723,24 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				var input struct {
 					QueryID    string          `json:"queryId"`
+					Database   string          `json:"database"`
 					ObservedAt string          `json:"observedAt"`
 					Plan       json.RawMessage `json:"plan"`
 				}
-				if readJSONLimit(w, r, &input, 128<<10) != nil {
+				if readJSONLimit(w, r, &input, 320<<10) != nil {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid SQL plan payload"})
 					return
 				}
-				value, err := importer.ImportSQLPlan(r.Context(), match[1], input.QueryID, input.ObservedAt, input.Plan)
+				plan := input.Plan
+				if len(plan) > 0 && plan[0] == '"' {
+					var content string
+					if err := json.Unmarshal(plan, &content); err != nil {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid SQL plan text"})
+						return
+					}
+					plan = json.RawMessage(content)
+				}
+				value, err := importer.ImportScopedSQLPlan(r.Context(), match[1], input.Database, input.QueryID, input.ObservedAt, plan)
 				switch {
 				case errors.Is(err, storepkg.ErrAssetNotFound):
 					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})

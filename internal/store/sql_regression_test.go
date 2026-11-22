@@ -258,7 +258,7 @@ func TestRealPG18SQLRegressionLinksRealPlanAndSlowLog(t *testing.T) {
 		}
 	}
 	const query = `SELECT pg_sleep($1::double precision), payload FROM dbsphere_plan_probe WHERE id=$2`
-	const explain = `EXPLAIN (ANALYZE, FORMAT JSON) ` + query
+	const explain = `EXPLAIN (ANALYZE, VERBOSE, BUFFERS, FORMAT JSON) ` + query
 	var priorPlan []byte
 	priorAt := time.Now().UTC()
 	if err := target.QueryRow(ctx, explain, 0.12, 1234).Scan(&priorPlan); err != nil {
@@ -341,6 +341,9 @@ func TestRealPG18SQLRegressionLinksRealPlanAndSlowLog(t *testing.T) {
 		priorRecord["shapeHash"] == currentRecord["shapeHash"] {
 		t.Fatal("real PG18 planner did not change shape")
 	}
+	if currentRecord["database"] != "postgres" || object(currentRecord["summary"])["queryIdentity"] != "explain" {
+		t.Fatal("the original PostgreSQL EXPLAIN Query Identifier and asset database were not verified")
+	}
 	var logContent string
 	if err := target.QueryRow(ctx, `SELECT pg_read_file(pg_current_logfile())`).Scan(&logContent); err != nil {
 		t.Fatal(err)
@@ -363,6 +366,10 @@ func TestRealPG18SQLRegressionLinksRealPlanAndSlowLog(t *testing.T) {
 	if _, err := pg.ImportSlowLogs(ctx, asset.ID, "jsonlog", strings.Join(logs, "\n")); err != nil {
 		t.Fatal(err)
 	}
+	replay, err := pg.ImportSlowLogs(ctx, asset.ID, "jsonlog", " "+strings.Join(logs, "\n "))
+	if err != nil || replay.(map[string]any)["imported"] != 0 {
+		t.Fatalf("reformatted real log replay inserted duplicate records: %v %v", replay, err)
+	}
 	detail, err := pg.EventByID(ctx, eventID)
 	if err != nil {
 		t.Fatal(err)
@@ -383,5 +390,6 @@ func TestRealPG18SQLRegressionLinksRealPlanAndSlowLog(t *testing.T) {
 		!strings.Contains(string(encoded), baseline.SampleID) || !strings.Contains(string(encoded), initial.SampleID) {
 		t.Fatal("event lost SQL plan, log or sample provenance")
 	}
-	t.Logf("real PG18 event %s: Query ID %s, fault %s, corroborating plans and jsonlog", eventID, queryID, fault.SampleID)
+	t.Logf("real PG18 event %s: Query ID %s, fault %s, plans %s and %s, database postgres, jsonlog replay skipped", eventID,
+		queryID, fault.SampleID, priorRecord["id"], currentRecord["id"])
 }
