@@ -183,6 +183,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	var metrics, kube, linux, pooler, patroni, haproxy map[string]any
 	var routeProbe collector.RouteProbe
 	var collectErr, linuxErr, poolerErr, patroniErr error
+	var poolerDone chan struct{}
 	var groupWait sync.WaitGroup
 	groupWait.Add(1)
 	go func() {
@@ -204,9 +205,11 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		}()
 	}
 	if poolerURL != "" {
+		poolerDone = make(chan struct{})
 		groupWait.Add(1)
 		go func() {
 			defer groupWait.Done()
+			defer close(poolerDone)
 			pooler, poolerErr = collector.PgBouncer(ctx, poolerURL, target.Database)
 		}()
 	}
@@ -221,6 +224,10 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		groupWait.Add(1)
 		go func() {
 			defer groupWait.Done()
+			// Read the existing queue before this monitor adds a client to the same pool.
+			if routeSettings.Kind == "pgbouncer" && poolerDone != nil {
+				<-poolerDone
+			}
 			routeTarget := target
 			routeTarget.Host, routeTarget.Port, _ = assets.ParsePoolerEndpoint(routeSettings.Entry)
 			routeProbe = collector.ProbePostgreSQLRoute(ctx, routeTarget, password)

@@ -677,10 +677,15 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 			old.MutedBy == nil && next.MutedBy != nil {
 			transition = "suppressed"
 		}
-		if transition == "" && rule.Metric == "routing.entry_fault" && next != nil && next.Status == "firing" &&
-			next.EventID != "" && signal.Available && signal.Value > 0 && signal.Detail["status"] != object(previous["routing"])["status"] {
+		route := object(metrics["routing"])
+		routeStatus := stringValue(route["status"])
+		routeChanged := routeStatus != stringValue(object(previous["routing"])["status"])
+		routeRule := rule.Metric == "routing.entry_fault" || (rule.Metric == "pgbouncer.waiting_clients" && routeStatus == "pool_exhausted")
+		if transition == "" && routeRule && routeChanged && next != nil && next.Status == "firing" &&
+			next.EventID != "" && signal.Available && signal.Value > 0 {
 			payload, _ := json.Marshal(map[string]any{"metric": rule.Metric, "source": signal.Source, "sampleId": sampleID,
-				"value": signal.Value, "operator": rule.Operator, "threshold": rule.Threshold, "detail": signal.Detail})
+				"value": signal.Value, "operator": rule.Operator, "threshold": rule.Threshold,
+				"detail": map[string]any{"entry": route["entry"], "status": routeStatus}})
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'routing_observed',$2,$3)`, next.EventID, now, payload); err != nil {
 				return err
