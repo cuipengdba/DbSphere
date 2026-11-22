@@ -70,6 +70,18 @@ func TestGoNotificationOutboxRetryPG18(t *testing.T) {
 		webhookID).Scan(&status, &attempts); err != nil || status != "pending" || attempts != 1 {
 		t.Fatalf("failed webhook did not retain retry state: %s %d %v", status, attempts, err)
 	}
+	metrics["diagnostics"] = map[string]any{"locks": map[string]any{"status": "ok", "data": map[string]any{"blockedSessions": 0}}}
+	if _, err := pg.recordCheckAt(ctx, asset.ID, metrics, "", "", now.Add(62*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := pg.DispatchDueNotifications(ctx, 10, func(_ context.Context, item Notification) (string, error) {
+		if item.Channel == "webhook" {
+			t.Fatal("recovery overtook the pending trigger for the same webhook")
+		}
+		return "skipped", nil
+	}); err != nil || processed != 1 {
+		t.Fatalf("recovery for the independent email route was not processed: %d %v", processed, err)
+	}
 	for attempt := 2; attempt <= 5; attempt++ {
 		if _, err := pg.pool.Exec(ctx, `UPDATE notification_outbox SET next_attempt_at=now()-interval '1 second'
 			WHERE id=$1`, webhookID); err != nil {

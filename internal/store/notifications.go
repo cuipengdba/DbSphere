@@ -58,6 +58,10 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			FROM notification_outbox n JOIN evidence e ON e.id=n.evidence_id
 			JOIN events v ON v.id=e.event_id JOIN assets a ON a.id=v.asset_id
 			WHERE n.status='pending' AND n.next_attempt_at<=now()
+			AND (e.kind<>'alert_recovered' OR NOT EXISTS (
+				SELECT FROM evidence original JOIN notification_outbox previous ON previous.evidence_id=original.id
+				WHERE original.event_id=v.id AND original.kind IN ('alert_firing','alert_unsuppressed')
+				AND previous.channel=n.channel AND previous.status='pending'))
 			ORDER BY n.next_attempt_at,n.id LIMIT 1 FOR UPDATE OF n SKIP LOCKED`).
 			Scan(&item.ID, &item.Channel, &attempts, &item.Kind, &item.ObservedAt,
 				&item.EventID, &item.EventTitle, &item.EventStatus, &item.AssetID,
