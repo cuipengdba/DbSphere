@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.31.0'
-          previous_sha='c5807cd93baca7e1aa3c82cc51e05f5663c4cd3928714937aa4c8dc1e8f72058'
+          previous_version='1.32.0'
+          previous_sha='2d4c4e754030fbc51f225a4a111d63f3ec7a6653b1821627beb8869bc33af6f0'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.31.0'
-          previous_arm_sha='bc09fcf38aea21e9911f0e8780662f9832c7ede045ef959d7d92068056296683'
+          previous_version='1.32.0'
+          previous_arm_sha='2d3cbb6148f5549adfa57bb24938bef2fd8034f3b5f1fd29706864d5bb673803'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -994,6 +994,11 @@ jobs:
             "$RUNNER_TEMP/dbsphere-patroni.env" \
             "$RUNNER_TEMP/dbsphere-patroni-result.json" '${{ matrix.pg }}'
           cat "$RUNNER_TEMP/dbsphere-patroni-result.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-patroni-drill-pg${{ matrix.pg }}
+          path: ${{ runner.temp }}/dbsphere-patroni-result*.json
+          if-no-files-found: error
       - name: Remove isolated Patroni drill
         if: always()
         run: |

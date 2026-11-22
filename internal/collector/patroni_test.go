@@ -7,11 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPatroniReadsBoundedClusterTopology(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/cluster" {
+		if r.Method != http.MethodGet {
 			t.Errorf("unexpected Patroni request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusMethodNotAllowed)
 			return
@@ -20,7 +21,20 @@ func TestPatroniReadsBoundedClusterTopology(t *testing.T) {
 		if !ok || user != "reader" || password != "private-test-password" {
 			t.Error("Patroni Basic auth was not passed to the read-only endpoint")
 		}
-		fmt.Fprint(w, `{"members":[{"name":"pg-a","role":"leader","state":"running","host":"10.0.0.1","port":5432,"timeline":2},{"name":"pg-b","role":"replica","state":"streaming","host":"10.0.0.2","port":5432,"replay_lag":1024}],"pause":false}`)
+		switch r.URL.Path {
+		case "/cluster":
+			fmt.Fprint(w, `{"members":[{"name":"pg-a","role":"leader","state":"running","host":"10.0.0.1","port":5432,"timeline":2},{"name":"pg-b","role":"replica","state":"streaming","host":"10.0.0.2","port":5432,"replay_lag":1024,"tags":{"nosync":true}}],"pause":false}`)
+		case "/patroni":
+			fmt.Fprintf(w, `{"patroni":{"name":"pg-a"},"dcs_last_seen":%d,"timeline":2,"role":"primary",
+				"replication":[{"application_name":"pg-b","sync_state":"async","state":"streaming"}]}`, time.Now().Unix())
+		case "/history":
+			fmt.Fprint(w, `[[1,9007199254740993,"promotion","2026-03-01T11:00:00Z","pg-a"]]`)
+		case "/liveness":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected Patroni path: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
 	}))
 	defer server.Close()
 	endpoint := strings.Replace(server.URL, "http://", "http://reader:private-test-password@", 1)
@@ -34,6 +48,13 @@ func TestPatroniReadsBoundedClusterTopology(t *testing.T) {
 	members := result["members"].([]map[string]any)
 	if members[1]["replayLagBytes"] != float64(1024) {
 		t.Fatalf("replica replay lag missing: %+v", members[1])
+	}
+	state := result["nodeState"].(map[string]any)
+	history := result["history"].(map[string]any)
+	if members[1]["nosync"] != true || state["name"] != "pg-a" || state["dcsLastSeen"] == nil ||
+		history["entries"].([]map[string]any)[0]["switchLSN"] != "9007199254740993" ||
+		result["heartbeat"].(map[string]any)["status"] != "healthy" {
+		t.Fatalf("health, eligibility and lossless timeline evidence missing: %+v", result)
 	}
 }
 

@@ -24,11 +24,13 @@ type RoutingSettings struct {
 	MatchDirect     bool   `json:"matchDirect"`
 	HAProxyBackend  string `json:"haproxyBackend"`
 	StatsConfigured bool   `json:"statsConfigured"`
+	ReadEntry       string `json:"readEntry"`
 }
 
 type RoutingInput struct {
 	RoutingSettings
-	HAProxyStatsURL string `json:"haproxyStatsUrl"`
+	HAProxyStatsURL string  `json:"haproxyStatsUrl"`
+	ReadEntry       *string `json:"readEntry"`
 }
 
 func migrateRouting(ctx context.Context, tx pgx.Tx) error {
@@ -45,10 +47,10 @@ func migrateRouting(ctx context.Context, tx pgx.Tx) error {
 func (s *Postgres) ReadRouting(ctx context.Context, id string) (RoutingSettings, error) {
 	var settings RoutingSettings
 	err := s.pool.QueryRow(ctx, `SELECT coalesce(r.kind,''),coalesce(r.entry,''),coalesce(r.expected_role,''),
-		coalesce(r.match_direct,false),coalesce(r.haproxy_backend,''),r.haproxy_stats_enc IS NOT NULL
+		coalesce(r.match_direct,false),coalesce(r.haproxy_backend,''),r.haproxy_stats_enc IS NOT NULL,coalesce(r.read_entry,'')
 		FROM assets a LEFT JOIN asset_route_settings r ON r.asset_id=a.id WHERE a.id=$1`, id).
 		Scan(&settings.Kind, &settings.Entry, &settings.ExpectedRole, &settings.MatchDirect,
-			&settings.HAProxyBackend, &settings.StatsConfigured)
+			&settings.HAProxyBackend, &settings.StatsConfigured, &settings.ReadEntry)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrAssetNotFound
 	}
@@ -64,6 +66,18 @@ func (s *Postgres) SetRouting(ctx context.Context, id string, input RoutingInput
 			return RoutingSettings{}, ErrRoutingSettings
 		}
 		settings.Entry = net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	var readEntry *string
+	if input.ReadEntry != nil && settings.Kind != "" {
+		entry := strings.TrimSpace(*input.ReadEntry)
+		if entry != "" {
+			host, port, err := assets.ParsePoolerEndpoint(entry)
+			if err != nil {
+				return RoutingSettings{}, ErrRoutingSettings
+			}
+			entry = net.JoinHostPort(host, strconv.Itoa(port))
+		}
+		readEntry = &entry
 	}
 	var encrypted *string
 	if settings.Kind == "haproxy" {
@@ -104,18 +118,25 @@ func (s *Postgres) SetRouting(ctx context.Context, id string, input RoutingInput
 		settings = RoutingSettings{}
 	} else {
 		err = tx.QueryRow(ctx, `INSERT INTO asset_route_settings(asset_id,kind,entry,expected_role,match_direct,
-			haproxy_backend,haproxy_stats_enc) VALUES($1,$2,$3,$4,$5,$6,$7)
+			haproxy_backend,haproxy_stats_enc,read_entry) VALUES($1,$2,$3,$4,$5,$6,$7,coalesce($8::text,''))
 			ON CONFLICT(asset_id) DO UPDATE SET kind=excluded.kind,entry=excluded.entry,expected_role=excluded.expected_role,
 			match_direct=excluded.match_direct,haproxy_backend=excluded.haproxy_backend,updated_at=now(),
+			read_entry=coalesce($8::text,asset_route_settings.read_entry),
 			haproxy_stats_enc=CASE WHEN excluded.kind='haproxy' AND excluded.haproxy_backend<>''
 				THEN coalesce(excluded.haproxy_stats_enc,asset_route_settings.haproxy_stats_enc) ELSE NULL END
-			RETURNING haproxy_stats_enc IS NOT NULL`, id, settings.Kind, settings.Entry, settings.ExpectedRole,
-			settings.MatchDirect, settings.HAProxyBackend, encrypted).Scan(&settings.StatsConfigured)
+			RETURNING haproxy_stats_enc IS NOT NULL,read_entry`, id, settings.Kind, settings.Entry, settings.ExpectedRole,
+			settings.MatchDirect, settings.HAProxyBackend, encrypted, readEntry).Scan(&settings.StatsConfigured, &settings.ReadEntry)
 	}
 	if err != nil {
 		return RoutingSettings{}, err
 	}
 	return settings, tx.Commit(ctx)
+}
+
+func migrateReadEntry(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, `ALTER TABLE asset_route_settings ADD COLUMN IF NOT EXISTS read_entry text NOT NULL DEFAULT '';
+		INSERT INTO dbsphere_schema_migrations(version) VALUES(43) ON CONFLICT DO NOTHING`)
+	return err
 }
 
 func routeAssessment(settings RoutingSettings, probe collector.RouteProbe, metrics, kube, pooler, haproxy map[string]any,

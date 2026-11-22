@@ -147,12 +147,12 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		runtime,linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,
 		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,
 		coalesce(r.kind,''),coalesce(r.entry,''),coalesce(r.expected_role,''),coalesce(r.match_direct,false),
-		coalesce(r.haproxy_backend,''),r.haproxy_stats_enc
+		coalesce(r.haproxy_backend,''),r.haproxy_stats_enc,coalesce(r.read_entry,'')
 		FROM assets a LEFT JOIN asset_route_settings r ON r.asset_id=a.id WHERE a.id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
 		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
 		&poolerEncrypted, &patroniEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod,
 		&routeSettings.Kind, &routeSettings.Entry, &routeSettings.ExpectedRole, &routeSettings.MatchDirect,
-		&routeSettings.HAProxyBackend, &statsEncrypted)
+		&routeSettings.HAProxyBackend, &statsEncrypted, &routeSettings.ReadEntry)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
@@ -181,7 +181,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		}
 	}
 	var metrics, kube, linux, pooler, patroni, haproxy map[string]any
-	var routeProbe collector.RouteProbe
+	var routeProbe, readProbe collector.RouteProbe
 	var collectErr, linuxErr, poolerErr, patroniErr error
 	var poolerDone chan struct{}
 	var groupWait sync.WaitGroup
@@ -220,7 +220,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 			patroni, patroniErr = collector.Patroni(ctx, patroniURL)
 		}()
 	}
-	if routeSettings.Kind != "" {
+	probeEntry := func(entry string, into *collector.RouteProbe) {
 		groupWait.Add(1)
 		go func() {
 			defer groupWait.Done()
@@ -229,9 +229,15 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 				<-poolerDone
 			}
 			routeTarget := target
-			routeTarget.Host, routeTarget.Port, _ = assets.ParsePoolerEndpoint(routeSettings.Entry)
-			routeProbe = collector.ProbePostgreSQLRoute(ctx, routeTarget, password)
+			routeTarget.Host, routeTarget.Port, _ = assets.ParsePoolerEndpoint(entry)
+			*into = collector.ProbePostgreSQLRoute(ctx, routeTarget, password)
 		}()
+	}
+	if routeSettings.Kind != "" {
+		probeEntry(routeSettings.Entry, &routeProbe)
+		if routeSettings.ReadEntry != "" {
+			probeEntry(routeSettings.ReadEntry, &readProbe)
+		}
 	}
 	if statsEncrypted != nil {
 		groupWait.Add(1)
@@ -306,7 +312,15 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		metrics["backup"] = backup
 	}
 	if routeSettings.Kind != "" {
-		metrics["routing"] = routeAssessment(routeSettings, routeProbe, metrics, kube, pooler, haproxy, target.Username)
+		route := routeAssessment(routeSettings, routeProbe, metrics, kube, pooler, haproxy, target.Username)
+		if routeSettings.ReadEntry != "" {
+			readStatus := readProbe.Status
+			if readStatus == "ok" && readProbe.Role != "standby" {
+				readStatus = "misrouted"
+			}
+			route["readEntry"], route["readProbe"], route["readStatus"] = routeSettings.ReadEntry, readProbe, readStatus
+		}
+		metrics["routing"] = route
 	}
 	return s.recordCheckWithLease(ctx, id, metrics, group, reason, time.Now().UTC(), lease, interval)
 }

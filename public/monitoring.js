@@ -1364,8 +1364,45 @@
           row.gapSeconds > 600 && '采样间隔超过 10 分钟'].filter(Boolean).join(' · ') || '—', sampleLink(asset.id, row.id)
       ]), '复制角色变化'));
       else changes.append(el('p', '所选时段未观测到角色、时间线或采集边界变化。', 'monitor-note'));
-      result.append(topologyPanel(topology, time), observation, charts, changes);
+      result.append(topologyPanel(topology, time));
+      if (asset.patroniConfigured || history.topology.some(row => row.patroni?.status === 'ok'))
+        result.append(patroniSwitchPanel(asset, history.topology, events));
+      result.append(observation, charts, changes);
       return result;
+    }
+
+    function patroniSwitchPanel(asset, points, events) {
+      const card = panel('Patroni 切换前后');
+      const observed = [...new Map(points.map(row => [row.id, row])).values()].sort((a, b) => Date.parse(a.collectedAt) - Date.parse(b.collectedAt));
+      const leader = row => row.patroni?.leaderCount === 1
+        ? row.patroni.members.find(member => ['leader', 'primary', 'standby_leader'].includes(member.role)) : null;
+      let prior, changeFrom, changeTo;
+      for (const row of observed) {
+        if (!leader(row)) continue;
+        if (prior && leader(prior).name !== leader(row).name) {
+          changeFrom = prior; changeTo = row;
+        }
+        prior = row;
+      }
+      if (!changeTo) {
+        card.append(el('p', '此时段尚无来自两个主库的切换观测。', 'monitor-note'));
+        return card;
+      }
+      const routeText = (status, probe) => probe ? [status === 'ok' ? '可用' : status, probe.backend, roleLabels[probe.role]].filter(Boolean).join(' · ') : '未采集';
+      card.append(table(['阶段', '观测时间', '主库与时间线', '主入口', '备库入口', '最大回放差距', '采样'],
+        [['切换前', changeFrom], ['切换后', changeTo]].map(([stage, row]) => {
+          const routes = row.routes;
+          const lag = (row.patroni?.members || []).map(item => item.replayLagBytes ?? item.lagBytes).filter(finite);
+          return [stage, formatTime(row.collectedAt), `${leader(row).name} · ${leader(row).timeline || '时间线未知'}`,
+            routeText(routes?.status, routes?.probe), routeText(routes?.readStatus, routes?.readProbe),
+            lag.length ? bytes(Math.max(...lag)) : '未采集', sampleLink(asset.id, row.id)];
+        }), '切换前后证据'));
+      const first = Date.parse(changeFrom.collectedAt), after = Date.parse(changeTo.collectedAt);
+      card.append(el('p', `切换观测间隔 ${number((after - first) / 1000, 2)} 秒 · 两条主库采样之间`, 'monitor-note'));
+      for (const event of events.filter(item => Date.parse(item.startedAt) <= after && (!item.endedAt || Date.parse(item.endedAt) >= first))) {
+        card.append(button(`同窗事件 · ${event.title}`, () => openEvent(event.id), 'monitor-link'));
+      }
+      return card;
     }
 
     function topologyPanel(views, time) {
@@ -1431,6 +1468,14 @@
             observed.length ? observed.join(' / ') : `SHOW DATABASES · ${reported}`,
             route?.disabled ? '已禁用' : route?.paused ? '已暂停' : waiting > 0 ? `${waiting} 个客户端排队` : pool?.status === 'ok' ? '统计可读' : '当前无统计', evidence()]);
         }
+        if (point.routes?.entry) {
+          for (const [label, entry, status, probe] of [
+            ['主入口探测', point.routes.entry, point.routes.status, point.routes.probe],
+            ['备库入口探测', point.routes.readEntry, point.routes.readStatus, point.routes.readProbe]
+          ]) if (entry) routeRows.push([label, asset.name, entry,
+            [probe?.backend, roleLabels[probe?.role]].filter(Boolean).join(' · ') || '后端待核对',
+            status === 'ok' ? '可用' : status || '待观测', evidence()]);
+        }
         for (const service of point.services || []) routeRows.push(['Kubernetes Service', asset.name,
           `${point.namespace}/${service.name} · ${service.clusterIP || '—'} · ${(service.ports || []).join(', ')}`,
           point.pod && `标签选择 · ${point.pod}`, point.podReady === 'True' ? 'Pod 就绪' : point.podReady === 'False' ? 'Pod 未就绪' : 'Pod 就绪未知', evidence()]);
@@ -1447,12 +1492,22 @@
       card.append(el('p', patroni?.status === 'ok'
         ? `Patroni · leader ${patroni.leaderCount} · ${formatTime(patroni.observedAt)}`
         : `Patroni · ${asset.patroniConfigured ? '此采样不可用' : '未配置'}`, 'monitor-note'));
-      if (patroni?.members?.length) card.append(table(['Patroni 成员', '角色', '状态', '时间线', '回放差距'],
+      if (patroni?.nodeState?.status === 'ok') {
+        const node = patroni.nodeState;
+        const heartbeat = {healthy: '正常', unhealthy: '异常', unavailable: '未知'};
+        card.append(el('p', `DCS 最近可见 ${formatTime(node.dcsLastSeen)} · 观测间隔 ${display(node.dcsAgeSeconds, value => number(value, 2) + ' 秒')} · 观测节点 ${node.name}`, 'monitor-note'));
+        card.append(el('p', `Patroni 心跳 ${heartbeat[patroni.heartbeat?.status] || '未知'}${node.unlocked ? ' · 集群无主锁' : ''}${node.failsafe ? ' · Failsafe 正在使用' : ''}`, 'monitor-note'));
+      } else if (patroni?.status === 'ok') card.append(el('p', 'DCS 观测暂不可用。', 'monitor-note'));
+      if (patroni?.members?.length) card.append(table(['Patroni 成员', '角色', '状态', '时间线', '回放差距', '同步资格 / 状态'],
         patroni.members.map(member => {
           const matches = members().filter(item => item.host === member.host && item.port === member.port);
+          const sync = patroni.nodeState?.replication?.find(item => item.name === member.name)?.syncState;
           return [matches.length === 1 ? button(member.name, () => openInstance(matches[0].id, 'replication'), 'monitor-link') : member.name,
-            member.role, member.state, member.timeline > 0 ? member.timeline : null, display(member.replayLagBytes ?? member.lagBytes, bytes)];
+            member.role, member.state, member.timeline > 0 ? member.timeline : null, display(member.replayLagBytes ?? member.lagBytes, bytes),
+            member.nosync ? '已排除同步' : [sync, ['sync_standby', 'quorum_standby'].includes(member.role) ? '同步候选' : ''].filter(Boolean).join(' · ') || '待观测'];
         }), 'Patroni 成员'));
+      if (patroni?.history?.entries?.length) card.append(table(['切换时间', '先前时间线', '切换 WAL 位置', '新主库'],
+        [...patroni.history.entries].reverse().map(row => [formatTime(row.switchedAt), row.previousTimeline, row.switchLSN, row.newLeader]), 'Patroni 时间线历史'));
       const poolerState = pooler?.status === 'ok' ? `${pooler.database} · ${formatTime(pooler.observedAt)}` :
         pooler?.status === 'unmapped' ? '未匹配到纳管数据库' : asset.poolerConfigured ? '此采样不可用' : '未配置统计采集';
       card.append(el('p', `PgBouncer · ${poolerState}${asset.poolerEndpoint ? ` · 配置的应用端点 ${asset.poolerEndpoint}` : ''}`, 'monitor-note'));

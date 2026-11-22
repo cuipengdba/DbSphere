@@ -8,13 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const patroniMaxBody = 1 << 20
 
-// Patroni reads only GET /cluster. It never invokes REST write endpoints.
+// Patroni reads topology and optional health evidence from the configured endpoint.
 func Patroni(ctx context.Context, endpoint string) (map[string]any, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
@@ -27,32 +29,40 @@ func Patroni(ctx context.Context, endpoint string) (map[string]any, error) {
 		password, _ = u.User.Password()
 	}
 	u.User = nil
-	u.Path = "/cluster"
 	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, errors.New("invalid Patroni REST endpoint")
-	}
-	if username != "" {
-		request.SetBasicAuth(username, password)
-	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	response, err := client.Do(request)
+	read := func(path string) ([]byte, int, error) {
+		target := *u
+		target.Path = path
+		request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target.String(), nil)
+		if err != nil {
+			return nil, 0, errors.New("invalid Patroni REST endpoint")
+		}
+		if username != "" {
+			request.SetBasicAuth(username, password)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, 0, errors.New("Patroni endpoint unavailable")
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return nil, response.StatusCode, fmt.Errorf("Patroni endpoint returned HTTP %d", response.StatusCode)
+		}
+		body, err := io.ReadAll(io.LimitReader(response.Body, patroniMaxBody+1))
+		if err != nil || len(body) > patroniMaxBody {
+			return nil, response.StatusCode, errors.New("Patroni response is too large or unreadable")
+		}
+		return body, response.StatusCode, nil
+	}
+	body, _, err := read("/cluster")
 	if err != nil {
-		return nil, errors.New("Patroni cluster endpoint unavailable")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Patroni cluster endpoint returned HTTP %d", response.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, patroniMaxBody+1))
-	if err != nil || len(body) > patroniMaxBody {
-		return nil, errors.New("Patroni cluster response is too large or unreadable")
+		return nil, err
 	}
 	var cluster struct {
 		Members []struct {
@@ -64,6 +74,7 @@ func Patroni(ctx context.Context, endpoint string) (map[string]any, error) {
 			Timeline  int             `json:"timeline"`
 			Lag       json.RawMessage `json:"lag"`
 			ReplayLag json.RawMessage `json:"replay_lag"`
+			Tags      map[string]any  `json:"tags"`
 		} `json:"members"`
 		Pause bool `json:"pause"`
 	}
@@ -90,15 +101,130 @@ func Patroni(ctx context.Context, endpoint string) (map[string]any, error) {
 		if lag, ok := patroniLag(member.ReplayLag); ok {
 			item["replayLagBytes"] = lag
 		}
+		for _, tag := range []string{"nosync", "nofailover", "noloadbalance"} {
+			if value, ok := member.Tags[tag].(bool); ok {
+				item[tag] = value
+			}
+		}
 		members = append(members, item)
 	}
+	var state, history, heartbeat map[string]any
+	var wait sync.WaitGroup
+	wait.Add(3)
+	go func() {
+		defer wait.Done()
+		body, _, _ := read("/patroni")
+		state = patroniNodeState(body, time.Now().UTC())
+	}()
+	go func() {
+		defer wait.Done()
+		body, _, _ := read("/history")
+		history = patroniTimelineHistory(body)
+	}()
+	go func() {
+		defer wait.Done()
+		_, status, err := read("/liveness")
+		heartbeat = map[string]any{"status": "unavailable", "source": "Patroni GET /liveness"}
+		if status == http.StatusOK && err == nil {
+			heartbeat["status"] = "healthy"
+		} else if status == http.StatusServiceUnavailable {
+			heartbeat["status"] = "unhealthy"
+		}
+	}()
+	wait.Wait()
 	return map[string]any{"status": "ok", "source": "Patroni GET /cluster", "observedAt": time.Now().UTC(),
-		"leaderCount": leaders, "replicaCount": replicas, "paused": cluster.Pause, "members": members}, nil
+		"leaderCount": leaders, "replicaCount": replicas, "paused": cluster.Pause, "members": members,
+		"nodeState": state, "history": history, "heartbeat": heartbeat}, nil
+}
+
+func patroniNodeState(body []byte, at time.Time) map[string]any {
+	result := map[string]any{"status": "unavailable", "source": "Patroni GET /patroni", "observedAt": at}
+	var row struct {
+		DCSLastSeen int64  `json:"dcs_last_seen"`
+		Timeline    int    `json:"timeline"`
+		Role        string `json:"role"`
+		Unlocked    bool   `json:"cluster_unlocked"`
+		Failsafe    bool   `json:"failsafe_mode_is_active"`
+		Patroni     struct {
+			Name string `json:"name"`
+		} `json:"patroni"`
+		Replication []struct {
+			Name     string `json:"application_name"`
+			State    string `json:"state"`
+			Sync     string `json:"sync_state"`
+			Priority int    `json:"sync_priority"`
+		} `json:"replication"`
+	}
+	if json.Unmarshal(body, &row) != nil || row.Patroni.Name == "" || len(row.Patroni.Name) > 150 {
+		return result
+	}
+	result["status"], result["name"] = "ok", row.Patroni.Name
+	result["timeline"], result["role"] = row.Timeline, row.Role
+	result["unlocked"], result["failsafe"] = row.Unlocked, row.Failsafe
+	if row.DCSLastSeen > 0 {
+		lastSeen := time.Unix(row.DCSLastSeen, 0).UTC()
+		result["dcsLastSeen"] = lastSeen
+		if !lastSeen.After(at.Add(time.Second)) {
+			result["dcsAgeSeconds"] = max(0, at.Sub(lastSeen).Seconds())
+		}
+	}
+	links := []map[string]any{}
+	for _, link := range row.Replication {
+		if link.Name != "" && len(link.Name) <= 150 && len(link.State) <= 40 && len(link.Sync) <= 40 && len(links) < 50 {
+			links = append(links, map[string]any{"name": link.Name, "state": link.State, "syncState": link.Sync, "syncPriority": link.Priority})
+		}
+	}
+	result["replication"] = links
+	return result
+}
+
+func patroniTimelineHistory(body []byte) map[string]any {
+	result := map[string]any{"status": "unavailable", "source": "Patroni GET /history"}
+	var entries [][]json.RawMessage
+	if json.Unmarshal(body, &entries) != nil || entries == nil {
+		return result
+	}
+	if len(entries) > 20 {
+		entries = entries[len(entries)-20:]
+		result["truncated"] = true
+	}
+	rows := []map[string]any{}
+	for _, fields := range entries {
+		var timeline int
+		var lsn json.Number
+		var reason, timestamp, leader string
+		if len(fields) < 4 || json.Unmarshal(fields[0], &timeline) != nil || timeline <= 0 ||
+			json.Unmarshal(fields[3], &timestamp) != nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			continue
+		}
+		row := map[string]any{"previousTimeline": timeline, "switchedAt": at.UTC()}
+		if json.Unmarshal(fields[1], &lsn) == nil {
+			if _, err := strconv.ParseUint(lsn.String(), 10, 64); err == nil {
+				row["switchLSN"] = lsn.String()
+			}
+		}
+		if json.Unmarshal(fields[2], &reason) == nil && len(reason) <= 256 {
+			row["reason"] = reason
+		}
+		if len(fields) >= 5 && json.Unmarshal(fields[4], &leader) == nil && len(leader) <= 150 {
+			row["newLeader"] = leader
+		}
+		rows = append(rows, row)
+	}
+	result["status"], result["entries"] = "ok", rows
+	if len(rows) < len(entries) {
+		result["invalidRows"] = len(entries) - len(rows)
+	}
+	return result
 }
 
 func patroniLag(raw json.RawMessage) (float64, bool) {
 	var value float64
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil || value < 0 {
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &value) != nil || value < 0 {
 		return 0, false
 	}
 	return value, true

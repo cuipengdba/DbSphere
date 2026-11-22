@@ -20,6 +20,8 @@ bootstrap:
     loop_wait: 10
     retry_timeout: 10
     maximum_lag_on_failover: 1048576
+    synchronous_mode: true
+    synchronous_node_count: 1
     postgresql:
       use_pg_rewind: true
       pg_hba:
@@ -43,6 +45,8 @@ postgresql:
       password: ${DBSPHERE_DRILL_REPL_PASSWORD}
   parameters:
     unix_socket_directories: /var/run/postgresql
+tags:
+  nosync: ${PATRONI_NOSYNC:-false}
 EOF
 
 exec patroni /tmp/dbsphere-patroni.yml

@@ -29,7 +29,7 @@ services:
       - --data-dir=/etcd-data
 
   patroni1:
-    image: dbsphere/patroni-drill:local
+    image: ${DBSPHERE_DRILL_PATRONI_IMAGE:-dbsphere/patroni-drill:local}
     build:
       context: ../..
       dockerfile: test/patroni-drill/Dockerfile
@@ -41,7 +41,7 @@ services:
       DBSPHERE_DRILL_PG_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
       DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
     ports:
-      - '127.0.0.1:18018:8008'
+      - '127.0.0.1:${DBSPHERE_DRILL_REST_PORT:-18018}:8008'
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
       interval: 5s
@@ -49,7 +49,7 @@ services:
       retries: 36
 
   patroni2:
-    image: dbsphere/patroni-drill:local
+    image: ${DBSPHERE_DRILL_PATRONI_IMAGE:-dbsphere/patroni-drill:local}
     depends_on:
       patroni1:
         condition: service_healthy
@@ -58,20 +58,52 @@ services:
       DBSPHERE_DRILL_PG_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
       DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
     ports:
-      - '127.0.0.1:18019:8008'
+      - '127.0.0.1:${DBSPHERE_DRILL_SECOND_REST_PORT:-18019}:8008'
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
       interval: 5s
       timeout: 3s
       retries: 36
 
+  patroni3:
+    image: ${DBSPHERE_DRILL_PATRONI_IMAGE:-dbsphere/patroni-drill:local}
+    depends_on:
+      patroni1:
+        condition: service_healthy
+    environment:
+      PATRONI_NAME: patroni3
+      PATRONI_NOSYNC: 'true'
+      DBSPHERE_DRILL_PG_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_DRILL_REPL_PASSWORD: ${DBSPHERE_DRILL_REPL_PASSWORD:?Generate the drill env file first}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 36
+
+  proxy:
+    image: haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb
+    depends_on:
+      patroni1:
+        condition: service_healthy
+      patroni2:
+        condition: service_healthy
+      patroni3:
+        condition: service_healthy
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
   app:
-    image: dbsphere/patroni-app-drill:local
+    image: ${DBSPHERE_DRILL_APP_IMAGE:-dbsphere/patroni-app-drill:local}
     depends_on:
       store:
         condition: service_healthy
       patroni2:
         condition: service_healthy
+      patroni3:
+        condition: service_healthy
+      proxy:
+        condition: service_started
     environment:
       DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store:5432/dbsphere?sslmode=disable
       DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_DRILL_ADMIN_PASSWORD:?Generate the drill env file first}
@@ -80,7 +112,7 @@ services:
       DBSPHERE_PORT: 8080
       DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
     ports:
-      - '127.0.0.1:18097:8080'
+      - '127.0.0.1:${DBSPHERE_DRILL_APP_PORT:-18097}:8080'
 
 volumes:
   store-data: {}

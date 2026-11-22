@@ -439,6 +439,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateRCAPolicies(ctx, tx); err != nil {
 		return fmt.Errorf("migrate versioned RCA rules: %w", err)
 	}
+	if err := migrateReadEntry(ctx, tx); err != nil {
+		return fmt.Errorf("migrate read entry monitoring: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

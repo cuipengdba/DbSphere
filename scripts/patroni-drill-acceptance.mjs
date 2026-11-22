@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Real two-node Patroni election against the Go API and an independent PG18 store.
+// Real three-node Patroni election with live read/write and standby entrances.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -44,14 +44,15 @@ function maintenance(service, action) {
     action, 'dbsphere-ci-patroni', ...(action === 'pause' ? ['--wait'] : []));
 }
 async function cluster() {
-  const response = await fetch('http://127.0.0.1:18018/cluster', { signal: AbortSignal.timeout(10000) });
+  const response = await fetch(`http://127.0.0.1:${process.env.DBSPHERE_DRILL_REST_PORT || 18018}/cluster`,
+    { signal: AbortSignal.timeout(10000) });
   assert.equal(response.status, 200);
   return response.json();
 }
 async function sample(assetId) {
   const result = (await api(`/api/assets/${assetId}/check`, 'POST')).body.result;
   const row = (await api(`/api/assets/${assetId}/samples/${result.sampleId}`)).body.sample;
-  return { id: result.sampleId, status: result.status, metrics: row.metrics };
+  return { id: result.sampleId, collectedAt: row.collectedAt, status: result.status, metrics: row.metrics };
 }
 async function waitUntil(description, predicate, timeoutMs = 150000) {
   const until = Date.now() + timeoutMs;
@@ -64,14 +65,15 @@ async function waitUntil(description, predicate, timeoutMs = 150000) {
 }
 
 assert.equal((await api('/readyz')).body.storage, 'postgresql18');
-await waitUntil('one leader and one streaming replica', async () => {
+await waitUntil('one leader and two streaming replicas', async () => {
   const members = (await cluster()).members;
-  return members.length === 2 && members.some(item => item.role === 'leader' && item.state === 'running') &&
-    members.some(item => item.role === 'replica' && item.state === 'streaming');
+  return members.length === 3 && members.some(item => item.role === 'leader' && item.state === 'running') &&
+    members.some(item => item.role === 'sync_standby' && item.state === 'streaming') &&
+    members.some(item => item.name === 'patroni3' && item.role === 'replica' && item.state === 'streaming' && item.tags?.nosync);
 });
 const members = (await cluster()).members;
 const leader = members.find(item => item.role === 'leader').name;
-const survivor = members.find(item => item.name !== leader).name;
+const survivor = members.find(item => item.role === 'sync_standby').name;
 assert.ok(['patroni1', 'patroni2'].includes(leader));
 assert.ok(['patroni1', 'patroni2'].includes(survivor));
 execFileSync('docker', ['exec', '-i', container(leader), 'psql', '-U', 'postgres',
@@ -92,16 +94,28 @@ cookie = login.response.headers.get('set-cookie')?.split(';')[0] || '';
 csrf = login.body.csrf;
 assert.ok(cookie && csrf);
 const asset = (await api('/api/assets', 'POST', {
-  name: `Patroni election ${Date.now()}`, host: leader, port: 5432, database: 'postgres',
+  name: `Patroni election ${Date.now()}`, clusterName: 'Patroni 三节点验收', host: leader, port: 5432, database: 'postgres',
   username: 'dbsphere_monitor', password: credentials.monitorPassword,
   sslMode: 'disable', runtime: 'linux', patroniUrl: `http://${survivor}:8008`
 })).body.asset;
 assert.ok(asset.id && asset.patroniConfigured);
-const baseline = await sample(asset.id);
+const { body: routes } = await api(`/api/assets/${asset.id}/routing`, 'PATCH',
+  {kind: 'haproxy', entry: 'proxy:5432', expectedRole: 'primary', readEntry: 'proxy:5433'});
+assert.equal(routes.readEntry, 'proxy:5433');
+const baseline = await waitUntil('healthy real read/write and standby routes', async () => {
+  const result = await sample(asset.id);
+  return result.status === 'ok' && result.metrics.routing?.status === 'ok' && result.metrics.routing?.readStatus === 'ok'
+    ? result : null;
+});
 assert.equal(baseline.status, 'ok');
 assert.equal(Math.floor(baseline.metrics.version_num / 10000), Number(major));
 assert.equal(baseline.metrics.patroni?.leaderCount, 1);
-assert.equal(baseline.metrics.patroni?.replicaCount, 1);
+assert.equal(baseline.metrics.patroni?.replicaCount, 2);
+assert.ok(baseline.metrics.patroni.nodeState?.dcsLastSeen);
+assert.equal(baseline.metrics.patroni.heartbeat?.status, 'healthy');
+assert.equal(baseline.metrics.routing.probe.role, 'primary');
+assert.equal(baseline.metrics.routing.readProbe.role, 'standby');
+assert.ok(baseline.metrics.patroni.members.some(item => item.name === 'patroni3' && item.nosync));
 assert.equal(baseline.metrics.monitor_role, true);
 assert.equal(baseline.metrics.privileged_role, false);
 assert.ok(!JSON.stringify(baseline).includes(credentials.monitorPassword));
@@ -114,6 +128,7 @@ let ruleChanged = false;
 let paused = false;
 let noLeaderSample;
 let unavailableSample;
+let promoted;
 let recovery;
 try {
   await api('/api/alert-rules/patroni_leader_invalid', 'PATCH', { durationSeconds: 0 });
@@ -148,24 +163,33 @@ try {
   }
   assert.ok(noLeaderSample, 'real leader election did not yield a no-leader sample');
   assert.ok(unavailableSample, 'stopped leader did not yield a PostgreSQL availability sample');
+  assert.notEqual(noLeaderSample.metrics.routing.status, 'ok', 'write entry should reflect the unlocked cluster');
   maintenance(survivor, 'resume');
   paused = false;
-  await waitUntil('surviving replica promotion', async () => {
+  promoted = await waitUntil('surviving replica promotion and both real entrances', async () => {
     try {
       const observed = await sample(asset.id);
-      return observed.metrics.patroni?.leaderCount === 1 &&
+      const route = observed.metrics.routing;
+      return observed.metrics.patroni?.leaderCount === 1 && route?.status === 'ok' && route.readStatus === 'ok' &&
         observed.metrics.patroni?.members?.some(item => item.name === survivor &&
-          item.role === 'leader' && item.state === 'running');
+          item.role === 'leader' && item.state === 'running') ? observed : null;
     } catch { return false; }
   }, 90000);
+  assert.equal(promoted.metrics.routing.probe.role, 'primary');
+  assert.equal(promoted.metrics.routing.readProbe.role, 'standby');
+  assert.notEqual(promoted.metrics.routing.probe.backend, baseline.metrics.routing.probe.backend);
+  assert.ok(promoted.metrics.patroni.history.entries.length > 0, 'actual DCS timeline history missing');
+  assert.ok(promoted.metrics.patroni.nodeState.timeline > baseline.metrics.patroni.nodeState.timeline);
   docker('start', leaderContainer);
   stopped = false;
   recovery = await waitUntil('old leader rejoin as streaming replica', async () => {
     try {
       const observed = await sample(asset.id);
       return observed.status === 'ok' && observed.metrics.patroni?.leaderCount === 1 &&
+        observed.metrics.patroni.members.length === 3 &&
         observed.metrics.patroni?.members?.some(item => item.name === leader &&
-          item.role === 'replica' && item.state === 'streaming') ? observed : null;
+          ['replica', 'sync_standby'].includes(item.role) && item.state === 'streaming' &&
+          Number.isFinite(item.replayLagBytes ?? item.lagBytes)) ? observed : null;
     } catch { return null; }
   }, 180000);
   console.log(JSON.stringify({ phase: 'rejoined', sampleId: recovery.id }));
@@ -206,9 +230,26 @@ const report = await reportResponse.text();
 assert.ok(report.includes(eventId) && report.includes('patroni_leader_anomaly') &&
   report.includes(noLeaderSample.id));
 
+const query = new URLSearchParams({from: new Date(Date.parse(baseline.collectedAt) - 1000).toISOString(),
+  to: new Date(Date.now() + 1000).toISOString()});
+const history = (await api(`/api/assets/${asset.id}/replication?${query}`)).body;
+assert.ok(history.topology.some(row => row.id === baseline.id && row.routes?.probe?.role === 'primary' &&
+  row.routes?.readProbe?.role === 'standby'));
+assert.ok(history.topology.some(row => row.id === promoted.id && row.routes?.probe?.backend === promoted.metrics.routing.probe.backend));
+const proof = { detail, history, baseline, promoted, recovery, asset };
+const browserProof = JSON.stringify(proof);
+for (const value of Object.values(credentials)) {
+  if (typeof value === 'string' && value.length >= 12) assert.ok(!browserProof.includes(value), 'drill credential leaked');
+}
+writeFileSync(resultPath.replace(/\.json$/, '.browser.json'), browserProof);
 const result = { eventId, assetId: asset.id, targetPGMajor: Number(major), leader, survivor, noLeaderSampleId: noLeaderSample.id,
   unavailableSampleId: unavailableSample.id, recoverySampleId: closureSampleId,
-  rejoinSampleId: recovery.id, status: detail.event.status,
+  baselineSampleId: baseline.id, promotedSampleId: promoted.id, rejoinSampleId: recovery.id, status: detail.event.status,
+  writeBefore: baseline.metrics.routing.probe.backend, writeAfter: promoted.metrics.routing.probe.backend,
+  readAfter: promoted.metrics.routing.readProbe.backend,
+  observationGapSeconds: (Date.parse(promoted.collectedAt) - Date.parse(baseline.collectedAt)) / 1000,
+  oldPrimaryReplayLag: recovery.metrics.patroni.members.find(item => item.name === leader).replayLagBytes ??
+    recovery.metrics.patroni.members.find(item => item.name === leader).lagBytes,
   candidate: candidate.code, storage: 'postgresql18' };
 writeFileSync(resultPath, JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

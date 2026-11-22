@@ -497,8 +497,14 @@ func TestGoPatroniEndpointEncryptionAndCombinedSampleInPG18(t *testing.T) {
 		t.Skip("PostgreSQL 18 store is required")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/cluster" {
+		if r.Method != http.MethodGet {
 			t.Errorf("unexpected Patroni request %s %s", r.Method, r.URL.Path)
+			http.Error(w, "invalid method", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path != "/cluster" {
+			http.NotFound(w, r)
+			return
 		}
 		_, _ = w.Write([]byte(`{"members":[{"name":"pg-a","role":"leader","state":"running","host":"127.0.0.1","port":5432},{"name":"pg-b","role":"replica","state":"streaming","replay_lag":0}]}`))
 	}))

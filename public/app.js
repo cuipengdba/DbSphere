@@ -755,6 +755,11 @@ function routingOverview(assetId, route, sampleId) {
   const renderedRole = role => roles[role] ?? '未知';
   const probe = route.probe ?? {};
   body.append(cell('p', `入口后端 ${probe.backend || '未识别'} · ${renderedRole(probe.role)} · 库 ${probe.database || '未识别'}${probe.durationMs == null ? '' : ` · ${probe.durationMs} ms`}`));
+  if (route.readEntry) {
+    const read = route.readProbe || {};
+    body.append(cell('p', `备库入口 ${route.readEntry} · ${routingStatus[route.readStatus] || route.readStatus} · ${read.backend || '后端待核对'} · ${renderedRole(read.role)}`,
+      route.readStatus === 'ok' ? 'evidence' : 'warning'));
+  }
   if (route.direct) body.append(cell('p', `资产直连 ${route.direct.backend} · ${renderedRole(route.direct.role)}`));
   if (route.expectedRole) body.append(cell('p', `期望角色 ${renderedRole(route.expectedRole)}`));
   if (probe.sqlState) body.append(cell('p', `SQLSTATE ${probe.sqlState}`, 'hint'));
@@ -793,7 +798,8 @@ function renderRoutingSettings(detail, asset, settings, sample) {
   detail.append(heading);
   const route = sample?.metrics?.routing;
   if (settings.kind && route?.entry === settings.entry && route.kind === settings.kind &&
-      route.expectedRole === settings.expectedRole && route.matchDirect === settings.matchDirect)
+      route.expectedRole === settings.expectedRole && route.matchDirect === settings.matchDirect &&
+      (route.readEntry || '') === (settings.readEntry || ''))
     detail.append(routingOverview(asset.id, route, sample.id));
   else detail.append(cell('p', settings.kind ? '等待新配置的首次采样。' : '尚未配置入口探测。', 'hint'));
   if (currentRole !== 'admin') return;
@@ -822,16 +828,18 @@ function renderRoutingSettings(detail, asset, settings, sample) {
   const kinds = Object.entries(routingKinds).filter(([kind]) => kind !== 'k8s_service' || asset.runtime === 'k8s');
   const kind = select([['', '关闭'], ...kinds], settings.kind);
   const entry = input(settings.entry, 'db-service.namespace.svc.cluster.local:5432');
+  const read = input(settings.readEntry || '', '可选，连接应返回备库');
   const role = select([['', '仅观察'], ['primary', '主库'], ['standby', '备库']], settings.expectedRole);
   const match = input('', '', 'checkbox'); match.checked = settings.matchDirect;
   const backend = input(settings.haproxyBackend, '例如 postgres-primary');
   const stats = input('', settings.statsConfigured ? '已设置，留空保留' : 'HAProxy 只读统计地址', 'password');
   stats.autocomplete = 'new-password';
   field('入口类型', kind); field('入口主机与端口', entry); field('期望 PostgreSQL 角色', role);
+  field('备库入口主机与端口', read);
   field('要求入口与资产直连命中同一后端', match);
   field('HAProxy 后端名称', backend); field('HAProxy CSV 统计地址', stats);
   const updateFields = () => {
-    for (const control of [entry, role, match]) control.parentElement.hidden = !kind.value;
+    for (const control of [entry, read, role, match]) control.parentElement.hidden = !kind.value;
     for (const control of [backend, stats]) control.parentElement.hidden = kind.value !== 'haproxy';
     entry.required = Boolean(kind.value);
   };
@@ -843,7 +851,7 @@ function renderRoutingSettings(detail, asset, settings, sample) {
     submit.disabled = true;
     try {
       await api(`/api/assets/${asset.id}/routing`, 'PATCH', {
-        kind: kind.value, entry: entry.value, expectedRole: role.value, matchDirect: match.checked,
+        kind: kind.value, entry: entry.value, readEntry: read.value, expectedRole: role.value, matchDirect: match.checked,
         haproxyBackend: kind.value === 'haproxy' ? backend.value : '',
         haproxyStatsUrl: kind.value === 'haproxy' ? stats.value : ''
       });
@@ -2044,7 +2052,14 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     changes.type = 'button';
     changes.addEventListener('click', () => { void openWindow('changes'); });
     const actions = cell('div', '', 'actions monitor-event-jump');
-    actions.append(jump, changes); summary.append(actions);
+    actions.append(jump, changes);
+    if (analysis.candidates.some(item => item.code === 'patroni_leader_anomaly')) {
+      const failover = cell('button', '查看切换前后', 'ghost small-button');
+      failover.type = 'button';
+      failover.addEventListener('click', () => { void openWindow('replication'); });
+      actions.append(failover);
+    }
+    summary.append(actions);
   }
   if (relatedEvents.length) {
     const related = document.createElement('details'); related.className = 'evidence';
