@@ -229,6 +229,7 @@ function cell(tag, text, cls) {
 
 const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
   api, assetHealth, assetRuntimeLabel, formatTime, openEvent,
+  canCaptureWaits: () => currentRole === 'admin',
   openAssets: () => setView('assets'),
   openPlans: id => {
     setView('assets');
@@ -1518,7 +1519,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (monitoringReturn) history.replaceState({ monitoringReturn }, '', location.href);
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
-  const { event, analysis, replay, relatedEvents = [] } = await api(`/api/events/${id}`);
+  const { event, analysis, replay, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
   const [eventAudit, workOrders, aiStatus] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
     currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
@@ -1570,6 +1571,22 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   activate(eventSection);
   target.append(sectionBar, ...content.values());
   if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis, aiStatus.enabled));
+  if (waitCaptures.length) {
+    const captures = cell('div', '', 'evidence');
+    captures.append(cell('h4', '同一事件的短时等待采样'));
+    for (const capture of waitCaptures) {
+      const row = cell('div', '', 'actions');
+      const jump = cell('button', `${formatTime(capture.startedAt)} · ${capture.observed}/${capture.expected} 帧`, 'ghost small-button');
+      jump.type = 'button';
+      jump.addEventListener('click', () => {
+        monitoring.openIncident(event, 'waits', { at: capture.startedAt, waitCaptureId: capture.id });
+        setView('monitoring');
+      });
+      row.append(jump);
+      captures.append(row);
+    }
+    evidencePanel.append(captures);
+  }
   if (assetServerPaging) {
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';

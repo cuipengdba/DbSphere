@@ -157,6 +157,10 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	waitCaptures, err := s.EventWaitCaptures(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	eventNode := "event:" + event.ID
 	assetNode := "asset:" + event.AssetID
 	nodes := []map[string]any{
@@ -171,6 +175,18 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		}
 		seen[id] = true
 		nodes = append(nodes, map[string]any{"id": id, "type": kind, "label": label, "source": source, "at": at})
+	}
+	for _, raw := range waitCaptures {
+		var capture struct {
+			ID        string    `json:"id"`
+			StartedAt time.Time `json:"startedAt"`
+		}
+		if json.Unmarshal(raw, &capture) != nil {
+			continue
+		}
+		captureNode := "wait-capture:" + capture.ID
+		addNode(captureNode, "evidence", "短时等待采样", "/api/assets/"+event.AssetID+"/wait-captures?id="+capture.ID, capture.StartedAt)
+		edges = append(edges, map[string]string{"from": eventNode, "to": captureNode, "relation": "contains"})
 	}
 	missing := []string{}
 	references := make(map[string][]sampleReference, len(event.Evidence))
@@ -518,7 +534,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	if err := s.enrichIncidentReplay(ctx, event, replay, samples, traceReplay, edges); err != nil {
 		return nil, err
 	}
-	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay}, nil
+	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay, "waitCaptures": waitCaptures}, nil
 }
 
 func (s *Postgres) AcknowledgeEvent(ctx context.Context, id string) (any, error) {

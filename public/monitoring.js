@@ -399,11 +399,12 @@
   }
 
   function create(root, actions) {
-    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, openPlans } = actions;
+    const { api, assetHealth, assetRuntimeLabel, formatTime, openEvent, openAssets, openPlans, canCaptureWaits } = actions;
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
     let focusAt = null, focusSample = '';
+    let waitCapturePick = '', waitCaptureRunning = false;
     let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
     let compare = null, abnormalOnly = false, fleetTime = null, fleetAt = null, chooseCluster = true;
     let rangeEvents = [];
@@ -503,7 +504,7 @@
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
-        ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''],
+        ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''], ['waitCapture', waitCapturePick, ''],
         ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
         ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''],
         ['deviceType', deviceType, ''], ['device', deviceName, ''],
@@ -534,6 +535,7 @@
       const evidenceTime = Date.parse(params.get('at'));
       focusAt = eventAnchor && Number.isFinite(evidenceTime) ? evidenceTime : null;
       focusSample = focusAt != null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('sample') || '') ? params.get('sample') : '';
+      waitCapturePick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('waitCapture') || '') ? params.get('waitCapture') : '';
       sqlOrder = sqlOrders.some(([key]) => key === params.get('sqlOrder')) ? params.get('sqlOrder') : 'time';
       baseline = ['previous', 'day'].includes(params.get('baseline')) ? params.get('baseline') : '';
       lockPick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('lockSample') || '') ? params.get('lockSample') : '';
@@ -600,7 +602,7 @@
 
     function resetFleet() { compare = null; abnormalOnly = false; fleetAt = null; rangeEvents = []; memberSeries = new Map(); }
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
-    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; }
+    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; waitCapturePick = ''; }
 
     function openCluster(key) {
       if (!assets.some(asset => clusterKey(asset) === key)) return;
@@ -1027,7 +1029,7 @@
       tree.setAttribute('aria-label', '历史锁树');
       function walk(pid, chain, edge) {
         const row = el('li', null);
-        row.append(el('strong', `${edge ? '等待' : '阻塞方'} PID ${pid}`));
+        row.append(el('strong', pid === 0 ? '阻塞方 · 预备事务' : `${edge ? '等待' : '阻塞方'} PID ${pid}`));
         const identifier = edge?.waitingQueryId;
         if (identifier) row.append(' · ', button(`Query ID ${identifier}`, () => openQuery(identifier), 'monitor-link'));
         if (chain.has(pid)) { row.append(el('small', ' · 循环关系')); return row; }
@@ -1043,6 +1045,86 @@
       }
       for (const pid of [...naturalRoots, ...connections.keys()]) if (!visited.has(pid)) tree.append(walk(pid, new Set()));
       return tree;
+    }
+
+    function waitCapturePanel(asset, captures, record, events) {
+      const card = panel('短时等待采样');
+      const path = `/api/assets/${asset.id}/wait-captures`;
+      const controls = el('div', null, 'monitor-wait-controls');
+      const choices = select('历史短时采样', id => { waitCapturePick = id; change(); });
+      const history = captures.map(row => [row.id, `${formatTime(row.startedAt)} · ${row.intervalMs} ms · ${row.observed}/${row.expected} 帧`]);
+      if (waitCapturePick && !captures.some(row => row.id === waitCapturePick)) history.unshift([waitCapturePick, '事件关联采样']);
+      options(choices, [['', '选择历史采样'], ...history], waitCapturePick);
+      controls.append(labeled('回放', choices));
+      if (canCaptureWaits?.()) {
+        const profile = select('采样档位', () => {});
+        options(profile, [['standard', '标准 · 1 秒'], ['enhanced', '增强 · 250 毫秒']], 'standard');
+        const status = el('p', '', 'monitor-note');
+        status.setAttribute('aria-live', 'polite');
+        const run = button(waitCaptureRunning ? '正在采样…' : '采样 10 秒', async () => {
+          if (waitCaptureRunning) return;
+          waitCaptureRunning = true; run.disabled = true; run.textContent = '正在采样…';
+          const event = events.find(row => row.id === eventAnchor && row.status === 'open');
+          status.textContent = event ? `保存至事件 ${event.id}` : '采样完成后可回放。';
+          try {
+            const response = await api(path, 'POST', { profile: profile.value, eventId: event?.id || '' });
+            if (visible && instance === asset.id && ['waits', 'locks'].includes(mode)) {
+              waitCapturePick = response.id;
+              waitCaptureRunning = false;
+              change();
+            }
+          } catch (error) {
+            status.textContent = error.message;
+          } finally {
+            waitCaptureRunning = false; run.disabled = false; run.textContent = '采样 10 秒';
+          }
+        });
+        run.disabled = waitCaptureRunning;
+        controls.append(labeled('采样档位', profile), run);
+        card.append(controls, status);
+      } else card.append(controls);
+      if (!record) {
+        if (waitCapturePick) card.append(el('p', '该采样无法读取。', 'monitor-warning'));
+        return card;
+      }
+      const { result } = record;
+      card.append(stats([
+        ['返回采样帧', `${result.observed} / ${result.expected}`], ['计划间隔', `${result.intervalMs} ms`],
+        ['查询往返累计', `${result.queryTotalMs.toFixed(1)} ms`], ['最长往返', `${result.queryMaximumMs.toFixed(1)} ms`]
+      ]));
+      const sources = el('p', `${formatTime(result.startedAt)} · `, 'monitor-note');
+      const raw = el('a', '原始短时采样', 'monitor-link');
+      raw.href = `${path}?id=${encodeURIComponent(record.id)}`;
+      sources.append(raw);
+      if (record.eventId) sources.append(' · ', button('打开原事件', () => openEvent(record.eventId, true, route(activeWindow)), 'monitor-link'));
+      card.append(sources);
+      const snapshotBody = el('div');
+      const snapshotSelect = select('短时采样帧', value => renderFrame(result.frames.find(frame => frame.slot === Number(value))));
+      const first = result.frames.find(frame => frame.snapshot?.edges.length) || result.frames.find(frame => frame.snapshot) || result.frames[0];
+      options(snapshotSelect, result.frames.map(frame => [String(frame.slot), `${formatTime(frame.at)} · 第 ${frame.slot + 1} 帧${frame.snapshot ? '' : ' · 无数据'}`]), String(first?.slot));
+      card.append(labeled('采样帧', snapshotSelect), snapshotBody);
+      renderFrame(first);
+      return card;
+
+      function renderFrame(frame) {
+        snapshotBody.replaceChildren();
+        const snapshot = frame?.snapshot;
+        if (!snapshot || snapshot.visibility !== 'full') {
+          snapshotBody.append(el('p', snapshot ? '目标权限或采集配置限制了会话可见性。' : '这帧缺少会话采样。', 'monitor-warning'));
+          return;
+        }
+        snapshotBody.append(el('p', `实例启动 ${formatTime(snapshot.serverStartedAt)}。会话身份由实例启动时间、PID 和后端启动时间共同确定。连接池可复用同一后端。`, 'monitor-note'));
+        if (snapshot.sessionsTruncated || snapshot.lockTruncated) snapshotBody.append(el('p', '这帧达到证据条数上限，仍可能存在其他会话或阻塞关系。', 'monitor-warning'));
+        if (snapshot.edges.length) {
+          snapshotBody.append(blockerTree(snapshot.edges), table(['阻塞 PID', '阻塞后端启动', '阻塞事务开始', '等待 PID', '等待后端启动', '等待事件'],
+            snapshot.edges.map(edge => [edge.blockerPid || '预备事务', edge.blockerBackendStart && formatTime(edge.blockerBackendStart),
+              edge.blockerXactStart && formatTime(edge.blockerXactStart), edge.waitingPid, edge.waitingBackendStart && formatTime(edge.waitingBackendStart), edge.waitEvent]), '短时阻塞关系'));
+        } else snapshotBody.append(el('p', snapshot.lockObserved ? '这帧没有观测到阻塞关系。' : '这帧仅包含会话快照。锁树最多每秒读取一次。', 'monitor-note'));
+        snapshotBody.append(table(['PID', '并行主进程', '后端启动', '事务开始', '当前查询开始', '等待事件', 'Query ID'], snapshot.sessions.map(row => [
+          row.pid, row.leaderPid, row.backendStart && formatTime(row.backendStart), row.xactStart && formatTime(row.xactStart),
+          row.queryStart && formatTime(row.queryStart), [row.waitType, row.waitEvent].filter(Boolean).join(' / '), row.queryId
+        ]), '短时会话明细'));
+      }
     }
 
     function lockPanel(asset, history, time) {
@@ -1946,7 +2028,8 @@
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data, waits, slow, plans, replication, prior, traces, topology] = await Promise.all([
+        const showWaitCaptures = ['waits', 'locks'].includes(mode);
+        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
@@ -1955,7 +2038,9 @@
           range ? api(`${path}sql-window?${baselineParams}`).catch(() => null) : null,
           linkedSQL ? api(`${path}query-traces?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
           Promise.all(peers.map(peer => api(`/api/assets/${peer.id}/replication?${topologyQuery}&view=topology`)
-            .then(value => ({ asset: peer, observations: value.topology })).catch(() => ({ asset: peer, observations: [] }))))
+            .then(value => ({ asset: peer, observations: value.topology })).catch(() => ({ asset: peer, observations: [] })))),
+          showWaitCaptures ? api(`${path}wait-captures`).catch(() => null) : null,
+          showWaitCaptures && waitCapturePick ? api(`${path}wait-captures?id=${encodeURIComponent(waitCapturePick)}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -2011,6 +2096,7 @@
         }
         if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, baseline: prior?.performance }, path, time));
         if (mode === 'locks') fragment.append(lockPanel(asset, data, time));
+        if (showWaitCaptures && captures) fragment.append(waitCapturePanel(asset, captures.captures || [], capture, events));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events,
           [{ asset, observations: replication.topology }, ...topology]));
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
@@ -2124,6 +2210,7 @@
         focusAt = Number.isFinite(selectedAt) ? selectedAt : null;
         replicaAt = mode === 'replication' && focusAt != null ? Math.min(to - 1, focusAt + 1) : null;
         focusSample = point?.sampleId || '';
+        waitCapturePick = point?.waitCaptureId || '';
       }
     };
   }

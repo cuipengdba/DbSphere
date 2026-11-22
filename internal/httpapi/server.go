@@ -68,7 +68,7 @@ var workOrderExecutePath = regexp.MustCompile(`^/api/work-orders/([0-9a-f]{8}-[0
 var eventAckPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/ack$`)
 var eventDecisionPath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/rca-decision$`)
 var eventResponsePath = regexp.MustCompile(`^/api/events/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/response$`)
-var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|sql-window|slow-logs|sql-plans|series|capacity|catalog|replication|backup|environment|wait-history|lock-history|query-traces|monitoring-context|instance-history)$`)
+var assetSectionPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(samples|sql|sql-window|slow-logs|sql-plans|series|capacity|catalog|replication|backup|environment|wait-history|lock-history|query-traces|monitoring-context|instance-history|wait-captures)$`)
 var slowLogImportPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/slow-logs/import$`)
 var rawSQLPath = regexp.MustCompile(`^/api/assets/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(slow-logs|sql-plans)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var alertRulePath = regexp.MustCompile(`^/api/alert-rules/([a-z][a-z0-9_]{1,63})$`)
@@ -1121,6 +1121,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 			}
 		}
+		if match := assetSectionPath.FindStringSubmatch(r.URL.Path); r.Method == http.MethodPost && match != nil && match[2] == "wait-captures" {
+			runWaitCapture(w, r, store, match[1], credentials.MasterKey)
+			return
+		}
 		if checker, ok := store.(AssetChecker); ok && r.Method == http.MethodPost {
 			if match := assetCheckPath.FindStringSubmatch(r.URL.Path); match != nil {
 				result, err := checker.CheckAsset(r.Context(), match[1], credentials.MasterKey)
@@ -1314,6 +1318,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					}
 				}
 				value, err := sections.ReadAssetSection(r.Context(), match[1], match[2], r.URL.Query())
+				if errors.Is(err, storepkg.ErrWaitCaptureNotFound) {
+					respond(w, http.StatusNotFound, map[string]string{"error": "未找到该资产的短时采样"})
+					return
+				}
 				if err == storepkg.ErrInvalidRange {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid monitoring time range"})
 					return

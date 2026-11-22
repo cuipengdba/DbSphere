@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.24.0'
-          previous_sha='c784ba89ed62d0a6eb78e0e48290de1da69aad1cee3769444d12e41e99a16a62'
+          previous_version='1.25.0'
+          previous_sha='93e1e92812d7ab0627c58a02ac33bae7fdf7a88040e46b67f5c27c9a00946429'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.24.0'
-          previous_arm_sha=''
+          previous_version='1.25.0'
+          previous_arm_sha='478b28e71250658273116fa7b6814574e2d15d062daf1021a86b673f4f4ed582'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -660,6 +660,40 @@ jobs:
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_PG_TARGET_MAJOR: ${{ matrix.pg }}
         run: go test ./internal/collector -run TestSQLPerformanceEnabledWithoutRawSQL -count=1 -v
+      - name: Capture and replay a two-hop lock incident on PostgreSQL
+        env:
+          DBSPHERE_TEST_PG_MAJOR: ${{ matrix.pg }}
+          DBSPHERE_TEST_BASE: http://127.0.0.1:18089
+          DBSPHERE_WAIT_CAPTURE_PROOF: ${{ runner.temp }}/wait-capture-pg${{ matrix.pg }}.json
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-wait-store@127.0.0.1:15438/postgres
+          DBSPHERE_ADMIN_PASSWORD: dbsphere-wait-admin-fixture
+          DBSPHERE_PORT: '18089'
+        run: |
+          docker run -d --rm --name dbsphere-wait-store -p 127.0.0.1:15438:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-wait-store postgres:18-bookworm
+          trap 'docker stop dbsphere-wait-store >/dev/null' EXIT
+          for i in {1..40}; do
+            if docker exec dbsphere-wait-store pg_isready -h 127.0.0.1 -U postgres >/dev/null; then break; fi
+            sleep 1
+          done
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
+          go build -o "$RUNNER_TEMP/dbsphere-wait" ./cmd/dbsphere
+          "$RUNNER_TEMP/dbsphere-wait" > "$RUNNER_TEMP/dbsphere-wait.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; docker stop dbsphere-wait-store >/dev/null' EXIT
+          for i in {1..30}; do
+            if curl -fs "$DBSPHERE_TEST_BASE/readyz" >/dev/null; then break; fi
+            sleep 1
+          done
+          if ! node scripts/pg-wait-capture-acceptance.mjs; then
+            tail -n 30 "$RUNNER_TEMP/dbsphere-wait.log"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-wait-capture-pg${{ matrix.pg }}
+          path: ${{ runner.temp }}/wait-capture-pg${{ matrix.pg }}.json
+          if-no-files-found: error
       - name: Detect a real SQL latency regression
         if: matrix.pg == 18
         run: node scripts/pg-sql-regression-smoke.mjs

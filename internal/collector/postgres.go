@@ -28,8 +28,7 @@ func PostgresMajorSupported(major int) bool {
 	return major >= minPostgresMajor && major <= maxPostgresMajor
 }
 
-// PostgreSQL only receives read-only sessions from this collector.
-func PostgreSQL(ctx context.Context, target Target, password string) (map[string]any, error) {
+func readOnlyPostgresConfig(target Target, password string) (*pgx.ConnConfig, error) {
 	mode := "disable"
 	if target.SSLMode == "require" {
 		mode = "verify-full"
@@ -46,6 +45,15 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	config.RuntimeParams["application_name"] = "dbsphere-monitor-go"
 	config.RuntimeParams["default_transaction_read_only"] = "on"
 	config.RuntimeParams["statement_timeout"] = "3000"
+	return config, nil
+}
+
+// PostgreSQL only receives read-only sessions from this collector.
+func PostgreSQL(ctx context.Context, target Target, password string) (map[string]any, error) {
+	config, err := readOnlyPostgresConfig(target, password)
+	if err != nil {
+		return nil, err
+	}
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	conn, err := pgx.ConnectConfig(connectCtx, config)
