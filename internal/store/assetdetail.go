@@ -139,15 +139,7 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 	}
 }
 
-func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
-	long := to.Sub(from) > 7*24*time.Hour
-	budget := 6 * time.Second
-	if long {
-		budget = 12 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	query := `WITH coverage AS (
+const monitoringBucketsSQL = `WITH coverage AS (
 			SELECT greatest(cursor,date_trunc('hour',now(),'UTC')-interval '31 days') AS from_time
 			FROM monitoring_trend_progress WHERE singleton
 		), observed AS (
@@ -214,8 +206,20 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			'transactionsPerSecond',round(avg(transactions_per_second),2),
 			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
 		FROM rated GROUP BY asset_id,bucket ORDER BY asset_id,bucket`
+
+func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
+	long := to.Sub(from) > 7*24*time.Hour
+	budget := 6 * time.Second
+	if long {
+		budget = 12 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if bucket == 60 && to.Sub(from) >= 2*time.Hour {
+		return s.readHourlyTrend(ctx, ids, from, to, long)
+	}
 	if !long {
-		return s.queryJSON(ctx, query, ids, from, to, bucket)
+		return s.queryJSON(ctx, monitoringBucketsSQL, ids, from, to, bucket)
 	}
 	// Keep the bounded long-range sort in memory without changing the session
 	// settings used by collection and interactive queries.
@@ -227,7 +231,11 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 	if _, err := tx.Exec(ctx, "SET LOCAL work_mem='24MB'"); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, query, ids, from, to, bucket)
+	return readMonitoringBucketRows(ctx, tx, monitoringBucketsSQL, ids, from, to, bucket)
+}
+
+func readMonitoringBucketRows(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]json.RawMessage, error) {
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

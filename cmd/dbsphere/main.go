@@ -368,11 +368,19 @@ func runPartitionMaintainer(ctx context.Context, pg *store.Postgres, log *slog.L
 }
 
 func runTrendMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	var pruneAfter time.Time
 	for ctx.Err() == nil {
 		workCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
-		done, err := pg.AdvanceTrendProjection(workCtx)
-		if done && err == nil {
+		projected, err := pg.AdvanceTrendProjection(workCtx)
+		complete := false
+		if projected && err == nil {
+			complete, err = pg.AdvanceHourlyTrend(workCtx)
+		}
+		if complete && err == nil && time.Now().After(pruneAfter) {
 			err = pg.PruneTrendProjection(workCtx)
+			if err == nil {
+				pruneAfter = time.Now().Add(time.Hour)
+			}
 		}
 		cancel()
 		wait := 150 * time.Millisecond
@@ -380,8 +388,8 @@ func runTrendMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logge
 		case err != nil && ctx.Err() == nil:
 			log.Warn("Go trend projection maintenance paused", "error", err)
 			wait = 20 * time.Second
-		case done:
-			wait = time.Hour
+		case complete:
+			wait = time.Minute
 		}
 		select {
 		case <-ctx.Done():

@@ -1098,6 +1098,11 @@ function renderCollectorStatus(status) {
     try {
       const coverage = await api('/api/admin/collector/coverage');
       report.replaceChildren(cell('p', `当前资产 ${coverage.targets} · 已到采集时间 ${coverage.due} · 近两周期有效 ${coverage.fresh}`, 'hint'));
+      if (coverage.hourlyTrend) {
+        const trend = coverage.hourlyTrend;
+        const window = trend.from === trend.through ? '等待首次计算' : `${formatTime(trend.from)} 至 ${formatTime(trend.through)}`;
+        report.append(cell('p', `小时汇总 · ${window} · 待补算 ${trend.pendingHours} 小时 · 待重算 ${trend.dirtyHours} 小时`, 'hint'));
+      }
       const rows = coverage.days.map(day => [day.day.slice(0, 10), day.observed, day.samples, day.postgresOK,
         day.samples ? `${(100 * day.failed / day.samples).toFixed(1)}%` : '无样本', `${(day.sampleBytes / 1048576).toFixed(2)} MiB`]);
       report.append(importTable(['日期 UTC', '覆盖资产', '采样数', 'PG 有效采样', '失败占比', '指标载荷'], rows));
