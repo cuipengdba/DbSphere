@@ -94,6 +94,7 @@ func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, 
 	tasks.Go(func() { runPartitionMaintainer(ctx, pg, log) })
 	tasks.Go(func() { runTrendMaintainer(ctx, pg, log) })
 	tasks.Go(func() { runHistoryTierMaintainer(ctx, pg, log) })
+	tasks.Go(func() { runRiskBaseline(ctx, pg, log) })
 	tasks.Go(func() { runInspectionScheduler(ctx, pg, cfg.MasterKey, log) })
 	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
 		tasks.Go(func() { runDataRetention(ctx, pg, cfg.SampleDays, cfg.EventDays, log) })

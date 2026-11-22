@@ -847,6 +847,7 @@ async function showAsset(id, layer) {
     trendHead.append(periods); detail.append(trendHead, trend);
     await loadTrend(selectedAssetTrendHours, selectedAssetTrendHours === 168 ? 6 : 1);
     detail.append(historyTierChart(id));
+    detail.append(assetRiskPanel(id));
   }
   if (currentSample?.status === 'ok' && currentSample.metrics) {
     const metrics = currentSample.metrics;
@@ -1722,6 +1723,96 @@ function historyTierChart(assetId) {
   return panel;
 }
 
+const riskMetricLabels = {connections: '连接使用率', capacity: '数据库容量增长', wal: 'WAL 生成速率', recurrence: '重复故障'};
+const riskStatusLabels = {risk: '达到预警条件', clear: '基线内', planned: '计划变更窗口', insufficient: '采样不足'};
+const riskReasonLabels = {
+  threshold_already_reached: '当前值达到预警阈值', rising_towards_threshold: '趋势预计触及预警阈值',
+  within_baseline: '当前走势在基线范围内', maintenance_window: '计划变更或维护窗口内暂停判定',
+  recent_samples_missing: '近期有效采样不足', seasonal_baseline_missing: '同周期历史样本不足',
+  continuous_samples_missing: '相邻时段有效采样不足', similar_failures_this_week: '近七天同类可用性故障达到三次'
+};
+
+function assetRiskPanel(assetId) {
+  const panel = cell('details', '', 'settings-details risk-panel');
+  panel.append(cell('summary', '风险与历史回测'));
+  const output = cell('div', '', 'list');
+  panel.append(output);
+  let loaded = false;
+  const path = '/api/assets/' + assetId + '/risk';
+  const format = (metric, value) => metric === 'capacity' ? (value / (1024 ** 3)).toFixed(2) + ' GiB' :
+    metric === 'wal' ? (value / (1024 ** 2)).toFixed(2) + ' MiB/s' :
+    metric === 'connections' ? value.toFixed(1) + '%' : String(value);
+  const load = async () => {
+    loaded = true;
+    try {
+      const state = await api(path);
+      output.replaceChildren(cell('p', state.enabled ? '预警通知已启用' : '影子预警 · 仅在工作台展示', 'hint'));
+      if (currentRole === 'admin') {
+        const control = cell('button', state.enabled ? '切换为影子预警' : '启用预警通知', 'ghost small-button');
+        control.type = 'button'; control.disabled = !state.enabled && !state.reviewed;
+        control.addEventListener('click', async () => {
+          try { await api(path + '/mode', 'PUT', {enabled: !state.enabled}); await load(); }
+          catch (error) { notice(error.message, true); }
+        });
+        output.append(control);
+      }
+      if (!state.assessments.length) output.append(cell('p', '等待收集风险基线的历史采样。', 'empty'));
+      const latest = state.assessments[0]?.evaluatedAt;
+      for (const item of state.assessments) {
+        const forecast = item.forecast;
+        if (item.evaluatedAt !== latest && (item.mode !== 'shadow' || item.review || state.enabled)) continue;
+        const row = cell('article', '', 'evidence');
+        row.append(cell('strong', riskMetricLabels[forecast.metric] + ' · ' + riskStatusLabels[forecast.status]),
+          cell('p', formatTime(item.evaluatedAt) + ' · ' + riskReasonLabels[forecast.reason]));
+        if (forecast.status === 'risk' || forecast.status === 'clear') {
+          const values = ['观测 ' + format(forecast.metric, forecast.observed), '阈值 ' + format(forecast.metric, forecast.threshold)];
+          if (forecast.horizonHours) values.push(forecast.horizonHours + ' 小时内预计 ' + format(forecast.metric, forecast.projected));
+          if (forecast.leadMinutes > 0) values.push('预计提前 ' + forecast.leadMinutes + ' 分钟');
+          row.append(cell('p', values.join(' · ')));
+        }
+        if (forecast.sampleId) row.append(replaySampleLink(assetId, forecast.sampleId));
+        if (item.eventId || forecast.sourceEventId) {
+          const event = cell('a', '打开关联事件', 'monitor-link');
+          event.href = '/#incidents?event=' + (item.eventId || forecast.sourceEventId);
+          row.append(document.createTextNode(' · '), event);
+        }
+        if (item.review) row.append(cell('p', item.reviewer + ' · ' + (item.review === 'confirmed' ? '确认预警' : '标记误报'), 'hint'));
+        if (item.mode === 'shadow' && forecast.status === 'risk' && !item.review && ['admin', 'operator'].includes(currentRole)) {
+          const actions = cell('div', '', 'actions');
+          for (const [verdict,label] of [['confirmed','确认影子预警'],['false_positive','标记为误报']]) {
+            const button = cell('button', label, 'ghost small-button'); button.type = 'button';
+            button.addEventListener('click', async () => {
+              try { await api(path + '/review', 'POST', {observationId:item.id, verdict}); await load(); }
+              catch (error) { notice(error.message, true); }
+            });
+            actions.append(button);
+          }
+          row.append(actions);
+        }
+        output.append(row);
+      }
+      const backtest = cell('button', '运行近 7 天回测', 'ghost small-button');
+      backtest.type = 'button';
+      const report = cell('div');
+      backtest.addEventListener('click', async () => {
+        backtest.disabled = true;
+        try {
+          const {metrics} = await api(path + '/backtest');
+          const table = cell('div', '', 'monitor-table');
+          table.append(importTable(['指标','可评估','证据不足','命中','误报','漏报','先导中位（分钟）'],
+            metrics.map(item => [riskMetricLabels[item.metric],item.evaluated,item.unknown,item.truePositive,
+              item.falsePositive,item.falseNegative,item.truePositive ? item.medianLeadMinutes : '—'])));
+          report.replaceChildren(table);
+        } catch (error) { report.replaceChildren(cell('p', error.message, 'warning')); }
+        finally { backtest.disabled = false; }
+      });
+      output.append(backtest,report);
+    } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); }
+  };
+  panel.addEventListener('toggle', () => { if (panel.open && !loaded) void load(); });
+  return panel;
+}
+
 async function loadPlatformStatus() {
   const target = $('platform-status-detail');
   try {
@@ -2036,6 +2127,7 @@ const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', sql: 'SQL', 
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+  risk_forecast: '无模型风险预警', risk_forecast_cleared: '风险信号回落',
   routing_observed: '入口诊断更新',
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
@@ -2948,6 +3040,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${delivery.channel} · ${status} · 投递 ID ${delivery.deliveryId}`;
     }
     const external = ['external_alert_firing', 'external_alert_resolved', 'external_ticket_linked'].includes(evidence.kind);
+    const risk = evidence.kind === 'risk_forecast' || evidence.kind === 'risk_forecast_cleared';
+    if (risk) text = evidence.payload.title || riskMetricLabels[evidence.payload.metric] || '风险信号';
     if (external) {
       const input = evidence.payload;
       text = [input.source, input.externalId, input.title].filter(Boolean).join(' · ');
@@ -2964,8 +3058,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = external ? replayKinds[evidence.kind] : evidence.kind;
+    const label = external || risk ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
+    if (risk && evidence.payload.sampleId) row.append(document.createTextNode(' · '), replaySampleLink(event.assetId, evidence.payload.sampleId));
     if (external && evidence.payload.url?.startsWith('https://')) {
       const link = cell('a', '打开外部记录', 'monitor-link');
       link.href = evidence.payload.url;
@@ -2978,7 +3073,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (condensedTimeline && highlightCount < 8 && (
       evidence.kind === 'alert_firing' || evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered' ||
       evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' ||
-      external || (noLeader && !highlightedNoLeader))) {
+      external || risk || (noLeader && !highlightedNoLeader))) {
       highlights.append(row.cloneNode(true));
       highlightCount++;
       if (noLeader) highlightedNoLeader = true;

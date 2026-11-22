@@ -465,6 +465,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateHistoryTiers(ctx, tx); err != nil {
 		return fmt.Errorf("migrate history retention tiers: %w", err)
 	}
+	if err := migrateRiskBaseline(ctx, tx); err != nil {
+		return fmt.Errorf("migrate rule-based risk forecasting: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

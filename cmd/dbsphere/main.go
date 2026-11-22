@@ -443,6 +443,26 @@ func runHistoryTierMaintainer(ctx context.Context, pg *store.Postgres, log *slog
 	}
 }
 
+func runRiskBaseline(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	for ctx.Err() == nil {
+		workCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		batch, err := pg.AdvanceRiskBaseline(workCtx, time.Now().Add(-5*time.Minute), 10)
+		cancel()
+		wait := time.Minute
+		if err != nil && ctx.Err() == nil {
+			log.Warn("Go risk baseline evaluation paused", "error", err)
+		}
+		if err == nil && batch == 10 {
+			wait = 300 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+}
+
 func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, eventDays int, log *slog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()

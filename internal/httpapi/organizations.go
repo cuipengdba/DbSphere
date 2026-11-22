@@ -51,6 +51,15 @@ func authorizeOrganizationAdmin(w http.ResponseWriter, r *http.Request, db Healt
 	if path == historyPolicyPath && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
 		return true
 	}
+	if r.Method == http.MethodPut {
+		if match := assetRiskPath.FindStringSubmatch(path); match != nil && match[2] == "mode" {
+			if allowed[match[1]] {
+				return true
+			}
+			respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+			return false
+		}
+	}
 	if r.Method == http.MethodGet && (path == "/api/admin/access" || path == "/api/admin/organizations" || path == "/api/admin/organization-audit") ||
 		r.Method != http.MethodGet && (path == "/api/admin/accounts" || path == "/api/admin/teams" ||
 			accessAccountPath.MatchString(path) || accessTeamPath.MatchString(path)) {

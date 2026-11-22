@@ -266,6 +266,13 @@ func authorizeNamedScope(w http.ResponseWriter, r *http.Request, db HealthStore,
 		}
 	}
 	if r.Method == http.MethodPost && role == "operator" {
+		if match := assetRiskPath.FindStringSubmatch(path); match != nil && match[2] == "review" {
+			if allowed[match[1]] {
+				return true
+			}
+			respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+			return false
+		}
 		if match := assetCheckPath.FindStringSubmatch(path); match != nil {
 			if allowed[match[1]] {
 				return true

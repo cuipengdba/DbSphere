@@ -46,6 +46,13 @@ jobs:
         run: |
           docker exec "$PG18_CONTAINER" createdb -U postgres history_acceptance
           go test ./internal/store -run '^TestPG18HistoryTierPreservesEvidenceAndExactBuckets$' -count=1 -v
+      - name: Verify model-free forecasts, shadow review and same-event alert
+        env:
+          DBSPHERE_TEST_RISK_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/risk_acceptance
+          PG18_CONTAINER: ${{ job.services.pg18.id }}
+        run: |
+          docker exec "$PG18_CONTAINER" createdb -U postgres risk_acceptance
+          go test ./internal/store -run '^Test(RiskBaselineLabeledScenarios|PG18RiskShadowReviewAndSameEvent)$' -count=1 -v
       - name: Build official OpenTelemetry Go SDK acceptance probe
         run: |
           cd examples/otel-sdk-probe
@@ -427,8 +434,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.41.0'
-          previous_sha='137d5b20dc6c6803a5abf3098766d11fa67fc3119bc1476e6d403f3df1ad2810'
+          previous_version='1.42.0'
+          previous_sha='c8a4818f1635ee0843ccf1eef0fd58bfc9eda6081451d88a7c184f555e212921'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -497,8 +504,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.41.0'
-          previous_arm_sha='628b1a2d84f3fa084489380ffa936eab7d62d6c45c3fcc04ecb0d5ae2cd5ebda'
+          previous_version='1.42.0'
+          previous_arm_sha='e2e2eaece2ef82751aad40953130cb82965d4bd24ff8e8c97c328b42b5d32d78'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
