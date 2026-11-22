@@ -58,6 +58,12 @@ func newConsoleGateway(upstreams string) (*consoleGateway, error) {
 				r.Out.Host = r.In.Host
 				r.SetXForwarded()
 			},
+			ModifyResponse: func(response *http.Response) error {
+				if response.Request.URL.Path == "/readyz" && response.StatusCode == http.StatusServiceUnavailable {
+					peer.readiness.Store(gatewayAlive)
+				}
+				return nil
+			},
 			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 				peer.readiness.Store(gatewayOffline)
 				gatewayUnavailable(w)

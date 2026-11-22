@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cuipengdba/dbsphere"
@@ -190,7 +191,6 @@ type AuthConfig struct {
 	AIDailyLimit         int
 	WorkOrderProfiles    map[string]WorkOrderProfile
 	ReplicaID            string
-	StorageAvailable     func() bool
 }
 
 type loginAttempt struct {
@@ -207,6 +207,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 	}
 	var attemptsMu sync.Mutex
+	var storeUnavailableUntil atomic.Int64
 	attempts := map[string]loginAttempt{}
 	var aiAttemptsMu sync.Mutex
 	aiAttempts := map[string]time.Time{}
@@ -221,10 +222,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := store.Health(r.Context()); err != nil {
+			if r.Context().Err() == nil {
+				storeUnavailableUntil.Store(time.Now().Add(3 * time.Second).UnixNano())
+			}
 			w.Header().Set("X-DbSphere-Storage", "unavailable")
 			respond(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
+		storeUnavailableUntil.Store(0)
 		if credentials != nil && credentials.ReplicaID != "" {
 			w.Header().Set("X-DbSphere-Replica", credentials.ReplicaID)
 		}
@@ -306,7 +311,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusNotImplemented, map[string]string{"error": "Go API migration in progress"})
 			return
 		}
-		if credentials.StorageAvailable != nil && !credentials.StorageAvailable() {
+		if storeUnavailableUntil.Load() > time.Now().UnixNano() {
 			w.Header().Set("X-DbSphere-Storage", "unavailable")
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "长期存储暂不可用，恢复后请重试"})
 			return

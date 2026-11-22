@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/ai"
@@ -33,11 +32,12 @@ func newPlatformReplica(collectorEnabled bool) store.PlatformReplica {
 }
 
 func runPlatform(ctx context.Context, pg *store.Postgres, replica store.PlatformReplica, tracker *collectorstate.Tracker,
-	available *atomic.Bool, start func(context.Context), log *slog.Logger) {
+	start func(context.Context), log *slog.Logger) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	var cancelLeader context.CancelFunc
 	var leaderDone <-chan struct{}
+	heartbeatHealthy := true
 	stopWorkers := func() {
 		if cancelLeader != nil {
 			cancelLeader()
@@ -57,8 +57,9 @@ func runPlatform(ctx context.Context, pg *store.Postgres, replica store.Platform
 		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
 		leader, err := pg.RegisterPlatformReplica(probe, replica)
 		cancel()
-		if available.Swap(err == nil) != (err == nil) && ctx.Err() == nil {
-			log.Info("platform storage availability changed", "available", err == nil, "replicaId", replica.ID)
+		if heartbeatHealthy != (err == nil) && ctx.Err() == nil {
+			heartbeatHealthy = err == nil
+			log.Info("platform heartbeat state changed", "reachable", heartbeatHealthy, "replicaId", replica.ID)
 		}
 		if !leader || err != nil {
 			stopWorkers()

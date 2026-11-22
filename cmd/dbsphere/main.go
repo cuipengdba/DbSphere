@@ -173,8 +173,6 @@ func run(log *slog.Logger) error {
 		cfg.CollectWorkers, time.Now())
 	replica := newPlatformReplica(cfg.AutoCollect)
 	pg.SetPlatformReplica(replica.ID)
-	var storageAvailable atomic.Bool
-	storageAvailable.Store(true)
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash:   viewerHash,
@@ -184,7 +182,6 @@ func run(log *slog.Logger) error {
 			CollectEvery:         cfg.CollectEvery,
 			CollectorState:       collectorRuntime,
 			ReplicaID:            replica.ID,
-			StorageAvailable:     storageAvailable.Load,
 			WorkOrderProfiles:    workProfiles,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
@@ -212,7 +209,7 @@ func run(log *slog.Logger) error {
 	}
 	go func() {
 		defer close(maintenanceDone)
-		runPlatform(ctx, pg, replica, collectorRuntime, &storageAvailable, func(leaderCtx context.Context) {
+		runPlatform(ctx, pg, replica, collectorRuntime, func(leaderCtx context.Context) {
 			runMaintenance(leaderCtx, pg, cfg, notifyConfig, autoModel, aiDailyLimit, log)
 		}, log)
 	}()
