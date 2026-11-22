@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -107,6 +108,26 @@ func TestMetricSeriesPreservesGapsAndCounterResets(t *testing.T) {
 	check("averageReplicationLagBytes", 1024)
 	check("transactionsPerSecond", 1.42)
 	check("walBytesPerSecond", 13.3)
+	check("peakBlockedSessions", 2)
+	if id, ok := row["blockedPeakSampleId"].(string); !ok || !evidenceUUID.MatchString(id) {
+		t.Fatalf("missing raw peak sample: %v", row)
+	}
+	var originalCursor time.Time
+	if err := pg.pool.QueryRow(ctx, `SELECT cursor FROM monitoring_trend_progress WHERE singleton`).Scan(&originalCursor); err != nil {
+		t.Fatal(err)
+	}
+	defer pg.pool.Exec(ctx, `UPDATE monitoring_trend_progress SET cursor=$1 WHERE singleton`, originalCursor)
+	if _, err := pg.pool.Exec(ctx, `UPDATE monitoring_trend_progress SET cursor=$1 WHERE singleton`, base.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	projected, err := pg.ReadAssetSection(ctx, asset.ID, "series", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectedRows := projected.(map[string]any)["series"].([]json.RawMessage)
+	if len(projectedRows) != 1 || !bytes.Equal(rows[0], projectedRows[0]) {
+		t.Fatalf("projected and raw metrics diverged: raw=%s projection=%s", rows, projectedRows)
+	}
 
 	other, err := pg.CreateAsset(ctx, assets.Input{Name: "Other metric series", Host: "127.0.0.2",
 		Port: 1, Database: "postgres", Username: "monitor", Password: "test-secret",

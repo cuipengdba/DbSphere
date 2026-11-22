@@ -171,6 +171,11 @@ func run(log *slog.Logger) error {
 		defer close(partitionDone)
 		runPartitionMaintainer(ctx, pg, log)
 	}()
+	trendDone := make(chan struct{})
+	go func() {
+		defer close(trendDone)
+		runTrendMaintainer(ctx, pg, log)
+	}()
 	var retentionDone <-chan struct{}
 	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
 		done := make(chan struct{})
@@ -214,6 +219,7 @@ func run(log *slog.Logger) error {
 	<-notifierDone
 	<-tracePrunerDone
 	<-partitionDone
+	<-trendDone
 	if retentionDone != nil {
 		<-retentionDone
 	}
@@ -357,6 +363,30 @@ func runPartitionMaintainer(ctx context.Context, pg *store.Postgres, log *slog.L
 			if err != nil && ctx.Err() == nil {
 				log.Error("Go storage partition maintenance failed", "error", err)
 			}
+		}
+	}
+}
+
+func runTrendMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	for ctx.Err() == nil {
+		workCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+		done, err := pg.AdvanceTrendProjection(workCtx)
+		if done && err == nil {
+			err = pg.PruneTrendProjection(workCtx)
+		}
+		cancel()
+		wait := 150 * time.Millisecond
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("Go trend projection maintenance paused", "error", err)
+			wait = 20 * time.Second
+		case done:
+			wait = time.Hour
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
 		}
 	}
 }

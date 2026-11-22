@@ -34,11 +34,11 @@ const monitoringFleetSQL = `WITH visible AS (
 			WHEN $7::int>0 AND now()-a.last_sample_at>=make_interval(secs=>$7) THEN 'stale'
 			WHEN a.last_status='ok' THEN 'ok' ELSE 'error' END AS coverage,
 		CASE WHEN $7::int>0 AND now()-a.last_sample_at>=make_interval(secs=>$7) THEN 'unknown'
-			WHEN m.status='ok' OR m.pg_status='ok' THEN 'available'
+			WHEN a.last_status='ok' AND a.last_sample_at IS NOT NULL OR m.pg_status='ok' THEN 'available'
 			WHEN m.pg_status='availability' THEN 'unavailable' ELSE 'unknown' END AS pg_state
 	FROM assets a
-	LEFT JOIN LATERAL (SELECT status,metrics_json#>>'{collector,pgStatus}' AS pg_status FROM samples
-		WHERE asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) m ON true
+	LEFT JOIN LATERAL (SELECT metrics_json#>>'{collector,pgStatus}' AS pg_status FROM samples
+		WHERE a.last_status<>'ok' AND asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) m ON true
 	LEFT JOIN LATERAL (SELECT count(*)::int AS total,min(k.started_at) AS started_at,
 		(array_agg(k.id ORDER BY k.started_at,k.id))[1] AS first_id
 		FROM open_event_groups g JOIN event_keys k ON k.id=g.event_id WHERE g.asset_id=a.id) e ON true

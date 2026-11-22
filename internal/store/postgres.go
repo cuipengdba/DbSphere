@@ -412,6 +412,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record fleet label migration: %w", err)
 		}
 	}
+	if err := migrateTrendProjection(ctx, tx); err != nil {
+		return err
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

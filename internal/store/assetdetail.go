@@ -142,44 +142,18 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	return s.queryJSON(ctx, `WITH observed AS (
-			SELECT id,asset_id,collected_at,status,
-				metrics_json#>>'{collector,pgStatus}' AS pg_status,
-				CASE WHEN status='ok' THEN metrics_json->>'role' END AS pg_role,
-				metrics_json#>>'{diagnostics,wal,data,statsReset}' AS wal_reset,
-				metrics_json#>>'{diagnostics,walPosition,data,startedAt}' AS server_started,
-				metrics_json#>>'{diagnostics,walPosition,data,timeline}' AS wal_timeline,
-				CASE WHEN jsonb_typeof(metrics_json#>'{diagnostics,freeze,data,usedPercent}')='number'
-					THEN (metrics_json#>>'{diagnostics,freeze,data,usedPercent}')::numeric END AS xid_used,
-				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,cpu,usedPercent}')='number'
-					THEN (metrics_json#>>'{linux,cpu,usedPercent}')::numeric END AS linux_cpu,
-				CASE WHEN metrics_json#>>'{linux,status}'='ok' AND jsonb_typeof(metrics_json#>'{linux,memory,usedPercent}')='number'
-					THEN (metrics_json#>>'{linux,memory,usedPercent}')::numeric END AS linux_memory,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'connections')='number'
-					THEN (metrics_json->>'connections')::numeric END AS connections,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'max_connections')='number'
-					THEN (metrics_json->>'max_connections')::numeric END AS max_connections,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'database_bytes')='number'
-					THEN (metrics_json->>'database_bytes')::numeric END AS database_bytes,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'replication_lag_bytes')='number'
-					THEN (metrics_json->>'replication_lag_bytes')::numeric END AS replication_lag_bytes,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json#>'{diagnostics,locks,data,blockedSessions}')='number'
-					THEN (metrics_json#>>'{diagnostics,locks,data,blockedSessions}')::numeric END AS blocked_sessions,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json#>'{diagnostics,transactions,data,longTransactions}')='number'
-					THEN (metrics_json#>>'{diagnostics,transactions,data,longTransactions}')::numeric END AS long_transactions,
-				CASE WHEN metrics_json#>>'{diagnostics,transactions,status}'='ok'
-					AND jsonb_typeof(metrics_json#>'{diagnostics,transactions,data,idleInTransaction}')='number'
-					THEN (metrics_json#>>'{diagnostics,transactions,data,idleInTransaction}')::numeric END AS idle_in_transaction,
-				CASE WHEN metrics_json#>>'{diagnostics,database,status}'='ok'
-					AND jsonb_typeof(metrics_json#>'{diagnostics,database,data,deadlocks}')='number'
-					THEN (metrics_json#>>'{diagnostics,database,data,deadlocks}')::numeric END AS deadlocks,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_commit')='number'
-					THEN (metrics_json->>'xact_commit')::numeric END AS commits,
-				CASE WHEN status='ok' AND jsonb_typeof(metrics_json->'xact_rollback')='number'
-					THEN (metrics_json->>'xact_rollback')::numeric END AS rollbacks,
-				CASE WHEN status='ok' AND (metrics_json#>>'{diagnostics,wal,data,bytes}') ~ '^[0-9]+([.][0-9]+)?$'
-					THEN (metrics_json#>>'{diagnostics,wal,data,bytes}')::numeric END AS wal_bytes
-			FROM samples WHERE asset_id=ANY($1::uuid[]) AND collected_at>=$2 AND collected_at<$3
+	return s.queryJSON(ctx, `WITH coverage AS (
+			SELECT greatest(cursor,date_trunc('hour',now(),'UTC')-interval '31 days') AS from_time
+			FROM monitoring_trend_progress WHERE singleton
+		), observed AS (
+			SELECT id,asset_id,collected_at,status,pg_status,pg_role,wal_reset,server_started,wal_timeline,xid_used,
+				linux_cpu,linux_memory,connections,max_connections,database_bytes,replication_lag_bytes,blocked_sessions,long_transactions,
+				idle_in_transaction,deadlocks,commits,rollbacks,wal_bytes
+			FROM monitoring_trend_points WHERE asset_id=ANY($1::uuid[]) AND collected_at>=greatest($2,(SELECT from_time FROM coverage)) AND collected_at<$3
+			UNION ALL
+			SELECT s.id,s.asset_id,s.collected_at,s.status,f.* FROM samples s
+			CROSS JOIN LATERAL dbsphere_trend_fields(s.status,s.metrics_json) f
+			WHERE s.asset_id=ANY($1::uuid[]) AND s.collected_at>=$2 AND s.collected_at<least($3,(SELECT from_time FROM coverage))
 		), compared AS (
 			SELECT *,lag(collected_at) OVER observed_order AS prior_at,
 				lag(commits) OVER observed_order AS prior_commits,
