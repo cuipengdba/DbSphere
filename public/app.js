@@ -230,6 +230,7 @@ function cell(tag, text, cls) {
 const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
   api, assetHealth, assetRuntimeLabel, formatTime, openEvent,
   canCaptureWaits: () => currentRole === 'admin',
+  canRecordChanges: () => currentRole === 'admin',
   openAssets: () => setView('assets'),
   openPlans: id => {
     setView('assets');
@@ -1820,8 +1821,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';
     jump.addEventListener('click', () => { monitoring.openIncident(event); setView('monitoring'); });
+    const changes = cell('button', '查看同窗变更', 'ghost small-button');
+    changes.type = 'button';
+    changes.addEventListener('click', () => { monitoring.openIncident(event, 'changes'); setView('monitoring'); });
     const actions = cell('div', '', 'actions monitor-event-jump');
-    actions.append(jump); summary.append(actions);
+    actions.append(jump, changes); summary.append(actions);
   }
   if (relatedEvents.length) {
     const related = document.createElement('details'); related.className = 'evidence';

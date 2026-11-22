@@ -593,6 +593,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			terminated = kubeObject(kubeObject(item["lastState"])["terminated"])
 		}
 		containers = append(containers, map[string]any{"name": item["name"], "ready": item["ready"],
+			"image": item["image"], "imageId": item["imageID"],
 			"restartCount": item["restartCount"], "terminatedReason": terminated["reason"],
 			"lastTerminatedAt": terminated["finishedAt"], "waitingReason": kubeObject(kubeObject(item["state"])["waiting"])["reason"]})
 	}

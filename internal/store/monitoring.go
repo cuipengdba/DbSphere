@@ -53,7 +53,11 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 }
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {
-	from, to, err := timeRange(params, 0, 7*24*time.Hour)
+	maxRange, eventLimit := 7*24*time.Hour, 12
+	if params.Get("changes") == "true" {
+		maxRange, eventLimit = 31*24*time.Hour, 100
+	}
+	from, to, err := timeRange(params, 0, maxRange)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +89,7 @@ func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.
 	}
 	events, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'title',title,'status',status,
 		'startedAt',started_at,'endedAt',ended_at) FROM events WHERE asset_id=$1 AND started_at<$3
-		AND (ended_at IS NULL OR ended_at >= $2) ORDER BY (status='open') DESC,started_at DESC LIMIT 12`, id, from, to)
+		AND (ended_at IS NULL OR ended_at >= $2) ORDER BY (status='open') DESC,started_at DESC LIMIT $4`, id, from, to, eventLimit)
 	return map[string]any{"snapshot": snapshot, "blockingSample": blockingSample, "events": events}, err
 }
 

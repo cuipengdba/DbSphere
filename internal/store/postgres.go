@@ -430,6 +430,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateRouting(ctx, tx); err != nil {
 		return fmt.Errorf("migrate route diagnostics: %w", err)
 	}
+	if err := migrateChangeTimeline(ctx, tx); err != nil {
+		return fmt.Errorf("migrate asset change timeline: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

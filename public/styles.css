@@ -297,6 +297,9 @@ body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approve
 .monitor-instance-title { margin: 3px 0 0; font-size: 19px; overflow-wrap: anywhere; }
 .monitor-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .monitor-tabs button[aria-pressed="true"] { border-color: var(--focus); background: var(--selected); color: var(--accent); }
+.monitor-change-list { list-style: none; margin: 14px 0; padding: 0 0 0 14px; border-left: 2px solid var(--border); }
+.monitor-change-list li { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; padding: 8px 0; overflow-wrap: anywhere; }
+.monitor-change-list button[aria-pressed="true"] { color: var(--accent); background: var(--selected); }
 .monitor-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
 .monitor-plot { position: relative; border-radius: 4px; }
 .monitor-plot svg { width: 100%; height: 155px; display: block; }

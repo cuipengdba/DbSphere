@@ -115,7 +115,7 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			FROM pg_replication_slots ORDER BY active ASC,slot_name LIMIT 20) q`, retained)},
 		{"settings", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
 			SELECT name,setting AS value,unit,source FROM pg_settings
-			WHERE name IN ('archive_mode','autovacuum','max_connections','max_slot_wal_keep_size','wal_level')
+			WHERE name IN ('archive_mode','autovacuum','log_min_duration_statement','max_connections','max_slot_wal_keep_size','wal_level')
 			ORDER BY name) q`},
 		{"databaseInventory", databaseInventorySQL},
 		{"tableInventory", tableInventorySQL},

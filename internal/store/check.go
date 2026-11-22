@@ -512,6 +512,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	if err := json.Unmarshal(encoded, &observed); err != nil {
 		return CheckResult{}, err
 	}
+	if err := recordObservedChanges(ctx, tx, id, previousID, sampleID, previousAt, now, previous, observed); err != nil {
+		return CheckResult{}, fmt.Errorf("record observed changes: %w", err)
+	}
 	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now, ""); err != nil {
 		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}

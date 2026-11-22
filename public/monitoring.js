@@ -2,11 +2,16 @@
   'use strict';
 
   const minute = 60_000;
+  const dateTimeInputValue = value => new Date(value - new Date(value).getTimezoneOffset() * minute).toISOString().slice(0, 16);
   const periods = [
     ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60], ['30 天', 43200, 60]
   ];
   const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'],
-    ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境'], ['backup', '备份与恢复']];
+    ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境'], ['backup', '备份与恢复'],
+    ['changes', '变更时间线']];
+  const changeKinds = {configuration: '配置', image: '镜像', deployment: '发布', maintenance: '维护', route: '路由', topology: '拓扑'};
+  const changeSources = {pg_settings: 'PostgreSQL pg_settings', kubernetes: 'Kubernetes 容器状态',
+    routing: '入口探测与 Service 采样', topology: '实例拓扑采样', operator: '人工登记 · 同窗待核对'};
   const defaultPeriod = '1 小时';
   const sqlOrders = [['time', '总耗时'], ['calls', '调用频率'], ['latency', '平均耗时'], ['reads', '读取共享块'], ['temp', '写入临时块']];
   const milliseconds = value => `${number(value, 2)} ms`;
@@ -404,6 +409,7 @@
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
     let focusAt = null, focusSample = '';
+    let changePick = '';
     let waitCapturePick = '', waitCaptureRunning = false;
     let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
     let compare = null, abnormalOnly = false, fleetTime = null, fleetAt = null, chooseCluster = true;
@@ -506,7 +512,7 @@
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
         ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''], ['waitCapture', waitCapturePick, ''],
         ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
-        ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''],
+        ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''], ['change', mode === 'changes' ? changePick : '', ''],
         ['deviceType', deviceType, ''], ['device', deviceName, ''],
         ['compare', compare ? [...compare].join(',') || 'none' : '', ''],
         ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), '']
@@ -533,6 +539,7 @@
       queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
       eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
       const evidenceTime = Date.parse(params.get('at'));
+      changePick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('change') || '') ? params.get('change') : '';
       focusAt = eventAnchor && Number.isFinite(evidenceTime) ? evidenceTime : null;
       focusSample = focusAt != null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('sample') || '') ? params.get('sample') : '';
       waitCapturePick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('waitCapture') || '') ? params.get('waitCapture') : '';
@@ -580,8 +587,7 @@
     function openRange() {
       const range = windowFor(period, fixed);
       for (const [input, value] of [[fromField, range.from], [toField, range.to]]) {
-        const local = new Date(value - new Date(value).getTimezoneOffset() * minute);
-        input.value = local.toISOString().slice(0, 16);
+        input.value = dateTimeInputValue(value);
       }
       errorLabel.textContent = '';
       rangeForm.hidden = false;
@@ -609,6 +615,7 @@
       cluster = key; instance = ''; database = ''; chooseCluster = false; mode = 'metrics';
       replicaAt = null;
       eventAnchor = ''; focusAt = null; focusSample = '';
+      changePick = '';
       resetWaitFilters(); resetCatalog(); resetFleet();
       try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
       change();
@@ -619,6 +626,7 @@
       if (!asset) return;
       if (id !== instance) {
         deviceType = ''; deviceName = '';
+        changePick = '';
         if (clusterKey(asset) !== cluster) { replicaAt = null; resetFleet(); }
         resetWaitFilters();
         resetCatalog();
@@ -1791,6 +1799,95 @@
       return result;
     }
 
+    function changeTimelinePanel(asset, data, time, events) {
+      const card = panel('变更与事件时间线');
+      const changes = data.changes || [];
+      const entries = changes.map(item => ({ at: Date.parse(item.occurredAt), change: item }));
+      for (const event of events) {
+        const opened = Date.parse(event.startedAt);
+        const recovered = Date.parse(event.endedAt);
+        if (opened >= time.from && opened < time.to) entries.push({at: opened, event, phase: '事件开始'});
+        if (recovered >= time.from && recovered < time.to) entries.push({at: recovered, event, phase: '事件恢复'});
+      }
+      entries.sort((a, b) => b.at - a.at);
+      if (entries.length) {
+        const timeline = el('ol', null, 'monitor-change-list');
+        for (const entry of entries) {
+          const row = el('li');
+          row.append(el('time', formatTime(entry.at), 'monitor-note'));
+          if (entry.event) {
+            row.append(button(`${entry.phase} · ${entry.event.title}`, () => openEvent(entry.event.id), 'monitor-link'));
+          } else {
+            const item = entry.change;
+            const action = button(`${changeKinds[item.kind] || item.kind} · ${item.label}`, () => {
+              changePick = item.id; change();
+            }, 'monitor-link');
+            action.setAttribute('aria-pressed', String(item.id === changePick));
+            row.append(action, el('small', changeSources[item.source] || item.source, 'monitor-note'));
+          }
+          timeline.append(row);
+        }
+        card.append(timeline);
+      } else {
+        card.append(el('p', '此时段没有变更或事件节点。', 'monitor-note'));
+      }
+      if (data.truncated) card.append(el('p', '此时段仅显示最近 100 条变更。可缩小时间范围。', 'monitor-note'));
+      const selected = changes.find(item => item.id === changePick);
+      if (selected) {
+        const compare = panel('变更前后对照');
+        const label = selected.source === 'operator' ? '发生时间' : '首次观测';
+        compare.append(el('h4', selected.label),
+          el('p', `${label} ${formatTime(selected.occurredAt)} · 入库 ${formatTime(selected.recordedAt)} · ${changeSources[selected.source]}`, 'monitor-note'));
+        if (selected.fields?.length) {
+          compare.append(table(['项目', '之前', '之后'], selected.fields.map(field => [field.name, field.before, field.after]), '变更字段对照'));
+        }
+        compare.append(table(['采样', '时间', '来源'], [['变更前', selected.before], ['变更后', selected.after]].map(([name, point]) =>
+          [name, point ? formatTime(point.collectedAt) : '无可用采样', point ? sampleLink(asset.id, point.id) : '—']), '变更采样对照'));
+        card.append(compare);
+      } else if (changePick) {
+        card.append(el('p', '所选时间窗没有该变更。', 'monitor-note'));
+      }
+      if (actions.canRecordChanges?.()) {
+        const details = el('details', null, 'settings-details');
+        details.append(el('summary', '登记运维变更'));
+        const form = el('form', null, 'form-grid routing-form');
+        const kind = select('变更类型', () => {});
+        options(kind, Object.entries(changeKinds), 'deployment');
+        const occurred = el('input'), name = el('input');
+        occurred.type = 'datetime-local'; occurred.required = true;
+        occurred.value = dateTimeInputValue(Math.min(Date.now(), time.to - 1000));
+        name.setAttribute('aria-label', '变更标题'); name.required = true; name.maxLength = 120;
+        occurred.setAttribute('aria-label', '变更发生时间');
+        const submit = el('button', '登记变更', 'monitor-action');
+        submit.type = 'submit';
+        const feedback = el('p', null, 'monitor-note wide');
+        feedback.setAttribute('role', 'status');
+        form.append(labeled('类型', kind), labeled('发生时间', occurred), labeled('标题', name), submit, feedback);
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          submit.disabled = true;
+          try {
+            const at = new Date(occurred.value).getTime();
+            const recorded = await api(`/api/assets/${asset.id}/changes`, 'POST',
+              {kind: kind.value, label: name.value, occurredAt: new Date(at).toISOString()});
+            if (instance !== asset.id || mode !== 'changes') return;
+            changePick = recorded.id;
+            if (at < time.from || at >= time.to) {
+              fixed = { from: at - 15 * minute, to: Math.min(Date.now(), at + 15 * minute) };
+              activeWindow = null;
+            }
+            change();
+          } catch (error) {
+            feedback.textContent = error.message;
+          } finally {
+            submit.disabled = false;
+          }
+        });
+        details.append(form); card.append(details);
+      }
+      return card;
+    }
+
     function linuxDevicePanel(asset, snapshot, data, time, events) {
       const card = panel('块设备、网卡与文件系统');
       const host = snapshot?.linux;
@@ -1974,7 +2071,7 @@
 
     async function load(asset, time) {
       const key = ++request;
-      if (time.to - time.from > 10080 * minute) {
+      if (mode !== 'changes' && time.to - time.from > 10080 * minute) {
         body.replaceChildren(el('p', '正在读取小时汇总…', 'monitor-note'));
         try { await loadLongRange(asset, time, key); }
         catch (error) { if (key === request) body.replaceChildren(el('p', error.message, 'monitor-warning')); }
@@ -1985,6 +2082,7 @@
       let section;
       if (mode === 'replication') section = 'series';
       if (mode === 'metrics') section = 'instance-history';
+      if (mode === 'changes') section = 'changes';
       if (mode === 'backup') {
         section = 'backup';
         if (focusSample) query.set('sample', focusSample);
@@ -2018,6 +2116,7 @@
       }
       const contextParams = new URLSearchParams(time.params);
       if (['metrics', 'waits', 'locks'].includes(mode)) contextParams.set('blocking', 'true');
+      if (mode === 'changes') contextParams.set('changes', 'true');
       const linkedSQL = mode === 'sql' && queryId;
       const topologyQuery = new URLSearchParams(time.params);
       const topologyAt = replicaAt;
@@ -2107,7 +2206,9 @@
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
         if (mode === 'backup') fragment.append(backupPanel(asset, data));
         if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
-        if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
+        if (mode === 'changes') fragment.append(changeTimelinePanel(asset, data, time, events));
+        if ((mode !== 'metrics' && mode !== 'changes') || waits?.buckets.some(bucket => bucket.observed > 0))
+          fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
         const marker = mode === 'waits' && lockAt != null ? lockAt : focusAt;
         if (marker != null && marker >= time.from && marker < time.to) {
@@ -2212,6 +2313,7 @@
         instance = asset.id;
         mode = tabs.some(([name]) => name === topic) ? topic : 'waits';
         eventAnchor = event.id;
+        changePick = point?.changeId || '';
         resetWaitFilters();
         resetCatalog();
         focusAt = Number.isFinite(selectedAt) ? selectedAt : null;
