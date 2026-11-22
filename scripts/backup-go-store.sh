@@ -29,13 +29,14 @@ manifest_partial="$output_dir/.$backup_id.json.partial"
 cleanup() { rm -f -- "$partial" "$manifest_partial"; }
 trap cleanup EXIT
 
+started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker exec -i "${containers[0]}" pg_dump -U dbsphere -d dbsphere -Fc > "$partial"
 docker exec -i "${containers[0]}" pg_restore --list < "$partial" >/dev/null
 test -s "$partial"
 digest="$(sha256sum "$partial" | cut -d ' ' -f 1)"
 completed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf '{"status":"success","backupId":"%s","completedAt":"%s","archive":"%s","sha256":"%s"}\n' \
-  "$backup_id" "$completed" "$(basename -- "$archive")" "$digest" > "$manifest_partial"
+printf '{"status":"success","backupId":"%s","completedAt":"%s","restorePointAt":"%s","archive":"%s","sha256":"%s"}\n' \
+  "$backup_id" "$completed" "$started" "$(basename -- "$archive")" "$digest" > "$manifest_partial"
 mv -- "$partial" "$archive"
 mv -- "$manifest_partial" "$manifest"
 echo "PostgreSQL 18 backup: $archive"

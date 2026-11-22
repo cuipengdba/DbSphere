@@ -72,6 +72,14 @@ if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
   fi
   compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.k8s.yaml")
 fi
+if grep -q '^DBSPHERE_BACKUP_INFO_HOST_PATH=' "$env_file"; then
+  backup_info_path="$(sed -n 's/^DBSPHERE_BACKUP_INFO_HOST_PATH=//p' "$env_file" | tail -n 1)"
+  if [[ "$backup_info_path" != /* || ! -d "$backup_info_path" ]]; then
+    echo 'DBSPHERE_BACKUP_INFO_HOST_PATH must be an existing absolute directory.' >&2
+    exit 1
+  fi
+  compose_args+=(-f "$bundle_dir/deploy/compose/compose.backup.yaml")
+fi
 loaded_images="$(docker image load --input "$bundle_dir/images.tar.gz")"
 if ! grep -Fqx "Loaded image: $DBSPHERE_GO_OFFLINE_APP_IMAGE" <<< "$loaded_images" ||
    ! grep -Fqx 'Loaded image: postgres:18-bookworm' <<< "$loaded_images"; then

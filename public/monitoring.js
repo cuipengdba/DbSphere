@@ -6,7 +6,7 @@
     ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
   ];
   const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'],
-    ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境']];
+    ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境'], ['backup', '备份与恢复']];
   const defaultPeriod = '1 小时';
   const sqlOrders = [['time', '总耗时'], ['calls', '调用频率'], ['latency', '平均耗时'], ['reads', '读取共享块'], ['temp', '写入临时块']];
   const milliseconds = value => `${number(value, 2)} ms`;
@@ -1269,6 +1269,72 @@
       return card;
     }
 
+    function backupPanel(asset, data) {
+      const card = panel('备份与时间点恢复');
+      const observations = data.observations;
+      const body = el('div');
+      if (observations.length > 1) {
+        const picker = select('备份证据采样', id => describe(observations.find(row => row.id === id)));
+        options(picker, observations.map(row => [row.id, formatTime(row.collectedAt)]),
+          observations.find(row => row.id === focusSample)?.id || observations[0].id);
+        card.append(labeled('采样', picker));
+      }
+      card.append(body);
+      describe(observations.find(row => row.id === focusSample) || observations[0]);
+      return card;
+
+      function describe(sample) {
+        body.replaceChildren();
+        if (!sample) {
+          body.append(el('p', '此时段没有备份或 WAL 采样。', 'monitor-empty'));
+          return;
+        }
+        const source = el('p', `${formatTime(sample.collectedAt)} · `, 'monitor-note');
+        source.append(sampleLink(asset.id, sample.id));
+        body.append(source);
+        const archiver = sample.archiver;
+        if (archiver) body.append(stats([
+          ['归档成功', display(archiver.archivedCount), formatTime(archiver.lastArchivedAt)],
+          ['归档失败', display(archiver.failedCount), formatTime(archiver.lastFailedAt)]
+        ]));
+        const report = sample.report;
+        if (report?.status !== 'ok') {
+          body.append(el('p', report?.reason || '该时点缺少 pgBackRest 报告，WAL 计数来自 PostgreSQL。', 'monitor-note'));
+          return;
+        }
+        const seconds = value => `${number(value)} s`;
+        body.append(stats([
+          ['pgBackRest stanza', report.stanza, report.repositoryHealthy ? '报告正常' : '报告异常'],
+          ['最近成功备份', formatTime(report.lastSuccessAt), report.lastAttemptStatus === 'failed' ? '最近尝试失败' : ''],
+          ['目标 RPO', display(report.targetRpoSeconds || null, seconds)],
+          ['目标 RTO', display(report.targetRtoSeconds || null, seconds)]
+        ]));
+        if (report.archives.length) body.append(table(['仓库', '数据库编号', '最早归档 WAL', '最近归档 WAL', '仓库状态'],
+          report.archives.map(row => [row.repoKey, row.databaseId, row.first, row.last,
+            report.repositories.find(repo => repo.key === row.repoKey)?.healthy === true ? '报告正常' :
+              report.repositories.some(repo => repo.key === row.repoKey) ? '报告异常' : '状态未上报']), '仓库 WAL 边界'));
+        body.append(el('p', '归档边界来自 pgBackRest。连续性以逐段清单核查及隔离恢复记录为准。', 'monitor-note'));
+        if (report.walChecks.length) body.append(table(['仓库', '数据库编号', '核查范围', '已列出 / 应有', '缺失 WAL'],
+          report.walChecks.map(check => {
+            const covered = el('span', `${check.present} / ${check.present + check.missingCount}`);
+            const bar = el('progress');
+            bar.max = check.present + check.missingCount; bar.value = check.present;
+            bar.setAttribute('aria-label', 'WAL 清单覆盖');
+            covered.append(' ', bar);
+            const missing = check.missingCount ? `${check.missingCount} 段 · ${check.missing.join(', ')}` : '清单无缺口';
+            return [check.repoKey, check.databaseId, `${check.first} → ${check.last}`, covered, el('span', missing, check.missingCount ? 'monitor-warning' : '')];
+          }), 'WAL 逐段核查'));
+        if (report.jobs.length) body.append(table(['备份标识', '类型', '仓库', '完成时间', '容量', '依赖', '状态'],
+          report.jobs.map(job => [job.label, {full: '全量', diff: '差异', incr: '增量'}[job.type], job.repoKey || '未知',
+            formatTime(job.completedAt), display(job.bytes, bytes), [job.prior, ...job.references].filter(Boolean).join(' / '),
+            job.failed ? '失败' : job.dependenciesAvailable ? '清单完整' : '依赖未齐']), '备份清单'));
+        if (report.jobLimit) body.append(el('p', '当前采样最多保留 100 个备份条目。', 'monitor-note'));
+        if (report.restoreTests.length) body.append(table(['演练目标时刻', '备份', '仓库', '目标前事务', '目标后事务', '实测 RPO', '实测 RTO', '结束时间'],
+          report.restoreTests.map(test => [formatTime(test.targetAt), test.label, test.repoKey, test.confirmedBefore ? '已核对' : '核对失败',
+            test.excludedAfter ? '已排除' : '排除失败', display(test.rpoSeconds, seconds), display(test.rtoSeconds, seconds), formatTime(test.finishedAt)]), '隔离恢复演练记录'));
+      }
+    }
+
     function catalogPanel(asset, data, time, events) {
       const result = document.createDocumentFragment();
       const growth = new Map((data.growth || []).map(row => [`${row.kind}:${row.oid}`, row]));
@@ -1654,6 +1720,10 @@
       let section;
       if (mode === 'replication') section = 'series';
       if (mode === 'metrics') section = 'instance-history';
+      if (mode === 'backup') {
+        section = 'backup';
+        if (focusSample) query.set('sample', focusSample);
+      }
       if (mode === 'infra' && asset.runtime !== 'managed') {
         section = 'environment';
         if (asset.runtime === 'linux' && deviceType && deviceName) {
@@ -1766,6 +1836,7 @@
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events,
           [{ asset, observations: replication.topology }, ...topology]));
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
+        if (mode === 'backup') fragment.append(backupPanel(asset, data));
         if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
         if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);

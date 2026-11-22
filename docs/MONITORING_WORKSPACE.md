@@ -44,6 +44,14 @@ PG14–16 的检查点采样来自 `pg_stat_bgwriter`，PG17–18 来自 `pg_sta
 
 容量排行按数据库和对象 OID 对照区间首末有效样本。重命名保留原名和 OID，存储重写保留容量变化并标记计数边界，同名重建采用新 OID。增长量附有两个原始采样。观测至少 24 小时且净增长为正时提供基于该窗口的七天线性估算。维护视图可按死元组、冻结阈值占比或 Analyze 后变化行排序。活元组和死元组为统计估计，冻结阈值采用全局设置与表级有效限制。
 
+## 备份、WAL 与时间点恢复
+
+在纳管实例打开「备份与恢复」。为 Go 服务设置 `DBSPHERE_BACKUP_INFO_DIR`。一键离线部署可在 `dbsphere-go.env` 设置 `DBSPHERE_BACKUP_INFO_HOST_PATH`。该目录按只读方式挂载，文件由服务账号读取。用备份作业将 `pgbackrest --output=json --stanza=名称 info` 输出原子发布为 `<资产 UUID>.json`，每个文件只包含一个 stanza。采集最多读取 1 MiB，不执行备份命令。界面保留仓库边界、全量／差异／增量依赖、最近尝试以及原始采样。WAL 归档失败事件可进入相同时间范围。
+
+包装格式使用 `pgbackrest` 数组与可选 `lastAttempt` 对象（`status`、`at`）。`walChecks` 条目包含 `repoKey`、`databaseId`、同时间线的 `from` 和 `to`、`segmentBytes` 以及从仓库实际盘点出的 `segments`。界面展示逐段覆盖和缺失标识。单个核查窗最多 8,192 段。归档最早和最近标识只来自仓库报告。
+
+`restoreTests` 条目引用 `repoKey` 和已有 `backup` 标识，记录 `targetAt`、`startedAt`、`finishedAt`、`confirmedBefore` 和 `excludedAfter`。有准确来源与恢复提交时间时填写 `sourceCommitAt` 和 `restoredCommitAt` 供实测 RPO 对照。目标值用 `targetRpoSeconds` 和 `targetRtoSeconds` 设置。恢复验证在隔离实例执行。PG18 监控存储另读取目录中的 `monitor-store.json` 或原生服务配置的 `DBSPHERE_STORE_BACKUP_MANIFEST`，显示逻辑备份上报时间及恢复点。
+
 ## 页面与主题
 
 登录页和控制台顶部均可切换浅色、深色主题。首次访问默认浅色，浏览器记住选项。总览优先显示待处理事件及异常资产。在资产页可从抽屉新增或编辑纳管配置。事件详情将根因与证据、处置、时间线与报告置于同一事件下。告警、巡检和系统设置按专题切换。

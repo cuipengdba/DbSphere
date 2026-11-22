@@ -251,6 +251,9 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 			metrics["patroni"] = patroni
 		}
 	}
+	if backup := collector.Backup(id, time.Now().UTC()); backup != nil {
+		metrics["backup"] = backup
+	}
 	result, err := s.recordCheck(ctx, id, metrics, group, reason)
 	if err != nil {
 		return CheckResult{}, err

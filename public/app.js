@@ -1150,7 +1150,7 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   const panel = cell('section', '', 'incident-replay');
   panel.append(cell('h4', '全链路故障回放'));
   const jump = point => {
-    const topic = point.signal === 'pg.blocked_sessions' ? 'locks' : { k8s: 'infra', linux: 'infra', replication: 'replication',
+    const topic = point.signal === 'pg.blocked_sessions' ? 'locks' : point.signal === 'pg.archive_fail_delta' ? 'backup' : { k8s: 'infra', linux: 'infra', replication: 'replication',
       pooler: 'replication', sql: 'sql' }[point.layer] || 'metrics';
     monitoring.openIncident(event, topic, point);
     setView('monitoring');

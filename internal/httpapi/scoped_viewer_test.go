@@ -141,7 +141,7 @@ func TestScopedViewerCannotReadOtherAssetsOrAggregates(t *testing.T) {
 		"/api/assets/" + scopeAssetB, "/api/assets/" + scopeAssetB + "/samples",
 		"/api/assets/" + scopeAssetB + "/wait-history", "/api/assets/" + scopeAssetB + "/monitoring-context",
 		"/api/assets/" + scopeAssetB + "/catalog", "/api/assets/" + scopeAssetB + "/replication",
-		"/api/assets/" + scopeAssetB + "/environment",
+		"/api/assets/" + scopeAssetB + "/environment", "/api/assets/" + scopeAssetB + "/backup",
 		"/api/assets/" + scopeAssetB + "/instance-history",
 		"/api/assets/" + scopeAssetB + "/lock-history", "/api/assets/" + scopeAssetB + "/query-traces",
 		"/api/events/" + scopeEventB, "/api/events/" + scopeEventB + "/report",

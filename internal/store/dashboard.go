@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -163,8 +165,8 @@ func (s *Postgres) storageSnapshot(ctx context.Context) (json.RawMessage, error)
 				round(sizes.sample_partition_bytes::numeric/sample_stats.sample_count *
 				round(sample_stats.recent_samples::numeric/7)) END,
 			'retentionDays',nullif($1::int,0),'eventRetentionDays',nullif($2::int,0),
-			'backup',jsonb_build_object('status','unknown','reason','尚未接入 PG18 备份清单'))
-		FROM sample_stats,event_stats,sizes`, s.sampleRetentionDays, s.eventRetentionDays).Scan(&raw)
+			'backup',$3::jsonb)
+		FROM sample_stats,event_stats,sizes`, s.sampleRetentionDays, s.eventRetentionDays, collector.StoreBackup(time.Now().UTC())).Scan(&raw)
 	if err != nil {
 		return nil, fmt.Errorf("read PostgreSQL 18 storage status: %w", err)
 	}

@@ -45,6 +45,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.instanceHistory(ctx, id, params)
 	case "replication":
 		return s.replicationHistory(ctx, id, params)
+	case "backup":
+		return s.backupHistory(ctx, id, params)
 	case "catalog":
 		return s.databaseCatalog(ctx, id, params)
 	case "environment":
