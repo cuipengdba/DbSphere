@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.26.0'
-          previous_sha='582fcd9de89c0fee6de1ae7cd37b6f526f58923b22bd33e523075a134b7163c3'
+          previous_version='1.27.0'
+          previous_sha='452fd38a654959db8e2bc7be8699963661965822acf5eef979ca4ccc21251b0d'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.26.0'
-          previous_arm_sha='eee32392000d6593179ac2f915c9bcf003d735cc6046eb7b52d0c6ccc23f2c01'
+          previous_version='1.27.0'
+          previous_arm_sha='3a5bb06ebed7e7bfc387d6001c23f745150d90569f79a74f36732edf48eb00fd'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1386,7 +1386,13 @@ jobs:
       - name: Trace one real HTTP lock incident through PgBouncer
         env:
           DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TRACE_ACCEPTANCE_PROOF: ${{ runner.temp }}/trace-pg${{ matrix.pg }}.json
           DBSPHERE_TEST_PG_TARGET_PORT: '15435'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_POOLER_URL: postgres://dbsphere_monitor:dbsphere-monitor-test@127.0.0.1:16433/pgbouncer
         run: go test ./examples/trace-lock-app -run '^TestApplicationLockTraceThrough(PgBouncer|SeparatePgBouncerEndpoint)UsesOneDbSphereEventID$' -count=1 -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-multiservice-trace-pg${{ matrix.pg }}
+          path: ${{ runner.temp }}/trace-pg${{ matrix.pg }}.json
+          if-no-files-found: error

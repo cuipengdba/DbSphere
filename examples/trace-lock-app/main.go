@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,24 @@ type config struct {
 	token    string
 	listen   string
 	lockKey  int64
+}
+
+type demoTraceContext struct {
+	traceID, parentSpanID string
+}
+
+func demoTraceParent(header string) (demoTraceContext, error) {
+	fields := strings.Split(header, "-")
+	if len(fields) == 4 && fields[0] == "00" && len(fields[1]) == 32 && len(fields[2]) == 16 && len(fields[3]) == 2 {
+		_, traceErr := hex.DecodeString(fields[1])
+		_, spanErr := hex.DecodeString(fields[2])
+		_, flagsErr := hex.DecodeString(fields[3])
+		if traceErr == nil && spanErr == nil && flagsErr == nil && strings.Trim(fields[1], "0") != "" && strings.Trim(fields[2], "0") != "" {
+			return demoTraceContext{traceID: strings.ToLower(fields[1]), parentSpanID: strings.ToLower(fields[2])}, nil
+		}
+	}
+	id, err := randomHex(16)
+	return demoTraceContext{traceID: id}, err
 }
 
 func readConfig() (config, error) {
@@ -63,17 +82,20 @@ func attr(key, value string) map[string]any {
 	return map[string]any{"key": key, "value": map[string]string{"stringValue": value}}
 }
 
-func traceBody(traceID, serverID, dbID, host, database string, port, pid int,
+func traceBody(parentContext demoTraceContext, serverID, dbID, host, database string, port, pid int,
 	serverStart, dbStart, dbEnd, serverEnd time.Time, queryErr error) ([]byte, error) {
 	status := 1
 	if queryErr != nil {
 		status = 2
 	}
-	parent := map[string]any{"traceId": traceID, "spanId": serverID, "kind": 2,
+	parent := map[string]any{"traceId": parentContext.traceID, "spanId": serverID, "kind": 2,
 		"startTimeUnixNano": strconv.FormatInt(serverStart.UnixNano(), 10),
 		"endTimeUnixNano":   strconv.FormatInt(serverEnd.UnixNano(), 10),
 		"status":            map[string]any{"code": status}}
-	dbSpan := map[string]any{"traceId": traceID, "spanId": dbID, "parentSpanId": serverID,
+	if parentContext.parentSpanID != "" {
+		parent["parentSpanId"] = parentContext.parentSpanID
+	}
+	dbSpan := map[string]any{"traceId": parentContext.traceID, "spanId": dbID, "parentSpanId": serverID,
 		"kind": 3, "startTimeUnixNano": strconv.FormatInt(dbStart.UnixNano(), 10),
 		"endTimeUnixNano": strconv.FormatInt(dbEnd.UnixNano(), 10),
 		"status":          map[string]any{"code": status},
@@ -85,9 +107,9 @@ func traceBody(traceID, serverID, dbID, host, database string, port, pid int,
 		"scopeSpans": []any{map[string]any{"spans": []any{parent, dbSpan}}}}}})
 }
 
-func runCheckout(ctx context.Context, cfg config, client *http.Client) (string, int, error) {
+func runCheckout(ctx context.Context, cfg config, client *http.Client, traceparent string) (string, int, error) {
 	serverStart := time.Now().UTC()
-	traceID, err := randomHex(16)
+	parent, err := demoTraceParent(traceparent)
 	if err != nil {
 		return "", 0, err
 	}
@@ -123,29 +145,36 @@ func runCheckout(ctx context.Context, cfg config, client *http.Client) (string, 
 	}
 	dbEnd := time.Now().UTC()
 	serverEnd := dbEnd
-	body, marshalErr := traceBody(traceID, serverID, dbID, parsed.Host, parsed.Database,
+	body, marshalErr := traceBody(parent, serverID, dbID, parsed.Host, parsed.Database,
 		int(parsed.Port), pid, serverStart, dbStart, dbEnd, serverEnd, err)
 	if marshalErr != nil {
-		return traceID, pid, marshalErr
+		return parent.traceID, pid, marshalErr
 	}
+	if exportErr := exportTrace(cfg, client, body); exportErr != nil {
+		return parent.traceID, pid, exportErr
+	}
+	return parent.traceID, pid, err
+}
+
+func exportTrace(cfg config, client *http.Client, body []byte) error {
 	exportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	request, requestErr := http.NewRequestWithContext(exportCtx, http.MethodPost, cfg.endpoint,
 		bytes.NewReader(body))
 	if requestErr != nil {
-		return traceID, pid, requestErr
+		return requestErr
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+cfg.token)
 	response, exportErr := client.Do(request)
 	if exportErr != nil {
-		return traceID, pid, exportErr
+		return exportErr
 	}
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
-		return traceID, pid, fmt.Errorf("OTLP receiver returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("OTLP receiver returned HTTP %d", response.StatusCode)
 	}
-	return traceID, pid, err
+	return nil
 }
 
 func newHandler(cfg config, client *http.Client) http.Handler {
@@ -161,7 +190,7 @@ func newHandler(cfg config, client *http.Client) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		traceID, pid, err := runCheckout(ctx, cfg, client)
+		traceID, pid, err := runCheckout(ctx, cfg, client, r.Header.Get("Traceparent"))
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)

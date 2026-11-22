@@ -68,6 +68,44 @@ func startPoolerTCPForwarder(t *testing.T, upstream string) net.Listener {
 	return listener
 }
 
+func startTraceGateway(t *testing.T, target string, cfg config) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now().UTC()
+		traceID, traceErr := randomHex(16)
+		spanID, spanErr := randomHex(8)
+		if traceErr != nil || spanErr != nil {
+			http.Error(w, "trace context unavailable", http.StatusInternalServerError)
+			return
+		}
+		request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target+"/checkout", nil)
+		if err != nil {
+			http.Error(w, "invalid checkout endpoint", http.StatusBadGateway)
+			return
+		}
+		request.Header.Set("Traceparent", "00-"+traceID+"-"+spanID+"-01")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			http.Error(w, "checkout unavailable", http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		payload, err := json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{attr("service.name", "dbsphere-checkout-gateway"),
+				attr("dbsphere.trace.sampling_probability", "0.25")}},
+			"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{"traceId": traceID, "spanId": spanID,
+				"kind": 2, "startTimeUnixNano": strconv.FormatInt(started.UnixNano(), 10),
+				"endTimeUnixNano": strconv.FormatInt(time.Now().UnixNano(), 10)}}}},
+		}}})
+		if err != nil || exportTrace(cfg, http.DefaultClient, payload) != nil {
+			http.Error(w, "gateway trace unavailable", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, response.Body)
+	}))
+}
+
 func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, separatePoolerEndpoint bool) {
 	t.Helper()
 	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
@@ -79,6 +117,10 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	port, err := strconv.Atoi(portText)
 	if err != nil {
 		t.Fatal(err)
+	}
+	targetHost := os.Getenv("DBSPHERE_TEST_PG_TARGET_HOST")
+	if targetHost == "" {
+		targetHost = "127.0.0.1"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -112,7 +154,7 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 		}
 	}()
 	key := []byte("01234567890123456789012345678901")
-	assetInput := assets.Input{Name: "Real HTTP lock drill", Host: "127.0.0.1",
+	assetInput := assets.Input{Name: "Real HTTP lock drill", Host: targetHost,
 		Port: port, Database: "postgres", Username: "postgres", Password: password,
 		SSLMode: "disable", Runtime: "linux"}
 	if viaPooler {
@@ -143,7 +185,7 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	receiver := httptest.NewServer(httpapi.New(pg, httpapi.AuthConfig{MasterKey: key,
 		OTLPToken: token}))
 	defer receiver.Close()
-	targetURL := (&url.URL{Scheme: "postgres", Host: "127.0.0.1:" + portText,
+	targetURL := (&url.URL{Scheme: "postgres", Host: net.JoinHostPort(targetHost, portText),
 		Path: "/postgres", User: url.UserPassword("postgres", password),
 		RawQuery: "sslmode=disable"}).String()
 	appURL := targetURL
@@ -173,10 +215,16 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	if _, err := blocker.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
 		t.Fatal(err)
 	}
-	app := httptest.NewServer(newHandler(config{pgURL: appURL,
-		endpoint: receiver.URL + "/v1/traces", token: token, lockKey: lockKey},
+	appConfig := config{pgURL: appURL, endpoint: receiver.URL + "/v1/traces", token: token, lockKey: lockKey}
+	app := httptest.NewServer(newHandler(appConfig,
 		&http.Client{Timeout: 5 * time.Second}))
 	defer app.Close()
+	entryPoint := app.URL
+	if viaPooler {
+		gateway := startTraceGateway(t, app.URL, appConfig)
+		defer gateway.Close()
+		entryPoint = gateway.URL
+	}
 	defer blocker.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", lockKey)
 	type response struct {
 		code int
@@ -186,7 +234,7 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	done := make(chan response, 1)
 	traceID := ""
 	go func() {
-		res, err := http.Get(app.URL + "/checkout")
+		res, err := http.Get(entryPoint + "/checkout")
 		if err != nil {
 			done <- response{err: err}
 			return
@@ -280,8 +328,10 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 		}
 	}
 	if viaPooler {
-		for _, marker := range []string{`"relation":"via_pooler"`, `"relation":"forwards_to"`,
-			`"type":"pgbouncer"`} {
+		for _, marker := range []string{`"relation":"via_pooler"`, `"relation":"forwards_to"`, `"relation":"calls_service"`,
+			`"type":"pgbouncer"`, `"parentState":"complete"`, `"service":"dbsphere-checkout-gateway"`,
+			`"samplingProbability":0.25`, `"backendState":"matched"`, `"poolerState":"pool_sample_observed"`,
+			`"backendSampleId":"` + checked.SampleID + `"`} {
 			if !strings.Contains(string(encoded), marker) {
 				t.Fatalf("real PgBouncer lock chain is missing %s: %s", marker, encoded)
 			}
@@ -326,6 +376,21 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 		}
 		lastStatus = incident.Event.Status
 		if lastStatus == "resolved" {
+			if separatePoolerEndpoint {
+				if proof := os.Getenv("DBSPHERE_TRACE_ACCEPTANCE_PROOF"); proof != "" {
+					combined := map[string]any{"event": resolved, "trace": rawTrace, "traceId": traceID,
+						"backendPid": waitingPID, "blockerPid": blockerPID, "sampleId": checked.SampleID}
+					payload, err := json.MarshalIndent(combined, "", "  ")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(proof, payload, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			t.Logf("event %s, trace %s, locked backend %d, blocker %d, source %s, through PgBouncer %t", eventID,
+				traceID, waitingPID, blockerPID, checked.SampleID, viaPooler)
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

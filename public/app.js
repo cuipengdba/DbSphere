@@ -1586,6 +1586,39 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   return panel;
 }
 
+function traceRequestEvidence(paths, assetId, limited) {
+  const section = cell('details', '', 'evidence');
+  section.append(cell('summary', `查看数据库请求路径（${paths.length}）`));
+  const parentStates = { complete: '父 Span 齐全', database_root: '数据库调用是当前根节点', missing_parent: '上游父 Span 未取得', cycle: '父子关系出现循环', depth_limit: '达到路径深度上限' };
+  const backendStates = { matched: '等待 PID 匹配', mismatch: '调用 PID 与所见等待 PID 不符', no_lock_evidence: '调用窗内无可核对的锁样本', pid_unreported: '应用未上报后端 PID', time_unreliable: '数据库 Span 时间异常' };
+  const poolerStates = { mapped_endpoint: '命中配置的 PgBouncer 入口', pool_sample_observed: '命中 PgBouncer 入口且调用窗内有连接池采样', time_unreliable: '代理采样的时间关联待核对' };
+  for (const path of paths) {
+    const card = cell('details', '', 'evidence');
+    const services = path.steps.filter(step => step.kind !== 'postgresql_client').map(step => step.service)
+      .filter((service, index, values) => index === 0 || service !== values[index - 1]);
+    card.append(cell('summary', [...services, ...(path.route === 'pgbouncer' ? ['PgBouncer'] : []), 'PostgreSQL'].join(' → ')));
+    const status = [parentStates[path.parentState], path.clockAnomaly ? '路径包含时间异常' : '', poolerStates[path.poolerState], backendStates[path.backendState]].filter(Boolean);
+    card.append(cell('p', status.join(' · ')));
+    const metrics = [path.backendPid ? `上报后端 PID ${path.backendPid}` : '', path.blockerPid ? `阻塞 PID ${path.blockerPid}` : ''];
+    if (metrics.some(Boolean)) card.append(cell('small', metrics.filter(Boolean).join(' · ')));
+    const table = importTable(['服务 / 调用', '开始时间', '耗时 ms', '采样声明', '时间检查'], path.steps.map(step => [
+      step.kind === 'postgresql_client' ? `${step.service} · PostgreSQL` : step.service, formatTime(step.startedAt), String(step.durationMs),
+      step.samplingProbability == null ? '未声明' : `${Number((step.samplingProbability * 100).toPrecision(4))}%`,
+      { unreliable: '时间异常', unavailable: '接收时间缺失', observed: '接收时间可核对' }[step.clock]
+    ]));
+    table.setAttribute('aria-label', '多服务请求证据');
+    const wrap = cell('div', '', 'monitor-table'); wrap.append(table); card.append(wrap);
+    const refs = cell('div', '', 'actions');
+    for (const [label, endpoint, id] of [['原始请求 Trace', 'traces', path.traceId], ['后端会话证据', 'samples', path.backendSampleId], ['连接池采样', 'samples', path.poolerSampleId]]) {
+      if (!id) continue;
+      const link = cell('a', label, 'monitor-link'); link.href = `/api/assets/${assetId}/${endpoint}/${id}`; refs.append(link);
+    }
+    card.append(refs); section.append(card);
+  }
+  if (limited) section.append(cell('small', '此处显示优先核对的 12 条路径。'));
+  return section;
+}
+
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   if (updateHash) setView(`incidents?event=${encodeURIComponent(id)}`);
@@ -1704,6 +1737,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   if (analysis.traceCoverage?.unresolvedParentSpans) diagnosis.append(cell('small',
     `链路断点：${analysis.traceCoverage.unresolvedParentSpans} 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；可能由采样、延迟或时间窗造成。`));
+  if (analysis.traceCoverage?.requestPaths?.length) {
+    diagnosis.append(traceRequestEvidence(analysis.traceCoverage.requestPaths, event.assetId, analysis.traceCoverage.requestPathsAtLimit));
+  }
   if (analysis.traceCoverage?.serviceImpact?.length) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
     for (const service of analysis.traceCoverage.serviceImpact) {

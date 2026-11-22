@@ -265,6 +265,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
 	observedSpans := []observedTraceSpan{}
+	requestSpans := []requestSpanObservation{}
 	traceReplay := []replayPoint{}
 	appPodReported, appPodVerified := 0, 0
 	appPodEdges := map[string]bool{}
@@ -333,6 +334,8 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		if queryID != nil {
 			observed.QueryID = *queryID
 		}
+		requestSpans = append(requestSpans, requestSpanObservation{observedTraceSpan: observed, Route: route,
+			Sampling: declaredProbability, ReceivedAt: receivedAt, TimingAnomaly: timingAnomaly})
 		if !timingAnomaly {
 			observedSpans = append(observedSpans, observed)
 		}
@@ -491,6 +494,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 		return nil, err
 	}
 	traceRows.Close()
+	requestPaths, requestPathsAtLimit := traceRequestPaths(requestSpans, samples)
 	classifyTraceImpact(observedSpans, samples, serviceImpacts, sqlRegressionForEvent(event))
 	unresolvedParentSpans := addTraceParentAndServiceEdges(parentEdges, spanServices, &edges)
 	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
@@ -529,7 +533,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			"unresolvedParentSpans": unresolvedParentSpans,
 			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,
 			"appPodReported": appPodReported, "appPodVerified": appPodVerified,
-			"sampling": sampling, "clock": clock},
+			"sampling": sampling, "clock": clock, "requestPaths": requestPaths, "requestPathsAtLimit": requestPathsAtLimit},
 	}
 	replay := incidentReplay(event, samples, candidates)
 	if err := s.enrichIncidentReplay(ctx, event, replay, samples, traceReplay, edges); err != nil {
