@@ -584,6 +584,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}()
 			}
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/rca/rules" {
+			handleRCAPolicy(w, r, store, role, "", "")
+			return
+		}
+		if match := rcaRulePath.FindStringSubmatch(r.URL.Path); match != nil &&
+			(r.Method == http.MethodGet || r.Method == http.MethodPatch) {
+			handleRCAPolicy(w, r, store, role, match[1], "")
+			return
+		}
+		if match := rcaReplayPath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodGet {
+			handleRCAPolicy(w, r, store, role, "", match[1])
+			return
+		}
 		if match := eventImpactPath.FindStringSubmatch(r.URL.Path); match != nil &&
 			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
 			var permitted []string

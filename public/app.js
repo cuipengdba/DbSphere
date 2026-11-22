@@ -8,6 +8,7 @@ let selectedAssetTrendHours = 24;
 let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
+let rcaWorkbenchRequest = 0;
 const pageSections = { alerts: 'active', inspections: 'history', settings: 'storage' };
 let recentEvents = [];
 let allAssets = [];
@@ -69,7 +70,14 @@ function setView(route, updateHash = true) {
   $('view-title').textContent = views[selected][0];
   $('view-description').textContent = views[selected][1];
   if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
-  if (pageSections[selected]) showSection(selected, selected === 'settings' && params.get('section') === 'collector' ? 'collector' : pageSections[selected]);
+  if (pageSections[selected]) {
+    const section = params.get('section');
+    if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
+      showSection(selected, section, params.get('event'), params.get('rule'));
+    } else {
+      showSection(selected, selected === 'settings' && section === 'collector' ? 'collector' : pageSections[selected]);
+    }
+  }
   monitoring.setVisible(selected === 'monitoring');
   if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
   if (updateHash) {
@@ -83,14 +91,126 @@ function setView(route, updateHash = true) {
   }
 }
 
-function showSection(view, section) {
+function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && currentRole !== 'admin') section = 'storage';
+  if (view === 'alerts' && section === 'rca' && currentRole !== 'admin') section = 'active';
   pageSections[view] = section;
   for (const button of document.querySelectorAll(`[data-view="${view}"] [data-section]`)) {
     button.setAttribute('aria-pressed', String(button.dataset.section === section));
+    if (button.classList.contains('admin-only')) button.hidden = currentRole !== 'admin';
   }
   for (const panel of document.querySelectorAll(`[data-view="${view}"][data-section-panel], [data-view="${view}"] [data-section-panel]`)) {
     panel.hidden = panel.dataset.sectionPanel !== section || (panel.classList.contains('admin-only') && currentRole !== 'admin');
+  }
+  if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
+}
+
+const rcaEvaluationLabels = {
+  matched: '显示候选', no_candidate: '该事件未产生此候选', disabled: '规则已停用',
+  evidence_below_minimum: '支持引用低于规则要求', onset_not_established: '首次观测时间未达到规则要求'
+};
+
+async function renderRCAWorkbench(eventId = '', preferredCode = '') {
+  const target = $('rca-workbench');
+  const request = ++rcaWorkbenchRequest;
+  target.replaceChildren(cell('p', '正在读取根因规则…', 'hint'));
+  try {
+    const { rules } = await api('/api/rca/rules');
+    if (request !== rcaWorkbenchRequest) return;
+    const active = cell('div', '', 'form-grid rca-rule-picker');
+    const picker = document.createElement('select');
+    picker.setAttribute('aria-label', '根因规则');
+    for (const rule of rules) {
+      const option = cell('option', rule.title); option.value = rule.code; picker.append(option);
+    }
+    if (rules.some(rule => rule.code === preferredCode)) picker.value = preferredCode;
+    const pickerField = cell('label', '规则'); pickerField.append(picker);
+    const eventField = cell('label', '回放事件 ID');
+    const eventInput = document.createElement('input');
+    eventInput.setAttribute('aria-label', '回放事件 ID'); eventInput.maxLength = 36; eventInput.value = eventId || '';
+    eventField.append(eventInput); active.append(pickerField, eventField);
+    const editor = cell('div', '', 'list');
+    target.replaceChildren(active, editor);
+    let revisionRequest = 0;
+    const showRule = async () => {
+      const run = ++revisionRequest;
+      const rule = rules.find(item => item.code === picker.value);
+      editor.replaceChildren();
+      if (!rule) return;
+      editor.append(cell('p', `当前版本 v${rule.version} · 新版本用于保存后新发生的事件。`, 'hint'));
+      const form = cell('form', '', 'form-grid routing-form');
+      const field = (labelText, control) => {
+        const label = cell('label', labelText);
+        control.setAttribute('aria-label', labelText);
+        label.append(control); form.append(label);
+      };
+      const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;
+      const onset = document.createElement('input'); onset.type = 'checkbox'; onset.checked = rule.requireOnset;
+      const minimum = document.createElement('input'); minimum.type = 'number'; minimum.min = '0';
+      minimum.max = '10'; minimum.required = true; minimum.value = rule.minEvidence;
+      const reason = document.createElement('input'); reason.required = true; reason.maxLength = 180;
+      field('启用规则', enabled); field('最少支持引用', minimum);
+      field('要求首次观测不晚于事件开始', onset); field('版本变更原因', reason);
+      const save = cell('button', '保存规则版本'); save.type = 'submit'; form.append(save);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        save.disabled = true;
+        try {
+          const updated = await api(`/api/rca/rules/${rule.code}`, 'PATCH',
+            { expectedVersion: rule.version, enabled: enabled.checked, minEvidence: Number(minimum.value),
+              requireOnset: onset.checked, reason: reason.value });
+          notice(`已保存根因规则 v${updated.version}。`);
+          await renderRCAWorkbench(eventInput.value, rule.code);
+        } catch (error) { notice(error.message, true); }
+        finally { save.disabled = false; }
+      });
+      const replay = cell('button', '回放规则', 'ghost small-button'); replay.type = 'button';
+      const replayResult = cell('div', '', 'list');
+      replay.addEventListener('click', async () => {
+        const id = eventInput.value.trim();
+        if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)) {
+          notice('请填写有效的事件 ID。', true); return;
+        }
+        replay.disabled = true;
+        try {
+          const result = await api(`/api/events/${id}/rca-replay?rule=${encodeURIComponent(rule.code)}`);
+          if (run !== revisionRequest || request !== rcaWorkbenchRequest) return;
+          const title = cell('p', `${result.eventStatus === 'resolved' ? '已恢复事件' : '事件'} ${result.eventId}`, 'hint');
+          replayResult.replaceChildren(title);
+          for (const [label, evaluation] of [['事件开始时规则', result.historical], ['当前规则', result.current]]) {
+            const row = cell('div', '', 'evidence');
+            row.append(cell('strong', `${label} v${evaluation.version} · ${rcaEvaluationLabels[evaluation.outcome] || evaluation.outcome}`));
+            const candidate = evaluation.candidate;
+            if (candidate?.coverage) row.append(cell('p', `支持引用 ${candidate.coverage.supports} · 反证 ${candidate.coverage.against} · 待核对 ${candidate.coverage.missing}`));
+            if (candidate?.timeOrder?.firstObservedAt) row.append(cell('p', `首次观测 ${formatTime(candidate.timeOrder.firstObservedAt)} · 事件开始 ${formatTime(result.eventStartedAt)}`));
+            for (const evidence of candidate?.supports || []) {
+              if (evidence.startsWith('sample:')) row.append(replaySampleLink(result.assetId, evidence.slice(7)));
+            }
+            for (const counter of candidate?.against || []) row.append(cell('p', counter, 'warning'));
+            for (const gap of candidate?.missing || []) row.append(cell('p', gap, 'hint'));
+            replayResult.append(row);
+          }
+          const link = cell('a', '返回原事件', 'monitor-link');
+          link.href = `#incidents?event=${id}`; replayResult.append(link);
+        } catch (error) { notice(error.message, true); }
+        finally { replay.disabled = false; }
+      });
+      const history = cell('details', '', 'settings-details');
+      history.append(cell('summary', '版本历史'));
+      editor.append(form, history, replay, replayResult);
+      try {
+        const { versions } = await api(`/api/rca/rules/${rule.code}`);
+        if (run !== revisionRequest || request !== rcaWorkbenchRequest) return;
+        for (const version of versions) {
+          const at = version.version === 1 ? '初始版本' : formatTime(version.effectiveAt);
+          history.append(cell('p', `v${version.version} · ${at} · ${version.enabled ? '启用' : '停用'} · 最少支持引用 ${version.minEvidence} · ${version.reason}`, 'evidence'));
+        }
+      } catch (error) { if (run === revisionRequest) history.append(cell('p', error.message, 'warning')); }
+    };
+    picker.addEventListener('change', () => { void showRule(); });
+    void showRule();
+  } catch (error) {
+    if (request === rcaWorkbenchRequest) target.replaceChildren(cell('p', error.message, 'warning'));
   }
 }
 
@@ -1943,6 +2063,12 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     evidencePanel.append(incidentImpactPanel(impact, event));
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
+  if (replay && currentRole === 'admin') {
+    const ruleReplay = cell('a', '回放根因规则', 'monitor-link');
+    const params = new URLSearchParams({ section: 'rca', event: event.id });
+    if (analysis.candidates[0]?.code) params.set('rule', analysis.candidates[0].code);
+    ruleReplay.href = `#alerts?${params}`; diagnosis.append(ruleReplay);
+  }
   diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
   if (analysis.traceCoverage) {
     const coverage = analysis.traceCoverage;
@@ -2048,12 +2174,17 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     }
     graphDetails.append(relation);
   }
-  if (analysis.status === 'unlocated') diagnosis.append(cell('p', '未定位：当前证据不足以支持根因候选。', 'warning'));
+  if (analysis.ruleSuppressedCount > 0)
+    diagnosis.append(cell('p', `事件适用的规则过滤了 ${analysis.ruleSuppressedCount} 条候选。`, 'hint'));
+  if (analysis.status === 'unlocated')
+    diagnosis.append(cell('p', analysis.ruleSuppressedCount ? '未定位 · 当前规则条件未满足' : '未定位 · 证据不足', 'warning'));
   for (const candidate of analysis.candidates) {
     const candidateCard = cell('section', '', 'rca-candidate');
     candidateCard.append(cell('h5', candidate.title),
       cell('p', `${replayStrength[candidate.evidenceStrength] || '时间相关'} · ${candidate.limitation}`, 'rca-candidate-interpretation'));
     const facts = cell('div', '', 'rca-facts');
+    if (candidate.rule && candidate.coverage) facts.append(cell('p',
+      `规则 v${candidate.rule.version} · 支持引用 ${candidate.coverage.supports} · 反证 ${candidate.coverage.against} · 待核对 ${candidate.coverage.missing}`, 'hint'));
     const supports = document.createElement('details');
     supports.append(cell('summary', `查看支持证据（${candidate.supports.length} 条）`));
     for (const support of candidate.supports) {

@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.30.0'
-          previous_sha='b8ec5b1e888b48e7faad2a101a45fb8575556c3b1cc573767614d4f813690d93'
+          previous_version='1.31.0'
+          previous_sha='c5807cd93baca7e1aa3c82cc51e05f5663c4cd3928714937aa4c8dc1e8f72058'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.30.0'
-          previous_arm_sha='8394cc423cccfefbcb43e60a3f473f6be7bdd365dea7d4f57b1deba47d2f3615'
+          previous_version='1.31.0'
+          previous_arm_sha='bc09fcf38aea21e9911f0e8780662f9832c7ede045ef959d7d92068056296683'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1459,6 +1459,7 @@ jobs:
           fi
           go test ./internal/store -run '^TestReal((PgBouncerPoolExhaustion|HAProxyRouteMismatch)KeepsOneEvent|PG18ChangeTimelineSeparatesObservedAndOperator)$' -count=1 -v
           go test ./internal/store -run '^TestRealHAProxySharedDependencyLinksAndSplitsOriginalEvents$' -count=1 -v
+          go test ./internal/store -run '^TestRealPG18RCARuleRevisionReplaysRecoveredEvent$' -count=1 -v
       - uses: actions/upload-artifact@v4
         with:
           name: dbsphere-multiservice-trace-pg${{ matrix.pg }}

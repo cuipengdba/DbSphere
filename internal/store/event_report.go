@@ -40,14 +40,22 @@ type eventReportData struct {
 			Clock                 traceClockSummary    `json:"clock"`
 		} `json:"traceCoverage"`
 		Candidates []struct {
-			Code              string   `json:"code"`
-			Title             string   `json:"title"`
-			Confidence        string   `json:"confidence"`
-			EvidenceStrength  string   `json:"evidenceStrength"`
-			Supports          []string `json:"supports"`
-			Against           []string `json:"against"`
-			Missing           []string `json:"missing"`
-			Limitation        string   `json:"limitation"`
+			Code             string   `json:"code"`
+			Title            string   `json:"title"`
+			Confidence       string   `json:"confidence"`
+			EvidenceStrength string   `json:"evidenceStrength"`
+			Supports         []string `json:"supports"`
+			Against          []string `json:"against"`
+			Missing          []string `json:"missing"`
+			Limitation       string   `json:"limitation"`
+			Rule             struct {
+				Version int `json:"version"`
+			} `json:"rule"`
+			Coverage struct {
+				Supports int `json:"supports"`
+				Against  int `json:"against"`
+				Missing  int `json:"missing"`
+			} `json:"coverage"`
 			MatchedConditions []struct {
 				Metric    string `json:"metric"`
 				Observed  any    `json:"observed"`
@@ -436,6 +444,10 @@ func renderEventMarkdown(data eventReportData) string {
 			reportText(candidate.TimeOrder.Relation), reportText(candidate.Limitation))
 		if strength != "" {
 			fmt.Fprintf(&out, "证据关系：%s\n\n", strength)
+		}
+		if candidate.Rule.Version != 0 {
+			fmt.Fprintf(&out, "规则 v%d · 支持引用 %d · 反证 %d · 待核对 %d\n\n", candidate.Rule.Version,
+				candidate.Coverage.Supports, candidate.Coverage.Against, candidate.Coverage.Missing)
 		}
 		if len(candidate.Against) > 0 {
 			fmt.Fprintf(&out, "反证：%s\n\n", reportText(strings.Join(candidate.Against, "；")))

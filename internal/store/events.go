@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -149,6 +150,10 @@ func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, erro
 }
 
 func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
+	return s.eventWithRCAPolicy(ctx, id, "")
+}
+
+func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string) (any, error) {
 	event, err := s.loadEvent(ctx, id)
 	if err != nil || event == nil {
 		return nil, err
@@ -522,6 +527,33 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	for _, service := range services {
 		impactList = append(impactList, *serviceImpacts[service])
 	}
+	historical, err := s.rcaPoliciesAt(ctx, event.StartedAt)
+	if err != nil {
+		return nil, err
+	}
+	policies := policiesByCode(historical)
+	if replayCode != "" {
+		current, err := s.rcaPoliciesAt(ctx, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		var matched map[string]any
+		for _, candidate := range candidates {
+			if candidate["code"] == replayCode {
+				matched = candidate
+				break
+			}
+		}
+		return map[string]any{"eventId": event.ID, "assetId": event.AssetID, "eventStatus": event.Status, "eventStartedAt": event.StartedAt,
+			"ruleCode": replayCode, "title": rcaRuleTitles[replayCode],
+			"historical": evaluateRCACandidate(matched, policies[replayCode], event.StartedAt),
+			"current":    evaluateRCACandidate(matched, policiesByCode(current)[replayCode], event.StartedAt)}, nil
+	}
+	candidates, hidden := selectRCACandidates(candidates, policies, event.StartedAt)
+	if len(hidden) != 0 {
+		nodes = slices.DeleteFunc(nodes, func(node map[string]any) bool { return hidden[stringValue(node["id"])] })
+		edges = slices.DeleteFunc(edges, func(edge map[string]string) bool { return hidden[edge["from"]] || hidden[edge["to"]] })
+	}
 	status := "unlocated"
 	if len(candidates) > 0 {
 		status = "candidates"
@@ -529,6 +561,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	analysis := map[string]any{
 		"status": status, "graph": map[string]any{"nodes": nodes, "edges": edges},
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
+		"ruleSuppressedCount": len(hidden),
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
 			"unresolvedParentSpans": unresolvedParentSpans,
 			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,

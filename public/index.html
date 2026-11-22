@@ -155,12 +155,13 @@
           <div id="event-page-controls" class="event-page-controls" hidden><button id="event-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="event-next" type="button" class="ghost small-button" disabled>下一页</button></div></section>
         <section class="panel"><div class="section-head"><div><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择事件查看它的全链路证据。</div></section>
       </div>
-      <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button></div>
+      <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="rca" class="admin-only">根因规则</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button></div>
       <div class="section-stack" data-view="alerts">
         <section class="panel" data-section-panel="active"><div class="section-head"><div><h2>值班事件</h2></div></div><div id="alert-list" class="list"></div></section>
         <section class="panel" data-section-panel="delivery"><div class="section-head"><div><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
       </div>
       <section class="panel" data-view="alerts" data-section-panel="rules"><div class="section-head"><h2>告警规则与阈值</h2></div><div id="rule-list" class="list"></div></section>
+      <section class="panel admin-only" data-view="alerts" data-section-panel="rca"><div class="section-head"><h2>根因规则工作台</h2></div><div id="rca-workbench" class="list"></div></section>
       <div class="grid" data-view="alerts" data-section-panel="silences">
         <section class="panel">
           <div class="section-head"><div><h2>静默与维护窗</h2></div></div>
