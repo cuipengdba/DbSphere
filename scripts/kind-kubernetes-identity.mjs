@@ -83,9 +83,13 @@ apply({apiVersion:'v1',kind:'PersistentVolume',metadata:{name:volume},spec:{stor
 wait('pod/'+pod);
 
 function routes(reading) { return Object.values(reading.metrics.k8s.endpointRoutes?.slices || {}); }
+function healthyRoute(reading, uid) {
+  return reading.metrics.collector.pgStatus === 'ok' && reading.metrics.k8s.pod?.uid === uid &&
+    routes(reading).some(item => item.endpoint.targetUID === uid && item.endpoint.conditions?.ready === true);
+}
 const bound = await until(async () => {
   const reading = await sample();
-  return reading.metrics.collector.pgStatus === 'ok' && routes(reading).some(item => item.endpoint.conditions.ready === true) ? reading : null;
+  return healthyRoute(reading, originalPod.metadata.uid) ? reading : null;
 }, 'The current EndpointSlice did not become ready', 12);
 assert.equal(bound.metrics.k8s.pvcs[0].phase, 'Bound');
 assert.equal(bound.metrics.k8s.pvcs[0].volume.claimUID, claim.metadata.uid);
@@ -106,7 +110,7 @@ apply({apiVersion:'discovery.k8s.io/v1',kind:'EndpointSlice',metadata:{...metada
     conditions:{ready:false,serving:false,terminating:true},targetRef:{kind:'Pod',name:pod,namespace,uid:oldUID}}]});
 const replaced = await until(async () => {
   const reading = await sample();
-  return reading.metrics.k8s.pod?.uid === newUID && routes(reading).some(item => item.endpoint.targetUID === newUID) ? reading : null;
+  return healthyRoute(reading, newUID) ? reading : null;
 }, 'EndpointSlice did not follow the replacement UID', 12);
 assert.ok(replaced.metrics.k8s.endpointRoutes.identityMismatches >= 1);
 assert.ok(routes(replaced).every(item => item.endpoint.targetUID === newUID));
@@ -118,11 +122,16 @@ try {
   replaceRules(rules.filter(rule => !rule.resources.includes('endpointslices')));
   degraded = await until(async () => {
     const reading = await sample();
-    return reading.metrics.k8s.endpointRoutes?.status === 'unavailable' ? reading : null;
+    const routes = reading.metrics.k8s.endpointRoutes;
+    return routes?.status === 'unavailable' && /\b403\b/.test(routes.reason) && reading.metrics.collector.pgStatus === 'ok' ? reading : null;
   }, 'Permission removal did not surface an EndpointSlice gap', 10);
   assert.equal(degraded.metrics.collector.pgStatus, 'ok');
   assert.equal(degraded.metrics.k8s.pod.uid, newUID);
 } finally { replaceRules(rules); }
+const restored = await until(async () => {
+  const reading = await sample();
+  return healthyRoute(reading, newUID) ? reading : null;
+}, 'Restored permissions did not recover the EndpointSlice observation', 12);
 const to = new Date().toISOString();
 const query = new URLSearchParams({from:startedAt,to,bucketMinutes:'1'});
 const history = (await api(root+'/environment?'+query)).changes;
@@ -132,4 +141,4 @@ assert.ok(history.some(item => item.uid === newUID && item.previousUID === oldUI
 assert.equal((await api(root+'/samples/'+pending.id)).sample.metrics.k8s.pod.uid, oldUID);
 assert.equal((await api(`/api/events/${event.id}`)).event.status, 'resolved');
 console.log(JSON.stringify({ asset:asset.id, namespace, pod, startedAt, to, oldUID, newUID, claimUID:claim.metadata.uid,
-  event:event.id, pending:pending.id, bound:bound.id, replaced:replaced.id, denied:degraded.id }, null, 2));
+  event:event.id, pending:pending.id, bound:bound.id, replaced:replaced.id, denied:degraded.id, restored:restored.id }, null, 2));
