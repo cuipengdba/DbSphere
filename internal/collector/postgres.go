@@ -66,16 +66,18 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	var commits, rollbacks, databaseBytes int64
 	var serverAddress, databaseName string
 	var serverPort int
+	var startedAt time.Time
 	err = conn.QueryRow(connectCtx, `SELECT current_setting('server_version_num')::int,
 		pg_is_in_recovery(),pg_has_role(current_user,'pg_monitor','member'),
 		pg_has_role(current_user,'pg_read_all_stats','USAGE'),
 		r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,
 		coalesce(s.numbackends,0)::int,coalesce(s.xact_commit,0)::bigint,
 		coalesce(s.xact_rollback,0)::bigint,pg_database_size(current_database())::bigint,
-		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0),current_database()
+		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0),
+		current_database(),pg_postmaster_start_time()
 		FROM pg_roles r LEFT JOIN pg_stat_database s ON s.datname=current_database()
 		WHERE r.rolname=current_user`).Scan(&version, &recovery, &monitor, &readStats, &super, &createDB, &createRole,
-		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName)
+		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName, &startedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -89,9 +91,10 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	}
 	metrics := map[string]any{
 		"version_num": version, "pg14_eol": major == 14, "role": role,
-		"databaseName":     databaseName,
-		"postgresEndpoint": map[string]any{"address": serverAddress, "port": serverPort, "source": "inet_server_addr/port"},
-		"monitor_role":     monitor, "privileged_role": super || createDB || createRole || replicationRole,
+		"databaseName":      databaseName,
+		"postgresEndpoint":  map[string]any{"address": serverAddress, "port": serverPort, "source": "inet_server_addr/port"},
+		"postgresStartedAt": startedAt,
+		"monitor_role":      monitor, "privileged_role": super || createDB || createRole || replicationRole,
 		"connections": connections, "max_connections": maxConnections,
 		"xact_commit": commits, "xact_rollback": rollbacks, "database_bytes": databaseBytes,
 		"replicas": nil, "wal_receiver": nil, "replication_lag_bytes": nil,

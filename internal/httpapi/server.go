@@ -1145,6 +1145,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 			}
 		}
+		if match := routingPath.FindStringSubmatch(r.URL.Path); match != nil &&
+			(r.Method == http.MethodGet || r.Method == http.MethodPatch) {
+			handleRouting(w, r, store, match[1], credentials.MasterKey)
+			return
+		}
 		if match := assetSectionPath.FindStringSubmatch(r.URL.Path); r.Method == http.MethodPost && match != nil && match[2] == "wait-captures" {
 			runWaitCapture(w, r, store, match[1], credentials.MasterKey)
 			return

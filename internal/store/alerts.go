@@ -54,6 +54,7 @@ var goDefaultRules = []alertRule{
 	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true, 0},
 	{"k8s_pvc_high", "Kubernetes PVC 使用率高", "k8s.pvc_used_percent", "Prometheus kubelet", "storage", "warning", ">=", 85, 300, 1, true, 0},
 	{"pgbouncer_waiting", "PgBouncer 客户端等待", "pgbouncer.waiting_clients", "PgBouncer", "latency", "warning", ">=", 1, 60, 1, true, 0},
+	{"routing_entry_fault", "数据库访问入口异常", "routing.entry_fault", "PostgreSQL 入口只读探测", "availability", "warning", ">=", 1, 0, 1, true, 0},
 }
 
 func seedGoRules(ctx context.Context, tx pgx.Tx) error {
@@ -119,7 +120,7 @@ func supportedAlertMetric(metric string) bool {
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent", "k8s.restart_delta",
-		"k8s.oom_recent", "k8s.node_pressure", "k8s.pvc_used_percent", "pgbouncer.waiting_clients":
+		"k8s.oom_recent", "k8s.node_pressure", "k8s.pvc_used_percent", "pgbouncer.waiting_clients", "routing.entry_fault":
 		return true
 	}
 	return false
@@ -454,6 +455,22 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 			}
 			return alertSignal{Available: true, Value: total, Source: signal.Source}
 		}
+	case "routing.entry_fault":
+		signal.Source = "PostgreSQL 入口只读探测"
+		route := object(metrics["routing"])
+		status := stringValue(route["status"])
+		signal.Detail = map[string]any{"entry": route["entry"], "status": status}
+		switch status {
+		case "misrouted", "ready_pod_entry_unreachable", "unreachable", "dns_error":
+			signal.Value = 1
+			signal.Available = true
+		case "ok":
+			signal.Available = true
+		case "":
+			// Reconfiguration disabling route check closes a previous route alert.
+			signal.Available = object(metrics["collector"])["pgStatus"] != nil
+		}
+		return signal
 	}
 	return signal
 }
@@ -659,6 +676,15 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 		} else if old != nil && old.Status == "firing" && next != nil &&
 			old.MutedBy == nil && next.MutedBy != nil {
 			transition = "suppressed"
+		}
+		if transition == "" && rule.Metric == "routing.entry_fault" && next != nil && next.Status == "firing" &&
+			next.EventID != "" && signal.Available && signal.Value > 0 && signal.Detail["status"] != object(previous["routing"])["status"] {
+			payload, _ := json.Marshal(map[string]any{"metric": rule.Metric, "source": signal.Source, "sampleId": sampleID,
+				"value": signal.Value, "operator": rule.Operator, "threshold": rule.Threshold, "detail": signal.Detail})
+			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+				VALUES(gen_random_uuid(),$1,'routing_observed',$2,$3)`, next.EventID, now, payload); err != nil {
+				return err
+			}
 		}
 		if transition != "" && next != nil && next.EventID != "" {
 			payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,

@@ -64,7 +64,7 @@ func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.
 		'activity',metrics_json#>'{diagnostics,activity}',
 		'blocked',metrics_json#>'{diagnostics,locks}',
 		'transactions',metrics_json#>'{diagnostics,transactions}',
-		'linux',metrics_json->'linux','k8s',metrics_json->'k8s')
+		'linux',metrics_json->'linux','k8s',metrics_json->'k8s','routing',metrics_json->'routing')
 		FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
 		ORDER BY collected_at DESC,id DESC LIMIT 1`, id, from, to).Scan(&snapshot)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {

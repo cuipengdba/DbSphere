@@ -40,6 +40,18 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 	source := "/api/assets/" + assetID + "/samples/" + sample.ID
 	sampleNode := "sample:" + sample.ID
 	metrics := sample.Metrics
+	route := object(metrics["routing"])
+	if entry := stringValue(route["entry"]); entry != "" {
+		entryNode := "route:" + sample.ID
+		add(entryNode, "network_entry", entry, source, sample.At)
+		*edges = append(*edges, map[string]string{"from": sampleNode, "to": entryNode, "relation": "probed_entry"})
+		probe := object(route["probe"])
+		if backend := stringValue(probe["backend"]); backend != "" {
+			backendNode := "route-backend:" + sample.ID
+			add(backendNode, "postgres", backend+" · "+stringValue(probe["role"]), source, sample.At)
+			*edges = append(*edges, map[string]string{"from": entryNode, "to": backendNode, "relation": "observed_backend"})
+		}
+	}
 	if linux := object(metrics["linux"]); stringValue(linux["status"]) == "ok" {
 		hostNode := "linux:" + assetID
 		add(hostNode, "linux", "Linux 主机", source, sample.At)
@@ -79,7 +91,12 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 				}
 				serviceID := "service:" + stringValue(k8s["namespace"]) + ":" + name
 				add(serviceID, "k8s_service", name, source, sample.At)
-				*edges = append(*edges, map[string]string{"from": serviceID, "to": podNode, "relation": "routes_to"})
+				relation := "routes_to"
+				if route["status"] == "ready_pod_entry_unreachable" && object(route["service"])["uid"] == service["uid"] {
+					relation = "selects_pod"
+					*edges = append(*edges, map[string]string{"from": "route:" + sample.ID, "to": serviceID, "relation": "configured_service"})
+				}
+				*edges = append(*edges, map[string]string{"from": serviceID, "to": podNode, "relation": relation})
 			}
 		}
 	}
@@ -279,7 +296,7 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		if json.Unmarshal(item.Payload, &payload) != nil {
 			continue
 		}
-		if item.Kind != "alert_firing" && item.Kind != "alert_unsuppressed" {
+		if item.Kind != "alert_firing" && item.Kind != "alert_unsuppressed" && item.Kind != "routing_observed" {
 			continue
 		}
 		sampleID := stringValue(payload["sampleId"])
@@ -409,10 +426,32 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			}
 		case "pgbouncer.waiting_clients":
 			if stringValue(object(sample.Metrics["pgbouncer"])["status"]) == "ok" && number(payload["value"]) > 0 {
+				route := object(sample.Metrics["routing"])
+				if route["status"] == "pool_exhausted" {
+					addCandidate("pooler_exhausted", "PgBouncer 监控账号的连接池全部占用，客户端正在排队", "medium", supports,
+						[]string{"需核对占用连接的事务和池容量"},
+						"监控账号的池状态反映该用户和数据库的连接池。", route, item.ObservedAt, condition)
+					continue
+				}
 				addCandidate("pooler_queue", "PgBouncer 客户端连接等待", "low", supports,
 					[]string{"连接池等待与 PostgreSQL 锁/连接限制的因果关系未确认"},
 					"连接池排队是延迟现象，需要与数据库会话和应用请求联合分析。",
 					map[string]any{"waitingClients": payload["value"]}, item.ObservedAt, condition)
+			}
+		case "routing.entry_fault":
+			route := object(sample.Metrics["routing"])
+			switch route["status"] {
+			case "misrouted":
+				addCandidate("route_backend_mismatch", "代理入口返回的后端与配置预期不符", "medium", supports,
+					[]string{"核对代理的后端和角色配置"}, "结论对应本次入口只读连接和资产配置。", route, item.ObservedAt, condition)
+			case "ready_pod_entry_unreachable":
+				addCandidate("service_entry_unreachable", "PostgreSQL Pod 已就绪，Service 入口从采集器不可达", "medium", supports,
+					[]string{"核对 Service targetPort、EndpointSlice 和采集器所在网络"},
+					"Service 入口与 Pod 直连是同次采样的独立观测。", route, item.ObservedAt, condition)
+			case "unreachable", "dns_error":
+				addCandidate("route_entry_unreachable", "入口探测未能建立 PostgreSQL 连接", "low", supports,
+					[]string{"核对入口 DNS、监听端口及采集器所在网络"},
+					"探测结果对应 DbSphere 采集器的网络视角。", route, item.ObservedAt, condition)
 			}
 		case "k8s.pvc_used_percent":
 			if stringValue(object(sample.Metrics["k8s"])["status"]) == "ok" && number(payload["value"]) >= 85 {

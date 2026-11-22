@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/jackc/pgx/v5"
@@ -139,13 +140,19 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	var exporterPort *int
 	var poolerEncrypted *string
 	var patroniEncrypted *string
+	var routeSettings RoutingSettings
+	var statsEncrypted *string
 	var k8sCluster, k8sNamespace, k8sWorkload, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
 		runtime,linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,
-		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod
-		FROM assets WHERE id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
+		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,
+		coalesce(r.kind,''),coalesce(r.entry,''),coalesce(r.expected_role,''),coalesce(r.match_direct,false),
+		coalesce(r.haproxy_backend,''),r.haproxy_stats_enc
+		FROM assets a LEFT JOIN asset_route_settings r ON r.asset_id=a.id WHERE a.id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
 		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
-		&poolerEncrypted, &patroniEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod)
+		&poolerEncrypted, &patroniEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod,
+		&routeSettings.Kind, &routeSettings.Entry, &routeSettings.ExpectedRole, &routeSettings.MatchDirect,
+		&routeSettings.HAProxyBackend, &statsEncrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, ErrAssetNotFound
 	}
@@ -173,7 +180,8 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 			return CheckResult{}, fmt.Errorf("decrypt Patroni credential: %w", err)
 		}
 	}
-	var metrics, kube, linux, pooler, patroni map[string]any
+	var metrics, kube, linux, pooler, patroni, haproxy map[string]any
+	var routeProbe collector.RouteProbe
 	var collectErr, linuxErr, poolerErr, patroniErr error
 	var groupWait sync.WaitGroup
 	groupWait.Add(1)
@@ -207,6 +215,27 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		go func() {
 			defer groupWait.Done()
 			patroni, patroniErr = collector.Patroni(ctx, patroniURL)
+		}()
+	}
+	if routeSettings.Kind != "" {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			routeTarget := target
+			routeTarget.Host, routeTarget.Port, _ = assets.ParsePoolerEndpoint(routeSettings.Entry)
+			routeProbe = collector.ProbePostgreSQLRoute(ctx, routeTarget, password)
+		}()
+	}
+	if statsEncrypted != nil {
+		groupWait.Add(1)
+		go func() {
+			defer groupWait.Done()
+			endpoint, err := security.Decrypt(key, *statsEncrypted)
+			if err != nil {
+				haproxy = map[string]any{"status": "credential_unavailable", "source": "HAProxy HTTP CSV"}
+				return
+			}
+			haproxy = collector.HAProxyStats(ctx, endpoint, routeSettings.HAProxyBackend)
 		}()
 	}
 	groupWait.Wait()
@@ -268,6 +297,9 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	if backup := collector.Backup(id, time.Now().UTC()); backup != nil {
 		metrics["backup"] = backup
+	}
+	if routeSettings.Kind != "" {
+		metrics["routing"] = routeAssessment(routeSettings, routeProbe, metrics, kube, pooler, haproxy, target.Username)
 	}
 	return s.recordCheckWithLease(ctx, id, metrics, group, reason, time.Now().UTC(), lease, interval)
 }

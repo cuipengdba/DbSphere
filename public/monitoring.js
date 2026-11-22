@@ -1702,6 +1702,11 @@
 
     function environmentPanel(asset, snapshot, data, time, events) {
       const result = document.createDocumentFragment();
+      if (snapshot?.routing) {
+        const entry = panel('代理与访问入口');
+        entry.append(actions.routingOverview(asset.id, snapshot.routing, snapshot.id));
+        result.append(entry);
+      }
       if (!data) { result.append(renderInfra(snapshot, asset)); return result; }
       const kubernetes = asset.runtime === 'k8s';
       const timeline = panel('PostgreSQL 与环境同窗');

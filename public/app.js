@@ -236,7 +236,7 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
     showAsset(id, 'sql-plans').then(() => $('detail').scrollIntoView({ block: 'start' }))
       .catch(error => notice(error.message, true));
   },
-  renderSqlPerformance
+  renderSqlPerformance, routingOverview
 });
 
 async function refresh() {
@@ -601,6 +601,10 @@ async function showAsset(id, layer) {
         'evidence'));
     } else detail.append(cell('p', `Patroni 未采集：${patroni.reason || patroni.status}`, 'warning'));
   }
+  if (pg18Store || viewerScoped) {
+    const settings = await api(`/api/assets/${id}/routing`).catch(() => null);
+    if (selectedAsset === id && settings) renderRoutingSettings(detail, asset, settings, currentSample);
+  }
   if (pg18Store) {
     const { forecast } = await api(`/api/assets/${id}/capacity`);
     const heading = cell('h3', '数据库容量趋势'); heading.id = 'capacity-detail'; detail.append(heading);
@@ -611,6 +615,123 @@ async function showAsset(id, layer) {
     } else detail.append(cell('p', `容量预测暂不可用：${forecast.reason}`, 'empty'));
   }
   organizeAssetLayers(detail, asset, preferredLayer, restoreLayerFocus);
+}
+
+const routingKinds = {pgbouncer: 'PgBouncer', haproxy: 'HAProxy', k8s_service: 'Kubernetes Service'};
+const routingStatus = {
+  ok: '入口可用', misrouted: '入口转发错位', pool_exhausted: '连接池占满，客户端排队',
+  ready_pod_entry_unreachable: 'Pod 已就绪，Service 入口不可达', unreachable: '入口不可达',
+  dns_error: '入口 DNS 解析失败', timeout: '入口探测超时', postgres_rejected: 'PostgreSQL 拒绝连接或探测',
+  connection_error: '入口握手失败', backend_unknown: '后端身份待核对',
+  configuration_error: '探测配置有误', cancelled: '探测取消'
+};
+
+function routingOverview(assetId, route, sampleId) {
+  const body = cell('div', '', 'routing-overview');
+  body.append(cell('p', `${routingKinds[route.kind]} · ${route.entry} · ${routingStatus[route.status] ?? route.status}`,
+    route.status === 'ok' ? 'evidence' : 'warning'));
+  const roles = {primary: '主库', standby: '备库'};
+  const renderedRole = role => roles[role] ?? '未知';
+  const probe = route.probe ?? {};
+  body.append(cell('p', `入口后端 ${probe.backend || '未识别'} · ${renderedRole(probe.role)} · 库 ${probe.database || '未识别'}${probe.durationMs == null ? '' : ` · ${probe.durationMs} ms`}`));
+  if (route.direct) body.append(cell('p', `资产直连 ${route.direct.backend} · ${renderedRole(route.direct.role)}`));
+  if (route.expectedRole) body.append(cell('p', `期望角色 ${renderedRole(route.expectedRole)}`));
+  if (probe.sqlState) body.append(cell('p', `SQLSTATE ${probe.sqlState}`, 'hint'));
+  if (route.pooler) {
+    body.append(cell('h4', 'PgBouncer 连接池'));
+    for (const pool of route.pooler.pools ?? []) {
+      body.append(cell('p', `${pool.user} · 排队 ${pool.clientWaiting} · 后端活跃 ${pool.serverActive} · 空闲 ${pool.serverIdle}`));
+    }
+    if (route.pooler.route) body.append(cell('p', `配置后端 ${route.pooler.route.host || '未知'}:${route.pooler.route.port || '未知'}`, 'hint'));
+  }
+  if (route.haproxy) {
+    const stats = route.haproxy;
+    body.append(cell('h4', `HAProxy 后端 ${stats.backend}`));
+    if (stats.status !== 'ok') body.append(cell('p',
+      stats.status === 'backend_missing' ? '统计中没有指定后端。' : '统计暂不可读。', 'hint'));
+    for (const row of stats.rows ?? []) {
+      body.append(cell('p', [row.name, row.addr, row.status, row.qcur == null ? '' : `当前队列 ${row.qcur}`,
+        row.qmax == null ? '' : `峰值队列 ${row.qmax}`, row.check_status].filter(Boolean).join(' · ')));
+    }
+  }
+  if (route.service) {
+    const service = route.service;
+    body.append(cell('h4', `Kubernetes Service ${service.namespace}/${service.name}`));
+    body.append(cell('p', `Service ${service.portMapping.port} → targetPort ${service.portMapping.targetPort} · Pod ${service.pod} ${service.podReady ? '已就绪' : '就绪待确认'}`));
+    body.append(cell('p', `EndpointSlice ${Object.keys(service.slices || {}).join('、') || '未找到该 Pod 的切片'} · Pod UID ${service.podUid || '未核对'}`, 'hint'));
+  }
+  const sources = [probe.source, route.direct?.source, route.pooler?.source, route.haproxy?.source, route.service?.source].filter(Boolean);
+  const caption = cell('p', `${formatTime(probe.observedAt)} · ${sources.join(' · ')} · `, 'hint');
+  caption.append(replaySampleLink(assetId, sampleId));
+  body.append(caption);
+  return body;
+}
+
+function renderRoutingSettings(detail, asset, settings, sample) {
+  const heading = cell('h3', '代理与访问入口'); heading.id = 'routing-detail';
+  detail.append(heading);
+  const route = sample?.metrics?.routing;
+  if (settings.kind && route?.entry === settings.entry && route.kind === settings.kind &&
+      route.expectedRole === settings.expectedRole && route.matchDirect === settings.matchDirect)
+    detail.append(routingOverview(asset.id, route, sample.id));
+  else detail.append(cell('p', settings.kind ? '等待新配置的首次采样。' : '尚未配置入口探测。', 'hint'));
+  if (currentRole !== 'admin') return;
+  const config = cell('details', '', 'settings-details');
+  config.append(cell('summary', '配置只读入口探测'));
+  const form = cell('form', '', 'form-grid routing-form');
+  const field = (name, control) => {
+    const label = cell('label', name);
+    label.append(control);
+    form.append(label);
+  };
+  const select = (choices, value) => {
+    const control = document.createElement('select');
+    for (const [key, label] of choices) {
+      const option = cell('option', label); option.value = key; control.append(option);
+    }
+    control.value = value;
+    return control;
+  };
+  const input = (value, placeholder, type = 'text') => {
+    const control = document.createElement('input');
+    control.type = type; control.value = value; control.placeholder = placeholder;
+    return control;
+  };
+  const kinds = Object.entries(routingKinds).filter(([kind]) => kind !== 'k8s_service' || asset.runtime === 'k8s');
+  const kind = select([['', '关闭'], ...kinds], settings.kind);
+  const entry = input(settings.entry, 'db-service.namespace.svc.cluster.local:5432');
+  const role = select([['', '仅观察'], ['primary', '主库'], ['standby', '备库']], settings.expectedRole);
+  const match = input('', '', 'checkbox'); match.checked = settings.matchDirect;
+  const backend = input(settings.haproxyBackend, '例如 postgres-primary');
+  const stats = input('', settings.statsConfigured ? '已设置，留空保留' : 'HAProxy 只读统计地址', 'password');
+  stats.autocomplete = 'new-password';
+  field('入口类型', kind); field('入口主机与端口', entry); field('期望 PostgreSQL 角色', role);
+  field('要求入口与资产直连命中同一后端', match);
+  field('HAProxy 后端名称', backend); field('HAProxy CSV 统计地址', stats);
+  const updateFields = () => {
+    for (const control of [entry, role, match]) control.parentElement.hidden = !kind.value;
+    for (const control of [backend, stats]) control.parentElement.hidden = kind.value !== 'haproxy';
+    entry.required = Boolean(kind.value);
+  };
+  updateFields();
+  kind.addEventListener('change', updateFields);
+  const submit = cell('button', '保存入口配置'); submit.type = 'submit'; form.append(submit);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    submit.disabled = true;
+    try {
+      await api(`/api/assets/${asset.id}/routing`, 'PATCH', {
+        kind: kind.value, entry: entry.value, expectedRole: role.value, matchDirect: match.checked,
+        haproxyBackend: kind.value === 'haproxy' ? backend.value : '',
+        haproxyStatsUrl: kind.value === 'haproxy' ? stats.value : ''
+      });
+      notice('入口配置已保存，下一次采样生效。');
+      if (selectedAsset === asset.id) await showAsset(asset.id, 'routing-detail');
+    } catch (error) {
+      notice(error.message, true);
+    } finally { submit.disabled = false; }
+  });
+  config.append(form); detail.append(config);
 }
 
 function renderSignalCoverage(target, asset, sample, performance) {
@@ -663,7 +784,7 @@ function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false
     ['slow-logs', '慢 SQL 日志'], ['sql-plans', '执行计划'],
     ...(asset.runtime === 'managed' ? [] : [[asset.runtime === 'k8s' ? 'k8s-detail' : 'linux-detail',
       asset.runtime === 'k8s' ? 'Pod / Node / PVC' : 'Linux 主机']]),
-    ['pooler-detail', 'PgBouncer'], ['patroni-detail', 'Patroni'], ['capacity-detail', '容量趋势']
+    ['pooler-detail', 'PgBouncer'], ['patroni-detail', 'Patroni'], ['routing-detail', '代理与访问入口'], ['capacity-detail', '容量趋势']
   ];
   const labels = new Map(definitions);
   const headings = [...detail.querySelectorAll('h3[id]')].filter(heading => labels.has(heading.id));
@@ -1451,6 +1572,7 @@ const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', sql: 'SQL', 
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+  routing_observed: '入口诊断更新',
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
@@ -2054,6 +2176,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'patroni_state') text = evidence.payload.status === 'ok'
       ? `leader ${evidence.payload.leaderCount} 个；其他成员 ${evidence.payload.replicaCount} 个`
       : evidence.payload.reason || evidence.payload.status;
+    if (evidence.kind === 'routing_observed') text = `${routingStatus[evidence.payload.detail?.status] || '入口状态更新'} · ${evidence.payload.sampleId}`;
     if (evidence.kind.startsWith('alert_')) {
       const alert = evidence.payload;
       const prefix = `${alert.ruleId || '规则'} · ${alert.source || '未知来源'}`;
@@ -2068,6 +2191,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
         text = `${prefix} · ${labels[evidence.kind] || evidence.kind}`;
       }
       if (alert.sampleId) text += ` · 样本 ${alert.sampleId}`;
+      if (alert.detail?.status && alert.metric === 'routing.entry_fault')
+        text += ` · ${routingStatus[alert.detail.status] || alert.detail.status}`;
       if (alert.reason) text += ` · ${alert.reason}`;
       if (alert.silenceId) text += ` · 静默窗 ${alert.silenceId}`;
     }
