@@ -826,16 +826,18 @@ async function* slowLogRecords(file, csv) {
 
 async function* slowLogBatches(file, format) {
   const encoder = new TextEncoder();
-  let records = [], bytes = 0;
+  let records = [], bytes = 0, encodedBytes = 0;
   for await (const record of slowLogRecords(file, format === 'csvlog')) {
     const size = encoder.encode(record).byteLength;
-    if (size > 60000) throw new Error('一条日志超过 60 KB。');
-    if (records.length === 200 || bytes + size > 60000) {
+    const encoded = encoder.encode(JSON.stringify(record)).byteLength - 2;
+    if (size > 60000 || encoded > 130000) throw new Error('一条日志超过导入上限。');
+    if (records.length === 200 || bytes + size > 60000 || encodedBytes + encoded > 130000) {
       yield records.join('');
-      records = []; bytes = 0;
+      records = []; bytes = 0; encodedBytes = 0;
     }
     records.push(record);
     bytes += size;
+    encodedBytes += encoded;
   }
   if (records.length) yield records.join('');
 }

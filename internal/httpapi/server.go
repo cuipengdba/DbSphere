@@ -143,6 +143,9 @@ type SlowLogImporter interface {
 	ImportSlowLogs(context.Context, string, string, string) (any, error)
 }
 type PlanImporter interface {
+	ImportSQLPlan(context.Context, string, string, string, json.RawMessage) (any, error)
+}
+type ScopedPlanImporter interface {
 	ImportScopedSQLPlan(context.Context, string, string, string, string, json.RawMessage) (any, error)
 }
 type AlertRuleStore interface {
@@ -698,7 +701,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					Format  string `json:"format"`
 					Content string `json:"content"`
 				}
-				if readJSONLimit(w, r, &input, 384<<10) != nil {
+				if readJSONLimit(w, r, &input, 128<<10) != nil || len(input.Content) > 60000 {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid slow log payload"})
 					return
 				}
@@ -716,8 +719,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				return
 			}
 			if match := assetSectionPath.FindStringSubmatch(r.URL.Path); match != nil && match[2] == "sql-plans" {
-				importer, ok := store.(PlanImporter)
-				if !ok {
+				legacy, legacyOK := store.(PlanImporter)
+				scoped, scopedOK := store.(ScopedPlanImporter)
+				if !scopedOK && !legacyOK {
 					respond(w, http.StatusNotImplemented, map[string]string{"error": "SQL plan import unavailable"})
 					return
 				}
@@ -727,7 +731,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					ObservedAt string          `json:"observedAt"`
 					Plan       json.RawMessage `json:"plan"`
 				}
-				if readJSONLimit(w, r, &input, 320<<10) != nil {
+				if readJSONLimit(w, r, &input, 128<<10) != nil {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid SQL plan payload"})
 					return
 				}
@@ -740,7 +744,17 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					}
 					plan = json.RawMessage(content)
 				}
-				value, err := importer.ImportScopedSQLPlan(r.Context(), match[1], input.Database, input.QueryID, input.ObservedAt, plan)
+				var value any
+				var err error
+				switch {
+				case scopedOK:
+					value, err = scoped.ImportScopedSQLPlan(r.Context(), match[1], input.Database, input.QueryID, input.ObservedAt, plan)
+				case input.Database == "":
+					value, err = legacy.ImportSQLPlan(r.Context(), match[1], input.QueryID, input.ObservedAt, plan)
+				default:
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Database-scoped SQL plan import unavailable"})
+					return
+				}
 				switch {
 				case errors.Is(err, storepkg.ErrAssetNotFound):
 					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
