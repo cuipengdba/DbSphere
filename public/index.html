@@ -54,7 +54,23 @@
       </section>
       <div class="grid overview-grid" data-view="overview">
         <section class="panel"><div class="section-head"><div><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
-        <section class="panel"><div class="section-head"><div><h2>资产健康</h2></div><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div><div id="overview-assets" class="list"></div></section>
+        <section class="panel"><div class="section-head"><h2>集群健康</h2><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div>
+          <div id="overview-assets" class="list"></div>
+          <div id="overview-fleet" hidden>
+            <form id="fleet-filters" class="asset-filters">
+              <input name="q" type="search" maxlength="128" aria-label="集群或成员名称" placeholder="集群或成员名称">
+              <select name="status" aria-label="集群状态"><option value="">全部状态</option><option value="incident">有异常</option><option value="coverage">采集不完整</option><option value="healthy">已观测健康</option></select>
+              <select name="runtime" aria-label="运行形态"><option value="">全部运行形态</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PG</option></select>
+              <select name="major" aria-label="PostgreSQL 大版本"><option value="0">全部 PG 版本</option><option>14</option><option>15</option><option>16</option><option>17</option><option>18</option></select>
+              <input name="environment" maxlength="26" aria-label="环境" placeholder="环境，例如生产">
+              <input name="tag" maxlength="21" aria-label="标签" placeholder="标签，例如订单">
+              <button type="submit" class="ghost">筛选</button>
+            </form>
+            <p id="fleet-caption" class="hint" aria-live="polite"></p>
+            <div id="fleet-result" class="monitor-table"></div>
+            <div class="event-page-controls"><button id="fleet-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="fleet-next" type="button" class="ghost small-button" disabled>下一页</button></div>
+          </div>
+        </section>
       </div>
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
       <div data-view="assets">
@@ -71,6 +87,8 @@
           <form id="asset-form" class="form-grid">
             <label>资产名称<input name="name" required maxlength="100" placeholder="生产主库"></label>
             <label>PG 集群名（可选）<input name="clusterName" maxlength="100" placeholder="生产订单库"><span class="hint">同一 PostgreSQL 集群的主备填写相同名称。与 K8S 集群名独立。</span></label>
+            <label>环境（可选）<input name="environment" maxlength="26" placeholder="例如生产、预发"></label>
+            <label>标签（可选）<input name="tags" maxlength="780" placeholder="以逗号分隔，例如订单,核心"></label>
             <label>主机地址<input name="host" required placeholder="pg.example.internal"></label>
             <label>端口<input name="port" type="number" min="1" max="65535" value="5432" required></label>
             <label>数据库<input name="database" value="postgres" required></label>

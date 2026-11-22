@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -46,6 +47,8 @@ func (p *OptionalPort) UnmarshalJSON(data []byte) error {
 type Input struct {
 	Name              string       `json:"name"`
 	ClusterName       *string      `json:"clusterName"`
+	Environment       *string      `json:"environment"`
+	Tags              *[]string    `json:"tags"`
 	Host              string       `json:"host"`
 	Port              int          `json:"port"`
 	Database          string       `json:"database"`
@@ -75,6 +78,19 @@ func (a Input) Validate() error {
 	}
 	if a.ClusterName != nil && (len(*a.ClusterName) > 150 || strings.ContainsAny(*a.ClusterName, "\x00\r\n\t")) {
 		return errors.New("invalid PostgreSQL cluster name")
+	}
+	if a.Environment != nil && (len(*a.Environment) > 80 || strings.ContainsAny(*a.Environment, "\x00\r\n\t")) {
+		return errors.New("invalid asset environment")
+	}
+	if a.Tags != nil {
+		if len(*a.Tags) > 12 {
+			return errors.New("too many asset tags")
+		}
+		for _, tag := range *a.Tags {
+			if len(tag) > 64 || strings.TrimSpace(tag) == "" || strings.ContainsAny(tag, "\x00\r\n\t,，") {
+				return errors.New("invalid asset tag")
+			}
+		}
 	}
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid PostgreSQL TLS mode")
@@ -136,6 +152,26 @@ func (a Input) MonitoringClusterName() *string {
 	}
 	name := strings.TrimSpace(*a.ClusterName)
 	return &name
+}
+
+func (a Input) MonitoringEnvironment() *string {
+	if a.Environment == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*a.Environment)
+	return &value
+}
+
+func (a Input) MonitoringTags() []string {
+	if a.Tags == nil {
+		return nil
+	}
+	value := make([]string, len(*a.Tags))
+	for i, tag := range *a.Tags {
+		value[i] = strings.TrimSpace(tag)
+	}
+	slices.Sort(value)
+	return slices.Compact(value)
 }
 
 // ParsePoolerEndpoint accepts only a host and TCP port. It never interprets

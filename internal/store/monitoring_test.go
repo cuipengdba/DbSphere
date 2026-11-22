@@ -25,7 +25,8 @@ func TestWaitHistorySeparatesZeroFromMissing(t *testing.T) {
 	defer pg.Close()
 	groupName := " sample cluster "
 	key := []byte("01234567890123456789012345678901")
-	input := assets.Input{Name: "wait history", ClusterName: &groupName, Host: "127.0.0.1", Port: 1,
+	environment, tags := " production ", []string{" orders ", "orders"}
+	input := assets.Input{Name: "wait history", ClusterName: &groupName, Environment: &environment, Tags: &tags, Host: "127.0.0.1", Port: 1,
 		Database: "postgres", Username: "observer", Password: "test-secret", Runtime: "linux", SSLMode: "disable"}
 	created, err := pg.CreateAsset(ctx, input, key)
 	if err != nil {
@@ -40,9 +41,30 @@ func TestWaitHistorySeparatesZeroFromMissing(t *testing.T) {
 	}
 	defer pg.DeleteAsset(context.Background(), asset.ID)
 	input.ClusterName = nil
+	input.Environment, input.Tags = nil, nil
 	updated, err := pg.UpdateAsset(ctx, asset.ID, input, key)
 	if err != nil || json.Unmarshal(updated, &asset) != nil || asset.ClusterName != "sample cluster" {
 		t.Fatalf("an old asset client lost the cluster: %s, %v", updated, err)
+	}
+	fleetQuery := FleetQuery{Page: 1, Limit: 10, Search: "sample cluster", Runtime: "linux", Environment: "production", Tag: "orders", Status: "coverage"}
+	fleet, err := pg.MonitoringFleet(ctx, fleetQuery, []string{asset.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Total    int `json:"total"`
+		Clusters []struct {
+			Members int `json:"members"`
+			Pending int `json:"pending"`
+		} `json:"clusters"`
+	}
+	if err := json.Unmarshal(fleet.(json.RawMessage), &page); err != nil || page.Total != 1 || len(page.Clusters) != 1 ||
+		page.Clusters[0].Members != 1 || page.Clusters[0].Pending != 1 {
+		t.Fatalf("unexpected scoped cluster summary: %s / %v", fleet, err)
+	}
+	empty, err := pg.MonitoringFleet(ctx, fleetQuery, []string{})
+	if err != nil || json.Unmarshal(empty.(json.RawMessage), &page) != nil || page.Total != 0 {
+		t.Fatalf("empty viewer scope exposed assets: %s / %v", empty, err)
 	}
 	base := time.Now().UTC().Truncate(time.Minute).Add(-5 * time.Minute)
 	if err := pg.EnsureTimePartitions(ctx, base); err != nil {

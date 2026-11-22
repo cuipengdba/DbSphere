@@ -398,6 +398,7 @@
     let sqlOrder = 'time';
     let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
     let rangeEvents = [];
+    let memberSeries = new Map();
     const header = el('div', null, 'monitor-controls');
     const fleet = el('div', null, 'monitor-fleet');
     const overview = el('div', null, 'cluster-overview');
@@ -456,12 +457,26 @@
       zoom(Date.parse(fromField.value), Date.parse(toField.value));
     });
     const editRange = button('编辑时段', openRange);
+    const shareField = el('input', null, 'monitor-share-url');
+    shareField.type = 'url'; shareField.readOnly = true; shareField.hidden = true;
+    shareField.setAttribute('aria-label', '监控分享地址');
+    const share = button('复制链接', async () => {
+      const url = new URL(location.href);
+      url.hash = route();
+      try {
+        await navigator.clipboard.writeText(url.href);
+        share.textContent = '链接已复制';
+        setTimeout(() => { share.textContent = '复制链接'; }, 1500);
+      } catch {
+        shareField.hidden = false; shareField.value = url.href; shareField.focus(); shareField.select();
+      }
+    });
     header.append(labeled('PG 集群', clusterSelect), labeled('实例', instanceSelect), labeled('纳管连接库', databaseSelect),
       labeled('时间范围', rangeSelect), editRange, button('刷新', () => {
         if (!fixed) activeWindow = null;
         update();
         void refreshFleet();
-      }), rangeForm);
+      }), share, shareField, rangeForm);
     for (const [key, label] of tabs) tablist.append(button(label, () => { mode = key; if (key === 'sql') queryId = ''; change(); }));
     details.append(button('← 集群总览', backToFleet, 'monitor-link monitor-breadcrumb'), instanceTitle, timeLabel, tablist, body);
     root.append(header, fleet, details);
@@ -547,9 +562,18 @@
       return assets.filter(asset => (!cluster || clusterKey(asset) === cluster) && (!database || database === asset.database));
     }
 
-    function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; }
+    function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; memberSeries = new Map(); }
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
+
+    function openCluster(key) {
+      if (!assets.some(asset => clusterKey(asset) === key)) return;
+      cluster = key; instance = ''; database = ''; chooseCluster = false; mode = 'metrics';
+      eventAnchor = ''; focusAt = null; focusSample = '';
+      resetWaitFilters(); resetCatalog(); resetFleet();
+      try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
+      change();
+    }
 
     function openInstance(id, topic) {
       const asset = assets.find(item => item.id === id);
@@ -594,6 +618,20 @@
       return card;
     }
 
+    function connectionSparkline(asset, time) {
+      const values = aligned(memberSeries.get(asset.id) || [], time, row => row.averageConnectionUsagePercent).slice(-24);
+      if (!values.some(finite)) return null;
+      const plot = svg('svg', { viewBox: '0 0 46 12', class: 'member-spark', role: 'img', 'aria-label': '近况连接占用趋势' });
+      const x = i => i * 46 / Math.max(1, values.length - 1);
+      const y = value => 11 - Math.max(0, Math.min(100, value)) / 10;
+      values.forEach((value, index) => {
+        if (!finite(value)) return;
+        if (index > 0 && finite(values[index - 1])) plot.append(svg('line', { x1: x(index - 1), y1: y(values[index - 1]), x2: x(index), y2: y(value) }));
+        else plot.append(svg('circle', { cx: x(index), cy: y(value), r: 1 }));
+      });
+      return plot;
+    }
+
     const healthRank = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
     const pgLabels = { available: '可用', unavailable: '不可用', unknown: '待确认' };
 
@@ -620,7 +658,7 @@
       const active = matching.filter(event => event.status === 'open');
       const resolved = matching.filter(event => event.status !== 'open' &&
         Date.parse(event.startedAt) < time.to && Date.parse(event.endedAt) >= time.from);
-      const issues = eventList((active.length ? active : resolved).slice(0, 3), active.length ? '当前事件' : '区间内已恢复');
+      const issues = eventList([...active, ...resolved].slice(0, 3), '开始与恢复事件');
       issues.classList.add('monitor-latest', 'cluster-issues');
       const card = panel('成员 · 最新观测');
       card.classList.add('monitor-members', 'cluster-members');
@@ -662,7 +700,11 @@
         ].join(' · ')));
         name.append(mobile);
         const badge = el('span', pgLabels[pg], `cluster-state cluster-state-${pg}`);
-        const connectionCell = finite(connection(asset)) ? button(conn, () => openInstance(asset.id), 'monitor-link') : conn;
+        const connectionCell = el('div', null, 'member-connection');
+        const spark = connectionSparkline(asset, time);
+        if (finite(connection(asset))) connectionCell.append(button(conn, () => openInstance(asset.id), 'monitor-link'));
+        else connectionCell.append(conn);
+        if (spark) connectionCell.append(spark);
         const replayCell = finite(values?.replicationLagBytes) ? button(replay, () => openInstance(asset.id, 'replication'), 'monitor-link') : replay;
         return [name, roleLabels[asset.role] || '未知', badge, health(asset), connectionCell, replayCell];
       });
@@ -702,7 +744,7 @@
       for (const asset of selected) {
         const row = el('div', null, 'cluster-track-row');
         const track = el('div', null, 'cluster-track');
-        const plot = svg('svg', { viewBox: `0 0 ${time.count} 12`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+        const plot = svg('svg', { viewBox: `0 0 ${time.count} 16`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
         const bins = aligned(records.get(asset.id), time, bucket => bucket);
         const statesAt = bins.map(bucket => {
           if (!bucket) return 'gap';
@@ -711,13 +753,16 @@
           if (bucket.pgAvailable === bucket.samples) return 'available';
           return 'unknown';
         });
-        let start = 0;
-        for (let end = 1; end <= statesAt.length; end++) {
-          if (statesAt[end] === statesAt[start]) continue;
-          plot.append(svg('rect', { x: start, y: 0, width: end - start, height: 12, class: `cluster-fill-${statesAt[start]}` }));
-          start = end;
+        const collection = bins.map(bucket => !bucket ? 'gap' : bucket.errors === bucket.samples ? 'unavailable' : bucket.errors ? 'mixed' : 'available');
+        for (const [trackStates, y, height] of [[statesAt, 0, 8], [collection, 10, 6]]) {
+          let start = 0;
+          for (let end = 1; end <= trackStates.length; end++) {
+            if (trackStates[end] === trackStates[start]) continue;
+            plot.append(svg('rect', { x: start, y, width: end - start, height, class: `cluster-fill-${trackStates[start]}` }));
+            start = end;
+          }
         }
-        const cursor = svg('line', { x1: 0, x2: 0, y1: 0, y2: 12, class: 'cluster-cursor' });
+        const cursor = svg('line', { x1: 0, x2: 0, y1: 0, y2: 16, class: 'cluster-cursor' });
         plot.append(cursor);
         track.append(plot);
         const eventsForAsset = events.filter(event => event.assetId === asset.id);
@@ -739,7 +784,9 @@
           index = Math.min(time.count - 1, Math.max(0, value));
           for (const displayCursor of time.cursors) displayCursor(index);
           const role = roleLabels[bins[index]?.observedRole];
-          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · ${states[statesAt[index]]}${role ? ` · ${role}` : ''}`;
+          const observed = bins[index];
+          const coverage = observed ? `${observed.samples - observed.errors}/${observed.samples} 次采集成功` : '采集缺失';
+          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · PG ${states[statesAt[index]]} · ${coverage}${role ? ` · ${role}` : ''}`;
         };
         track.addEventListener('pointermove', event => {
           const rect = track.getBoundingClientRect();
@@ -755,7 +802,7 @@
         tracks.append(row);
       }
       footer.setAttribute('aria-live', 'polite');
-      card.append(tracks, legend, footer);
+      card.append(tracks, legend, el('p', '每个成员上方为 PostgreSQL 状态，下方为采集状态。', 'monitor-note'), footer);
       return card;
     }
 
@@ -804,14 +851,16 @@
         const { series, events } = await api(`/api/monitoring/series?${params}`);
         if (key !== request || !visible || instance) return;
         rangeEvents = events;
-        if (!overview.contains(document.activeElement)) renderFleet(time);
         time.cursors.clear();
         const records = new Map(selected.map(asset => [asset.id, []]));
         for (const row of series) records.get(row.assetId)?.push(row);
+        memberSeries = records;
+        if (!overview.contains(document.activeElement)) renderFleet(time);
         const flow = fleetTimeline(time, selected, records, events);
         for (const [metric, title, format, trendAssets] of [
           ['transactionsPerSecond', lead && compare.has(lead.id) ? '当前主库 TPS' : '事务吞吐 · TPS', rate,
             lead && compare.has(lead.id) ? [lead] : selected],
+          ['averageBlockedSessions', '阻塞会话', number, selected],
           ['averageConnectionUsagePercent', '连接压力', percent, selected],
           ['averageReplicationLagBytes', '复制回放差距', bytes, selected]
         ]) {
@@ -1420,7 +1469,7 @@
         if (value) { update(); void refreshFleet(); }
         else { request++; fleetRequest++; }
       },
-      route, restore, openInstance,
+      route, restore, openInstance, openCluster,
       openIncident(event, topic = 'waits', point = null) {
         const asset = assets.find(item => item.id === event.assetId);
         if (!asset) return;

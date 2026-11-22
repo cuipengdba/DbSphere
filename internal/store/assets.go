@@ -55,12 +55,13 @@ func (s *Postgres) CreateAsset(ctx context.Context, input assets.Input, key []by
 	err = s.pool.QueryRow(ctx, `INSERT INTO assets
 		(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,
 		linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,k8s_cluster,k8s_namespace,
-		k8s_workload,k8s_pod,k8s_node,pooler_endpoint,cluster_name,created_at)
-		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,nullif($19,''),now())
+		k8s_workload,k8s_pod,k8s_node,pooler_endpoint,cluster_name,environment,tags,created_at)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,nullif($19,''),nullif($20,''),coalesce($21::text[],'{}'),now())
 		RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username, password,
 		input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		pooler, patroni, nullable(input.K8sCluster), nullable(input.Namespace), nullable(input.Workload),
-		nullable(input.Pod), nullable(input.Node), nullable(input.PoolerEndpoint), input.MonitoringClusterName()).Scan(&id)
+		nullable(input.Pod), nullable(input.Node), nullable(input.PoolerEndpoint), input.MonitoringClusterName(),
+		input.MonitoringEnvironment(), input.MonitoringTags()).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("create PostgreSQL asset: %w", err)
 	}
@@ -108,12 +109,13 @@ func (s *Postgres) UpdateAsset(ctx context.Context, id string, input assets.Inpu
 		patroni_url_enc=CASE WHEN $13 THEN NULL ELSE coalesce($14,patroni_url_enc) END,
 		k8s_cluster=$15,k8s_namespace=$16,k8s_workload=$17,k8s_pod=$18,k8s_node=$19,
 		pooler_endpoint=$21,cluster_name=CASE WHEN $22::text IS NULL THEN cluster_name ELSE nullif($22,'') END,
+		environment=CASE WHEN $23::text IS NULL THEN environment ELSE nullif($23,'') END,tags=coalesce($24::text[],tags),
 		last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
 		WHERE id=$20 RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username,
 		password, input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		input.PoolerClear, pooler, input.PatroniClear, patroni, nullable(input.K8sCluster), nullable(input.Namespace),
 		nullable(input.Workload), nullable(input.Pod), nullable(input.Node), id,
-		nullable(input.PoolerEndpoint), input.MonitoringClusterName()).Scan(&updated)
+		nullable(input.PoolerEndpoint), input.MonitoringClusterName(), input.MonitoringEnvironment(), input.MonitoringTags()).Scan(&updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

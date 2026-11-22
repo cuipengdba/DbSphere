@@ -399,6 +399,19 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 			return fmt.Errorf("record monitoring cluster migration: %w", err)
 		}
 	}
+	var fleetLabelsMigrated bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=33)").Scan(&fleetLabelsMigrated); err != nil {
+		return fmt.Errorf("check fleet label migration: %w", err)
+	}
+	if !fleetLabelsMigrated {
+		if _, err = tx.Exec(ctx, `ALTER TABLE assets ADD COLUMN IF NOT EXISTS environment text,
+			ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'`); err != nil {
+			return fmt.Errorf("migrate fleet labels: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO dbsphere_schema_migrations(version) VALUES(33)"); err != nil {
+			return fmt.Errorf("record fleet label migration: %w", err)
+		}
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

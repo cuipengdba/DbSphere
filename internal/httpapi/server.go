@@ -1257,6 +1257,21 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/monitoring/fleet" {
+				var ids []string
+				if viewerScope != nil {
+					ids = credentials.ViewerAssetIDs
+				}
+				stale := 0
+				if credentials != nil && credentials.AutoCollect {
+					stale = 120
+					if credentials.CollectEvery > 0 {
+						stale = 2 * credentials.CollectEvery
+					}
+				}
+				readMonitoringFleet(w, r, store, ids, stale)
+				return
+			}
 			if r.URL.Path == "/api/monitoring/series" {
 				readMonitoringSeries(w, r, store, viewerScope)
 				return

@@ -186,6 +186,17 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .cluster-members .monitor-table :is(th, td) { padding: 6px; }
 .cluster-members h3 { padding-right: 84px; }
 .cluster-member-name { overflow-wrap: anywhere; }
+.overview-grid { grid-template-columns: minmax(225px, .95fr) minmax(0, 2.5fr); }
+.overview-grid .panel { min-width: 0; }
+#fleet-result table { min-width: 570px; }
+.fleet-row-meta { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.fleet-incident { color: var(--issue-line); }
+.fleet-coverage { color: var(--warn-line); }
+.member-connection { display: flex; gap: 3px; align-items: center; }
+.member-spark { width: 32px; min-width: 32px; height: 12px; color: var(--plot-teal); }
+.member-spark line { stroke: currentColor; stroke-width: 1.5; }
+.member-spark circle { fill: currentColor; }
+.monitor-share-url { flex: 1 0 100%; min-width: 0; }
 .cluster-tools { position: absolute; top: 8px; right: 10px; }
 .cluster-tools button { font-size: 12px; min-height: 26px; padding: 3px 7px; }
 .cluster-issues { max-height: 230px; overflow: auto; }
@@ -229,6 +240,8 @@ body[data-active-view="monitoring"] #view-description { display: none; }
   .cluster-issues { grid-column: 1 / -1; }
 }
 @media (max-width: 700px) {
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .member-spark { display: none; }
   .cluster-grid, .cluster-charts { grid-template-columns: minmax(0, 1fr); }
   .cluster-issues { grid-area: 2 / 1; }
   .cluster-identity .monitor-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }

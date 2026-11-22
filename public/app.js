@@ -71,6 +71,7 @@ function setView(route, updateHash = true) {
   if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
   if (pageSections[selected]) showSection(selected, pageSections[selected]);
   monitoring.setVisible(selected === 'monitoring');
+  if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
@@ -109,6 +110,12 @@ function renderOverview(assets, events) {
     focus.append(button);
   }
   const fleet = $('overview-assets'); fleet.replaceChildren();
+  fleet.hidden = assetServerPaging;
+  $('overview-fleet').hidden = !assetServerPaging;
+  if (assetServerPaging) {
+    if (document.body.dataset.activeView === 'overview') void loadFleetOverview();
+    return;
+  }
   if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
   const healthOrder = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
   const ordered = [...assets].sort((a, b) => healthOrder[assetHealth(a).kind] - healthOrder[assetHealth(b).kind]);
@@ -121,6 +128,74 @@ function renderOverview(assets, events) {
       else { setView('assets'); void showAsset(asset.id); }
     });
     fleet.append(button);
+  }
+}
+
+let fleetPage = 1, fleetOverviewRequest = 0;
+
+async function loadFleetOverview() {
+  const key = ++fleetOverviewRequest;
+  const target = $('fleet-result');
+  const caption = $('fleet-caption');
+  const params = new URLSearchParams(new FormData($('fleet-filters')));
+  params.set('page', String(fleetPage));
+  target.setAttribute('aria-busy', 'true');
+  try {
+    const { clusters, summary, total } = await api(`/api/monitoring/fleet?${params}`);
+    if (key !== fleetOverviewRequest || document.body.dataset.activeView !== 'overview') return;
+    if (!clusters.length && fleetPage > 1) { fleetPage--; return loadFleetOverview(); }
+    caption.textContent = `${summary.clusters} 个匹配集群 · ${summary.incidents} 个有异常 · ` +
+      `${summary.observed}/${summary.members} 个成员采集成功 · ${summary.failed} 个失败 · ${summary.stale} 个过期 · ${summary.pending} 个待采集`;
+    $('fleet-prev').disabled = fleetPage <= 1;
+    $('fleet-next').disabled = fleetPage * 12 >= total;
+    target.replaceChildren();
+    if (!clusters.length) { target.append(cell('p', '没有匹配的集群。', 'empty')); return; }
+    const grid = cell('table', '');
+    grid.setAttribute('aria-label', '集群值班列表');
+    const head = grid.createTHead().insertRow();
+    for (const title of ['集群 / 运行形态', 'PG 可用', '采集', '当前异常', '开始时间']) {
+      const heading = cell('th', title); heading.scope = 'col'; head.append(heading);
+    }
+    const body = grid.createTBody();
+    const names = { linux: 'Linux', k8s: 'Kubernetes', managed: '托管 PG' };
+    const statusLabels = { incident: '有异常', coverage: '采集不完整', healthy: '已观测健康' };
+    for (const item of clusters) {
+      const row = body.insertRow();
+      const link = cell('button', item.cluster_name, 'monitor-link');
+      link.type = 'button';
+      link.addEventListener('click', () => { monitoring.openCluster(item.cluster_key); setView('monitoring'); });
+      row.insertCell().append(link, cell('small', [item.runtimes.map(value => names[value]).join(' / '),
+        item.versions?.length ? `PG ${item.versions.join('/')}` : 'PG 版本待采集'].join(' · '), 'fleet-row-meta'));
+      row.insertCell().textContent = `${item.available} / ${item.members}`;
+      row.insertCell().append(cell('span', `${item.observed} / ${item.members}`),
+        cell('small', statusLabels[item.status], `fleet-row-meta fleet-${item.status}`));
+      const affected = row.insertCell();
+      if (item.affected) {
+        const member = cell('button', item.affected.name, 'monitor-link');
+        member.type = 'button';
+        member.addEventListener('click', () => { monitoring.openInstance(item.affected.id, 'waits'); setView('monitoring'); });
+        affected.append(member);
+      }
+      if (item.first_event) {
+        const event = cell('button', `${item.events} 个事件`, 'monitor-link fleet-row-meta');
+        event.addEventListener('click', () => openEvent(item.first_event)); affected.append(event);
+      }
+      if (!affected.childNodes.length) affected.textContent = '—';
+      const began = row.insertCell();
+      began.textContent = item.started_at ? formatTime(item.started_at) : '—';
+      if (item.started_at) {
+        const elapsed = Math.max(0, Date.now() - Date.parse(item.started_at));
+        began.append(cell('small', elapsed < 60000 ? '不足 1 分钟' : elapsed < 3600000 ?
+          `${Math.floor(elapsed / 60000)} 分钟` : `${(elapsed / 3600000).toFixed(1)} 小时`, 'fleet-row-meta'));
+      }
+    }
+    target.append(grid);
+  } catch (error) {
+    if (key !== fleetOverviewRequest) return;
+    caption.textContent = `集群摘要读取失败 · ${error.message}`;
+    target.replaceChildren();
+  } finally {
+    if (key === fleetOverviewRequest) target.removeAttribute('aria-busy');
   }
 }
 
@@ -194,10 +269,10 @@ async function refresh() {
   $('healthy-count').textContent = assets.filter(a => assetHealth(a).kind === (collectorSchedule.known && !collectorSchedule.enabled ? 'manual' : 'ok')).length;
   $('event-count').textContent = eventOverview.openCount;
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
-  renderOverview(assets, eventOverview.latestOpen);
   allAssets = assets;
   assetServerPaging = runtime?.backend === 'go';
   monitoring.sync(assets, assetServerPaging, [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
+  renderOverview(assets, eventOverview.latestOpen);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
   else renderLegacyAssets();
@@ -1028,7 +1103,8 @@ function editAsset(asset) {
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
     linuxHost: asset.linuxHost, linuxExporterPort: asset.linuxExporterPort, k8sCluster: asset.k8sCluster, namespace: asset.namespace,
     workload: asset.workload, pod: asset.pod, node: asset.node,
-    poolerEndpoint: asset.poolerEndpoint, clusterName: asset.clusterName
+    poolerEndpoint: asset.poolerEndpoint, clusterName: asset.clusterName, environment: asset.environment,
+    tags: asset.tags?.join(', ')
   })) form.elements[field].value = value ?? '';
   form.elements.password.value = '';
   form.elements.poolerUrl.value = '';
@@ -1743,6 +1819,7 @@ $('asset-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
   data.port = Number(data.port);
+  data.tags = data.tags.split(/[,，]/).map(tag => tag.trim()).filter(Boolean);
   data.poolerClear = data.poolerClear === 'on';
   data.patroniClear = data.patroniClear === 'on';
   $('asset-error').textContent = '';
@@ -1754,6 +1831,10 @@ $('asset-form').addEventListener('submit', async (event) => {
   catch (e) { $('asset-error').textContent = e.message; }
   finally { $('asset-submit').disabled = false; }
 });
+
+$('fleet-filters').addEventListener('submit', event => { event.preventDefault(); fleetPage = 1; void loadFleetOverview(); });
+$('fleet-prev').addEventListener('click', () => { if (fleetPage > 1) { fleetPage--; void loadFleetOverview(); } });
+$('fleet-next').addEventListener('click', () => { fleetPage++; void loadFleetOverview(); });
 
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
 setInterval(() => { if (csrf) refresh().catch(() => {}); }, 30000);
