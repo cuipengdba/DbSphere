@@ -108,12 +108,12 @@ try {
       while (loadEnabled) await client.query('SELECT pg_sleep(0.045)');
     })());
     const parallel = await connect('wait-capture-parallel');
-    await admin.query(`CREATE TABLE dbsphere_wait_parallel_input AS SELECT n FROM generate_series(1,300) n;
+    await admin.query(`CREATE TABLE IF NOT EXISTS dbsphere_wait_parallel_input AS SELECT n FROM generate_series(1,220) n;
       ALTER TABLE dbsphere_wait_parallel_input SET (parallel_workers=2);
-      CREATE FUNCTION dbsphere_wait_parallel_delay(n int) RETURNS boolean LANGUAGE plpgsql PARALLEL SAFE AS
+      CREATE OR REPLACE FUNCTION dbsphere_wait_parallel_delay(n int) RETURNS boolean LANGUAGE plpgsql PARALLEL SAFE AS
         $$ BEGIN PERFORM pg_sleep(0.075); RETURN n>0; END; $$`);
     await parallel.query(`SET min_parallel_table_scan_size=0; SET parallel_setup_cost=0; SET parallel_tuple_cost=0;
-      SET max_parallel_workers_per_gather=2`);
+      SET max_parallel_workers_per_gather=2; SET parallel_leader_participation=off`);
     const parallelPID = await pid(parallel);
     background.push(parallel.query('SELECT count(*) FROM dbsphere_wait_parallel_input WHERE dbsphere_wait_parallel_delay(n)'));
     await until(async () => (await admin.query('SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE leader_pid=$1) found', [parallelPID])).rows[0].found,
