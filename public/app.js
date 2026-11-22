@@ -1817,13 +1817,23 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     }
     evidencePanel.append(captures);
   }
-  if (assetServerPaging) {
+  if (assetServerPaging || replay) {
+    const openWindow = async topic => {
+      try {
+        if (!assetServerPaging) await refresh();
+        if (selectedEvent !== event.id) return;
+        monitoring.openIncident(event, topic);
+        setView('monitoring');
+      } catch (error) {
+        notice(error.message, true);
+      }
+    };
     const jump = cell('button', '查看事件时段的监控', 'ghost small-button');
     jump.type = 'button';
-    jump.addEventListener('click', () => { monitoring.openIncident(event); setView('monitoring'); });
+    jump.addEventListener('click', () => { void openWindow(); });
     const changes = cell('button', '查看同窗变更', 'ghost small-button');
     changes.type = 'button';
-    changes.addEventListener('click', () => { monitoring.openIncident(event, 'changes'); setView('monitoring'); });
+    changes.addEventListener('click', () => { void openWindow('changes'); });
     const actions = cell('div', '', 'actions monitor-event-jump');
     actions.append(jump, changes); summary.append(actions);
   }
