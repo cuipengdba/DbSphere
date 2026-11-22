@@ -42,7 +42,7 @@ services:
       - -c
       - track_commit_timestamp=on
       - -c
-      - archive_command=/usr/local/bin/dbsphere-test-archive-push %p
+      - archive_command=test ! -e /lab/archive-paused && pgbackrest --config=/etc/dbsphere-pgbackrest.conf --stanza=ledger archive-push %p
     tmpfs:
       - /lab:size=768m,mode=1777
     healthcheck:

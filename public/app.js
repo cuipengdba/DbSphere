@@ -1423,7 +1423,7 @@ function renderStorage(storage) {
       cell('p', `事件 ${test.eventsReadable ? '可读' : '待核对'} · 配置 ${test.configurationReadable ? '可读' : '待核对'} · 历史采样 ${test.samplesReadable ? '可读' : '待核对'}`));
     if (test.isolated) record.append(cell('p', `备份前标记 ${test.beforeMarker} · 排除备份后标记 ${test.afterMarker}`));
     const digest = document.createElement('details');
-    digest.append(cell('summary', '归档 SHA-256'), cell('p', test.archiveSha256));
+    digest.append(cell('summary', '归档 SHA-256'), cell('pre', test.archiveSha256));
     record.append(digest);
     target.append(record);
   }

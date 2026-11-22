@@ -22,7 +22,7 @@ function docker(args, input, binary = false) {
     return execFileSync('docker', [...compose, ...args], {input, encoding: binary ? undefined : 'utf8',
       maxBuffer: 40 * 1024 * 1024, timeout: 140000, stdio: ['pipe', 'pipe', 'pipe']});
   } catch (err) {
-    let message = String(err.stderr || err.message);
+    let message = [err.stderr, binary ? '' : err.stdout].filter(Boolean).map(String).join('\n') || err.message;
     for (const value of Object.values(secret)) message = message.replaceAll(value, '[redacted]');
     throw new Error('Isolated recovery command failed: ' + message.slice(-4000));
   }

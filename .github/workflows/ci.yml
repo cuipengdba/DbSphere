@@ -965,7 +965,6 @@ jobs:
         run: |
           node --check scripts/recovery-drill.mjs
           bash -n test/recovery-drill/init.sh
-          bash -n test/recovery-drill/archive-push.sh
           reports="$RUNNER_TEMP/dbsphere-recovery-reports"
           mkdir -p "$reports"
           chmod 755 "$reports"
