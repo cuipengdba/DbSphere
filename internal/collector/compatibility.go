@@ -48,9 +48,16 @@ func postgresCompatibility(major int, recovery, readStats bool, diagnostics, per
 	if !readStats && topSQL.Status == "ok" {
 		topSQL.Status, topSQL.Reason = "limited_permissions", "query IDs are limited to the current role"
 	}
+	logicalErrors := fromDiagnostic("logicalSubscriptionErrors", "pg_stat_subscription_stats")
+	if major < 15 {
+		logicalErrors.Status, logicalErrors.Reason = "not_supported", "pg_stat_subscription_stats is available from PostgreSQL 15"
+	}
 	return map[string]any{
 		"major": major, "lifecycle": lifecycle,
 		"signals": []postgresSignal{waits, io, fromDiagnostic("checkpoints", checkpointSource),
-			fromDiagnostic("wal", "pg_stat_wal"), replication, topSQL},
+			fromDiagnostic("wal", "pg_stat_wal"), replication, topSQL,
+			fromDiagnostic("logicalPublications", "pg_publication"),
+			fromDiagnostic("logicalSubscriptions", "pg_subscription / pg_stat_subscription"),
+			fromDiagnostic("logicalApplyProgress", "pg_replication_origin_status"), logicalErrors},
 	}
 }

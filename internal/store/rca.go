@@ -346,6 +346,15 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 					"延迟现象已确认，造成延迟的上游原因尚未定位。",
 					map[string]any{"lagBytes": lag}, item.ObservedAt, condition)
 			}
+		case "pg.logical_slot_retained_bytes":
+			signal := readGoSignal(metric, sample.Metrics, item.ObservedAt)
+			slot := object(signal.Detail)
+			if signal.Available && signal.Value > 0 && signal.Value == number(payload["value"]) && stringValue(slot["name"]) != "" {
+				addCandidate("logical_slot_wal_retention", "逻辑复制槽保留 WAL", "medium", supports,
+					[]string{"核对订阅状态、应用位置与上游连接"},
+					"主库采样已定位保留 WAL 的槽。订阅停用、同步积压或网络异常需要订阅侧证据。",
+					slot, item.ObservedAt, condition)
+			}
 		case "pg.wal_receiver_down":
 			if stringValue(sample.Metrics["role"]) == "standby" &&
 				sample.Metrics["replication_observed"] == true &&

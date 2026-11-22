@@ -1,0 +1,51 @@
+name: dbsphere-logical-replication
+
+x-target: &target
+  image: postgres:${DBSPHERE_LOGICAL_PG_MAJOR:-18}-bookworm
+  environment:
+    PGDATA: /var/lib/postgresql/fixture
+    POSTGRES_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+  tmpfs:
+    - /var/lib/postgresql/fixture:size=512m
+  healthcheck:
+    test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U postgres -d postgres']
+    interval: 3s
+    timeout: 3s
+    retries: 30
+
+services:
+  publisher:
+    <<: *target
+    command: [postgres, -c, wal_level=logical, -c, wal_sender_timeout=10s]
+  subscriber:
+    <<: *target
+    command: [postgres, -c, wal_receiver_status_interval=1s]
+  store:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: dbsphere
+      POSTGRES_DB: dbsphere
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_STORE_PASSWORD:?Generate the drill env file first}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U dbsphere -d dbsphere']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  app:
+    image: ${DBSPHERE_LOGICAL_APP_IMAGE:-dbsphere/logical-replication:local}
+    depends_on:
+      store:
+        condition: service_healthy
+      publisher:
+        condition: service_healthy
+      subscriber:
+        condition: service_healthy
+    environment:
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store:5432/dbsphere?sslmode=disable
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_DRILL_ADMIN_PASSWORD:?Generate the drill env file first}
+      DBSPHERE_MASTER_KEY: ${DBSPHERE_DRILL_MASTER_KEY:?Generate the drill env file first}
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+    ports:
+      - '127.0.0.1:${DBSPHERE_LOGICAL_APP_PORT:-18134}:8080'

@@ -314,7 +314,7 @@ func incidentLayer(kind, metric string) string {
 	case strings.HasPrefix(kind, "linux_") || strings.HasPrefix(metric, "linux."):
 		return "linux"
 	case strings.HasPrefix(kind, "patroni_") || strings.HasPrefix(metric, "patroni.") || strings.Contains(metric, "replication_lag") ||
-		strings.Contains(metric, "wal_receiver") || strings.Contains(metric, "archive_fail"):
+		strings.Contains(metric, "wal_receiver") || strings.Contains(metric, "archive_fail") || metric == "pg.logical_slot_retained_bytes":
 		return "replication"
 	case kind == "pgbouncer_state" || strings.HasPrefix(metric, "pgbouncer."):
 		return "pooler"

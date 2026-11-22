@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.32.0'
-          previous_sha='2d4c4e754030fbc51f225a4a111d63f3ec7a6653b1821627beb8869bc33af6f0'
+          previous_version='1.33.0'
+          previous_sha='f6a032d78ad5dce61df655f3cfd1b5e79e9d419610f1ac6619e17dec3bf351d7'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.32.0'
-          previous_arm_sha='2d3cbb6148f5549adfa57bb24938bef2fd8034f3b5f1fd29706864d5bb673803'
+          previous_version='1.33.0'
+          previous_arm_sha='6d2cb06635d629efe338f9ccd16d47631d51c2792d5c1bb8bae131e68a61b2d1'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -951,6 +951,54 @@ jobs:
           if [ -f "$RUNNER_TEMP/dbsphere-replication.env" ]; then
             docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
               -f test/replication-drill/compose.yaml down -v --remove-orphans
+          fi
+
+  logical-replication-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['14', '18']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Start isolated logical replication targets and PG18 monitoring storage
+        env:
+          DBSPHERE_LOGICAL_PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          node --check scripts/logical-replication-drill.mjs
+          node scripts/replication-drill-secrets.mjs \
+            "$RUNNER_TEMP/dbsphere-logical.env" "$RUNNER_TEMP/dbsphere-logical-credentials.json"
+          docker build -f Dockerfile-go -t dbsphere/logical-replication:local .
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-logical.env" \
+            -f test/logical-replication/compose.yaml config --quiet
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-logical.env" \
+            -f test/logical-replication/compose.yaml up -d --wait --wait-timeout 180
+          curl --fail --silent --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:18134/readyz |
+            jq -e '.storage=="postgresql18"' >/dev/null
+      - name: Verify subscription pause, retained WAL and recovery in one incident
+        env:
+          DBSPHERE_LOGICAL_PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          node scripts/logical-replication-drill.mjs http://127.0.0.1:18134 \
+            "$RUNNER_TEMP/dbsphere-logical-credentials.json" "$RUNNER_TEMP/dbsphere-logical.env" \
+            "$RUNNER_TEMP/dbsphere-logical-result.json" "$DBSPHERE_LOGICAL_PG_MAJOR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-logical-replication-pg${{ matrix.pg }}
+          path: ${{ runner.temp }}/dbsphere-logical-result*.json
+          if-no-files-found: error
+      - name: Remove the isolated logical replication drill
+        if: always()
+        env:
+          DBSPHERE_LOGICAL_PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          if [ -f "$RUNNER_TEMP/dbsphere-logical.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/dbsphere-logical.env" \
+              -f test/logical-replication/compose.yaml down -v --remove-orphans
           fi
 
   patroni-failover-drill:

@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/url"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (s *Postgres) replicationHistory(ctx context.Context, id string, params url.Values) (any, error) {
@@ -22,7 +24,13 @@ func (s *Postgres) replicationHistory(ctx context.Context, id string, params url
 	if err != nil || params.Get("view") == "topology" {
 		return map[string]any{"topology": topology}, err
 	}
-	observations, err := s.queryJSON(ctx, replicationObservationsSQL, id, from, to)
+	var sample pgtype.UUID
+	if sampleID := params.Get("sample"); sampleID != "" {
+		if err := sample.Scan(sampleID); err != nil {
+			return nil, ErrInvalidRange
+		}
+	}
+	observations, err := s.queryJSON(ctx, replicationObservationsSQL, id, from, to, sample)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +101,33 @@ const replicationObservationsSQL = `WITH recent AS (
 	AND (metrics_json->>'replication_lag_bytes')::numeric > 0
 	AND metrics_json#>>'{diagnostics,replicationLinks,status}'='ok'
 	ORDER BY (metrics_json->>'replication_lag_bytes')::numeric DESC,collected_at,id LIMIT 1
+), slot_peak AS (
+	SELECT id,collected_at,status,metrics_json FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+	AND metrics_json#>>'{diagnostics,logicalSlotPressure,status}'='ok'
+	AND metrics_json#>>'{diagnostics,logicalSlotPressure,data,retainedBytes}'~'^[1-9][0-9]{0,19}$'
+	ORDER BY (metrics_json#>>'{diagnostics,logicalSlotPressure,data,retainedBytes}')::numeric DESC,collected_at,id LIMIT 1
+), incident AS (
+	SELECT id,collected_at,status,metrics_json FROM samples
+	WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3 AND id=$4
+	ORDER BY collected_at DESC LIMIT 1
 ), chosen AS (
 	SELECT 'latest' AS kind,* FROM recent
 	UNION ALL SELECT 'peak' AS kind,* FROM peak WHERE id NOT IN (SELECT id FROM recent)
+	UNION ALL SELECT 'slot_peak' AS kind,* FROM slot_peak WHERE id NOT IN (SELECT id FROM recent)
+	UNION ALL SELECT 'incident' AS kind,* FROM incident
 )
 SELECT jsonb_build_object('id',id,'kind',kind,'collectedAt',collected_at,'status',status,
 	'role',metrics_json->'role','receiverState',metrics_json->'wal_receiver',
+	'postgresMajor',CASE WHEN metrics_json->>'version_num'~'^[0-9]{5,7}$' THEN (metrics_json->>'version_num')::int/10000 END,
 	'links',metrics_json#>'{diagnostics,replicationLinks}', 'receiver',metrics_json#>'{diagnostics,walReceiver}',
 	'position',metrics_json#>'{diagnostics,walPosition}','wal',metrics_json#>'{diagnostics,wal}',
 	'archive',metrics_json#>'{diagnostics,archiver}','slots',metrics_json#>'{diagnostics,slotDetails}',
+	'slotSummary',metrics_json#>'{diagnostics,slots}',
+	'logicalPublications',metrics_json#>'{diagnostics,logicalPublications}',
+	'logicalSubscriptions',metrics_json#>'{diagnostics,logicalSubscriptions}',
+	'logicalApplyProgress',metrics_json#>'{diagnostics,logicalApplyProgress}',
+	'logicalSubscriptionErrors',metrics_json#>'{diagnostics,logicalSubscriptionErrors}',
+	'logicalSlotPressure',metrics_json#>'{diagnostics,logicalSlotPressure}',
 	'freeze',metrics_json#>'{diagnostics,freeze}','patroni',metrics_json->'patroni','pooler',metrics_json->'pgbouncer')
 FROM chosen ORDER BY kind`
 

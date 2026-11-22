@@ -43,7 +43,11 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	}
 	sections := []string{"activity", "activeWaits", "instanceSessions", "transactions", "locks", "lockChain", "database",
 		"wal", "archiver", "checkpoints", "vacuum", "tables", "slots", "freeze",
-		"slotDetails", "settings", "databaseInventory", "tableInventory", "indexInventory"}
+		"slotDetails", "settings", "databaseInventory", "tableInventory", "indexInventory",
+		"logicalPublications", "logicalSubscriptions", "logicalApplyProgress", "logicalSlotPressure"}
+	if major >= 15 {
+		sections = append(sections, "logicalSubscriptionErrors")
+	}
 	if version >= 160000 {
 		sections = append(sections, "instanceIO")
 	}
@@ -73,6 +77,10 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 			}
 			if signal.Source != wantSource || signal.Status != "ok" {
 				t.Fatalf("unexpected PG%d checkpoint capability: %+v", major, signal)
+			}
+		case "logicalSubscriptionErrors":
+			if (major == 14 && signal.Status != "not_supported") || (major >= 15 && signal.Status != "ok") {
+				t.Fatalf("unexpected PG%d logical apply error capability: %+v", major, signal)
 			}
 		}
 	}

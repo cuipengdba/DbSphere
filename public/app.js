@@ -2035,11 +2035,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     evidencePanel.append(captures);
   }
   if (assetServerPaging || replay) {
-    const openWindow = async topic => {
+    const openWindow = async (topic, point) => {
       try {
         if (!assetServerPaging) await refresh();
         if (selectedEvent !== event.id) return;
-        monitoring.openIncident(event, topic);
+        monitoring.openIncident(event, topic, point);
         setView('monitoring');
       } catch (error) {
         notice(error.message, true);
@@ -2058,6 +2058,15 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       failover.type = 'button';
       failover.addEventListener('click', () => { void openWindow('replication'); });
       actions.append(failover);
+    }
+    const logicalCandidate = analysis.candidates.find(item => item.code === 'logical_slot_wal_retention');
+    if (logicalCandidate) {
+      const slot = cell('button', '查看逻辑复制槽', 'ghost small-button');
+      slot.type = 'button';
+      const trigger = event.evidence.find(item => item.kind === 'alert_firing' &&
+        item.payload?.metric === 'pg.logical_slot_retained_bytes' && logicalCandidate.supports.includes(`sample:${item.payload.sampleId}`));
+      slot.addEventListener('click', () => { void openWindow('replication', trigger && {at: trigger.observedAt, sampleId: trigger.payload.sampleId}); });
+      actions.append(slot);
     }
     summary.append(actions);
   }

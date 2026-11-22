@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,7 @@ var goDefaultRules = []alertRule{
 	{"pg_sql_regression", "PostgreSQL SQL 耗时退化", "pg.sql_regression_ratio", "pg_stat_statements", "latency", "warning", ">=", 2, 0, 1, true, 0},
 	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true, 0},
 	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true, 0},
+	{"pg_logical_slot_retention", "PostgreSQL 逻辑复制槽 WAL 保留过高", "pg.logical_slot_retained_bytes", "PostgreSQL pg_replication_slots", "replication", "warning", ">=", 512 * 1024 * 1024, 120, 1, true, 0},
 	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true, 0},
 	{"patroni_leader_invalid", "Patroni 集群 leader 数量异常", "patroni.leader_count_invalid", "Patroni REST API", "availability", "critical", ">=", 1, 30, 1, true, 0},
 	{"pg_archive_failures", "PostgreSQL WAL 归档失败增加", "pg.archive_fail_delta", "PostgreSQL", "storage", "warning", ">=", 1, 0, 1, true, 0},
@@ -116,7 +118,7 @@ func supportedAlertMetric(metric string) bool {
 	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
 		"collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed",
 		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.sql_regression_ratio", "pg.long_transactions",
-		"pg.replication_lag_bytes", "pg.wal_receiver_down", "patroni.leader_count_invalid", "pg.archive_fail_delta", "pg.autovacuum_disabled",
+		"pg.replication_lag_bytes", "pg.logical_slot_retained_bytes", "pg.wal_receiver_down", "patroni.leader_count_invalid", "pg.archive_fail_delta", "pg.autovacuum_disabled",
 		"pg.vacuum_backlog_percent", "linux.cpu_used_percent",
 		"linux.memory_used_percent", "linux.disk_used_percent",
 		"k8s.pod_not_ready", "k8s.pod_unscheduled", "k8s.scheduling_failure_recent", "k8s.restart_delta",
@@ -225,6 +227,15 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 				}
 				return alertSignal{Available: true, Value: value, Source: signal.Source,
 					Detail: map[string]any{"receiver": status}}
+			}
+		}
+	case "pg.logical_slot_retained_bytes":
+		signal.Source = "PostgreSQL pg_replication_slots"
+		slot := object(object(metrics["diagnostics"])["logicalSlotPressure"])
+		if stringValue(metrics["role"]) == "primary" && stringValue(slot["status"]) == "ok" {
+			details := object(slot["data"])
+			if value, err := strconv.ParseUint(stringValue(details["retainedBytes"]), 10, 64); err == nil {
+				return alertSignal{Available: true, Value: float64(value), Source: signal.Source, Detail: details}
 			}
 		}
 	case "patroni.leader_count_invalid":

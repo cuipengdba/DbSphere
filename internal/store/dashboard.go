@@ -58,7 +58,7 @@ func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []s
                         'collector.missed_intervals','collector.k8s_failed','collector.linux_failed',
                         'collector.patroni_failed','patroni.leader_count_invalid',
 			'pg.connection_utilization','pg.database_growth_bytes_per_day','pg.blocked_sessions',
-			'pg.long_transactions','pg.replication_lag_bytes','pg.wal_receiver_down',
+			'pg.long_transactions','pg.replication_lag_bytes','pg.logical_slot_retained_bytes','pg.wal_receiver_down',
 			'pg.archive_fail_delta',
 			'pg.autovacuum_disabled','pg.vacuum_backlog_percent',
 			'linux.cpu_used_percent','linux.memory_used_percent','linux.disk_used_percent',

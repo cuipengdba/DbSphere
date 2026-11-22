@@ -1296,7 +1296,10 @@
       ]);
       const observation = panel('复制链路与 WAL 位置');
       const view = el('div');
-      const [latest, peak] = history.observations;
+      const latest = history.observations.find(row => row.kind === 'latest');
+      const peak = history.observations.find(row => row.kind === 'peak');
+      const slotPeak = history.observations.find(row => row.kind === 'slot_peak');
+      const incidentSample = history.observations.find(row => row.kind === 'incident' && row.logicalSlotPressure?.data?.name);
       if (latest && peak) {
         const choices = select('复制采样', value => describe(value === 'peak' ? peak : latest));
         options(choices, [['latest', '区间末次采样'], ['peak', '区间回放差距峰值']], 'latest');
@@ -1340,18 +1343,13 @@
             receiver.flushedLsn, receiver.senderLsn, formatTime(receiver.lastMessageAt)
           ]], 'WAL 接收会话'));
         } else view.append(el('p', links ? '本次未观测到 WAL 发送会话。' : '缺少可见的 WAL 发送采样。', 'monitor-empty'));
-        const storage = panel('复制槽、归档与冻结');
+        const storage = panel('WAL 归档与冻结');
         const archive = sample.archive?.data;
         const freeze = sample.freeze?.data;
         storage.append(stats([
           ['累计成功归档', display(archive?.archivedCount)], ['累计归档失败', display(archive?.failedCount)],
           ['最近归档失败', formatTime(archive?.lastFailedAt)], ['当前连接库 XID 年龄', display(freeze?.xidAge)]
         ]));
-        if (sample.slots?.data.length) storage.append(table(['复制槽', '活动', 'WAL 状态', '保留 WAL', '可用预算'],
-          sample.slots.data.map(slot => [slot.name, slot.active ? '是' : '否', slot.walStatus,
-            slot.retainedBytes != null ? display(Number(slot.retainedBytes), bytes) : '—',
-            slot.safeWalBytes != null ? display(Number(slot.safeWalBytes), bytes) : '—']), '复制槽保留量'));
-        else storage.append(el('p', sample.slots?.status === 'ok' ? '未观测到复制槽。' : '复制槽样本缺失。', 'monitor-note'));
         view.append(storage, servicesPanel(asset, sample));
       }
       describe(latest);
@@ -1367,8 +1365,80 @@
       result.append(topologyPanel(topology, time));
       if (asset.patroniConfigured || history.topology.some(row => row.patroni?.status === 'ok'))
         result.append(patroniSwitchPanel(asset, history.topology, events));
+      result.append(logicalReplicationPanel(asset, latest, slotPeak, incidentSample, events));
       result.append(observation, charts, changes);
       return result;
+    }
+
+    function logicalReplicationPanel(asset, latest, peak, incident, events) {
+      const card = panel('逻辑复制与复制槽');
+      if (!latest) {
+        card.append(el('p', '所选时段没有逻辑复制采样。', 'monitor-empty'));
+        return card;
+      }
+      const view = el('div');
+      const event = events.find(item => item.id === eventAnchor);
+      const withinEvent = peak && event && Date.parse(peak.collectedAt) >= Date.parse(event.startedAt) &&
+        (!event.endedAt || Date.parse(peak.collectedAt) <= Date.parse(event.endedAt));
+      const focus = incident ? 'incident' : withinEvent ? 'peak' : 'latest';
+      const frames = {latest, peak, incident};
+      if (peak || incident) {
+        const choice = select('逻辑复制采样', value => render(frames[value]));
+        options(choice, [['latest', '区间末次采样'], ['peak', '区间逻辑槽保留峰值'], ['incident', '原事件采样']]
+          .filter(([value]) => frames[value]), focus);
+        card.append(labeled('采样', choice));
+      }
+      card.append(view);
+      render(frames[focus]);
+      return card;
+
+      function render(sample) {
+        const collected = el('p', `${formatTime(sample.collectedAt)} · `, 'monitor-note');
+        collected.append(sampleLink(asset.id, sample.id));
+        view.replaceChildren(collected);
+        const note = message => view.append(el('p', message, 'monitor-note'));
+        const unavailable = section => section?.reason === 'SQLSTATE 42501' ? '监控账号权限不足' : '当前采样不可用';
+        const amount = value => value == null ? '—' : display(Number(value), bytes);
+        const pressure = sample.logicalSlotPressure?.data;
+        if (pressure?.name) note(`纳管数据库保留量最高的逻辑槽 ${pressure.name} · ${amount(pressure.retainedBytes)} · ${pressure.active ? '活动' : '空闲'}`);
+        const slots = sample.slots?.data;
+        if (slots?.length) {
+          view.append(table(['复制槽', '类型 / 插件', '归属数据库', '活动', 'WAL 状态', '保留 WAL', '未确认 WAL', '剩余预算', '回放确认耗时', '重启 / 已确认 LSN'],
+            slots.map(slot => [slot.name, [slot.type, slot.plugin].filter(Boolean).join(' / '), slot.database, slot.active ? '是' : '否',
+              [slot.walStatus, slot.invalidationReason].filter(Boolean).join(' / '), amount(slot.retainedBytes), amount(slot.unconfirmedBytes),
+              amount(slot.safeWalBytes), display(slot.replayLagSeconds, value => `${number(value, 3)} s`),
+              [slot.restartLsn, slot.confirmedFlushLsn].filter(Boolean).join(' / ')]), '复制槽保留量'));
+          if (sample.slotSummary?.data?.total > slots.length) note(`显示 ${slots.length} / ${sample.slotSummary.data.total} 个复制槽。`);
+        } else note(sample.slots?.status === 'ok' ? '本次未观测到复制槽。' : `复制槽 · ${unavailable(sample.slots)}`);
+        const pub = sample.logicalPublications;
+        if (pub?.data?.entries.length) {
+          const operations = {insert: '插入', update: '更新', delete: '删除', truncate: '清空'};
+          view.append(table(['Publication', '表范围', '发布操作', '分区根发布'], pub.data.entries.map(item => [
+            item.name, item.allTables ? '全部表' : `${item.explicitTables} 条显式表绑定`,
+            Object.keys(operations).filter(key => item[key]).map(key => operations[key]).join(' / '), item.viaRoot ? '是' : '否'
+          ]), '逻辑复制 Publication'));
+          if (pub.data.total > pub.data.entries.length) note(`显示 ${pub.data.entries.length} / ${pub.data.total} 个 publication。`);
+        } else note(pub?.status === 'ok' ? '当前连接库无 publication。' : `Publication · ${unavailable(pub)}`);
+        const subs = sample.logicalSubscriptions;
+        if (subs?.data?.entries.length) {
+          const states = {running: '应用进程运行', disabled: '订阅已停用', worker_absent: '已启用，应用进程未运行', worker_unknown: '已启用，进程可见性受限'};
+          const applied = new Map((sample.logicalApplyProgress?.data || []).map(item => [item.oid, item]));
+          const errors = new Map((sample.logicalSubscriptionErrors?.data || []).map(item => [item.oid, item]));
+          view.append(table(['Subscription', '状态', '上游复制槽', '订阅的 Publication', '表同步', '最近收信', '收到 / 回报 LSN', '已应用的上游 LSN', '应用 / 同步错误'],
+            subs.data.entries.map(item => [item.name, states[item.state] || item.state, item.slot,
+              [...item.publications, ...(item.publicationCount > item.publications.length ? ['…'] : [])].join(' / '),
+              `${item.readyTableCount} / ${item.tableCount} 就绪`, formatTime(item.lastMessageAt),
+              [item.receivedLsn, item.reportedLsn].filter(Boolean).join(' / '), applied.get(item.oid)?.appliedOriginLsn,
+              errors.has(item.oid) ? `${errors.get(item.oid).applyErrors} / ${errors.get(item.oid).syncErrors}` : '—'
+            ]), '逻辑复制 Subscription'));
+          if (subs.data.total > subs.data.entries.length) note(`显示 ${subs.data.entries.length} / ${subs.data.total} 个 subscription。`);
+          if (sample.logicalApplyProgress?.status !== 'ok') note(`上游应用位置 · ${unavailable(sample.logicalApplyProgress)}`);
+        } else note(subs?.status === 'ok' ? '当前连接库无 subscription。' : `Subscription · ${unavailable(subs)}`);
+        if (sample.postgresMajor === 14) note('PostgreSQL 14 提供订阅进程与位置信息，应用和同步错误计数从 PostgreSQL 15 起提供。');
+        else if (subs?.data?.entries.length && sample.logicalSubscriptionErrors?.status !== 'ok')
+          note(`应用与同步错误 · ${unavailable(sample.logicalSubscriptionErrors)}`);
+        if (slots?.length || subs?.data?.entries.length) note('保留 WAL 以槽重启位置计算，未确认 WAL 以消费者确认位置计算。回放确认耗时来自发送进程近期反馈。');
+      }
     }
 
     function patroniSwitchPanel(asset, points, events) {
@@ -2188,6 +2258,8 @@
       const topologyAt = replicaAt;
       if (topologyAt != null && topologyAt >= time.from && topologyAt < time.to)
         topologyQuery.set('at', new Date(topologyAt).toISOString());
+      const replicationQuery = new URLSearchParams(topologyQuery);
+      if (focusSample) replicationQuery.set('sample', focusSample);
       const peers = mode === 'replication' ? assets.filter(row => row.id !== asset.id && clusterKey(row) === clusterKey(asset)).slice(0, 4) : [];
       const range = mode === 'sql' && baseline ? baselineWindow(time) : null;
       const baselineParams = new URLSearchParams(query);
@@ -2204,7 +2276,7 @@
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
           linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
-          mode === 'replication' ? api(`${path}replication?${topologyQuery}`) : null,
+          mode === 'replication' ? api(`${path}replication?${replicationQuery}`) : null,
           range ? api(`${path}sql-window?${baselineParams}`).catch(() => null) : null,
           linkedSQL ? api(`${path}query-traces?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
           Promise.all(peers.map(peer => api(`/api/assets/${peer.id}/replication?${topologyQuery}&view=topology`)

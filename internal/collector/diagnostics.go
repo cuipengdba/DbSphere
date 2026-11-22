@@ -29,12 +29,15 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 	}
 	retained := `CASE WHEN restart_lsn IS NOT NULL THEN
 		pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::text END`
+	backlog := `CASE WHEN confirmed_flush_lsn IS NOT NULL THEN
+		greatest(0,pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn))::text END`
 	replication := diagnosticQuery{"replicationLinks", replicationLinksSQL}
 	walPosition := diagnosticQuery{"walPosition", `SELECT jsonb_build_object(
 		'position',pg_current_wal_lsn()::text,'timeline',left(pg_walfile_name(pg_current_wal_lsn()),8),
 		'timelineSource','pg_walfile_name','startedAt',pg_postmaster_start_time())`}
 	if inRecovery {
 		retained = `NULL::text`
+		backlog = `NULL::text`
 		replication = diagnosticQuery{"walReceiver", `SELECT to_jsonb(q) FROM (
 			SELECT status, sender_host AS "senderHost", sender_port AS "senderPort", slot_name AS slot,
 			written_lsn::text AS "writtenLsn",flushed_lsn::text AS "flushedLsn",latest_end_lsn::text AS "senderLsn",
@@ -110,9 +113,16 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			current_setting('autovacuum_freeze_max_age')::numeric*100,1) AS "usedPercent"
 			FROM pg_database WHERE datname=current_database()) q`},
 		{"slotDetails", fmt.Sprintf(`SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
-			SELECT slot_name AS name,active,wal_status AS "walStatus",
-			safe_wal_size::text AS "safeWalBytes",%s AS "retainedBytes"
-			FROM pg_replication_slots ORDER BY active ASC,slot_name LIMIT 20) q`, retained)},
+			SELECT s.slot_name AS name,s.active,s.wal_status AS "walStatus",s.slot_type AS type,s.database,s.plugin,
+			s.restart_lsn::text AS "restartLsn",s.confirmed_flush_lsn::text AS "confirmedFlushLsn",
+			s.safe_wal_size::text AS "safeWalBytes",%s AS "retainedBytes",%s AS "unconfirmedBytes",
+			extract(epoch FROM r.replay_lag) AS "replayLagSeconds",r.reply_time AS "lastReplyAt",
+			to_jsonb(s)->>'invalidation_reason' AS "invalidationReason",to_jsonb(s)->>'inactive_since' AS "inactiveSince"
+			FROM pg_catalog.pg_replication_slots s LEFT JOIN pg_catalog.pg_stat_replication r ON r.pid=s.active_pid
+			ORDER BY s.active ASC,s.restart_lsn ASC NULLS LAST,s.slot_name LIMIT 40) q`, retained, backlog)},
+		{"logicalPublications", logicalPublicationsSQL},
+		{"logicalSubscriptions", logicalSubscriptionsSQL},
+		{"logicalApplyProgress", logicalApplyProgressSQL},
 		{"settings", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
 			SELECT name,setting AS value,unit,source FROM pg_settings
 			WHERE name IN ('archive_mode','autovacuum','log_min_duration_statement','max_connections','max_slot_wal_keep_size','wal_level')
@@ -120,6 +130,12 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 		{"databaseInventory", databaseInventorySQL},
 		{"tableInventory", tableInventorySQL},
 		{"indexInventory", indexInventorySQL},
+	}
+	if !inRecovery {
+		queries = append(queries, diagnosticQuery{"logicalSlotPressure", logicalSlotPressureSQL})
+	}
+	if major >= 15 {
+		queries = append(queries, diagnosticQuery{"logicalSubscriptionErrors", logicalSubscriptionErrorsSQL})
 	}
 	if major >= 16 {
 		queries = append(queries, diagnosticQuery{"instanceIO", instanceIOSQL})
