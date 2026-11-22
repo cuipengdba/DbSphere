@@ -27,6 +27,30 @@ func recordLinuxInterval(current, previous map[string]any, elapsed time.Duration
 	if totalKnown && idleKnown && total > 0 && idle <= total {
 		object(current["cpu"])["usedPercent"] = 100 * (total - idle) / total
 	}
+	if wait, ok := hostCounterChange(current, previous, "cpu", "ioWaitSeconds"); ok && totalKnown && total > 0 && wait <= total {
+		object(current["cpu"])["ioWaitPercent"] = 100 * wait / total
+	}
+	deviceRates := map[string]any{}
+	for _, kind := range []string{"disk", "network"} {
+		before := object(object(previous["devices"])[kind])
+		now := object(object(current["devices"])[kind])
+		rates := map[string]any{}
+		for name, counters := range now {
+			rate := map[string]any{}
+			for key, value := range object(counters) {
+				next, nextOK := numeric(value)
+				prior, priorOK := numeric(object(before[name])[key])
+				if nextOK && priorOK && next >= prior {
+					rate[key] = (next - prior) / elapsed.Seconds()
+				}
+			}
+			if len(rate) > 0 {
+				rates[name] = rate
+			}
+		}
+		deviceRates[kind] = rates
+	}
+	current["deviceRates"] = deviceRates
 	current["interval"] = interval
 }
 

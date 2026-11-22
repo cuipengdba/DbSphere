@@ -162,6 +162,8 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 				t.Errorf("Service list was not bounded: %s", r.URL.RawQuery)
 			}
 			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-service"},"spec":{"selector":{"app":"postgres"},"ports":[{"port":5432}]}},{"metadata":{"name":"other"},"spec":{"selector":{"app":"other"}}}]}`)
+		case "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices":
+			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-slice","labels":{"kubernetes.io/service-name":"pg-service"}},"endpoints":[{"targetRef":{"kind":"Pod","uid":"old-pod"}},{"addresses":["10.0.0.2"],"targetRef":{"kind":"Pod","uid":"pod-uid"},"conditions":{"ready":true}}]},{"metadata":{"name":"private","labels":{"kubernetes.io/service-name":"other"}},"endpoints":[{"targetRef":{"kind":"Pod","uid":"pod-uid"}}]}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/namespaces/db/pods/pg-0":
 			fmt.Fprint(w, `{"timestamp":"2026-11-17T00:01:00Z","containers":[{"name":"postgres","usage":{"cpu":"20m","memory":"128Mi"}}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/nodes/worker-1":
@@ -216,7 +218,11 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		kubeObject(resources["podUsage"])["memoryBytes"] != float64(128*1024*1024) || kubeObject(usageRows[0])["cpuCores"] != 0.02 {
 		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
 	}
-	if len(paths) != 8 {
+	slices := kubeObject(kubeObject(value["endpointRoutes"])["slices"])
+	if len(slices) != 1 || kubeObject(kubeObject(slices["pg-slice"])["endpoint"])["targetUID"] != "pod-uid" {
+		t.Fatalf("EndpointSlices do not match Service and current Pod identity: %+v", slices)
+	}
+	if len(paths) != 9 {
 		t.Fatalf("unexpected Kubernetes API calls: %v", paths)
 	}
 }

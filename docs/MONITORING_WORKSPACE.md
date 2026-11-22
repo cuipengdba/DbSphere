@@ -52,7 +52,11 @@ PG14–16 的检查点采样来自 `pg_stat_bgwriter`，PG17–18 来自 `pg_sta
 
 「运行环境」在同一时间范围呈现 PostgreSQL 连通性、环境变化、最近快照和资源趋势。点击变化记录或故障标记可以打开原始采样或原事件。Linux 使用 `node_exporter` 提供 CPU、内存、文件系统占用、磁盘和网络吞吐，以及可用时的 CPU、内存和 I/O 压力。CPU 和吞吐按相邻样本读取，主机启动时间变化、计数回退或缺采切断增量。
 
+Linux 资源可下钻到块设备、网卡和挂载点。节点级 CPU I/O 等待与 PSI 分别显示。设备视图呈现吞吐、I/O 时间占比、平均队列深度、IOPS、错误与丢包。至少两次连续采样才可计算增量，采集端点变化时重新建立基线。每次采样保留最多 32 个块设备、32 张网卡及 10 个挂载点。
+
 Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和已挂载的 PVC。按观测时间记录就绪、调度、重启计数、节点压力和 PVC 状态变化。同名 Pod 重建时按 UID 区分，资源图按 UID 分段。已启用 `metrics.k8s.io` 时可切换 Pod 总量和单容器 CPU 与内存，PVC 容量和已用量分别注明来源。资源接口缺失或受限时，已取得的 Kubernetes 对象状态和 PostgreSQL 证据继续可用。
+
+控制器、Pod 与节点显示各自的 UID。容器请求和限额来自 Pod 规格，用量来自 `metrics.k8s.io`。PVC 历史保留 UID、请求和容量变化。命名空间权限包含 `discovery.k8s.io/endpointslices` 的 `list` 时，可按目标 Pod UID 核对匹配 Service 的发现端点、地址与就绪状态，并打开采样中的对象事件。
 
 ## 全链路故障回放
 

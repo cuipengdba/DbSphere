@@ -17,6 +17,16 @@ import (
 
 var metricLine = regexp.MustCompile(`^([a-zA-Z_:][\w:]*)(\{[^}]*\})?\s+([^\s]+)`)
 var metricLabel = regexp.MustCompile(`([a-zA-Z_][\w]*)="((?:\\.|[^"\\])*)"`)
+var nodeDiskMetrics = map[string]string{
+	"node_disk_read_bytes_total": "readBytes", "node_disk_written_bytes_total": "writtenBytes",
+	"node_disk_io_time_seconds_total": "ioSeconds", "node_disk_reads_completed_total": "reads",
+	"node_disk_writes_completed_total": "writes", "node_disk_io_time_weighted_seconds_total": "weightedIOSeconds",
+}
+var nodeNetworkMetrics = map[string]string{
+	"node_network_receive_bytes_total": "receiveBytes", "node_network_transmit_bytes_total": "transmitBytes",
+	"node_network_receive_errs_total": "receiveErrors", "node_network_transmit_errs_total": "transmitErrors",
+	"node_network_receive_drop_total": "receiveDrops", "node_network_transmit_drop_total": "transmitDrops",
+}
 var excludedFS = map[string]bool{"tmpfs": true, "devtmpfs": true, "overlay": true,
 	"squashfs": true, "proc": true, "sysfs": true, "cgroup": true, "cgroup2": true,
 	"nsfs": true, "tracefs": true, "autofs": true, "securityfs": true, "configfs": true,
@@ -47,7 +57,9 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 	scalar := map[string]float64{}
 	filesystems := map[string]*filesystemSample{}
 	collected := map[string]bool{}
+	disks, interfaces := map[string]map[string]float64{}, map[string]map[string]float64{}
 	var cpuTotal, cpuIdle, diskRead, diskWritten, netReceive, netTransmit float64
+	var cpuIOWait float64
 	for _, line := range strings.Split(raw, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -61,11 +73,24 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 			continue
 		}
 		labels := parseMetricLabels(match[2])
+		device := labels["device"]
+		validDisk := device != "" && !strings.HasPrefix(device, "loop") && !strings.HasPrefix(device, "ram") && !strings.HasPrefix(device, "zram")
+		validNetwork := device != "" && device != "lo"
+		if key := nodeDiskMetrics[match[1]]; key != "" && validDisk {
+			addNodeDeviceCounter(disks, device, key, value)
+		}
+		if key := nodeNetworkMetrics[match[1]]; key != "" && validNetwork {
+			addNodeDeviceCounter(interfaces, device, key, value)
+		}
 		switch match[1] {
 		case "node_cpu_seconds_total":
 			cpuTotal += value
 			if labels["mode"] == "idle" {
 				cpuIdle += value
+			}
+			if labels["mode"] == "iowait" {
+				cpuIOWait += value
+				collected["iowait"] = true
 			}
 		case "node_disk_read_bytes_total":
 			if !strings.HasPrefix(labels["device"], "loop") && !strings.HasPrefix(labels["device"], "ram") &&
@@ -150,16 +175,47 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 	return map[string]any{"status": "ok", "source": "node_exporter", "observedAt": time.Now().UTC(),
 		"bootTimeSeconds": metric("node_boot_time_seconds"),
 		"cpu": map[string]any{"totalSeconds": cpuTotal, "idleSeconds": cpuIdle,
-			"load1": metric("node_load1")},
+			"load1": metric("node_load1"), "ioWaitSeconds": counter("iowait", cpuIOWait)},
 		"memory": map[string]any{"totalBytes": scalar["node_memory_MemTotal_bytes"],
 			"availableBytes": scalar["node_memory_MemAvailable_bytes"], "usedPercent": memoryUsed},
-		"filesystems": fs,
+		"filesystems": fs, "devices": map[string]any{"disk": nodeDevices(disks), "network": nodeDevices(interfaces),
+			"diskTotal": len(disks), "networkTotal": len(interfaces)},
 		"pressure": map[string]any{"cpuWaitSeconds": metric("node_pressure_cpu_waiting_seconds_total"),
 			"memoryWaitSeconds": metric("node_pressure_memory_waiting_seconds_total"), "ioWaitSeconds": metric("node_pressure_io_waiting_seconds_total")},
 		"disk": map[string]any{"readBytesTotal": counter("node_disk_read_bytes_total", diskRead),
 			"writtenBytesTotal": counter("node_disk_written_bytes_total", diskWritten)},
 		"network": map[string]any{"receiveBytesTotal": counter("node_network_receive_bytes_total", netReceive),
 			"transmitBytesTotal": counter("node_network_transmit_bytes_total", netTransmit)}}, nil
+}
+
+func addNodeDeviceCounter(devices map[string]map[string]float64, name, key string, value float64) {
+	if len(name) > 128 || value < 0 {
+		return
+	}
+	if devices[name] == nil {
+		devices[name] = map[string]float64{}
+	}
+	devices[name][key] = value
+}
+
+func nodeDevices(devices map[string]map[string]float64) map[string]any {
+	names := make([]string, 0, len(devices))
+	for name := range devices {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) > 32 {
+		names = names[:32]
+	}
+	result := make(map[string]any, len(names))
+	for _, name := range names {
+		counters := map[string]any{}
+		for key, value := range devices[name] {
+			counters[key] = value
+		}
+		result[name] = counters
+	}
+	return result
 }
 
 func Linux(ctx context.Context, host string, port int) (map[string]any, error) {

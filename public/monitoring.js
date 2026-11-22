@@ -412,7 +412,7 @@
     const instanceTitle = el('h2', null, 'monitor-instance-title');
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
-    let dbOid = '', objectOid = '', objectKind = '';
+    let dbOid = '', objectOid = '', objectKind = '', deviceType = '', deviceName = '';
     const fleetLabel = el('p', null, 'monitor-range-caption');
     const clusterSelect = select('PG 集群', value => {
       cluster = value; instance = ''; database = ''; chooseCluster = false;
@@ -496,7 +496,8 @@
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
         ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''],
         ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
-        ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), '']
+        ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''],
+        ['deviceType', deviceType, ''], ['device', deviceName, '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -524,6 +525,8 @@
       lockAt = Number.isFinite(lockTime) ? lockTime : null;
       const replicaTime = Date.parse(params.get('replicaAt'));
       replicaAt = Number.isFinite(replicaTime) ? replicaTime : null;
+      deviceType = ['disk', 'network', 'filesystem'].includes(params.get('deviceType')) ? params.get('deviceType') : '';
+      deviceName = deviceType ? (params.get('device') || '').slice(0, 128) : '';
       dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
       objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
       objectKind = objectOid && ['table', 'index'].includes(params.get('objectKind')) ? params.get('objectKind') : '';
@@ -590,6 +593,7 @@
       const asset = assets.find(item => item.id === id);
       if (!asset) return;
       if (id !== instance) {
+        deviceType = ''; deviceName = '';
         if (clusterKey(asset) !== cluster) replicaAt = null;
         resetWaitFilters();
         resetCatalog();
@@ -1466,7 +1470,8 @@
         ['观测时间', 'PG 状态', '主机记录', '采样'], data.changes.map(row => {
         const pg = row.pg === 'ok' ? '可用' : row.pg === 'availability' ? '不可用' : '未知';
         const origin = sampleLink(asset.id, row.id);
-        if (!kubernetes) return [formatTime(row.collectedAt), pg, row.hostRestart ? '主机启动时间变化' : '—', origin];
+        if (!kubernetes) return [formatTime(row.collectedAt), pg, [row.hostRestart && '主机启动时间变化',
+          row.hostEndpointChanged && '采集端点变化', row.hostEndpoint].filter(Boolean).join(' · ') || '—', origin];
         const pod = [row.pod, row.uid];
         if (row.uid && row.previousUID && row.uid !== row.previousUID) pod.push(`前一 UID ${row.previousUID}`);
         const summary = pairs => Object.entries(pairs || {}).map(([key, value]) => `${key} ${value ?? '未知'}`).join(' · ');
@@ -1483,6 +1488,7 @@
         ['podMemoryBytes', 'Pod 内存 · metrics.k8s.io', bytes, palette[1], 'podUid']
       ] : [
         ['memoryPercent', 'Linux 内存占用', percent, palette[1]], ['cpuLoad', 'Linux 1 分钟负载', number, palette[0]],
+        ['cpuIOWait', 'Linux CPU I/O 等待', percent, palette[2]],
         ['diskUsedPercent', '文件系统最高占用', percent, palette[2]], ['diskReadBps', '磁盘读取', bySecond, palette[0]],
         ['diskWriteBps', '磁盘写入', bySecond, palette[2]], ['networkReceiveBps', '网络接收', bySecond, palette[0]],
         ['networkTransmitBps', '网络发送', bySecond, palette[1]], ['pressureCPU', 'CPU 压力 · PSI', percent, palette[2]],
@@ -1497,7 +1503,11 @@
         const selected = data.containers.find(item => item.name === name);
         const rendered = metricCharts(selected?.series || data.series, time, events, selected ? [
           ['cpuCores', '容器 CPU · metrics.k8s.io', value => `${number(value, 3)} 核`, palette[0], 'podUid'],
-          ['memoryBytes', '容器内存 · metrics.k8s.io', bytes, palette[1], 'podUid']
+          ['memoryBytes', '容器内存 · metrics.k8s.io', bytes, palette[1], 'podUid'],
+          ['cpuRequest', '容器 CPU 请求', number, palette[2], 'podUid'],
+          ['cpuLimit', '容器 CPU 限额', number, palette[3], 'podUid'],
+          ['memoryRequest', '容器内存请求', bytes, palette[2], 'podUid'],
+          ['memoryLimit', '容器内存限额', bytes, palette[3], 'podUid']
         ] : resourceCharts);
         graphCursors = [...time.cursors].filter(cursor => !previous.has(cursor));
         if (graphs) graphs.replaceWith(rendered);
@@ -1514,8 +1524,78 @@
       drawResources('');
       if (kubernetes && !data.series.some(row => finite(row.podCPUCores) || finite(row.podMemoryBytes)))
         resources.append(el('p', '此时段无可用的 Pod 资源指标。就绪、调度、重启和卷状态来自 Kubernetes 对象采样。', 'monitor-note'));
-      result.append(timeline, history, renderInfra(snapshot, asset), resources);
+      const covered = key => data.series.reduce((sum, row) => sum + (row[key] ?? 0), 0);
+      const total = covered('observed');
+      const coverage = kubernetes ? `Kubernetes 对象 ${covered('kubeObserved')}/${total} · 资源用量 ${covered('resourceObserved')}/${total}` :
+        `node_exporter ${covered('hostObserved')}/${total} 次采样`;
+      resources.insertBefore(el('p', coverage, 'monitor-note'), resources.children[1] || null);
+      result.append(timeline, history, renderInfra(snapshot, asset));
+      result.append(kubernetes ? kubernetesIdentityPanel(asset, snapshot, data.changes) : linuxDevicePanel(asset, snapshot, data, time, events), resources);
       return result;
+    }
+
+    function linuxDevicePanel(asset, snapshot, data, time, events) {
+      const card = panel('块设备、网卡与文件系统');
+      const host = snapshot?.linux;
+      const labels = {disk: '磁盘', network: '网卡', filesystem: '挂载点'};
+      const devices = ['disk', 'network'].flatMap(kind => Object.keys(host?.devices?.[kind] || {}).sort().map(name => [`${kind}:${name}`, `${labels[kind]} · ${name}`]));
+      for (const fs of host?.filesystems || []) devices.push([`filesystem:${fs.mountpoint}`, `挂载点 · ${fs.mountpoint}`]);
+      const active = deviceType && deviceName ? `${deviceType}:${deviceName}` : '';
+      if (active && !devices.some(([key]) => key === active)) devices.push([active, `${labels[deviceType]} · ${deviceName}`]);
+      const chooser = select('Linux 资源对象', value => {
+        const split = value.indexOf(':');
+        deviceType = split < 0 ? '' : value.slice(0, split);
+        deviceName = split < 0 ? '' : value.slice(split + 1);
+        change();
+      });
+      options(chooser, [['', '核对主机总量'], ...devices], active);
+      card.append(labeled('对象', chooser));
+      if (host?.endpoint) card.append(el('p', `node_exporter · ${host.endpoint}`, 'monitor-note'));
+      if (!active) return card;
+      const rows = data.deviceSeries || [];
+      const bySecond = value => `${bytes(value)}/s`;
+      const dimensions = {
+        disk: [['readBps', '设备读吞吐', bySecond], ['writeBps', '设备写吞吐', bySecond], ['busyPercent', '设备 I/O 时间占比', percent],
+          ['queueDepth', '设备平均 I/O 队列深度', number], ['readIOPS', '设备读 IOPS', rate], ['writeIOPS', '设备写 IOPS', rate]],
+        network: [['receiveBps', '网卡接收', bySecond], ['transmitBps', '网卡发送', bySecond], ['receiveErrors', '接收错误', rate],
+          ['transmitErrors', '发送错误', rate], ['receiveDrops', '接收丢包', rate], ['transmitDrops', '发送丢包', rate]],
+        filesystem: [['usedPercent', '挂载点占用', percent], ['availableBytes', '可用容量', bytes], ['sizeBytes', '文件系统容量', bytes]]
+      };
+      card.append(metricCharts(rows, time, events, dimensions[deviceType].map(([key, title, format], i) => [key, title, format, palette[i % palette.length], 'identity'])));
+      const latest = rows.findLast(row => row.observed);
+      if (latest) card.append(sampleLink(asset.id, latest.sampleId));
+      else card.append(el('p', '所选时段无此对象的可见采样。', 'monitor-note'));
+      return card;
+    }
+
+    function kubernetesIdentityPanel(asset, snapshot, changes) {
+      const card = panel('Workload、Pod、节点和服务端点');
+      const kube = snapshot?.k8s;
+      const owner = kube?.owner;
+      const pod = kube?.pod;
+      const node = kube?.node;
+      if (pod) card.append(stats([
+        ['控制器', owner ? `${owner.kind}/${owner.name}` : '—', owner?.uid],
+        ['Pod', `${kube.namespace}/${pod.name}`, pod.uid], ['Node', node?.name || pod.node || '—', node?.uid]
+      ]));
+      if (kube?.resourceSpecs && Object.keys(kube.resourceSpecs).length) {
+        const usage = new Map((kube.resourceMetrics?.containers || []).map(row => [row.name, row]));
+        card.append(table(['容器', 'CPU 用量 / 请求 / 限额（核）', '内存用量 / 请求 / 限额'],
+          Object.entries(kube.resourceSpecs).map(([name, config]) => [
+            name, [usage.get(name)?.cpuCores, config.requests.cpuCores, config.limits.cpuCores].map(value => display(value)).join(' / '),
+            [usage.get(name)?.memoryBytes, config.requests.memoryBytes, config.limits.memoryBytes].map(value => display(value, bytes)).join(' / ')
+          ]), '容器规格与用量'));
+      }
+      const changed = changes.filter(row => row.routesChanged || row.volumes || row.events?.length);
+      if (changed.length) card.append(table(['观察时间', 'Pod UID', 'EndpointSlice', 'PVC 身份与容量', '对象事件', '采样'], changed.map(row => {
+        const endpoints = Object.entries(row.endpointRoutes?.slices || {}).map(([name, slice]) =>
+          `${slice.service}/${name} · ${(slice.endpoint.addresses || []).join(', ')} · ${slice.endpoint.conditions?.ready === false ? '未就绪' : slice.endpoint.conditions?.ready === true ? '就绪' : '状态未报告'}`);
+        const volumes = Object.entries(row.volumes || {}).map(([name, [uid, capacity, requested]]) => [name, uid, capacity, requested].filter(Boolean).join(' · '));
+        const recent = (row.events || []).slice(0, 3).map(event => [event.reason, formatTime(event.at), event.message].filter(Boolean).join(' · '));
+        return [formatTime(row.collectedAt), row.uid, endpoints.join(' / ') || (row.endpointRoutes?.status === 'unavailable' ? 'EndpointSlice 读取受限' : '—'),
+          volumes.join(' / '), recent.join(' / '), sampleLink(asset.id, row.id)];
+      }), '环境身份与端点历史'));
+      return card;
     }
 
     function followWait(item) {
@@ -1574,7 +1654,13 @@
       let section;
       if (mode === 'replication') section = 'series';
       if (mode === 'metrics') section = 'instance-history';
-      if (mode === 'infra' && asset.runtime !== 'managed') section = 'environment';
+      if (mode === 'infra' && asset.runtime !== 'managed') {
+        section = 'environment';
+        if (asset.runtime === 'linux' && deviceType && deviceName) {
+          query.set('deviceType', deviceType);
+          query.set('device', deviceName);
+        }
+      }
       if (mode === 'locks') {
         section = 'lock-history';
         if (lockPick || focusSample) query.set('sample', lockPick || focusSample);

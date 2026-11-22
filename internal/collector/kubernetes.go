@@ -538,6 +538,22 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
 		"node": nil, "services": []any{}, "resourceMetrics": nil,
 		"observedAt": time.Now().UTC()}
+	resourceSpecs := map[string]any{}
+	for _, raw := range kubeList(spec["containers"]) {
+		container := kubeObject(raw)
+		name := kubeString(container["name"])
+		if name == "" || len(resourceSpecs) >= 32 {
+			continue
+		}
+		values := map[string]any{}
+		for _, kind := range []string{"requests", "limits"} {
+			resources := kubeObject(kubeObject(container["resources"])[kind])
+			var units kubeUsageTotals
+			values[kind] = units.add(kubeString(resources["cpu"]), kubeString(resources["memory"]))
+		}
+		resourceSpecs[name] = values
+	}
+	result["resourceSpecs"] = resourceSpecs
 	for _, raw := range kubeList(metadata["ownerReferences"]) {
 		owner := kubeObject(raw)
 		if owner["controller"] == true {
@@ -597,6 +613,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	if serviceList, err := k.get(ctx, base+"/services", url.Values{"limit": {"100"}}); err == nil {
 		labels := kubeObject(metadata["labels"])
 		services := []any{}
+		serviceNames := make(map[string]bool)
 		for _, raw := range kubeList(serviceList["items"]) {
 			service := kubeObject(raw)
 			serviceSpec := kubeObject(service["spec"])
@@ -618,12 +635,17 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			for _, rawPort := range kubeList(serviceSpec["ports"]) {
 				ports = append(ports, kubeObject(rawPort)["port"])
 			}
-			services = append(services, map[string]any{"name": kubeObject(service["metadata"])["name"], "ports": ports,
+			name := kubeString(kubeObject(service["metadata"])["name"])
+			serviceNames[name] = true
+			services = append(services, map[string]any{"name": name, "ports": ports,
 				"type": serviceSpec["type"], "clusterIP": serviceSpec["clusterIP"]})
 		}
 		result["services"] = services
 		if kubeString(kubeObject(serviceList["metadata"])["continue"]) != "" {
 			result["servicesError"] = "Service list truncated at 100 items"
+		}
+		if len(serviceNames) > 0 {
+			result["endpointRoutes"] = k.endpointRoutes(ctx, target.Namespace, uid, serviceNames)
 		}
 	} else {
 		result["servicesError"] = err.Error()
@@ -689,4 +711,36 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		}
 	}
 	return result
+}
+
+func (k *kubeClient) endpointRoutes(ctx context.Context, namespace, podUID string, services map[string]bool) map[string]any {
+	path := "/apis/discovery.k8s.io/v1/namespaces/" + url.PathEscape(namespace) + "/endpointslices"
+	list, err := k.get(ctx, path, url.Values{"limit": {"100"}})
+	if err != nil {
+		return map[string]any{"status": "unavailable", "reason": err.Error()}
+	}
+	routes := map[string]any{}
+	for _, raw := range kubeList(list["items"]) {
+		slice := kubeObject(raw)
+		metadata := kubeObject(slice["metadata"])
+		service := kubeString(kubeObject(metadata["labels"])["kubernetes.io/service-name"])
+		if !services[service] {
+			continue
+		}
+		key := kubeString(metadata["name"])
+		endpoints := map[string]any{}
+		for _, rawEndpoint := range kubeList(slice["endpoints"]) {
+			point := kubeObject(rawEndpoint)
+			ref := kubeObject(point["targetRef"])
+			if podUID != "" && kubeString(ref["uid"]) == podUID && ref["kind"] == "Pod" {
+				endpoints = map[string]any{"addresses": point["addresses"], "conditions": point["conditions"], "targetUID": podUID}
+				break
+			}
+		}
+		if len(endpoints) != 0 && len(routes) < 32 {
+			routes[key] = map[string]any{"uid": metadata["uid"], "service": service, "addressType": slice["addressType"],
+				"ports": slice["ports"], "endpoint": endpoints}
+		}
+	}
+	return map[string]any{"status": "ok", "slices": routes, "truncated": kubeString(kubeObject(list["metadata"])["continue"]) != ""}
 }
