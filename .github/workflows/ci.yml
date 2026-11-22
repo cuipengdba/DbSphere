@@ -1407,6 +1407,12 @@ jobs:
             -e DB_USER=dbsphere_monitor -e DB_PASSWORD=dbsphere-monitor-test -e DB_HOST=dbsphere-pg-pooltest \
             -e DB_NAME=postgres -e STATS_USERS=dbsphere_monitor -e AUTH_TYPE=scram-sha-256 \
             -e POOL_MODE=transaction -e DEFAULT_POOL_SIZE=1 -e RESERVE_POOL_SIZE=0 edoburu/pgbouncer:v1.26.1-p0
+          for attempt in {1..30}; do
+            if docker exec dbsphere-route-limited pg_isready -h 127.0.0.1 -U dbsphere_monitor -d pgbouncer >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e PGPASSWORD=dbsphere-monitor-test dbsphere-pg-pooltest \
+            psql -h dbsphere-route-limited -U dbsphere_monitor -d postgres -v ON_ERROR_STOP=1 -c 'SELECT 1'
           docker run -d --rm --name dbsphere-route-other --network dbsphere-pooltest \
             -e POSTGRES_PASSWORD=dbsphere-root-test postgres:18-bookworm
           for attempt in {1..60}; do
