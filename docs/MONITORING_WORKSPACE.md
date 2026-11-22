@@ -68,7 +68,9 @@ Linux 资源可下钻到块设备、网卡和挂载点。节点级 CPU I/O 等�
 
 Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和已挂载的 PVC。按观测时间记录就绪、调度、重启计数、节点压力和 PVC 状态变化。同名 Pod 重建时按 UID 区分，资源图按 UID 分段。已启用 `metrics.k8s.io` 时可切换 Pod 总量和单容器 CPU 与内存，PVC 容量和已用量分别注明来源。资源接口缺失或受限时，已取得的 Kubernetes 对象状态和 PostgreSQL 证据继续可用。
 
-控制器、Pod 与节点显示各自的 UID。容器请求和限额来自 Pod 规格，用量来自 `metrics.k8s.io`。PVC 历史保留 UID、请求和容量变化。命名空间权限包含 `discovery.k8s.io/endpointslices` 的 `list` 时，可按目标 Pod UID 核对匹配 Service 的发现端点、地址与就绪状态，并打开采样中的对象事件。
+工作负载映射按 Deployment 或 StatefulSet 所有者 UID 校验，并核对 Pod 列表与回读的 UID。运行环境页显示 Workload、控制器、Pod 和 Node 身份，保留 Pod 就绪、调度、驱逐与终止状态。节点和对象事件需与当前采样的 Pod 身份一致。容器请求和限额来自 Pod 规格，用量来自 `metrics.k8s.io`。
+
+命名空间权限包含 `discovery.k8s.io/endpointslices` 的 `list` 时，页面显示指向当前 Pod UID 的端点及其就绪、服务和终止状态，也会指明权限缺口或可见范围截断。PVC 历史记录待绑定、已绑定、请求、容量和 PVC UID。PV 关联需核对 `claimRef` 的 namespace、名称和 UID。用量数据仅查询当前 PVC 创建后的样本。旧采样保留当时的对象身份，可从同一个问题事件打开。[EndpointSlice 条件](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) · [Kubernetes 对象 UID](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/)
 
 ## 全链路故障回放
 

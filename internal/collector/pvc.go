@@ -24,9 +24,17 @@ type pvcMetricPoint struct {
 }
 
 func queryPVCMetric(ctx context.Context, client *http.Client, endpoint url.URL,
-	metric, namespace, name string) (map[string]pvcMetricPoint, map[string]any) {
-	endpoint.RawQuery = url.Values{"query": {fmt.Sprintf(`%s{namespace="%s",persistentvolumeclaim="%s"}`,
-		metric, namespace, name)}}.Encode()
+	metric, namespace, name string, since time.Time) (map[string]pvcMetricPoint, map[string]any) {
+	selector := fmt.Sprintf(`%s{namespace="%s",persistentvolumeclaim="%s"}`, metric, namespace, name)
+	query := selector
+	if !since.IsZero() {
+		cutoff := time.Now().UTC().Add(-5 * time.Minute)
+		if since.After(cutoff) {
+			cutoff = since
+		}
+		query = fmt.Sprintf(`%s and (timestamp(%s) >= %.3f)`, selector, selector, float64(cutoff.UnixMilli())/1000)
+	}
+	endpoint.RawQuery = url.Values{"query": {query}}.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, map[string]any{"status": "error", "reason": "Prometheus request could not be created"}
@@ -90,6 +98,10 @@ func queryPVCMetric(ctx context.Context, client *http.Client, endpoint url.URL,
 // PVCUsage compares used and capacity from the same kubelet volume series.
 // The PVC request size may differ from the driver's actual filesystem capacity.
 func PVCUsage(ctx context.Context, namespace, name string) map[string]any {
+	return pvcUsageSince(ctx, namespace, name, time.Time{})
+}
+
+func pvcUsageSince(ctx context.Context, namespace, name string, since time.Time) map[string]any {
 	endpoint := os.Getenv("DBSPHERE_PROMETHEUS_URL")
 	if endpoint == "" {
 		return map[string]any{"status": "not_configured", "reason": "Prometheus PVC usage endpoint is not configured"}
@@ -105,11 +117,11 @@ func PVCUsage(ctx context.Context, namespace, name string) map[string]any {
 	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/api/v1/query"
 	client := &http.Client{Timeout: 4 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	used, problem := queryPVCMetric(ctx, client, *parsed, "kubelet_volume_stats_used_bytes", namespace, name)
+	used, problem := queryPVCMetric(ctx, client, *parsed, "kubelet_volume_stats_used_bytes", namespace, name, since)
 	if problem != nil {
 		return problem
 	}
-	capacity, problem := queryPVCMetric(ctx, client, *parsed, "kubelet_volume_stats_capacity_bytes", namespace, name)
+	capacity, problem := queryPVCMetric(ctx, client, *parsed, "kubelet_volume_stats_capacity_bytes", namespace, name, since)
 	if problem != nil {
 		return problem
 	}

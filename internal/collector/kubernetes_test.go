@@ -137,6 +137,7 @@ func TestRealKubernetesApplicationPodIdentity(t *testing.T) {
 
 func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 	paths := []string{}
+	staleObjects := false
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-only-token" {
@@ -145,25 +146,33 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/namespaces/db/pods/pg-0":
-			fmt.Fprint(w, `{"metadata":{"name":"pg-0","uid":"pod-uid","labels":{"app":"postgres"}},"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"pg-data"}}]},"status":{"phase":"Running","containerStatuses":[{"name":"postgres","restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-17T00:00:00Z"}}}]}}`)
+			fmt.Fprint(w, `{"metadata":{"name":"pg-0","namespace":"db","uid":"pod-uid","creationTimestamp":"2026-11-16T00:00:00Z","labels":{"app":"postgres"}},"spec":{"nodeName":"worker-1","volumes":[{"persistentVolumeClaim":{"claimName":"pg-data"}}]},"status":{"phase":"Running","conditions":[{"type":"PodScheduled","status":"True","lastTransitionTime":"2026-11-16T00:00:01Z"}],"containerStatuses":[{"name":"postgres","restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-17T00:00:00Z"}}}]}}`)
 		case "/api/v1/nodes/worker-1":
-			fmt.Fprint(w, `{"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"memory":"2Gi"}}}`)
+			created := "2026-11-15T00:00:00Z"
+			if staleObjects {
+				created = "2026-11-17T00:00:00Z"
+			}
+			fmt.Fprintf(w, `{"metadata":{"name":"worker-1","uid":"node-uid","creationTimestamp":%q},"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"memory":"2Gi"}}}`, created)
 		case "/api/v1/namespaces/db/persistentvolumeclaims/pg-data":
-			fmt.Fprint(w, `{"status":{"phase":"Bound","capacity":{"storage":"5Gi"}},"spec":{"volumeName":"pv-1"}}`)
+			fmt.Fprint(w, `{"metadata":{"name":"pg-data","namespace":"db","uid":"pvc-uid","creationTimestamp":"2026-11-15T00:00:00Z"},"status":{"phase":"Bound","capacity":{"storage":"5Gi"}},"spec":{"volumeName":"pv-1"}}`)
 		case "/api/v1/persistentvolumes/pv-1":
-			fmt.Fprint(w, `{"status":{"phase":"Bound"},"spec":{"capacity":{"storage":"5Gi"}}}`)
+			claim := "pvc-uid"
+			if staleObjects {
+				claim = "old-pvc"
+			}
+			fmt.Fprintf(w, `{"metadata":{"name":"pv-1","uid":"pv-uid"},"status":{"phase":"Bound"},"spec":{"capacity":{"storage":"5Gi"},"claimRef":{"name":"pg-data","namespace":"db","uid":%q}}}`, claim)
 		case "/api/v1/namespaces/db/events":
 			if r.URL.Query().Get("fieldSelector") != "involvedObject.uid=pod-uid" {
 				t.Errorf("events were not scoped by Pod UID: %s", r.URL.RawQuery)
 			}
-			fmt.Fprint(w, `{"items":[{"reason":"Unhealthy","message":"readiness probe failed","lastTimestamp":"2026-11-17T00:01:00Z"}]}`)
+			fmt.Fprint(w, `{"items":[{"involvedObject":{"uid":"pod-uid"},"reason":"Unhealthy","message":"readiness probe failed","lastTimestamp":"2026-11-17T00:01:00Z"},{"involvedObject":{"uid":"old-pod"},"reason":"Evicted"}]}`)
 		case "/api/v1/namespaces/db/services":
 			if r.URL.Query().Get("limit") != "100" {
 				t.Errorf("Service list was not bounded: %s", r.URL.RawQuery)
 			}
-			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-service"},"spec":{"selector":{"app":"postgres"},"ports":[{"port":5432}]}},{"metadata":{"name":"other"},"spec":{"selector":{"app":"other"}}}]}`)
+			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-service","uid":"service-uid"},"spec":{"selector":{"app":"postgres"},"ports":[{"port":5432}]}},{"metadata":{"name":"other"},"spec":{"selector":{"app":"other"}}}]}`)
 		case "/apis/discovery.k8s.io/v1/namespaces/db/endpointslices":
-			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-slice","labels":{"kubernetes.io/service-name":"pg-service"}},"endpoints":[{"targetRef":{"kind":"Pod","uid":"old-pod"}},{"addresses":["10.0.0.2"],"targetRef":{"kind":"Pod","uid":"pod-uid"},"conditions":{"ready":true}}]},{"metadata":{"name":"private","labels":{"kubernetes.io/service-name":"other"}},"endpoints":[{"targetRef":{"kind":"Pod","uid":"pod-uid"}}]}]}`)
+			fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-slice","uid":"slice-uid","labels":{"kubernetes.io/service-name":"pg-service"},"ownerReferences":[{"kind":"Service","name":"pg-service","uid":"service-uid"}]},"endpoints":[{"targetRef":{"kind":"Pod","name":"pg-0","uid":"old-pod"}},{"addresses":["10.0.0.2"],"targetRef":{"kind":"Pod","name":"pg-0","uid":"pod-uid"},"conditions":{"ready":true,"serving":true,"terminating":false}}]},{"metadata":{"name":"old-service","labels":{"kubernetes.io/service-name":"pg-service"},"ownerReferences":[{"kind":"Service","name":"pg-service","uid":"old-service-uid"}]},"endpoints":[{"targetRef":{"kind":"Pod","uid":"pod-uid"}}]},{"metadata":{"name":"private","labels":{"kubernetes.io/service-name":"other"}},"endpoints":[{"targetRef":{"kind":"Pod","uid":"pod-uid"}}]}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/namespaces/db/pods/pg-0":
 			fmt.Fprint(w, `{"timestamp":"2026-11-17T00:01:00Z","containers":[{"name":"postgres","usage":{"cpu":"20m","memory":"128Mi"}}]}`)
 		case "/apis/metrics.k8s.io/v1beta1/nodes/worker-1":
@@ -179,11 +188,12 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		query := r.URL.Query().Get("query")
 		usedQuery := `kubelet_volume_stats_used_bytes{namespace="db",persistentvolumeclaim="pg-data"}`
 		capacityQuery := `kubelet_volume_stats_capacity_bytes{namespace="db",persistentvolumeclaim="pg-data"}`
-		if query != usedQuery && query != capacityQuery {
+		if !strings.HasPrefix(query, usedQuery+" and (timestamp("+usedQuery+") >= ") &&
+			!strings.HasPrefix(query, capacityQuery+" and (timestamp("+capacityQuery+") >= ") {
 			t.Errorf("PVC Prometheus query was not scoped: %s", r.URL.RawQuery)
 		}
 		value := "4294967296"
-		if query == capacityQuery {
+		if strings.HasPrefix(query, capacityQuery) {
 			value = "8589934592"
 		}
 		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"db","persistentvolumeclaim":"pg-data","instance":"node-a"},"value":[%d,%q]}]}}`,
@@ -219,11 +229,19 @@ func TestKubernetesReadOnlyMappedPodEvidence(t *testing.T) {
 		t.Fatalf("Pod/Node resource metrics are missing: %+v", resources)
 	}
 	slices := kubeObject(kubeObject(value["endpointRoutes"])["slices"])
-	if len(slices) != 1 || kubeObject(kubeObject(slices["pg-slice"])["endpoint"])["targetUID"] != "pod-uid" {
+	if len(slices) != 1 || kubeObject(kubeObject(slices["pg-slice"])["endpoint"])["targetUID"] != "pod-uid" ||
+		kubeObject(value["endpointRoutes"])["identityMismatches"] != 2 {
 		t.Fatalf("EndpointSlices do not match Service and current Pod identity: %+v", slices)
 	}
 	if len(paths) != 9 {
 		t.Fatalf("unexpected Kubernetes API calls: %v", paths)
+	}
+	staleObjects = true
+	value = Kubernetes(context.Background(), KubernetesTarget{Cluster: "test-context", Namespace: "db", Pod: "pg-0"})
+	pvc := kubeObject(kubeList(value["pvcs"])[0])
+	if value["status"] != "ok" || value["node"] != nil || value["nodeError"] == nil ||
+		pvc["volume"] != nil || pvc["volumeError"] == nil || pvc["uid"] != "pvc-uid" {
+		t.Fatalf("stale Node or PV was attached to current evidence: %+v", value)
 	}
 }
 
@@ -247,6 +265,10 @@ func TestKubernetesMetricsPermissionGapDoesNotHidePodStatus(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/apis/metrics.k8s.io/") {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if r.URL.Path == "/api/v1/nodes/worker-1" {
+			fmt.Fprint(w, `{"metadata":{"name":"worker-1","uid":"node-uid"}}`)
 			return
 		}
 		fmt.Fprint(w, `{}`)
@@ -285,14 +307,14 @@ func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testin
 				t.Errorf("Pod discovery is not bounded: %s", r.URL.RawQuery)
 			}
 			if singleUnready {
-				fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-new","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}`)
+				fmt.Fprint(w, `{"items":[{"metadata":{"name":"pg-new","uid":"new-uid","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}`)
 				return
 			}
 			other := "False"
 			if secondReady {
 				other = "True"
 			}
-			fmt.Fprintf(w, `{"items":[{"metadata":{"name":"pg-new","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"pg-other","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":%q}]}},{"metadata":{"name":"unrelated","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"unrelated-rs"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, other)
+			fmt.Fprintf(w, `{"items":[{"metadata":{"name":"pg-new","uid":"new-uid","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"pg-other","uid":"other-uid","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid"}]},"status":{"conditions":[{"type":"Ready","status":%q}]}},{"metadata":{"name":"unrelated","uid":"unrelated-uid","labels":{"app":"postgres"},"ownerReferences":[{"kind":"ReplicaSet","uid":"unrelated-rs"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, other)
 		case "/api/v1/namespaces/db/pods/pg-new":
 			if singleUnready {
 				fmt.Fprint(w, `{"metadata":{"name":"pg-new","uid":"new-uid","labels":{"app":"postgres"}},"spec":{},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}],"containerStatuses":[{"name":"postgres","ready":false,"restartCount":1,"lastState":{"terminated":{"reason":"OOMKilled","finishedAt":"2026-11-18T00:00:00Z"}}}]}}`)
@@ -314,13 +336,17 @@ func TestKubernetesWorkloadFollowsUniqueReplacementAndRejectsAmbiguity(t *testin
 	target := KubernetesTarget{Cluster: "test-context", Namespace: "db", Workload: "postgres", Pod: "pg-old"}
 	value := Kubernetes(context.Background(), target)
 	if value["status"] != "ok" || kubeObject(value["pod"])["name"] != "pg-new" ||
-		kubeObject(value["podMapping"])["resolved"] != "pg-new" || !newMetricsRead {
+		kubeObject(value["podMapping"])["resolved"] != "pg-new" || kubeObject(value["workload"])["uid"] != "deployment-uid" || !newMetricsRead {
 		t.Fatalf("replacement Pod was not selected consistently: %+v", value)
 	}
 	target.Pod = ""
 	if value = Kubernetes(context.Background(), target); value["status"] != "ok" ||
 		kubeObject(value["pod"])["name"] != "pg-new" {
 		t.Fatalf("workload-only Pod mapping failed: %+v", value)
+	}
+	target.Pod = "unrelated"
+	if value = Kubernetes(context.Background(), target); value["status"] != "error" || !strings.Contains(fmt.Sprint(value["reason"]), "Workload UID") {
+		t.Fatalf("Pod outside the requested Workload was accepted: %+v", value)
 	}
 	target.Pod = "pg-old"
 	singleUnready = true
@@ -385,7 +411,7 @@ func TestKubernetesWorkloadDiscoveryFollowsBoundedPages(t *testing.T) {
 			if !second {
 				writeList(w, dummies("pod"), "pod-page-2")
 			} else {
-				writeList(w, []any{map[string]any{"metadata": map[string]any{"name": "pg-new",
+				writeList(w, []any{map[string]any{"metadata": map[string]any{"name": "pg-new", "uid": "new-uid",
 					"labels":          map[string]any{"app": "postgres"},
 					"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "uid": "rs-uid"}}},
 					"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}}, "")
@@ -401,9 +427,9 @@ func TestKubernetesWorkloadDiscoveryFollowsBoundedPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pod, err := client.resolveWorkloadPod(context.Background(), "db", "postgres")
-	if err != nil || pod != "pg-new" {
-		t.Fatalf("Pod on a later list page was missed: %s, %v", pod, err)
+	pod, _, err := client.resolveWorkloadPod(context.Background(), "db", "postgres", "")
+	if err != nil || kubeObject(pod["metadata"])["name"] != "pg-new" {
+		t.Fatalf("Pod on a later list page was missed: %v, %v", pod, err)
 	}
 	for _, path := range []string{"/apis/apps/v1/namespaces/db/deployments", "/apis/apps/v1/namespaces/db/replicasets", "/api/v1/namespaces/db/pods"} {
 		if pageCalls[path] != 2 {

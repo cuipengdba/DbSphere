@@ -362,14 +362,15 @@ func (k *kubeClient) listBounded(ctx context.Context, path string) ([]any, error
 	return nil, errors.New("Kubernetes list exceeds 10 pages; mapping is uncertain")
 }
 
-func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload string) (string, error) {
+func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload, preferred string) (map[string]any, map[string]any, error) {
 	base := "/apis/apps/v1/namespaces/" + url.PathEscape(namespace)
 	var selector map[string]any
+	var identity map[string]any
 	workloadUID, workloadKind := "", ""
 	for _, resource := range []string{"deployments", "statefulsets"} {
 		items, err := k.listBounded(ctx, base+"/"+resource)
 		if err != nil {
-			return "", fmt.Errorf("read Kubernetes Workload list: %w", err)
+			return nil, nil, fmt.Errorf("read Kubernetes Workload list: %w", err)
 		}
 		for _, raw := range items {
 			item := kubeObject(raw)
@@ -377,31 +378,36 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 				continue
 			}
 			if selector != nil {
-				return "", errors.New("Kubernetes Workload name is ambiguous")
+				return nil, nil, errors.New("Kubernetes Workload name is ambiguous")
 			}
 			workloadUID = kubeString(kubeObject(item["metadata"])["uid"])
 			if workloadUID == "" {
-				return "", errors.New("Kubernetes Workload UID is missing")
+				return nil, nil, errors.New("Kubernetes Workload UID is missing")
 			}
 			workloadKind = resource
+			kind := "Deployment"
+			if resource == "statefulsets" {
+				kind = "StatefulSet"
+			}
+			identity = map[string]any{"kind": kind, "name": workload, "uid": workloadUID}
 			specSelector := kubeObject(kubeObject(item["spec"])["selector"])
 			if len(kubeList(specSelector["matchExpressions"])) != 0 {
-				return "", errors.New("Kubernetes Workload selector expressions are not supported")
+				return nil, nil, errors.New("Kubernetes Workload selector expressions are not supported")
 			}
 			selector = kubeObject(specSelector["matchLabels"])
 			if len(selector) == 0 {
-				return "", errors.New("Kubernetes Workload has no exact Pod labels")
+				return nil, nil, errors.New("Kubernetes Workload has no exact Pod labels")
 			}
 		}
 	}
 	if selector == nil {
-		return "", errors.New("Kubernetes Workload was not found for Pod mapping")
+		return nil, nil, errors.New("Kubernetes Workload was not found for Pod mapping")
 	}
 	replicaSetUIDs := map[string]bool{}
 	if workloadKind == "deployments" {
 		sets, err := k.listBounded(ctx, base+"/replicasets")
 		if err != nil {
-			return "", fmt.Errorf("read Kubernetes ReplicaSets for Workload: %w", err)
+			return nil, nil, fmt.Errorf("read Kubernetes ReplicaSets for Workload: %w", err)
 		}
 		for _, raw := range sets {
 			metadata := kubeObject(kubeObject(raw)["metadata"])
@@ -411,7 +417,7 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 			}
 			for _, reference := range kubeList(metadata["ownerReferences"]) {
 				owner := kubeObject(reference)
-				if kubeString(owner["kind"]) == "Deployment" && kubeString(owner["uid"]) == workloadUID {
+				if kubeString(owner["kind"]) == "Deployment" && kubeString(owner["uid"]) == workloadUID && owner["controller"] != false {
 					replicaSetUIDs[setUID] = true
 				}
 			}
@@ -419,14 +425,18 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 	}
 	pods, err := k.listBounded(ctx, "/api/v1/namespaces/"+url.PathEscape(namespace)+"/pods")
 	if err != nil {
-		return "", fmt.Errorf("read Kubernetes Pods for Workload: %w", err)
+		return nil, nil, fmt.Errorf("read Kubernetes Pods for Workload: %w", err)
 	}
-	all, ready := []string{}, []string{}
+	all, active, ready := []map[string]any{}, []map[string]any{}, []map[string]any{}
+	preferredSeen := false
 	for _, raw := range pods {
 		pod := kubeObject(raw)
 		metadata := kubeObject(pod["metadata"])
 		name := kubeString(metadata["name"])
-		if name == "" || !kubeName.MatchString(name) {
+		if preferred != "" && name == preferred {
+			preferredSeen = true
+		}
+		if !kubeName.MatchString(name) || !kubeUID.MatchString(kubeString(metadata["uid"])) {
 			continue
 		}
 		labels := kubeObject(metadata["labels"])
@@ -443,6 +453,9 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 		owned := false
 		for _, reference := range kubeList(metadata["ownerReferences"]) {
 			owner := kubeObject(reference)
+			if owner["controller"] == false {
+				continue
+			}
 			if workloadKind == "statefulsets" && kubeString(owner["kind"]) == "StatefulSet" && kubeString(owner["uid"]) == workloadUID {
 				owned = true
 			}
@@ -453,28 +466,69 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 		if !owned {
 			continue
 		}
-		all = append(all, name)
+		if name == preferred {
+			return pod, identity, nil
+		}
+		all = append(all, pod)
+		if metadata["deletionTimestamp"] != nil {
+			continue
+		}
+		active = append(active, pod)
 		for _, rawCondition := range kubeList(kubeObject(pod["status"])["conditions"]) {
 			condition := kubeObject(rawCondition)
 			if kubeString(condition["type"]) == "Ready" && kubeString(condition["status"]) == "True" {
-				ready = append(ready, name)
+				ready = append(ready, pod)
 				break
 			}
 		}
 	}
+	if preferredSeen {
+		return nil, nil, errors.New("Configured Kubernetes Pod could not be verified against the Workload UID")
+	}
 	if len(ready) == 1 {
-		return ready[0], nil
+		return ready[0], identity, nil
 	}
 	if len(ready) > 1 {
-		return "", errors.New("Kubernetes Workload has multiple ready Pods; mapping is ambiguous")
+		return nil, nil, errors.New("Kubernetes Workload has multiple ready Pods; mapping is ambiguous")
+	}
+	if len(active) == 1 {
+		return active[0], identity, nil
 	}
 	if len(all) == 1 {
-		return all[0], nil
+		return all[0], identity, nil
 	}
 	if len(all) == 0 {
-		return "", errors.New("Kubernetes Workload has no matching Pod")
+		return nil, nil, errors.New("Kubernetes Workload has no matching Pod")
 	}
-	return "", errors.New("Kubernetes Workload has multiple unready Pods; mapping is ambiguous")
+	return nil, nil, errors.New("Kubernetes Workload has multiple unready Pods; mapping is ambiguous")
+}
+
+func (k *kubeClient) readMappedPod(ctx context.Context, target KubernetesTarget) (map[string]any, map[string]any, error) {
+	name, expectedUID := target.Pod, ""
+	var workload map[string]any
+	if target.Workload != "" {
+		selected, identity, err := k.resolveWorkloadPod(ctx, target.Namespace, target.Workload, target.Pod)
+		if err != nil {
+			return nil, nil, err
+		}
+		metadata := kubeObject(selected["metadata"])
+		name, expectedUID, workload = kubeString(metadata["name"]), kubeString(metadata["uid"]), identity
+	}
+	if !kubeName.MatchString(name) || len(name) > 253 {
+		return nil, nil, errors.New("Invalid Kubernetes Pod mapping")
+	}
+	path := "/api/v1/namespaces/" + url.PathEscape(target.Namespace) + "/pods/" + url.PathEscape(name)
+	pod, err := k.get(ctx, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	metadata := kubeObject(pod["metadata"])
+	uid, namespace := kubeString(metadata["uid"]), kubeString(metadata["namespace"])
+	if !kubeUID.MatchString(uid) || metadata["name"] != name ||
+		(namespace != "" && namespace != target.Namespace) || (expectedUID != "" && uid != expectedUID) {
+		return nil, nil, errors.New("Kubernetes Pod identity changed or could not be verified")
+	}
+	return pod, workload, nil
 }
 
 // Kubernetes reads the mapped Pod and related read-only resources. A configured
@@ -495,23 +549,14 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		return map[string]any{"status": "not_configured", "reason": err.Error()}
 	}
 	base := "/api/v1/namespaces/" + url.PathEscape(target.Namespace)
-	podName := target.Pod
-	var pod map[string]any
-	if podName != "" {
-		pod, err = k.get(ctx, base+"/pods/"+url.PathEscape(podName), nil)
-	}
-	if target.Workload != "" && (podName == "" || errors.Is(err, kubeHTTPError(http.StatusNotFound))) {
-		podName, err = k.resolveWorkloadPod(ctx, target.Namespace, target.Workload)
-		if err != nil {
-			return map[string]any{"status": "error", "reason": err.Error()}
-		}
-		pod, err = k.get(ctx, base+"/pods/"+url.PathEscape(podName), nil)
-	}
+	pod, workload, err := k.readMappedPod(ctx, target)
 	if err != nil {
 		return map[string]any{"status": "error", "reason": err.Error()}
 	}
 	metadata, spec, state := kubeObject(pod["metadata"]), kubeObject(pod["spec"]), kubeObject(pod["status"])
 	uid, nodeName := kubeString(metadata["uid"]), kubeString(spec["nodeName"])
+	podName := kubeString(metadata["name"])
+	var scheduledAt time.Time
 	conditions := []any{}
 	for _, raw := range kubeList(state["conditions"]) {
 		item := kubeObject(raw)
@@ -519,6 +564,9 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		case "PodScheduled", "Initialized", "ContainersReady", "Ready":
 			conditions = append(conditions, map[string]any{"type": item["type"], "status": item["status"],
 				"reason": item["reason"], "message": kubeShort(item["message"]), "changedAt": item["lastTransitionTime"]})
+			if item["type"] == "PodScheduled" && item["status"] == "True" {
+				scheduledAt, _ = time.Parse(time.RFC3339Nano, kubeString(item["lastTransitionTime"]))
+			}
 		}
 	}
 	containers := []any{}
@@ -533,11 +581,14 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			"lastTerminatedAt": terminated["finishedAt"], "waitingReason": kubeObject(kubeObject(item["state"])["waiting"])["reason"]})
 	}
 	result := map[string]any{"status": "ok", "cluster": target.Cluster, "namespace": target.Namespace,
-		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"],
+		"pod": map[string]any{"name": metadata["name"], "uid": uid, "phase": state["phase"], "deletingAt": metadata["deletionTimestamp"],
 			"reason": state["reason"], "message": kubeShort(state["message"]), "node": nodeName, "createdAt": metadata["creationTimestamp"],
 			"conditions": conditions}, "containers": containers, "pvcs": []any{}, "events": []any{},
 		"node": nil, "services": []any{}, "resourceMetrics": nil,
 		"observedAt": time.Now().UTC()}
+	if workload != nil {
+		result["workload"] = workload
+	}
 	resourceSpecs := map[string]any{}
 	for _, raw := range kubeList(spec["containers"]) {
 		container := kubeObject(raw)
@@ -561,15 +612,22 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			break
 		}
 	}
-	if podName != target.Pod {
+	if workload != nil {
 		result["podMapping"] = map[string]any{"configured": target.Pod, "resolved": podName,
-			"workload": target.Workload, "source": "workload_selector"}
+			"workload": target.Workload, "source": "workload_owner_uid"}
 	}
 	if nodeName != "" && kubeName.MatchString(nodeName) {
 		if node, err := k.get(ctx, "/api/v1/nodes/"+url.PathEscape(nodeName), nil); err == nil {
-			info := kubeObject(node["status"])
-			result["node"] = map[string]any{"name": nodeName, "uid": kubeObject(node["metadata"])["uid"], "conditions": info["conditions"],
-				"allocatable": info["allocatable"]}
+			nodeMeta := kubeObject(node["metadata"])
+			createdAt, _ := time.Parse(time.RFC3339Nano, kubeString(nodeMeta["creationTimestamp"]))
+			if nodeMeta["name"] != nodeName || !kubeUID.MatchString(kubeString(nodeMeta["uid"])) ||
+				(!scheduledAt.IsZero() && createdAt.After(scheduledAt)) {
+				result["nodeError"] = "Kubernetes Node identity is inconsistent with Pod scheduling"
+			} else {
+				info := kubeObject(node["status"])
+				result["node"] = map[string]any{"name": nodeName, "uid": nodeMeta["uid"], "conditions": info["conditions"],
+					"allocatable": info["allocatable"]}
+			}
 		} else {
 			result["nodeError"] = err.Error()
 		}
@@ -588,21 +646,36 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		seen[name] = true
 		pvc, err := k.get(ctx, base+"/persistentvolumeclaims/"+url.PathEscape(name), nil)
 		if err != nil {
-			pvcs = append(pvcs, map[string]any{"name": name, "error": err.Error()})
+			pvcs = append(pvcs, map[string]any{"name": name, "status": "unavailable", "error": err.Error()})
+			continue
+		}
+		pvcMeta := kubeObject(pvc["metadata"])
+		pvcUID := kubeString(pvcMeta["uid"])
+		if pvcMeta["name"] != name || pvcMeta["namespace"] != target.Namespace || !kubeUID.MatchString(pvcUID) {
+			pvcs = append(pvcs, map[string]any{"name": name, "status": "unavailable", "error": "Kubernetes PVC identity could not be verified"})
 			continue
 		}
 		pvcSpec := kubeObject(pvc["spec"])
-		entry := map[string]any{"name": name, "uid": kubeObject(pvc["metadata"])["uid"], "namespace": target.Namespace,
-			"phase":     kubeObject(pvc["status"])["phase"],
+		phase := kubeObject(pvc["status"])["phase"]
+		entry := map[string]any{"name": name, "uid": pvcUID, "namespace": target.Namespace, "status": "ok",
+			"phase": phase, "createdAt": pvcMeta["creationTimestamp"],
 			"capacity":  kubeObject(kubeObject(pvc["status"])["capacity"])["storage"],
 			"requested": kubeObject(kubeObject(pvcSpec["resources"])["requests"])["storage"],
-			"usage":     PVCUsage(ctx, target.Namespace, name)}
-		if volumeName := kubeString(pvcSpec["volumeName"]); volumeName != "" && kubeName.MatchString(volumeName) {
+			"usage":     map[string]any{"status": "unavailable", "reason": "PVC usage requires a bound claim and verified creation time"}}
+		if createdAt, err := time.Parse(time.RFC3339Nano, kubeString(pvcMeta["creationTimestamp"])); phase == "Bound" && err == nil {
+			entry["usage"] = pvcUsageSince(ctx, target.Namespace, name, createdAt)
+		}
+		if volumeName := kubeString(pvcSpec["volumeName"]); phase == "Bound" && kubeName.MatchString(volumeName) {
 			volume, err := k.get(ctx, "/api/v1/persistentvolumes/"+url.PathEscape(volumeName), nil)
+			volumeMeta := kubeObject(volume["metadata"])
+			claim := kubeObject(kubeObject(volume["spec"])["claimRef"])
 			if err != nil {
 				entry["volumeError"] = err.Error()
+			} else if volumeMeta["name"] != volumeName || !kubeUID.MatchString(kubeString(volumeMeta["uid"])) ||
+				claim["uid"] != pvcUID || claim["name"] != name || claim["namespace"] != target.Namespace {
+				entry["volumeError"] = "PersistentVolume claimRef does not match the current PVC identity"
 			} else {
-				entry["volume"] = map[string]any{"name": volumeName,
+				entry["volume"] = map[string]any{"name": volumeName, "uid": volumeMeta["uid"], "claimUID": pvcUID,
 					"phase":    kubeObject(volume["status"])["phase"],
 					"capacity": kubeObject(kubeObject(volume["spec"])["capacity"])["storage"]}
 			}
@@ -613,7 +686,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	if serviceList, err := k.get(ctx, base+"/services", url.Values{"limit": {"100"}}); err == nil {
 		labels := kubeObject(metadata["labels"])
 		services := []any{}
-		serviceNames := make(map[string]bool)
+		serviceNames := make(map[string]string)
 		for _, raw := range kubeList(serviceList["items"]) {
 			service := kubeObject(raw)
 			serviceSpec := kubeObject(service["spec"])
@@ -635,9 +708,10 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			for _, rawPort := range kubeList(serviceSpec["ports"]) {
 				ports = append(ports, kubeObject(rawPort)["port"])
 			}
-			name := kubeString(kubeObject(service["metadata"])["name"])
-			serviceNames[name] = true
-			services = append(services, map[string]any{"name": name, "ports": ports,
+			serviceMeta := kubeObject(service["metadata"])
+			name, serviceUID := kubeString(serviceMeta["name"]), kubeString(serviceMeta["uid"])
+			serviceNames[name] = serviceUID
+			services = append(services, map[string]any{"name": name, "uid": serviceUID, "ports": ports,
 				"type": serviceSpec["type"], "clusterIP": serviceSpec["clusterIP"]})
 		}
 		result["services"] = services
@@ -645,10 +719,15 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			result["servicesError"] = "Service list truncated at 100 items"
 		}
 		if len(serviceNames) > 0 {
-			result["endpointRoutes"] = k.endpointRoutes(ctx, target.Namespace, uid, serviceNames)
+			result["endpointRoutes"] = k.endpointRoutes(ctx, target.Namespace, podName, uid, serviceNames)
+		} else if result["servicesError"] != nil {
+			result["endpointRoutes"] = map[string]any{"status": "unavailable", "reason": result["servicesError"]}
+		} else {
+			result["endpointRoutes"] = map[string]any{"status": "not_applicable"}
 		}
 	} else {
 		result["servicesError"] = err.Error()
+		result["endpointRoutes"] = map[string]any{"status": "unavailable", "reason": err.Error()}
 	}
 	if uid != "" {
 		query := url.Values{"fieldSelector": {"involvedObject.uid=" + uid}, "limit": {"20"}}
@@ -656,6 +735,9 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			items := []any{}
 			for _, raw := range kubeList(events["items"]) {
 				item := kubeObject(raw)
+				if kubeObject(item["involvedObject"])["uid"] != uid {
+					continue
+				}
 				at := item["lastTimestamp"]
 				if at == nil {
 					at = item["eventTime"]
@@ -686,9 +768,9 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		result["resourceMetrics"] = map[string]any{"source": "metrics.k8s.io",
 			"observedAt": podMetrics["timestamp"], "window": podMetrics["window"], "containers": usage, "node": nil}
 		metricUID := kubeString(kubeObject(podMetrics["metadata"])["uid"])
-		created, _ := time.Parse(time.RFC3339Nano, kubeString(metadata["creationTimestamp"]))
+		created, createdErr := time.Parse(time.RFC3339Nano, kubeString(metadata["creationTimestamp"]))
 		observed, observedErr := time.Parse(time.RFC3339Nano, kubeString(podMetrics["timestamp"]))
-		if observedErr == nil && (metricUID == "" || metricUID == uid) && !observed.Before(created) {
+		if createdErr == nil && observedErr == nil && (metricUID == "" || metricUID == uid) && !observed.Before(created) {
 			kubeObject(result["resourceMetrics"])["podUsage"] = totals.values()
 		} else {
 			result["resourceMetricsError"] = "Pod metrics identity or observation timestamp could not be verified"
@@ -697,7 +779,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	} else {
 		result["resourceMetricsError"] = err.Error()
 	}
-	if nodeName != "" && kubeName.MatchString(nodeName) {
+	if result["node"] != nil {
 		if nodeMetrics, err := k.get(ctx, metricPath+"/nodes/"+url.PathEscape(nodeName), nil); err == nil {
 			resources := kubeObject(nodeMetrics["usage"])
 			if metrics := kubeObject(result["resourceMetrics"]); len(metrics) != 0 {
@@ -713,18 +795,32 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	return result
 }
 
-func (k *kubeClient) endpointRoutes(ctx context.Context, namespace, podUID string, services map[string]bool) map[string]any {
+func (k *kubeClient) endpointRoutes(ctx context.Context, namespace, podName, podUID string, services map[string]string) map[string]any {
 	path := "/apis/discovery.k8s.io/v1/namespaces/" + url.PathEscape(namespace) + "/endpointslices"
 	list, err := k.get(ctx, path, url.Values{"limit": {"100"}})
 	if err != nil {
 		return map[string]any{"status": "unavailable", "reason": err.Error()}
 	}
 	routes := map[string]any{}
+	mismatches := 0
 	for _, raw := range kubeList(list["items"]) {
 		slice := kubeObject(raw)
 		metadata := kubeObject(slice["metadata"])
 		service := kubeString(kubeObject(metadata["labels"])["kubernetes.io/service-name"])
-		if !services[service] {
+		serviceUID, selected := services[service]
+		if !selected {
+			continue
+		}
+		stale := false
+		for _, rawOwner := range kubeList(metadata["ownerReferences"]) {
+			owner := kubeObject(rawOwner)
+			if owner["kind"] == "Service" && (owner["name"] != service || owner["uid"] != serviceUID) {
+				stale = true
+				break
+			}
+		}
+		if stale {
+			mismatches++
 			continue
 		}
 		key := kubeString(metadata["name"])
@@ -732,17 +828,24 @@ func (k *kubeClient) endpointRoutes(ctx context.Context, namespace, podUID strin
 		for _, rawEndpoint := range kubeList(slice["endpoints"]) {
 			point := kubeObject(rawEndpoint)
 			ref := kubeObject(point["targetRef"])
-			if podUID != "" && kubeString(ref["uid"]) == podUID && ref["kind"] == "Pod" {
+			if ref["kind"] != "Pod" || (ref["namespace"] != nil && ref["namespace"] != namespace) {
+				continue
+			}
+			if ref["name"] == podName && kubeString(ref["uid"]) != podUID {
+				mismatches++
+			}
+			if podUID != "" && kubeString(ref["uid"]) == podUID && (ref["name"] == nil || ref["name"] == podName) {
 				endpoints = map[string]any{"addresses": point["addresses"], "conditions": point["conditions"], "targetUID": podUID}
 				break
 			}
 		}
 		if len(endpoints) != 0 && len(routes) < 32 {
-			routes[key] = map[string]any{"uid": metadata["uid"], "service": service, "addressType": slice["addressType"],
+			routes[key] = map[string]any{"uid": metadata["uid"], "service": service, "serviceUID": serviceUID, "addressType": slice["addressType"],
 				"ports": slice["ports"], "endpoint": endpoints}
 		}
 	}
-	return map[string]any{"status": "ok", "slices": routes, "truncated": kubeString(kubeObject(list["metadata"])["continue"]) != ""}
+	return map[string]any{"status": "ok", "slices": routes, "identityMismatches": mismatches,
+		"truncated": len(routes) == 32 || kubeString(kubeObject(list["metadata"])["continue"]) != ""}
 }
 
 // DiscoverAssetPod previews identity using the configured read-only Kubernetes access.
@@ -757,19 +860,12 @@ func DiscoverAssetPod(ctx context.Context, target KubernetesTarget, port int) ma
 	if err != nil {
 		return unknown
 	}
-	name := target.Pod
-	if name == "" && target.Workload != "" {
-		name, err = client.resolveWorkloadPod(ctx, target.Namespace, target.Workload)
-	}
-	if err != nil || !kubeName.MatchString(name) || len(name) > 253 {
-		return unknown
-	}
-	pod, err := client.get(ctx, "/api/v1/namespaces/"+url.PathEscape(target.Namespace)+"/pods/"+url.PathEscape(name), nil)
+	pod, workload, err := client.readMappedPod(ctx, target)
 	if err != nil {
 		return unknown
 	}
 	metadata := kubeObject(pod["metadata"])
-	if metadata["namespace"] != target.Namespace || metadata["name"] != name || !kubeUID.MatchString(kubeString(metadata["uid"])) {
+	if metadata["namespace"] != target.Namespace {
 		return unknown
 	}
 	unknown["portDeclared"] = false
@@ -780,6 +876,9 @@ func DiscoverAssetPod(ctx context.Context, target KubernetesTarget, port int) ma
 			}
 		}
 	}
-	unknown["status"], unknown["pod"], unknown["uid"] = "observed", name, metadata["uid"]
+	unknown["status"], unknown["pod"], unknown["uid"] = "observed", metadata["name"], metadata["uid"]
+	if workload != nil {
+		unknown["workloadIdentity"] = workload
+	}
 	return unknown
 }

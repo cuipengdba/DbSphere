@@ -119,7 +119,9 @@ const environmentChangesSQL = `WITH frames AS (
 	FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
 ), states AS (
 	SELECT id,collected_at,pg,kube,linux,kube#>>'{pod,uid}' AS uid,kube#>>'{pod,name}' AS pod,kube#>>'{pod,node}' AS node,
-		kube#>>'{node,uid}' AS node_uid,kube->'owner' AS owner,kube->'endpointRoutes' AS routes,
+		kube#>>'{node,uid}' AS node_uid,kube->'owner' AS owner,kube->'workload' AS workload,kube->'endpointRoutes' AS routes,
+		kube->>'status' AS kube_status,kube->>'reason' AS kube_reason,kube#>>'{pod,phase}' AS pod_phase,
+		kube#>>'{pod,reason}' AS pod_reason,kube#>>'{pod,deletingAt}' AS deleting_at,
 		linux->>'endpoint' AS host_endpoint,
 		(SELECT status FROM jsonb_to_recordset(NULLIF(kube#>'{pod,conditions}','null'::jsonb)) AS c(type text,status text) WHERE type='Ready' LIMIT 1) AS ready,
 		(SELECT status FROM jsonb_to_recordset(NULLIF(kube#>'{pod,conditions}','null'::jsonb)) AS c(type text,status text) WHERE type='PodScheduled' LIMIT 1) AS scheduled,
@@ -128,8 +130,8 @@ const environmentChangesSQL = `WITH frames AS (
 		(SELECT string_agg(type,', ' ORDER BY type) FROM jsonb_to_recordset(NULLIF(kube#>'{node,conditions}','null'::jsonb)) AS c(type text,status text)
 		 WHERE type IN ('MemoryPressure','DiskPressure','PIDPressure','NetworkUnavailable') AND status='True') AS node_pressure,
 		(SELECT jsonb_object_agg(name,phase) FROM jsonb_to_recordset(NULLIF(kube->'pvcs','null'::jsonb)) AS c(name text,phase text) WHERE name IS NOT NULL) AS pvcs,
-		(SELECT jsonb_object_agg(name,jsonb_build_array(uid,capacity,requested))
-			FROM jsonb_to_recordset(NULLIF(kube->'pvcs','null'::jsonb)) AS c(name text,uid text,capacity text,requested text)
+		(SELECT jsonb_object_agg(name,jsonb_build_array(uid,capacity,requested,phase,"volumeError"))
+			FROM jsonb_to_recordset(NULLIF(kube->'pvcs','null'::jsonb)) AS c(name text,uid text,capacity text,requested text,phase text,"volumeError" text)
 			WHERE name IS NOT NULL) AS volumes,
 		(linux->>'bootTimeSeconds')::numeric AS boot
 	FROM frames
@@ -141,6 +143,9 @@ const environmentChangesSQL = `WITH frames AS (
 		lag(pvcs) OVER chronological AS prior_pvcs,lag(node_pressure) OVER chronological AS prior_pressure,
 		lag(restarts) OVER chronological AS prior_restarts,lag(node) OVER chronological AS prior_node,
 		lag(routes) OVER chronological AS prior_routes,lag(owner) OVER chronological AS prior_owner,
+		lag(workload) OVER chronological AS prior_workload,lag(kube_status) OVER chronological AS prior_kube_status,
+		lag(kube_reason) OVER chronological AS prior_kube_reason,lag(pod_phase) OVER chronological AS prior_pod_phase,
+		lag(pod_reason) OVER chronological AS prior_pod_reason,lag(deleting_at) OVER chronological AS prior_deleting_at,
 		lag(volumes) OVER chronological AS prior_volumes,lag(node_uid) OVER chronological AS prior_node_uid,
 		lag(host_endpoint) OVER chronological AS prior_host_endpoint,
 		lag(boot) OVER chronological AS prior_boot,row_number() OVER chronological AS n
@@ -148,12 +153,15 @@ const environmentChangesSQL = `WITH frames AS (
 )
 SELECT jsonb_build_object('id',id,'collectedAt',collected_at,'pg',pg,'previousPG',prior_pg,'pod',pod,'uid',uid,'previousUID',previous_uid,
 	'node',node,'ready',ready,'scheduled',scheduled,'restarts',restarts,'nodePressure',node_pressure,'pvcs',pvcs,
-	'nodeUID',node_uid,'owner',owner,'endpointRoutes',routes,'volumes',volumes,'routesChanged',routes IS DISTINCT FROM prior_routes,
+	'nodeUID',node_uid,'owner',owner,'workload',workload,'endpointRoutes',routes,'volumes',volumes,'routesChanged',routes IS DISTINCT FROM prior_routes,
+	'kubeStatus',kube_status,'kubeReason',kube_reason,'podPhase',pod_phase,'podReason',pod_reason,'deletingAt',deleting_at,
 	'hostEndpoint',host_endpoint,'hostEndpointChanged',host_endpoint IS DISTINCT FROM prior_host_endpoint,
 	'hostRestart',boot<>prior_boot,'events',kube->'events')
 FROM compared WHERE n=1 OR pg IS DISTINCT FROM prior_pg OR uid IS DISTINCT FROM prior_uid OR ready IS DISTINCT FROM prior_ready
 	OR scheduled IS DISTINCT FROM prior_scheduled OR restarts IS DISTINCT FROM prior_restarts OR node IS DISTINCT FROM prior_node
 	OR node_pressure IS DISTINCT FROM prior_pressure OR pvcs IS DISTINCT FROM prior_pvcs OR boot<>prior_boot
 	OR owner IS DISTINCT FROM prior_owner OR routes IS DISTINCT FROM prior_routes OR volumes IS DISTINCT FROM prior_volumes
+	OR workload IS DISTINCT FROM prior_workload OR kube_status IS DISTINCT FROM prior_kube_status OR kube_reason IS DISTINCT FROM prior_kube_reason
+	OR pod_phase IS DISTINCT FROM prior_pod_phase OR pod_reason IS DISTINCT FROM prior_pod_reason OR deleting_at IS DISTINCT FROM prior_deleting_at
 	OR node_uid IS DISTINCT FROM prior_node_uid OR host_endpoint IS DISTINCT FROM prior_host_endpoint
 ORDER BY collected_at DESC,id DESC LIMIT 60`

@@ -1641,7 +1641,8 @@
         const origin = sampleLink(asset.id, row.id);
         if (!kubernetes) return [formatTime(row.collectedAt), pg, [row.hostRestart && '主机启动时间变化',
           row.hostEndpointChanged && '采集端点变化', row.hostEndpoint].filter(Boolean).join(' · ') || '—', origin];
-        const pod = [row.pod, row.uid];
+        const pod = [row.pod, row.uid, row.podPhase, row.podReason, row.deletingAt && '终止中'];
+        if (row.kubeStatus && row.kubeStatus !== 'ok') pod.push(row.kubeReason || 'Kubernetes 对象状态未知');
         if (row.uid && row.previousUID && row.uid !== row.previousUID) pod.push(`前一 UID ${row.previousUID}`);
         const summary = pairs => Object.entries(pairs || {}).map(([key, value]) => `${key} ${value ?? '未知'}`).join(' · ');
         const ready = row.ready === 'True' ? '就绪' : row.ready === 'False' ? '未就绪' : '未知';
@@ -1741,12 +1742,39 @@
       const card = panel('Workload、Pod、节点和服务端点');
       const kube = snapshot?.k8s;
       const owner = kube?.owner;
+      const workload = kube?.workload;
       const pod = kube?.pod;
       const node = kube?.node;
-      if (pod) card.append(stats([
-        ['控制器', owner ? `${owner.kind}/${owner.name}` : '—', owner?.uid],
-        ['Pod', `${kube.namespace}/${pod.name}`, pod.uid], ['Node', node?.name || pod.node || '—', node?.uid]
-      ]));
+      const named = item => item && [item.kind, item.name].filter(Boolean).join('/');
+      const endpoints = routes => Object.entries(routes?.slices || {}).map(([name, slice]) => {
+        const conditions = slice.endpoint.conditions || {};
+        const state = (flag, yes, no) => conditions[flag] === true ? yes : conditions[flag] === false ? no : '未报告';
+        return [slice.service, name, slice.uid, slice.endpoint.targetUID, (slice.endpoint.addresses || []).join(', '),
+          state('ready','就绪','未就绪'), state('serving','服务中','停止服务'), state('terminating','终止中','运行中')];
+      });
+      const routeSummary = routes => {
+        if (!routes) return '—';
+        if (routes.status === 'unavailable') return routes.reason || 'EndpointSlice 读取受限';
+        if (routes.status === 'not_applicable') return '未发现匹配的 Service';
+        return [routes.truncated ? '读取范围受限' : '', routes.identityMismatches ? `已排除 ${routes.identityMismatches} 条过期身份` : ''].filter(Boolean).join(' · ');
+      };
+      if (pod) card.append(table(['对象', '名称', 'UID', '状态'], [
+        ['Workload', named(workload), workload?.uid, workload ? '按所有者 UID 验证' : '未配置工作负载映射'],
+        ['控制器', named(owner), owner?.uid, 'Pod ownerReference'],
+        ['Pod', `${kube.namespace}/${pod.name}`, pod.uid, [pod.phase, pod.reason, pod.deletingAt && '终止中'].filter(Boolean).join(' · ')],
+        ['Node', node?.name || pod.node, node?.uid, kube.nodeError || (node ? '已观测' : '尚未调度或未知')]
+      ], 'Kubernetes 对象身份'));
+      else if (kube?.reason) card.append(el('p', kube.reason, 'monitor-warning'));
+      const currentRoutes = endpoints(kube?.endpointRoutes);
+      if (currentRoutes.length) card.append(table(['Service', 'EndpointSlice', '切片 UID', '目标 Pod UID', '地址', '就绪', '服务', '终止'],
+        currentRoutes, '当前 EndpointSlice'));
+      const routeNote = routeSummary(kube?.endpointRoutes);
+      if (kube?.endpointRoutes && (routeNote || !currentRoutes.length))
+        card.append(el('p', routeNote || '未观察到指向当前 Pod UID 的端点。', 'monitor-note'));
+      if (kube?.pvcs?.length) card.append(table(['PVC', 'PVC UID', '状态', 'PV', 'PV UID', '绑定证据'], kube.pvcs.map(pvc => [
+        pvc.name, pvc.uid, pvc.phase || '未知', pvc.volume?.name, pvc.volume?.uid, pvc.error || pvc.volumeError ||
+          (pvc.volume?.claimUID ? '已核对 claimRef UID' : '待绑定或证据不足')
+      ]), 'PVC 与 PV 绑定'));
       if (kube?.resourceSpecs && Object.keys(kube.resourceSpecs).length) {
         const usage = new Map((kube.resourceMetrics?.containers || []).map(row => [row.name, row]));
         card.append(table(['容器', 'CPU 用量 / 请求 / 限额（核）', '内存用量 / 请求 / 限额'],
@@ -1757,11 +1785,12 @@
       }
       const changed = changes.filter(row => row.routesChanged || row.volumes || row.events?.length);
       if (changed.length) card.append(table(['观察时间', 'Pod UID', 'EndpointSlice', 'PVC 身份与容量', '对象事件', '采样'], changed.map(row => {
-        const endpoints = Object.entries(row.endpointRoutes?.slices || {}).map(([name, slice]) =>
-          `${slice.service}/${name} · ${(slice.endpoint.addresses || []).join(', ')} · ${slice.endpoint.conditions?.ready === false ? '未就绪' : slice.endpoint.conditions?.ready === true ? '就绪' : '状态未报告'}`);
-        const volumes = Object.entries(row.volumes || {}).map(([name, [uid, capacity, requested]]) => [name, uid, capacity, requested].filter(Boolean).join(' · '));
+        const routes = endpoints(row.endpointRoutes).map(([service, name, , target, addresses, ready, serving, terminating]) =>
+          [service, name, target, addresses, ready, serving, terminating].filter(Boolean).join(' · '));
+        const volumes = Object.entries(row.volumes || {}).map(([name, [uid, capacity, requested, phase, error]]) =>
+          [name, uid, capacity, requested, phase || row.pvcs?.[name], error].filter(Boolean).join(' · '));
         const recent = (row.events || []).slice(0, 3).map(event => [event.reason, formatTime(event.at), event.message].filter(Boolean).join(' · '));
-        return [formatTime(row.collectedAt), row.uid, endpoints.join(' / ') || (row.endpointRoutes?.status === 'unavailable' ? 'EndpointSlice 读取受限' : '—'),
+        return [formatTime(row.collectedAt), row.uid, [...routes, routeSummary(row.endpointRoutes)].filter(Boolean).join(' / '),
           volumes.join(' / '), recent.join(' / '), sampleLink(asset.id, row.id)];
       }), '环境身份与端点历史'));
       return card;

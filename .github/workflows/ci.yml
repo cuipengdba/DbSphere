@@ -404,8 +404,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.21.0'
-          previous_sha='6037e70cda845930e41e8d1d27f20b3516701dc3cd40f53ae132a226aca5c246'
+          previous_version='1.22.0'
+          previous_sha='276110a076fecb82a560553aab57fd53ae4b3fda13557e4e8d0e1e48b23cb6b0'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -1001,6 +1001,8 @@ jobs:
           node scripts/kind-matrix-verify-persistence.mjs http://127.0.0.1:18091 \
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" \
             "$RUNNER_TEMP/dbsphere-kind-before.json" "$RUNNER_TEMP/dbsphere-kind-after.json"
+          node scripts/kind-kubernetes-identity.mjs http://127.0.0.1:18091 \
+            "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" kind-dbsphere-ci
       - name: Verify one real application incident across PostgreSQL Pod OOM and recovery
         if: github.event_name == 'workflow_dispatch'
         run: |
