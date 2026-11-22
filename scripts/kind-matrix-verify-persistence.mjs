@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Verify PG18 kept the original five-version samples across Go and store Pod replacement.
+// Verify PG18 kept the original target samples across Go and store Pod replacement.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -13,11 +13,12 @@ const base = baseURL.replace(/\/$/, '');
 const { adminPassword } = JSON.parse(readFileSync(credentialsPath, 'utf8'));
 const before = JSON.parse(readFileSync(beforePath, 'utf8'));
 const after = JSON.parse(readFileSync(afterPath, 'utf8'));
+const majors = [14, 15, 16, 17, 18, 19];
 assert.equal(before.storage, 'postgresql18');
 assert.equal(after.storage, 'postgresql18');
 assert.deepEqual(before.persistentClaims, after.persistentClaims);
-assert.equal(before.matrix.length, 5);
-assert.equal(after.matrix.length, 5);
+assert.equal(before.matrix.length, majors.length);
+assert.equal(after.matrix.length, majors.length);
 
 const login = await fetch(base + '/api/login', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -34,7 +35,7 @@ const getSample = async (assetId, sampleId) => {
   return (await response.json()).sample;
 };
 const preserved = [];
-for (let major = 14; major <= 19; major++) {
+for (const major of majors) {
   const old = before.matrix.find(item => item.major === major);
   const fresh = after.matrix.find(item => item.major === major);
   assert.ok(old && fresh, `PostgreSQL ${major} missing from matrix`);
