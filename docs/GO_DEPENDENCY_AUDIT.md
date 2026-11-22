@@ -2,7 +2,7 @@
 
 CI 的 `go-dependency-inventory` 作业针对 `cmd/dbsphere` 的 Linux amd64、`CGO_ENABLED=0` 构建约束生成 CycloneDX JSON SBOM，并作为 `dbsphere-go-linux-amd64-sbom` 作业产物保存。使用固定版本 `cyclonedx-gomod v1.12.0`，包含实际编译所需的 Go 模块、包和许可证检测证据；许可证检测结果需要人工核对，不等同于许可证批准。
 
-当前清单有 8 个第三方 Go 模块。其上游 `LICENSE` 文件及 `gopkg.in/yaml.v3` 的 `NOTICE` 原文保存在 `third_party/licenses/go/`；CI 检查 SBOM 中每个模块均有非空许可证文件。Go 容器镜像和离线安装包均携带这些文件及 DbSphere 自身的 Apache-2.0 许可证。
+OIDC 接入新增 go-oidc、go-jose 和 OAuth2 客户端依赖。上游 `LICENSE` 文件和适用的 `NOTICE` 原文保存在 `third_party/licenses/go/`。CI 检查 SBOM 中每个模块都有许可证文件。Go 容器镜像及离线包携带这些文件和 DbSphere 自身的 Apache-2.0 许可证。
 
 同一作业运行 `go mod verify` 和固定版本 `govulncheck v1.8.0`，后者扫描 Go 代码可达的已知漏洞。扫描结果仅代表运行时所用漏洞数据库和所检查的代码路径，不能替代安全审查。
 

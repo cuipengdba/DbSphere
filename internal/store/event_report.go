@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/jackc/pgx/v5"
 )
 
 var ErrAIBudgetExceeded = errors.New("daily AI invocation budget exceeded")
@@ -126,7 +127,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	ids := make([]string, 0, len(data.Event.Evidence))
 	for _, item := range data.Event.Evidence {
 		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" &&
-			item.Kind != "operator_response" && item.Kind != "rca_decision" &&
+			item.Kind != "operator_response" && item.Kind != "rca_decision" && item.Kind != "event_handoff" &&
 			!strings.HasPrefix(item.Kind, "work_order_") {
 			ids = append(ids, item.ID)
 		}
@@ -157,7 +158,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	filtered := data.Event.Evidence[:0]
 	for _, item := range data.Event.Evidence {
-		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" &&
+		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" && item.Kind != "event_handoff" &&
 			!strings.HasPrefix(item.Kind, "work_order_") {
 			filtered = append(filtered, item)
 		}
@@ -203,7 +204,16 @@ func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model strin
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(1742028)"); err != nil {
+	var organization string
+	err = tx.QueryRow(ctx, `SELECT a.organization_id::text FROM event_keys e JOIN assets a ON a.id=e.asset_id WHERE e.id=$1
+		AND (nullif($2,'')::uuid IS NULL OR a.organization_id=nullif($2,'')::uuid)`, eventID, OrganizationFromContext(ctx)).Scan(&organization)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrEventNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,1742028))", organization); err != nil {
 		return "", err
 	}
 	if actor == "auto" {
@@ -233,8 +243,9 @@ func (s *Postgres) reserveAIInvocation(ctx context.Context, eventID, model strin
 	}
 	day := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	var used int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE kind='ai_invocation'
-		AND observed_at >= $1 AND observed_at < $2`, day, day.Add(24*time.Hour)).Scan(&used); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM evidence v JOIN event_keys e ON e.id=v.event_id JOIN assets a ON a.id=e.asset_id
+		WHERE v.kind='ai_invocation' AND v.observed_at >= $1 AND v.observed_at < $2
+		AND a.organization_id=$3`, day, day.Add(24*time.Hour), organization).Scan(&used); err != nil {
 		return "", err
 	}
 	if used >= dailyLimit {

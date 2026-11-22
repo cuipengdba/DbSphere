@@ -16,6 +16,10 @@ func (s *Postgres) StartAdminAudit(ctx context.Context, method, path string) (st
 }
 
 func (s *Postgres) StartRoleAudit(ctx context.Context, actor, method, path string) (string, error) {
+	return insertRoleAudit(ctx, s.pool, actor, method, path)
+}
+
+func insertRoleAudit(ctx context.Context, db assetQueryer, actor, method, path string) (string, error) {
 	if actor != "admin" && actor != "approver" && (!accessName.MatchString(actor) || actor != accessActor(ctx, "")) {
 		return "", errors.New("unsupported audit actor")
 	}
@@ -32,16 +36,32 @@ func (s *Postgres) StartRoleAudit(ctx context.Context, actor, method, path strin
 	}
 	if len(segments) >= 4 && segments[1] == "api" && segments[2] == "work-orders" && evidenceUUID.MatchString(segments[3]) {
 		var linked string
-		err := s.pool.QueryRow(ctx, "SELECT event_id::text FROM work_orders WHERE id=$1", segments[3]).Scan(&linked)
+		err := db.QueryRow(ctx, "SELECT event_id::text FROM work_orders WHERE id=$1", segments[3]).Scan(&linked)
 		if err == nil {
 			eventID = &linked
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return "", err
 		}
 	}
+	organizationID := OrganizationFromContext(ctx)
+	if organizationID == "" && eventID != nil {
+		err := db.QueryRow(ctx, `SELECT a.organization_id::text FROM assets a JOIN event_keys k ON k.asset_id=a.id WHERE k.id=$1`, *eventID).Scan(&organizationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
+	if organizationID == "" && len(segments) >= 4 && segments[1] == "api" && segments[2] == "assets" && evidenceUUID.MatchString(segments[3]) {
+		err := db.QueryRow(ctx, `SELECT organization_id::text FROM assets WHERE id=$1`, segments[3]).Scan(&organizationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
+	if organizationID == "" {
+		organizationID = DefaultOrganizationID
+	}
 	var id string
-	err := s.pool.QueryRow(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome,event_id)
-		VALUES(gen_random_uuid(),$1,$2,$3,'started',$4) RETURNING id::text`, actor, method, path, eventID).Scan(&id)
+	err := db.QueryRow(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome,event_id,organization_id)
+		VALUES(gen_random_uuid(),$1,$2,$3,'started',$4,$5) RETURNING id::text`, actor, method, path, eventID, organizationID).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("start admin audit: %w", err)
 	}

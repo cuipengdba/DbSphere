@@ -32,6 +32,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "verify-audit" {
+		if err := verifyAuditFile(os.Args[2:]); err != nil {
+			log.Error("DbSphere audit verification failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -121,6 +128,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("DBSPHERE_WORK_ORDER_TARGETS: %w", err)
 	}
+	oidcProvider, err := httpapi.LoadOIDCProvider()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	pg, err := store.Open(ctx, cfg.DatabaseURL)
@@ -183,6 +194,7 @@ func run(log *slog.Logger) error {
 			CollectorState:       collectorRuntime,
 			ReplicaID:            replica.ID,
 			WorkOrderProfiles:    workProfiles,
+			OIDC:                 oidcProvider,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

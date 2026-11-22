@@ -45,6 +45,7 @@ func (p *OptionalPort) UnmarshalJSON(data []byte) error {
 }
 
 type Input struct {
+	OrganizationID    string       `json:"organizationId"`
 	Name              string       `json:"name"`
 	ClusterName       *string      `json:"clusterName"`
 	Environment       *string      `json:"environment"`

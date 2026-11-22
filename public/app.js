@@ -1,6 +1,9 @@
 let csrf = null;
 let currentRole = null;
 let currentUsername = '';
+let currentOrganization = '';
+let oidcEnabled = false;
+let organizations = [];
 let approvalEnabled = false;
 let viewerScoped = false;
 let selectedAsset = null;
@@ -55,6 +58,14 @@ const views = {
 
 function setView(route, updateHash = true) {
   const [view, query] = route.split('?');
+  if (view === 'shared' && currentRole) {
+    const share = new URLSearchParams(query).get('id');
+    if (/^[a-f0-9-]{36}$/.test(share || '')) {
+      setView('incidents', false);
+      void api(`/api/event-shares/${share}`).then(result => openEvent(result.eventId)).catch(error => notice(error.message, true));
+      return;
+    }
+  }
   const selected = Object.hasOwn(views, view) ? view : 'overview';
   const params = new URLSearchParams(query);
   if (document.body.dataset.activeView !== selected) notice('');
@@ -77,7 +88,7 @@ function setView(route, updateHash = true) {
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
     } else {
-      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -95,7 +106,8 @@ function setView(route, updateHash = true) {
 
 function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && currentRole !== 'admin') section = 'storage';
-  if (view === 'alerts' && section === 'rca' && currentRole !== 'admin') section = 'active';
+  if (view === 'settings' && currentOrganization && ['collector', 'platform'].includes(section)) section = 'organizations';
+  if (view === 'alerts' && section === 'rca' && (currentRole !== 'admin' || currentOrganization)) section = 'active';
   pageSections[view] = section;
   for (const button of document.querySelectorAll(`[data-view="${view}"] [data-section]`)) {
     button.setAttribute('aria-pressed', String(button.dataset.section === section));
@@ -107,6 +119,8 @@ function showSection(view, section, eventId, ruleCode) {
   if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
   if (view === 'settings' && section === 'access') void loadAccessDirectory();
   if (view === 'settings' && section === 'platform') void loadPlatformStatus();
+  if (view === 'settings' && section === 'organizations') void loadOrganizations();
+  if (view === 'settings' && section === 'audit') renderOrganizationAudit();
 }
 
 const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
@@ -158,6 +172,48 @@ function accessForm(title, parent, existing, save) {
   return form;
 }
 
+const defaultOrganizationID = '00000000-0000-4000-8000-000000000001';
+const organizationOptions = () => organizations.map(organization => [organization.id, organization.name]);
+const organizationName = id => organizations.find(organization => organization.id === (id || defaultOrganizationID))?.name || '默认组织';
+
+async function loadOrganizations(render = true) {
+  const target = $('organization-list');
+  try {
+    const response = await api('/api/admin/organizations');
+    organizations = response.organizations || [];
+    if (render) target.replaceChildren(...organizations.map(item => cell('p', `${item.name} · ${item.id}`, 'evidence')));
+  } catch (error) {
+    if (render) target.replaceChildren(cell('p', error.message, 'warning'));
+  }
+}
+
+function renderOrganizationAudit() {
+  const target = $('organization-audit');
+  target.replaceChildren();
+  const controls = cell('div', '', 'section-actions');
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', '审计组织');
+  for (const [id, name] of organizationOptions()) select.add(new Option(name, id, id === defaultOrganizationID, id === defaultOrganizationID));
+  if (!select.options.length) select.add(new Option('默认组织', currentOrganization || defaultOrganizationID));
+  const download = cell('a', '导出可验证审计 JSON');
+  const fingerprint = cell('p', '', 'hint');
+  const auditPath = () => `/api/admin/organization-audit?organizationId=${encodeURIComponent(select.value)}`;
+  let pending = 0;
+  const update = async () => {
+    const request = ++pending;
+    download.href = auditPath();
+    fingerprint.textContent = '正在读取审计完整性信息…';
+    try {
+      const proof = await api(auditPath());
+      if (request === pending) fingerprint.textContent = `已核验 ${proof.headSequence} 条审计记录 · 验证公钥指纹 ${proof.keyFingerprint}`;
+    } catch (error) { if (request === pending) fingerprint.textContent = error.message; }
+  };
+  select.addEventListener('change', update);
+  controls.append(select, download);
+  target.append(controls, fingerprint, cell('p', '使用发布包的 verify-audit 命令可离线核对签名与链条。', 'hint'));
+  void update();
+}
+
 async function loadAccessDirectory() {
   const content = $('access-directory-content');
   let directory;
@@ -168,15 +224,17 @@ async function loadAccessDirectory() {
     return;
   }
   const { accounts = [], teams = [] } = directory;
+  if (directory.organizations) organizations = directory.organizations;
   const teamPanel = cell('div', '', 'list');
   teamPanel.append(cell('h3', '项目团队'));
   for (const team of [null, ...teams]) {
-    const form = accessForm(team ? team.project + ' / ' + team.name : '新建团队', teamPanel, !!team, data => {
-      const rawIDs = data.get('assetIds').split(/[\\s,，]+/).filter(Boolean);
+    const form = accessForm(team ? organizationName(team.organizationId) + ' · ' + team.project + ' / ' + team.name : '新建团队', teamPanel, !!team, data => {
+      const rawIDs = data.get('assetIds').split(/[\s,，]+/).filter(Boolean);
       return api(team ? '/api/admin/teams/' + team.id : '/api/admin/teams', team ? 'PATCH' : 'POST', {
-        project: data.get('project').trim(), name: data.get('name').trim(), assetIds: [...new Set(rawIDs)]
+        project: data.get('project').trim(), name: data.get('name').trim(), assetIds: [...new Set(rawIDs)], organizationId: data.get('organizationId') || ''
       });
     });
+    if (!team && !currentOrganization && organizations.length) accessSelect(form, '所属组织', 'organizationId', organizationOptions(), [defaultOrganizationID]);
     accessInput(form, '项目', 'project', team?.project || '', { required: true, maxLength: 80 });
     accessInput(form, '团队名称', 'name', team?.name || '', { required: true, maxLength: 80 });
     const ids = Object.assign(document.createElement('textarea'), { name: 'assetIds', rows: 2, value: (team?.assetIds || []).join('\n') });
@@ -188,22 +246,41 @@ async function loadAccessDirectory() {
   accountPanel.append(cell('h3', '独立账号'));
   for (const account of [null, ...accounts]) {
     const form = accessForm(account ? account.username + ' · ' + accessRoleLabels[account.role] : '新建或迁移账号', accountPanel, !!account, data => {
-      const update = { role: data.get('role'), teamIds: data.getAll('teamIds'), enabled: data.get('enabled') === 'on' };
+      const update = { role: data.get('role'), teamIds: data.getAll('teamIds'), enabled: data.get('enabled') === 'on', organizationId: data.get('organizationId') || '' };
+      if (oidcEnabled && (data.get('oidcSubject') || '') !== (account?.oidcSubject || '')) update.oidcSubject = data.get('oidcSubject') || '';
       if (account) return api('/api/admin/accounts/' + account.id, 'PATCH', update);
       return api('/api/admin/accounts', 'POST', { ...update, username: data.get('username').trim(), password: data.get('password'), legacyRole: data.get('legacyRole') });
     });
     if (!account) accessInput(form, '账号', 'username', '', { required: true, minLength: 3, maxLength: 48, pattern: '[a-z][a-z0-9_.\\-]{2,47}', autocomplete: 'off' });
+    const organization = !account && !currentOrganization && organizations.length ?
+      accessSelect(form, '所属组织', 'organizationId', [['', '默认范围（平台管理员全局）'], ...organizationOptions()], ['']) : null;
     accessSelect(form, '角色', 'role', Object.entries(accessRoleLabels), [account?.role || 'viewer']);
-    accessSelect(form, '团队授权', 'teamIds', teams.map(team => [team.id, team.project + ' / ' + team.name]), account?.teamIds || [], true);
+    const teamPicker = accessSelect(form, '团队授权', 'teamIds', [], [], true);
+    const updateTeams = () => {
+      const selected = account?.organizationId || currentOrganization || organization?.value || defaultOrganizationID;
+      teamPicker.replaceChildren(...teams.filter(team => (team.organizationId || defaultOrganizationID) === selected).map(team => {
+        const member = account?.teamIds?.includes(team.id) ?? false;
+        return new Option(team.project + ' / ' + team.name, team.id, member, member);
+      }));
+    };
+    organization?.addEventListener('change', updateTeams);
+    updateTeams();
+    if (oidcEnabled) accessInput(form, 'OIDC Subject（可选）', 'oidcSubject', account?.oidcSubject || '', { maxLength: 255, autocomplete: 'off' });
     accessInput(form, '启用账号', 'enabled', 'on', { type: 'checkbox', checked: account?.enabled ?? true });
     if (!account) {
       const password = accessInput(form, '初始密码（至少 12 字符）', 'password', '', { type: 'password', minLength: 12, maxLength: 256, autocomplete: 'new-password', required: true });
-      const legacy = accessSelect(form, '迁移初始凭据', 'legacyRole', [['', '创建新密码'], ['admin', '初始管理员'], ['viewer', '初始只读账号'], ['approver', '初始审批账号']], ['']);
-      legacy.addEventListener('change', () => {
-        password.disabled = !!legacy.value;
-        password.required = !legacy.value;
-        if (legacy.value) form.elements.role.value = legacy.value;
-      });
+      if (!currentOrganization) {
+        const legacy = accessSelect(form, '迁移初始凭据', 'legacyRole', [['', '创建新密码'], ['admin', '初始管理员'], ['viewer', '初始只读账号'], ['approver', '初始审批账号']], ['']);
+        const updateLegacy = () => {
+          legacy.disabled = !!organization?.value;
+          if (legacy.disabled) legacy.value = '';
+          password.disabled = !!legacy.value;
+          password.required = !legacy.value;
+          if (legacy.value) form.elements.role.value = legacy.value;
+        };
+        legacy.addEventListener('change', updateLegacy);
+        organization?.addEventListener('change', updateLegacy);
+      }
     }
     form.append(cell('button', account ? '保存账号' : '创建账号'));
     form.lastChild.type = 'submit';
@@ -501,9 +578,9 @@ async function refresh() {
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
     api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
     api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
-    currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
+    currentRole === 'admin' && !currentOrganization ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
     api('/api/version').catch(() => null),
-    currentRole === 'admin' ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null),
+    currentRole === 'admin' && !currentOrganization ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null),
     api('/api/alert-workbench').catch(() => null)
   ]);
   const interval = Number(runtime?.collectionIntervalSeconds);
@@ -1866,6 +1943,8 @@ function resetEdit() {
   $('asset-dialog-title').textContent = '纳管 PostgreSQL 实例';
   $('asset-error').textContent = '';
   $('asset-form').reset();
+  $('asset-organization-field').hidden = true;
+  $('asset-organization-field').querySelector('select').disabled = true;
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '保存资产';
   $('asset-dialog').dataset.mode = 'new';
@@ -2130,6 +2209,52 @@ function incidentImpactPanel(impact, event) {
     });
     details.append(form); panel.append(details);
   }
+  return panel;
+}
+
+function eventSharingPanel(eventId) {
+  const panel = cell('details', '', 'settings-details');
+  panel.append(cell('summary', '事件分享'));
+  const listing = cell('div', '', 'list');
+  const form = cell('form', '', 'response-form operator-action');
+  const hours = accessInput(form, '链接有效期（小时）', 'hours', '24', { type: 'number', min: 1, max: 168, required: true });
+  const create = cell('button', '创建事件链接', 'ghost small-button');
+  create.type = 'submit';
+  form.append(create);
+  panel.append(cell('p', '接收者登录后需要具备该事件资产的访问权限。', 'hint'), form, listing);
+  const path = `/api/events/${eventId}/shares`;
+  const load = async () => {
+    try {
+      const { shares = [] } = await api(path);
+      listing.replaceChildren();
+      if (!shares.length) listing.append(cell('p', '当前没有有效的分享链接。', 'empty'));
+      for (const share of shares) {
+        const row = cell('div', '', 'evidence');
+        const link = cell('a', '打开分享链接');
+        link.href = `/#shared?id=${share.id}`;
+        const url = Object.assign(document.createElement('input'), { value: link.href, readOnly: true });
+        url.setAttribute('aria-label', '分享链接地址');
+        url.addEventListener('focus', () => url.select());
+        const revoke = cell('button', '撤销链接', 'ghost small-button');
+        revoke.type = 'button';
+        revoke.addEventListener('click', async () => {
+          revoke.disabled = true;
+          try { await api(`${path}/${share.id}`, 'DELETE'); await load(); }
+          catch (error) { notice(error.message, true); revoke.disabled = false; }
+        });
+        row.append(link, cell('p', `到期 ${formatTime(share.expiresAt)}`, 'hint'), url, revoke);
+        listing.append(row);
+      }
+    } catch (error) { listing.replaceChildren(cell('p', error.message, 'warning')); }
+  };
+  panel.addEventListener('toggle', () => { if (panel.open) void load(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    create.disabled = true;
+    try { await api(path, 'POST', { hours: hours.valueAsNumber }); await load(); }
+    catch (error) { notice(error.message, true); }
+    finally { create.disabled = false; }
+  });
   return panel;
 }
 
@@ -2459,6 +2584,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     reports.append(button);
   }
   timelinePanel.append(reports);
+  if (canRespond) timelinePanel.append(eventSharingPanel(event.id));
   if (handoff) {
     const panel = cell('section', '', 'response-form');
     panel.append(cell('h4', '值班交接'));
@@ -2771,16 +2897,29 @@ async function boot() {
   csrf = session.csrf;
   currentRole = session.authenticated ? (session.role || 'admin') : null;
   currentUsername = session.username || '';
+  currentOrganization = session.organizationId || '';
+  oidcEnabled = session.oidcEnabled === true;
   approvalEnabled = session.approvalEnabled === true;
   viewerScoped = session.authenticated && session.viewerScoped === true;
   document.body.dataset.role = currentRole || '';
-  $('role-label').textContent = currentUsername ? `${currentUsername} · ${accessRoleLabels[currentRole]}` : accessRoleLabels[currentRole] || '';
+  document.body.dataset.organizationScope = String(!!currentOrganization);
+  $('role-label').textContent = [currentUsername, session.organizationName, accessRoleLabels[currentRole]].filter(Boolean).join(' · ');
+  $('oidc-login').hidden = !oidcEnabled || session.authenticated;
   $('scoped-asset-export').hidden = !currentUsername || !viewerScoped;
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
   $('logout').hidden = !session.authenticated;
-  if (session.authenticated) { setView(location.hash.slice(1), false); await refresh(); }
+  const ssoError = new URLSearchParams(location.search).get('sso');
+  if (ssoError && !session.authenticated) {
+    $('login-error').textContent = ssoError === 'unlinked' ? '该身份尚未绑定 DbSphere 账号。' :
+      ssoError === 'unavailable' ? '企业身份源暂不可用，可使用本地账号登录。' : '单点登录未通过验证。';
+  }
+  if (session.authenticated) {
+    if (currentRole === 'admin') await loadOrganizations(false);
+    setView(location.hash.slice(1), false);
+    await refresh();
+  }
 }
 
 for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click', () => setView(button.dataset.nav));
@@ -2792,6 +2931,11 @@ for (const bar of document.querySelectorAll('.section-nav')) {
 }
 $('asset-add').addEventListener('click', () => {
   resetEdit();
+  const field = $('asset-organization-field');
+  const select = field.querySelector('select');
+  field.hidden = !!currentOrganization || organizations.length < 2;
+  select.disabled = field.hidden;
+  select.replaceChildren(...organizationOptions().map(([id, name]) => new Option(name, id, id === defaultOrganizationID, id === defaultOrganizationID)));
   $('asset-dialog').showModal();
 });
 $('asset-close').addEventListener('click', resetEdit);
@@ -2916,6 +3060,7 @@ $('discover-k8s').addEventListener('click', async () => {
 $('asset-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
+  if (editingAsset) delete data.organizationId;
   data.port = Number(data.port);
   data.tags = data.tags.split(/[,，]/).map(tag => tag.trim()).filter(Boolean);
   data.poolerClear = data.poolerClear === 'on';
@@ -2934,6 +3079,15 @@ $('fleet-filters').addEventListener('submit', event => { event.preventDefault();
 $('fleet-prev').addEventListener('click', () => { if (fleetPage > 1) { fleetPage--; void loadFleetOverview(); } });
 $('fleet-next').addEventListener('click', () => { fleetPage++; void loadFleetOverview(); });
 $('platform-refresh').addEventListener('click', loadPlatformStatus);
+$('organization-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  try {
+    await api('/api/admin/organizations', 'POST', { name: form.elements.name.value.trim() });
+    form.reset();
+    await loadOrganizations();
+  } catch (error) { notice(error.message, true); }
+});
 
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
 window.setTimeout(pollStorageAvailability, 5000);

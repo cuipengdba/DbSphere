@@ -146,7 +146,8 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 			Password string `json:"password"`
 			Legacy   string `json:"legacyRole"`
 		}
-		if readJSONLimit(w, r, &input, 8192) != nil {
+		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(&input.AccessAccountInput, config) ||
+			input.Legacy != "" && (input.OrganizationID != "" || storepkg.OrganizationFromContext(r.Context()) != "") {
 			writeAccessResult(w, 0, nil, storepkg.ErrAccessInput)
 			break
 		}
@@ -168,7 +169,7 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 		writeAccessResult(w, http.StatusCreated, map[string]any{"account": data}, err)
 	case r.Method == http.MethodPatch && account != nil && account[2] == "":
 		var input storepkg.AccessAccountInput
-		if readJSONLimit(w, r, &input, 8192) != nil {
+		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(&input, config) {
 			writeAccessResult(w, 0, nil, storepkg.ErrAccessInput)
 			break
 		}
@@ -203,6 +204,17 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 	return true
 }
 
+func prepareOIDCBinding(input *storepkg.AccessAccountInput, config *AuthConfig) bool {
+	if input.OIDCSubject == nil || *input.OIDCSubject == "" {
+		return true
+	}
+	if config.OIDC == nil {
+		return false
+	}
+	input.OIDCIssuer = config.OIDC.Issuer
+	return true
+}
+
 func handleEventHandoff(w http.ResponseWriter, r *http.Request, db accessStore, role, eventID string) {
 	if db == nil || (role != "admin" && role != "operator") {
 		respond(w, http.StatusForbidden, map[string]string{"error": "Operator access required"})
@@ -230,6 +242,12 @@ func handleEventHandoff(w http.ResponseWriter, r *http.Request, db accessStore, 
 
 func authorizeNamedScope(w http.ResponseWriter, r *http.Request, db HealthStore, role string, allowed map[string]bool) bool {
 	path := r.URL.Path
+	if r.Method == http.MethodGet && eventShareReaderPath.MatchString(path) {
+		return true
+	}
+	if match := eventShareMakerPath.FindStringSubmatch(path); match != nil && role == "operator" {
+		return authorizeScopedResource(w, r, db, allowed, "event", match[1])
+	}
 	if r.Method == http.MethodGet {
 		if path == "/api/access/assets/export" {
 			return true

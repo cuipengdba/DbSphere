@@ -191,6 +191,7 @@ type AuthConfig struct {
 	AIDailyLimit         int
 	WorkOrderProfiles    map[string]WorkOrderProfile
 	ReplicaID            string
+	OIDC                 *OIDCProvider
 }
 
 type loginAttempt struct {
@@ -217,6 +218,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	}
 	files := http.FileServerFS(static)
 	mux := http.NewServeMux()
+	if credentials != nil && credentials.OIDC != nil {
+		registerOIDC(mux, store, credentials)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -413,12 +417,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
-			approval := credentials.ApproverPasswordHash != "" || namedDB != nil && namedDB.HasAccessApprover(r.Context(), "")
+			loginScope, err := scopedPrincipalIDs(r.Context(), store, credentials, loginAccount, loginRole)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Organization scope unavailable"})
+				return
+			}
+			approval := hasOrganizationApprover(r.Context(), namedDB, credentials, loginAccount.OrganizationID)
 			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
-				"viewerScoped":    loginAccount.ID != "" && loginRole != "admin" || loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"username":        loginAccount.Username,
-				"approvalEnabled": approval,
-				"csrf":            security.CSRFToken(credentials.MasterKey, session)})
+				"viewerScoped":     loginScope != nil,
+				"username":         loginAccount.Username,
+				"organizationId":   loginAccount.OrganizationID,
+				"organizationName": loginAccount.OrganizationName,
+				"approvalEnabled":  approval,
+				"csrf":             security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/session" {
@@ -430,12 +441,24 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if loggedIn {
 				sessionRole = role
 			}
-			approval := credentials.ApproverPasswordHash != "" || loggedIn && namedDB != nil && namedDB.HasAccessApprover(r.Context(), "")
+			var sessionScope []string
+			var err error
+			if loggedIn {
+				sessionScope, err = scopedPrincipalIDs(r.Context(), store, credentials, principal, role)
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Organization scope unavailable"})
+					return
+				}
+			}
+			approval := loggedIn && hasOrganizationApprover(r.Context(), namedDB, credentials, principal.OrganizationID)
 			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole,
-				"viewerScoped":    loggedIn && (principal.ID != "" && role != "admin" || role == "viewer" && len(credentials.ViewerAssetIDs) > 0),
-				"username":        principal.Username,
-				"approvalEnabled": approval,
-				"csrf":            csrf})
+				"viewerScoped":     sessionScope != nil,
+				"username":         principal.Username,
+				"organizationId":   principal.OrganizationID,
+				"organizationName": principal.OrganizationName,
+				"oidcEnabled":      credentials.OIDC != nil,
+				"approvalEnabled":  approval,
+				"csrf":             csrf})
 			return
 		}
 		if !loggedIn {
@@ -468,16 +491,18 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Approver account can only review work orders"})
 			return
 		}
-		var scopeIDs []string
+		scopeIDs, scopeErr := scopedPrincipalIDs(r.Context(), store, credentials, principal, role)
+		if scopeErr != nil {
+			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Organization scope unavailable"})
+			return
+		}
 		actor := role
 		if principal.ID != "" {
 			actor = principal.Username
 			r = r.WithContext(storepkg.WithAccessActor(r.Context(), actor))
-			if role != "admin" {
-				scopeIDs = append([]string{}, principal.AssetIDs...)
+			if principal.OrganizationID != "" {
+				r = r.WithContext(storepkg.WithOrganization(r.Context(), principal.OrganizationID))
 			}
-		} else if role == "viewer" && len(credentials.ViewerAssetIDs) > 0 {
-			scopeIDs = credentials.ViewerAssetIDs
 		}
 		viewerScope := map[string]bool(nil)
 		if scopeIDs != nil {
@@ -485,7 +510,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			for _, id := range scopeIDs {
 				viewerScope[id] = true
 			}
-			if principal.ID != "" {
+			if role == "admin" && principal.OrganizationID != "" {
+				if !authorizeOrganizationAdmin(w, r, store, viewerScope) {
+					return
+				}
+			} else if principal.ID != "" || role == "approver" || eventShareReaderPath.MatchString(r.URL.Path) {
 				if !authorizeNamedScope(w, r, store, role, viewerScope) {
 					return
 				}
@@ -633,7 +662,16 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if (role == "admin" || role == "approver" || role == "operator") && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
 			if auditor, ok := store.(AdminAuditStore); ok {
-				id, err := auditor.StartRoleAudit(r.Context(), actor, r.Method, r.URL.Path)
+				start, finish := auditor.StartRoleAudit, auditor.FinishAdminAudit
+				if signed, ok := store.(signedOrganizationAudit); ok {
+					start = func(ctx context.Context, actor, method, path string) (string, error) {
+						return signed.StartSignedRoleAudit(ctx, actor, method, path, credentials.MasterKey)
+					}
+					finish = func(ctx context.Context, id string, status int) error {
+						return signed.FinishSignedAdminAudit(ctx, id, status, credentials.MasterKey)
+					}
+				}
+				id, err := start(r.Context(), actor, r.Method, r.URL.Path)
 				if err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable; operation was not run"})
 					return
@@ -647,13 +685,24 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					}
 					auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					if err := auditor.FinishAdminAudit(auditCtx, id, status); err != nil {
+					if err := finish(auditCtx, id, status); err != nil {
 						slog.Error("administrator audit completion failed", "auditId", id, "error", err)
 					}
 				}()
 			}
 		}
 		if handleAccessDirectory(w, r, namedDB, role, credentials) {
+			return
+		}
+		if r.URL.Path == "/api/admin/organizations" {
+			handleOrganizationDirectory(w, r, store, role)
+			return
+		}
+		if handleOrganizationShares(w, r, store, role, viewerScope) {
+			return
+		}
+		if r.URL.Path == "/api/admin/organization-audit" && r.Method == http.MethodGet {
+			handleOrganizationAudit(w, r, store, role, credentials.MasterKey)
 			return
 		}
 		if match := eventHandoffPath.FindStringSubmatch(r.URL.Path); match != nil {
@@ -720,13 +769,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusOK, value)
 				return
 			}
-			hasApprover := credentials.ApproverPasswordHash != ""
-			if !hasApprover && namedDB != nil {
-				if lookup, ok := store.(scopedResourceLookup); ok {
-					assetID, err := lookup.AssetIDForResource(r.Context(), "event", match[1])
-					hasApprover = err == nil && assetID != "" && namedDB.HasAccessApprover(r.Context(), assetID)
-				}
-			}
+			hasApprover := workOrderApproverAvailable(r.Context(), store, namedDB, credentials, match[1])
 			if (role != "admin" && role != "operator") || !hasApprover {
 				respond(w, http.StatusForbidden, map[string]string{"error": "A separate approver account is required"})
 				return
@@ -1177,6 +1220,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					return
 				}
 				asset, err := assetsDB.CreateAsset(r.Context(), input, credentials.MasterKey)
+				if errors.Is(err, storepkg.ErrAccessInput) {
+					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset organization"})
+					return
+				}
 				if err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset storage unavailable"})
 					return

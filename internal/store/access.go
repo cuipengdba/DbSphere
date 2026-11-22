@@ -34,26 +34,33 @@ func accessActor(ctx context.Context, fallback string) string {
 }
 
 type AccessAccount struct {
-	ID       string   `json:"id"`
-	Username string   `json:"username"`
-	Role     string   `json:"role"`
-	Enabled  bool     `json:"enabled"`
-	TeamIDs  []string `json:"teamIds"`
-	AssetIDs []string `json:"assetIds"`
-	Hash     string   `json:"-"`
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	Role             string    `json:"role"`
+	Enabled          bool      `json:"enabled"`
+	TeamIDs          []string  `json:"teamIds"`
+	AssetIDs         []string  `json:"assetIds"`
+	Hash             string    `json:"-"`
+	OrganizationID   string    `json:"organizationId,omitempty"`
+	OrganizationName string    `json:"organizationName,omitempty"`
+	UpdatedAt        time.Time `json:"-"`
 }
 
 type AccessAccountInput struct {
-	Username string   `json:"username"`
-	Role     string   `json:"role"`
-	Enabled  *bool    `json:"enabled"`
-	TeamIDs  []string `json:"teamIds"`
+	Username       string   `json:"username"`
+	Role           string   `json:"role"`
+	Enabled        *bool    `json:"enabled"`
+	TeamIDs        []string `json:"teamIds"`
+	OrganizationID string   `json:"organizationId"`
+	OIDCSubject    *string  `json:"oidcSubject"`
+	OIDCIssuer     string   `json:"-"`
 }
 
 type AccessTeamInput struct {
-	Name     string   `json:"name"`
-	Project  string   `json:"project"`
-	AssetIDs []string `json:"assetIds"`
+	Name           string   `json:"name"`
+	Project        string   `json:"project"`
+	AssetIDs       []string `json:"assetIds"`
+	OrganizationID string   `json:"organizationId"`
 }
 
 func migrateAccess(ctx context.Context, tx pgx.Tx) error {
@@ -93,12 +100,17 @@ func migrateAccess(ctx context.Context, tx pgx.Tx) error {
 
 const accountColumns = `a.id::text,a.username,a.role,a.enabled,a.password_hash,
 	ARRAY(SELECT m.team_id::text FROM access_memberships m WHERE m.account_id=a.id ORDER BY m.team_id),
-	ARRAY(SELECT DISTINCT t.asset_id::text FROM access_memberships m JOIN access_team_assets t USING(team_id)
-		WHERE m.account_id=a.id ORDER BY t.asset_id::text)`
+	ARRAY(SELECT r.id::text FROM assets r WHERE
+		r.organization_id=coalesce(a.organization_id,'00000000-0000-4000-8000-000000000001')
+		AND (a.role='admin' AND a.organization_id IS NOT NULL OR EXISTS(
+		SELECT FROM access_memberships m JOIN access_team_assets t USING(team_id)
+		WHERE m.account_id=a.id AND t.asset_id=r.id)) ORDER BY r.id),
+	coalesce(a.organization_id::text,''),coalesce((SELECT name FROM organizations WHERE id=a.organization_id),''),a.updated_at`
 
 func readAccessAccount(row pgx.Row) (AccessAccount, error) {
 	var account AccessAccount
-	err := row.Scan(&account.ID, &account.Username, &account.Role, &account.Enabled, &account.Hash, &account.TeamIDs, &account.AssetIDs)
+	err := row.Scan(&account.ID, &account.Username, &account.Role, &account.Enabled, &account.Hash, &account.TeamIDs, &account.AssetIDs,
+		&account.OrganizationID, &account.OrganizationName, &account.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrAccessMissing
 	}
@@ -107,6 +119,11 @@ func readAccessAccount(row pgx.Row) (AccessAccount, error) {
 
 func (s *Postgres) AccessCredential(ctx context.Context, name string) (AccessAccount, error) {
 	return readAccessAccount(s.pool.QueryRow(ctx, "SELECT "+accountColumns+" FROM access_accounts a WHERE a.username=$1", name))
+}
+
+func (s *Postgres) AccessOIDC(ctx context.Context, issuer, subject string) (AccessAccount, error) {
+	return readAccessAccount(s.pool.QueryRow(ctx, "SELECT "+accountColumns+`
+		FROM access_accounts a WHERE a.oidc_issuer=$1 AND a.oidc_subject=$2 AND a.enabled`, issuer, subject))
 }
 
 func (s *Postgres) AccessSession(ctx context.Context, digest string, now time.Time) (AccessAccount, error) {
@@ -123,8 +140,9 @@ func (s *Postgres) CreateAccessSession(ctx context.Context, account AccessAccoun
 	defer tx.Rollback(ctx)
 	var enabled bool
 	var hash string
-	err = tx.QueryRow(ctx, `SELECT enabled,password_hash FROM access_accounts WHERE id=$1 FOR UPDATE`, account.ID).Scan(&enabled, &hash)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && (!enabled || hash != account.Hash) {
+	var updatedAt time.Time
+	err = tx.QueryRow(ctx, `SELECT enabled,password_hash,updated_at FROM access_accounts WHERE id=$1 FOR UPDATE`, account.ID).Scan(&enabled, &hash, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && (!enabled || hash != account.Hash || !updatedAt.Equal(account.UpdatedAt)) {
 		return ErrAccessMissing
 	}
 	if err != nil {
@@ -173,23 +191,38 @@ func accessWriteError(err error) error {
 }
 
 func (s *Postgres) AccessDirectory(ctx context.Context) (any, error) {
+	organizationID := OrganizationFromContext(ctx)
 	accounts, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'username',username,'role',role,'enabled',enabled,
+		'organizationId',organization_id,'oidcSubject',oidc_subject,
 		'teamIds',ARRAY(SELECT team_id::text FROM access_memberships WHERE account_id=a.id ORDER BY team_id))
-		FROM access_accounts a ORDER BY username`)
+		FROM access_accounts a WHERE (nullif($1,'')::uuid IS NULL OR organization_id=nullif($1,'')::uuid) ORDER BY username`, organizationID)
 	if err != nil {
 		return nil, err
 	}
 	teams, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'name',name,'project',project,
+		'organizationId',organization_id,
 		'assetIds',ARRAY(SELECT asset_id::text FROM access_team_assets WHERE team_id=t.id ORDER BY asset_id))
-		FROM access_teams t ORDER BY project,name`)
-	return map[string]any{"accounts": accounts, "teams": teams}, err
+		FROM access_teams t WHERE (nullif($1,'')::uuid IS NULL OR organization_id=nullif($1,'')::uuid) ORDER BY project,name`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	organizations, err := s.Organizations(ctx)
+	return map[string]any{"accounts": accounts, "teams": teams, "organizations": organizations}, err
 }
 
 func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input AccessAccountInput, hash string) (AccessAccount, error) {
+	organizationID, scopeErr := requestedOrganization(ctx, input.OrganizationID, "")
+	if scopeErr != nil {
+		return AccessAccount{}, scopeErr
+	}
 	if len(input.TeamIDs) > 100 || !validAccessIDs(input.TeamIDs) || input.Role != "" && !validAccessRole(input.Role) ||
 		id == "" && (!accessName.MatchString(input.Username) || input.Username == "admin" || input.Username == "viewer" ||
 			input.Username == "approver" || input.Username == "operator" || hash == "" || !validAccessRole(input.Role)) ||
 		id != "" && (!evidenceUUID.MatchString(id) || input.Username != "") {
+		return AccessAccount{}, ErrAccessInput
+	}
+	if input.OIDCSubject != nil && (len(*input.OIDCSubject) > 255 || strings.ContainsFunc(*input.OIDCSubject, unicode.IsControl) ||
+		*input.OIDCSubject != "" && input.OIDCIssuer == "") {
 		return AccessAccount{}, ErrAccessInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -198,11 +231,16 @@ func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input Acce
 	}
 	defer tx.Rollback(ctx)
 	if id == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO access_accounts(username,role,password_hash,enabled)
-			VALUES($1,$2,$3,coalesce($4,true)) RETURNING id::text`, input.Username, input.Role, hash, input.Enabled).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO access_accounts(username,role,password_hash,enabled,organization_id,oidc_subject,oidc_issuer)
+			VALUES($1,$2,$3,coalesce($4,true),nullif($5,'')::uuid,nullif($6,''),CASE WHEN nullif($6,'') IS NOT NULL THEN $7 END)
+			RETURNING id::text`, input.Username, input.Role, hash, input.Enabled, organizationID, input.OIDCSubject, input.OIDCIssuer).Scan(&id)
 	} else {
 		result, updateErr := tx.Exec(ctx, `UPDATE access_accounts SET role=coalesce(nullif($2,''),role),
-			enabled=coalesce($3,enabled),updated_at=now() WHERE id=$1`, id, input.Role, input.Enabled)
+			enabled=coalesce($3,enabled),updated_at=now(),
+			oidc_subject=CASE WHEN $5::text IS NULL THEN oidc_subject ELSE nullif($5,'') END,
+			oidc_issuer=CASE WHEN $5::text IS NULL THEN oidc_issuer WHEN $5<>'' THEN $6 ELSE NULL END
+			WHERE id=$1 AND (nullif($4,'')::uuid IS NULL OR organization_id=nullif($4,'')::uuid)`,
+			id, input.Role, input.Enabled, organizationID, input.OIDCSubject, input.OIDCIssuer)
 		err = updateErr
 		if err == nil && result.RowsAffected() == 0 {
 			err = ErrAccessMissing
@@ -212,6 +250,15 @@ func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input Acce
 		return AccessAccount{}, accessWriteError(err)
 	}
 	if input.TeamIDs != nil {
+		var permitted int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM access_teams t JOIN access_accounts a ON a.id=$1
+			WHERE t.id=ANY($2::uuid[]) AND t.organization_id=coalesce(a.organization_id,$3::uuid)`,
+			id, input.TeamIDs, DefaultOrganizationID).Scan(&permitted); err != nil {
+			return AccessAccount{}, err
+		}
+		if permitted != len(input.TeamIDs) {
+			return AccessAccount{}, ErrAccessInput
+		}
 		if _, err = tx.Exec(ctx, `DELETE FROM access_memberships WHERE account_id=$1`, id); err != nil {
 			return AccessAccount{}, err
 		}
@@ -219,7 +266,7 @@ func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input Acce
 			return AccessAccount{}, accessWriteError(err)
 		}
 	}
-	if input.Enabled != nil && !*input.Enabled {
+	if input.Enabled != nil && !*input.Enabled || input.OIDCSubject != nil && id != "" {
 		if _, err = tx.Exec(ctx, `DELETE FROM access_sessions WHERE account_id=$1`, id); err != nil {
 			return AccessAccount{}, err
 		}
@@ -237,7 +284,8 @@ func (s *Postgres) RotateAccessCredential(ctx context.Context, id, hash string) 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE access_accounts SET password_hash=$2,updated_at=now() WHERE id=$1`, id, hash)
+	result, err := tx.Exec(ctx, `UPDATE access_accounts SET password_hash=$2,updated_at=now()
+		WHERE id=$1 AND (nullif($3,'')::uuid IS NULL OR organization_id=nullif($3,'')::uuid)`, id, hash, OrganizationFromContext(ctx))
 	if err != nil {
 		return err
 	}
@@ -251,6 +299,10 @@ func (s *Postgres) RotateAccessCredential(ctx context.Context, id, hash string) 
 }
 
 func (s *Postgres) WriteAccessTeam(ctx context.Context, id string, input AccessTeamInput) (any, error) {
+	organizationID, scopeErr := requestedOrganization(ctx, input.OrganizationID, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	input.Name, input.Project = strings.TrimSpace(input.Name), strings.TrimSpace(input.Project)
 	if input.Name == "" || input.Project == "" || len(input.Name) > 120 || len(input.Project) > 120 ||
 		strings.ContainsFunc(input.Name+input.Project, unicode.IsControl) || len(input.AssetIDs) > 400 || !validAccessIDs(input.AssetIDs) ||
@@ -263,16 +315,29 @@ func (s *Postgres) WriteAccessTeam(ctx context.Context, id string, input AccessT
 	}
 	defer tx.Rollback(ctx)
 	if id == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO access_teams(name,project) VALUES($1,$2) RETURNING id::text`, input.Name, input.Project).Scan(&id)
+		if organizationID == "" {
+			organizationID = DefaultOrganizationID
+		}
+		err = tx.QueryRow(ctx, `INSERT INTO access_teams(name,project,organization_id) VALUES($1,$2,$3) RETURNING id::text`, input.Name, input.Project, organizationID).Scan(&id)
 	} else {
-		result, updateErr := tx.Exec(ctx, `UPDATE access_teams SET name=$2,project=$3 WHERE id=$1`, id, input.Name, input.Project)
-		err = updateErr
-		if err == nil && result.RowsAffected() == 0 {
+		var actualOrganization string
+		err = tx.QueryRow(ctx, `UPDATE access_teams SET name=$2,project=$3 WHERE id=$1
+			AND (nullif($4,'')::uuid IS NULL OR organization_id=nullif($4,'')::uuid)
+			RETURNING organization_id::text`, id, input.Name, input.Project, organizationID).Scan(&actualOrganization)
+		if errors.Is(err, pgx.ErrNoRows) {
 			err = ErrAccessMissing
 		}
+		organizationID = actualOrganization
 	}
 	if err != nil {
 		return nil, accessWriteError(err)
+	}
+	var permitted int
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM assets WHERE id=ANY($1::uuid[]) AND organization_id=$2`, input.AssetIDs, organizationID).Scan(&permitted); err != nil {
+		return nil, err
+	}
+	if permitted != len(input.AssetIDs) {
+		return nil, ErrAccessInput
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM access_team_assets WHERE team_id=$1`, id); err != nil {
 		return nil, err
@@ -280,7 +345,7 @@ func (s *Postgres) WriteAccessTeam(ctx context.Context, id string, input AccessT
 	if _, err = tx.Exec(ctx, `INSERT INTO access_team_assets SELECT $1::uuid,unnest($2::text[])::uuid`, id, input.AssetIDs); err != nil {
 		return nil, accessWriteError(err)
 	}
-	return map[string]any{"id": id, "name": input.Name, "project": input.Project, "assetIds": input.AssetIDs}, tx.Commit(ctx)
+	return map[string]any{"id": id, "name": input.Name, "project": input.Project, "assetIds": input.AssetIDs, "organizationId": organizationID}, tx.Commit(ctx)
 }
 
 func (s *Postgres) HasAccessApprover(ctx context.Context, assetID string) bool {
@@ -288,7 +353,9 @@ func (s *Postgres) HasAccessApprover(ctx context.Context, assetID string) bool {
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS(
 		SELECT FROM access_accounts a JOIN access_memberships m ON m.account_id=a.id
 		JOIN access_team_assets t ON t.team_id=m.team_id
-		WHERE a.enabled AND a.role='approver' AND ($1='' OR t.asset_id::text=$1))`, assetID).Scan(&found)
+		WHERE a.enabled AND a.role='approver' AND ($1='' OR t.asset_id::text=$1)
+		AND (nullif($2,'')::uuid IS NULL OR coalesce(a.organization_id,$3::uuid)=nullif($2,'')::uuid))`,
+		assetID, OrganizationFromContext(ctx), DefaultOrganizationID).Scan(&found)
 	return err == nil && found
 }
 

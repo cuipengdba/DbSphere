@@ -21,7 +21,7 @@ type AssetPageQuery struct {
 }
 
 const assetJSON = `jsonb_build_object(
-	'id',id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
+	'id',id,'organizationId',organization_id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
 	'environment',environment,'tags',tags,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,

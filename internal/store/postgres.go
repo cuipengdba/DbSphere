@@ -455,6 +455,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migratePlatformHA(ctx, tx); err != nil {
 		return fmt.Errorf("migrate platform replica leadership: %w", err)
 	}
+	if err := migrateOrganizations(ctx, tx); err != nil {
+		return fmt.Errorf("migrate organizations and signed audit: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
