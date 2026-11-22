@@ -144,18 +144,24 @@ console.log(JSON.stringify({phase: 'archive-gap', eventId: incident.id, wal: blo
 await waitUntil('the initially missing segment to reach the repository', () => segments().includes(blockedWal));
 
 const businessStarted = clock('business');
-backrest('--pg1-path=/lab/restored', '--set=' + diff.label, '--type=time', '--target=' + targetAt,
+const postgresTarget = targetAt.replace('T', ' ').replace(/Z$/, '+00');
+backrest('--pg1-path=/lab/restored', '--set=' + diff.label, '--type=time', '--target=' + postgresTarget,
   '--target-action=pause', '--target-timeline=current', 'restore');
+let restoreStarted = false;
 try {
   business('pg_ctl', '-D', '/lab/restored', '-l', '/lab/restored-postgres.log',
     '-o', '-p 5442 -k /lab/restore-socket -c listen_addresses=127.0.0.1 -c archive_mode=off', '-w', 'start');
+  restoreStarted = true;
   const lookup = ['-h', '/lab/restore-socket', '-p', '5442'];
   await waitUntil('the physically restored database to pause at the requested target', () =>
     sql('business', 'SELECT pg_is_in_recovery() AND pg_get_wal_replay_pause_state()=\'paused\';', lookup) === 't');
   const rows = sql('business', 'SELECT id FROM recovery_marker ORDER BY id;', lookup).split(/\r?\n/);
   assert.deepEqual(rows, ['base-backup', 'before-target', 'diff-backup']);
+} catch (err) {
+  try { console.error(business('tail', '-n', '24', '/lab/restored-postgres.log')); } catch { /* retain the original failure */ }
+  throw err;
 } finally {
-  business('pg_ctl', '-D', '/lab/restored', '-m', 'fast', '-w', 'stop');
+  if (restoreStarted) business('pg_ctl', '-D', '/lab/restored', '-m', 'fast', '-w', 'stop');
 }
 const businessProof = {id: 'business-pitr-verified', repoKey: 1, databaseId: diff.database.id, backup: diff.label,
   targetAt, startedAt: businessStarted, finishedAt: clock('business'), sourceCommitAt: afterAt,
