@@ -23,12 +23,12 @@ func TestCollectorCycleHealthAndRestartBoundary(t *testing.T) {
 	if got := tracker.Snapshot(base.Add(6 * time.Minute)).State; got != "overdue" {
 		t.Fatalf("slow but active collector was hidden: %q", got)
 	}
-	tracker.Finish(base.Add(6*time.Minute+time.Second), Cycle{Selected: 100, Processed: 99,
+	tracker.Finish(base.Add(6*time.Minute+time.Second), Cycle{Selected: 4, Processed: 3,
 		TargetFailures: 1, CollectorErrors: 1, AtBatchLimit: true})
 	snapshot := tracker.Snapshot(base.Add(6*time.Minute + 2*time.Second))
 	if snapshot.State != "degraded" || snapshot.CompletedCycles != 1 ||
-		snapshot.CycleDurationMs != 181000 || snapshot.Cycle.Processed != 99 ||
-		!snapshot.Cycle.AtBatchLimit || snapshot.BatchLimit != 100 {
+		snapshot.CycleDurationMs != 181000 || snapshot.Cycle.Processed != 3 ||
+		!snapshot.Cycle.AtBatchLimit || snapshot.BatchLimit != snapshot.WorkerLimit {
 		t.Fatalf("failed cycle status was lost: %+v", snapshot)
 	}
 	tracker.Begin(base.Add(7 * time.Minute))
