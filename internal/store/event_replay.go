@@ -3,9 +3,13 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type sampleReference struct{ id, relation string }
@@ -92,12 +96,18 @@ type replayPoint struct {
 	SampleID   string     `json:"sampleId,omitempty"`
 	SampleAt   *time.Time `json:"sampleAt,omitempty"`
 	At         time.Time  `json:"at"`
+	EndAt      *time.Time `json:"endAt,omitempty"`
 	Layer      string     `json:"layer"`
 	Stage      string     `json:"stage"`
 	Kind       string     `json:"kind"`
 	Signal     string     `json:"signal,omitempty"`
 	Source     string     `json:"source,omitempty"`
 	Strength   string     `json:"strength"`
+	Phase      string     `json:"phase,omitempty"`
+	TraceID    string     `json:"traceId,omitempty"`
+	SpanID     string     `json:"spanId,omitempty"`
+	BackendPID int        `json:"backendPid,omitempty"`
+	Limitation string     `json:"limitation,omitempty"`
 }
 
 func incidentReplay(event *eventRecord, samples map[string]sampleObservation, candidates []map[string]any) map[string]any {
@@ -119,6 +129,9 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		if sample, ok := samples[stringValue(payload["sampleId"])]; ok && sample.Metrics != nil {
 			point.SampleID, point.SampleAt = sample.ID, &sample.At
 			point.Strength = "direct"
+			if point.At.Sub(sample.At) > 10*time.Minute || sample.At.Sub(point.At) > time.Minute {
+				point.Strength, point.Limitation = "correlated", "证据引用的采样与记录时刻相隔较远"
+			}
 			layers[point.Layer] = true
 		}
 		switch item.Kind {
@@ -176,7 +189,7 @@ func candidateEvidenceStrength(candidate map[string]any, samples map[string]samp
 	}
 	if hasRawSample {
 		switch stringValue(candidate["code"]) {
-		case "lock_chain", "same_backend_pid_lock_chain", "wal_receiver_down":
+		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down":
 			return "direct"
 		}
 		return "correlated"
@@ -185,6 +198,107 @@ func candidateEvidenceStrength(candidate map[string]any, samples map[string]samp
 		return "insufficient"
 	}
 	return "correlated"
+}
+
+type replayComparison struct {
+	Phase    string             `json:"phase"`
+	SampleID string             `json:"sampleId,omitempty"`
+	At       *time.Time         `json:"at,omitempty"`
+	Metrics  map[string]float64 `json:"metrics,omitempty"`
+}
+
+func (s *Postgres) enrichIncidentReplay(ctx context.Context, event *eventRecord, replay map[string]any,
+	samples map[string]sampleObservation, traces []replayPoint, edges []map[string]string) error {
+	points := replay["points"].([]replayPoint)
+	layers := replay["observedLayers"].(map[string]bool)
+	exact := map[string]bool{}
+	for _, edge := range edges {
+		if edge["relation"] == "same_backend_pid" {
+			exact[edge["from"]] = true
+		}
+	}
+	for _, trace := range traces {
+		if trace.Strength != "insufficient" && exact["span:"+trace.TraceID+":"+trace.SpanID] {
+			trace.Strength, trace.Limitation = "direct", "可核对这条数据库 Span 对应的等待 PID 和阻塞链"
+		} else if trace.Strength == "correlated" && tracePIDConflict(trace, samples) {
+			trace.Strength, trace.Limitation = "conflict", "同窗锁样本的等待 PID 与应用上报不符，仍需核对连接和采样范围"
+		}
+		points = append(points, trace)
+		layers["app"] = true
+	}
+	for i := range points {
+		point := &points[i]
+		point.Phase = "during"
+		switch {
+		case point.Stage == "recovery" || event.EndedAt != nil && !point.At.Before(*event.EndedAt):
+			point.Phase = "after"
+		case point.At.Before(event.StartedAt) && (point.EndAt == nil || point.EndAt.Before(event.StartedAt)):
+			point.Phase = "before"
+		}
+	}
+	sort.SliceStable(points, func(i, j int) bool { return points[i].At.Before(points[j].At) })
+	replay["points"] = points
+	baseline := sampleObservation{}
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT id::text,collected_at,status,metrics_json FROM samples WHERE asset_id=$1
+		AND collected_at >= $2::timestamptz-interval '30 minutes' AND collected_at < $2::timestamptz
+		AND (status='ok' OR metrics_json#>>'{collector,pgStatus}'='ok')
+		ORDER BY collected_at DESC,id DESC LIMIT 1`, event.AssetID, event.StartedAt).Scan(&baseline.ID, &baseline.At, &baseline.Status, &raw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if raw != nil {
+		_ = json.Unmarshal(raw, &baseline.Metrics)
+	}
+	reference := func(point *replayPoint) sampleObservation {
+		if point != nil {
+			return samples[point.SampleID]
+		}
+		return sampleObservation{}
+	}
+	replay["comparison"] = []replayComparison{compareReplaySample("before", baseline),
+		compareReplaySample("during", reference(replay["detection"].(*replayPoint))),
+		compareReplaySample("after", reference(replay["recovery"].(*replayPoint)))}
+	return nil
+}
+
+func tracePIDConflict(point replayPoint, samples map[string]sampleObservation) bool {
+	if point.Signal != "postgresql_client" || point.BackendPID == 0 || point.EndAt == nil {
+		return false
+	}
+	seenWait := false
+	for _, sample := range samples {
+		if sample.At.Before(point.At) || sample.At.After(*point.EndAt) {
+			continue
+		}
+		chain := object(object(sample.Metrics["diagnostics"])["lockChain"])
+		if stringValue(chain["status"]) == "ok" && len(list(chain["data"])) > 0 {
+			if matchedLockWaitBlocker(sample, point.At, *point.EndAt, point.BackendPID) > 0 {
+				return false
+			}
+			seenWait = true
+		}
+	}
+	return seenWait
+}
+
+func compareReplaySample(phase string, sample sampleObservation) replayComparison {
+	result := replayComparison{Phase: phase}
+	if sample.ID == "" || sample.Metrics == nil {
+		return result
+	}
+	result.SampleID, result.At = sample.ID, &sample.At
+	result.Metrics = map[string]float64{}
+	if value, ok := numeric(sample.Metrics["connections"]); ok {
+		result.Metrics["connections"] = value
+	}
+	for name, metric := range map[string]string{"blockedSessions": "pg.blocked_sessions", "poolWaiting": "pgbouncer.waiting_clients",
+		"replicationLagBytes": "pg.replication_lag_bytes", "podUnready": "k8s.pod_not_ready"} {
+		if signal := readGoSignal(metric, sample.Metrics, sample.At); signal.Available {
+			result.Metrics[name] = signal.Value
+		}
+	}
+	return result
 }
 
 func incidentLayer(kind, metric string) string {

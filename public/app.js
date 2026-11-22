@@ -917,7 +917,7 @@ async function openEvent(id, updateHash = true) {
     if (selectedEvent === id && matchMedia('(max-width: 1080px)').matches)
       $('event-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
-    if (location.hash === `#incidents?event=${encodeURIComponent(id)}`)
+    if (location.hash.startsWith('#incidents?') && new URLSearchParams(location.hash.split('?')[1]).get('event') === id)
       $('event-detail').replaceChildren(cell('p', error.message, 'warning'));
     else notice(error.message, true);
   }
@@ -1289,10 +1289,10 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
-const replayStrength = { direct: '直接证据', correlated: '时间相关', insufficient: '证据不足', record: '事件记录' };
-const replayKinds = { event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
+const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
@@ -1317,12 +1317,17 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   };
   const pointActions = point => {
     const actions = cell('div', '', 'incident-replay-actions');
-    if (assetServerPaging && point.stage !== 'response') {
+    if (assetServerPaging && point.stage !== 'response' && !point.traceId) {
       const button = cell('button', '定位同窗', 'ghost small-button');
       button.type = 'button'; button.addEventListener('click', () => jump(point));
       actions.append(button);
     }
     if (point.sampleId) actions.append(replaySampleLink(event.assetId, point.sampleId));
+    if (point.traceId) {
+      const link = cell('a', '原始 Trace', 'monitor-link');
+      link.href = `/api/assets/${event.assetId}/traces/${point.traceId}`;
+      link.target = '_blank'; link.rel = 'noopener'; actions.append(link);
+    }
     return actions;
   };
   const milestones = cell('div', '', 'incident-replay-milestones');
@@ -1333,13 +1338,26 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
     return item;
   };
   const layers = Object.keys(replay.observedLayers).map(key => replayLayers[key]).filter(Boolean);
-  if (analysis.traceCoverage?.spans) layers.push('应用 Trace');
+  if (!layers.includes('应用 Trace') && analysis.traceCoverage?.spans) layers.unshift('应用 Trace');
   const scope = cell('div', '', 'incident-replay-milestone');
   scope.append(cell('span', '影响实例'), cell('strong', event.assetName || event.assetId),
     cell('small', layers.length ? layers.join(' · ') : '暂缺有原始采样的信号'),
     cell('small', aiEnabled ? '规则诊断 · 已启用可选 AI' : '规则诊断 · AI 未启用'));
   milestones.append(milestone('首次发现', replay.detection, '待确认'), scope, milestone('恢复观测', replay.recovery, '仍在处理中'));
   panel.append(milestones);
+
+  const phases = { before: '故障前', during: '故障期间', after: '恢复后' };
+  if (replay.comparison?.length) {
+    const values = [ ['connections', '连接'], ['blockedSessions', '阻塞会话'], ['poolWaiting', '连接池等待'],
+      ['replicationLagBytes', '回放差距（字节）'], ['podUnready', 'Pod 就绪'] ];
+    const comparison = cell('div', '', 'monitor-table');
+    comparison.append(cell('h5', '故障前、触发与恢复采样对照'), importTable(['阶段', '记录时间', ...values.map(item => item[1]), '证据'],
+      replay.comparison.map(row => [phases[row.phase], row.at ? formatTime(row.at) : '缺少可比采样',
+        ...values.map(([key]) => key === 'podUnready' && row.metrics?.[key] != null
+          ? (row.metrics[key] ? '未就绪' : '就绪') : row.metrics?.[key] ?? '—'),
+        row.sampleId ? replaySampleLink(event.assetId, row.sampleId) : '—'])));
+    panel.append(comparison);
+  }
 
   const body = cell('div', '', 'incident-replay-rows');
   const toolbar = cell('div', '', 'incident-replay-actions');
@@ -1349,16 +1367,41 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
     const option = cell('option', title); option.value = key; filter.append(option);
   }
   label.append(filter); toolbar.append(label); panel.append(toolbar, body);
+  const filterBy = (name, values) => {
+    const field = cell('select'); field.setAttribute('aria-label', name);
+    for (const [value, title] of [['', '全部'], ...Object.entries(values)]) {
+      const option = cell('option', title); option.value = value; field.append(option);
+    }
+    const caption = cell('label', `${name} `); caption.append(field); toolbar.append(caption);
+    return field;
+  };
+  const phase = filterBy('回放阶段', phases);
+  const strength = filterBy('证据判断', replayStrength);
+  const state = new URLSearchParams(location.hash.split('?')[1]);
+  const filters = { layer: filter, phase, strength };
+  for (const [key, field] of Object.entries(filters)) {
+    const value = state.get(key) || '';
+    if ([...field.options].some(option => option.value === value)) field.value = value;
+  }
+  const share = cell('button', '复制当前证据链接', 'ghost small-button');
+  const shareURL = cell('input'); shareURL.type = 'url'; shareURL.readOnly = true; shareURL.hidden = true;
+  shareURL.setAttribute('aria-label', '当前证据链接');
+  share.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(location.href); share.textContent = '已复制证据链接'; }
+    catch { shareURL.hidden = false; shareURL.value = location.href; shareURL.select(); }
+  });
+  toolbar.append(share, shareURL);
   let offset = 0;
   const pageSize = 8;
   const show = () => {
-    const points = replay.points.filter(point => !filter.value || point.layer === filter.value);
+    const points = replay.points.filter(point => Object.entries(filters).every(([key, field]) => !field.value || point[key] === field.value));
     body.replaceChildren();
     for (const point of points.slice(offset, offset + pageSize)) {
       const row = cell('div', '', 'incident-replay-row');
       const text = cell('div', '');
       text.append(cell('strong', `${replayLayers[point.layer]} · ${replayKinds[point.kind] || point.kind}`),
-        cell('small', [formatTime(point.at), point.source, point.signal, replayStrength[point.strength]].filter(Boolean).join(' · ')));
+        cell('small', [formatTime(point.at), phases[point.phase], point.source, point.signal, replayStrength[point.strength]].filter(Boolean).join(' · ')));
+      if (point.limitation) text.append(cell('small', point.limitation));
       row.dataset.evidenceId = point.evidenceId || '';
       row.append(text, pointActions(point));
       body.append(row);
@@ -1374,7 +1417,13 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
     nav.append(previous, cell('small', `${offset + 1}–${Math.min(points.length, offset + pageSize)} / ${points.length}`), next);
     body.append(nav);
   };
-  filter.addEventListener('change', () => { offset = 0; show(); });
+  for (const field of Object.values(filters)) field.addEventListener('change', () => {
+    const params = new URLSearchParams({ event: event.id });
+    for (const [key, input] of Object.entries(filters)) if (input.value) params.set(key, input.value);
+    history.replaceState(null, '', `#incidents?${params}`);
+    share.textContent = '复制当前证据链接'; shareURL.hidden = true;
+    offset = 0; show();
+  });
   show();
   return panel;
 }

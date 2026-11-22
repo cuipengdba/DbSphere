@@ -21,8 +21,10 @@ type eventReportData struct {
 	Event         eventRecord          `json:"event"`
 	RelatedEvents []relatedEventRecord `json:"relatedEvents"`
 	Replay        struct {
-		Detection *replayPoint `json:"detection"`
-		Recovery  *replayPoint `json:"recovery"`
+		Detection  *replayPoint       `json:"detection"`
+		Recovery   *replayPoint       `json:"recovery"`
+		Points     []replayPoint      `json:"points"`
+		Comparison []replayComparison `json:"comparison"`
 	} `json:"replay"`
 	Analysis struct {
 		Status         string   `json:"status"`
@@ -546,6 +548,7 @@ func renderEventMarkdown(data eventReportData) string {
 		}
 		out.WriteByte('\n')
 	}
+	writeComparisonMarkdown(&out, data)
 	out.WriteString("## 证据时间线\n\n| 时间 | 证据 ID | 类型 | 样本 ID / 规则 ID |\n|---|---|---|---|\n")
 	for _, evidence := range event.Evidence {
 		var payload map[string]any
@@ -563,4 +566,48 @@ func renderEventMarkdown(data eventReportData) string {
 		out.WriteString("\n时间线已达到 500 条显示上限，可能仍有其他证据。\n")
 	}
 	return out.String()
+}
+
+func writeComparisonMarkdown(out *strings.Builder, data eventReportData) {
+	event := data.Event
+	if len(data.Replay.Comparison) > 0 {
+		out.WriteString("## 故障前、触发与恢复采样对照\n\n| 阶段 | 时间 | 连接 | 阻塞 | 池等待 | 回放差距（字节） | Pod 未就绪 | 样本 |\n|---|---|---|---|---|---|---|---|\n")
+		phases := map[string]string{"before": "故障前", "during": "故障期间", "after": "恢复后"}
+		for _, sample := range data.Replay.Comparison {
+			fmt.Fprintf(out, "| %s | %s |", phases[sample.Phase], reportTime(sample.At))
+			for _, key := range []string{"connections", "blockedSessions", "poolWaiting", "replicationLagBytes", "podUnready"} {
+				if value, ok := sample.Metrics[key]; ok {
+					fmt.Fprintf(out, " %g |", value)
+				} else {
+					out.WriteString(" — |")
+				}
+			}
+			if sample.SampleID != "" {
+				fmt.Fprintf(out, " [原始采样](/api/assets/%s/samples/%s) |\n", event.AssetID, sample.SampleID)
+			} else {
+				out.WriteString(" 缺少可比采样 |\n")
+			}
+		}
+		out.WriteByte('\n')
+	}
+	shown := 0
+	judgement := map[string]string{"direct": "直接证据", "correlated": "时间相关", "conflict": "标识不符", "insufficient": "证据不足"}
+	for _, point := range data.Replay.Points {
+		if point.TraceID == "" {
+			continue
+		}
+		if shown == 0 {
+			fmt.Fprintf(out, "## 应用回放证据\n\n[打开应用证据](/#incidents?event=%s&layer=app)\n\n", event.ID)
+		}
+		if shown >= 20 {
+			out.WriteString("\n前 20 条 Span 已列出，其余可在事件回放查看。\n")
+			break
+		}
+		fmt.Fprintf(out, "- %s · %s · %s · %s · [原始 Trace](/api/assets/%s/traces/%s)\n", reportTime(&point.At),
+			reportText(point.Source), judgement[point.Strength], reportText(point.Limitation), event.AssetID, point.TraceID)
+		shown++
+	}
+	if shown > 0 {
+		out.WriteByte('\n')
+	}
 }

@@ -248,6 +248,7 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	serviceImpacts := map[string]*serviceTraceImpact{}
 	traceDBSpans := []traceDBSpan{}
 	observedSpans := []observedTraceSpan{}
+	traceReplay := []replayPoint{}
 	appPodReported, appPodVerified := 0, 0
 	appPodEdges := map[string]bool{}
 	appPVCStatusNodes := map[string]bool{}
@@ -341,6 +342,13 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			impact.LastAt = endedAt
 		}
 		spanNode := "span:" + traceID + ":" + spanID
+		strength, limitation := "correlated", "Trace 与事件属于同一资产及查询窗，跨层关系需再核对"
+		if timingAnomaly {
+			strength, limitation = "insufficient", "Span 结束时间晚于接收时间，跨层时序待核对"
+		}
+		traceReplay = append(traceReplay, replayPoint{TraceID: traceID, SpanID: spanID, At: at, EndAt: &endedAt,
+			Layer: "app", Stage: "observation", Kind: "trace_span", Signal: kind, Source: service,
+			Strength: strength, Limitation: limitation, BackendPID: observed.BackendPID})
 		spanSet[spanNode] = !timingAnomaly
 		spanServices[spanNode] = service
 		serviceNode := "service:" + service
@@ -493,7 +501,6 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 	for _, service := range services {
 		impactList = append(impactList, *serviceImpacts[service])
 	}
-	missing = append(missing, "Go 全量根因规则和自动跨层采集仍在迁移")
 	status := "unlocated"
 	if len(candidates) > 0 {
 		status = "candidates"
@@ -508,6 +515,9 @@ func (s *Postgres) EventByID(ctx context.Context, id string) (any, error) {
 			"sampling": sampling, "clock": clock},
 	}
 	replay := incidentReplay(event, samples, candidates)
+	if err := s.enrichIncidentReplay(ctx, event, replay, samples, traceReplay, edges); err != nil {
+		return nil, err
+	}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay}, nil
 }
 

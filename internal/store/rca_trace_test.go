@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+func TestReplayOnlyReportsPIDConflictForObservedLockWindow(t *testing.T) {
+	start := time.Now().UTC()
+	end := start.Add(5 * time.Second)
+	point := replayPoint{At: start, EndAt: &end, Signal: "postgresql_client", BackendPID: 21}
+	sample := sampleObservation{At: start.Add(time.Second), Status: "ok", Metrics: map[string]any{
+		"diagnostics": map[string]any{"lockChain": map[string]any{"status": "ok",
+			"data": []any{map[string]any{"waitingPid": 20, "blockerPid": 9}}}}}}
+	if !tracePIDConflict(point, map[string]sampleObservation{"other": sample}) {
+		t.Fatal("different waiting PID was not marked in the overlapping raw sample")
+	}
+	point.BackendPID = 20
+	if tracePIDConflict(point, map[string]sampleObservation{"matched": sample}) {
+		t.Fatal("the observed PID was treated as a conflict")
+	}
+	point.BackendPID = 21
+	sample.At = start.Add(-time.Minute)
+	if tracePIDConflict(point, map[string]sampleObservation{"old": sample}) {
+		t.Fatal("an older observation was used as contradictory evidence")
+	}
+}
+
 func TestTraceLockCandidateRequiresParentAndObservedLock(t *testing.T) {
 	now := time.Now().UTC()
 	event := &eventRecord{ID: "event", StartedAt: now}

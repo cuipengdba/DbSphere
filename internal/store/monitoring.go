@@ -24,13 +24,20 @@ const monitoringInstancesSQL = `SELECT jsonb_build_object(
 		SELECT count(*)::int AS total FROM open_event_groups WHERE asset_id=a.id
 	) e ON true /*asset_scope*/ ORDER BY a.id`
 
+func monitoringBucketLimit(minutes int) time.Duration {
+	if minutes == 60 {
+		return 30 * 24 * time.Hour
+	}
+	return time.Duration(minutes*400) * time.Minute
+}
+
 // MonitoringSeries reads one bounded set of time buckets for authorized assets.
 func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params url.Values) (any, error) {
-	from, to, err := timeRange(params, 0, 7*24*time.Hour)
+	from, to, err := timeRange(params, 0, 30*24*time.Hour)
 	minutes, parseErr := strconv.Atoi(params.Get("bucketMinutes"))
 	if err != nil || parseErr != nil || params.Get("to") == "" || len(ids) < 1 || len(ids) > 5 ||
 		(minutes != 1 && minutes != 5 && minutes != 15 && minutes != 60) ||
-		to.Sub(from) > time.Duration(minutes*400)*time.Minute {
+		to.Sub(from) > monitoringBucketLimit(minutes) {
 		return nil, ErrInvalidRange
 	}
 	values, err := s.readMonitoringBuckets(ctx, ids, from, to, minutes)

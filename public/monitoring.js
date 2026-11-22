@@ -3,7 +3,7 @@
 
   const minute = 60_000;
   const periods = [
-    ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60]
+    ['15 分钟', 15, 1], ['1 小时', 60, 1], ['6 小时', 360, 5], ['24 小时', 1440, 15], ['7 天', 10080, 60], ['30 天', 43200, 60]
   ];
   const tabs = [['metrics', '实例概览'], ['waits', '等待分析'], ['sql', 'SQL 性能'], ['locks', '锁与会话'],
     ['replication', '复制与高可用'], ['catalog', '数据库与对象'], ['infra', '运行环境'], ['backup', '备份与恢复']];
@@ -261,7 +261,7 @@
     const [, duration, bin] = periods.find(([name]) => name === range) || periods[1];
     const to = fixed?.to ?? Date.now();
     const from = fixed?.from ?? to - duration * minute;
-    const minutes = fixed ? [1, 5, 15, 60].find(size => to - from <= size * minute * 380) : bin;
+    const minutes = fixed ? ([1, 5, 15].find(size => to - from <= size * minute * 380) || 60) : bin;
     const bucketMs = minutes * minute;
     const first = Math.floor(from / bucketMs) * bucketMs;
     const params = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucketMinutes: String(minutes) });
@@ -453,7 +453,7 @@
     rangeForm.addEventListener('submit', event => {
       event.preventDefault();
       if (!validRange(Date.parse(fromField.value), Date.parse(toField.value))) {
-        errorLabel.textContent = '请选择至少 1 分钟、最多 7 天且结束时间不晚于当前的范围。';
+        errorLabel.textContent = '请选择至少 1 分钟、最多 30 天且结束时间不晚于当前的范围。';
         return;
       }
       zoom(Date.parse(fromField.value), Date.parse(toField.value));
@@ -484,7 +484,7 @@
     root.append(header, fleet, details);
 
     function validRange(from, to) {
-      return Number.isFinite(from) && Number.isFinite(to) && to <= Date.now() && to - from >= minute && to - from <= 10080 * minute;
+      return Number.isFinite(from) && Number.isFinite(to) && to <= Date.now() && to - from >= minute && to - from <= 43200 * minute;
     }
 
     function route() {
@@ -897,12 +897,58 @@
           seriesPanels.append(trend);
         }
         loading.replaceWith(flow, seriesPanels);
+        if (time.bucketMs === 60 * minute) charts.append(hourlyDetails(time, selected, records));
       } catch (error) {
         if (key === request && visible && !instance) {
           loading.textContent = `趋势读取失败 · ${error.message}`;
           loading.className = 'monitor-warning';
         }
       }
+    }
+
+    function hourlyDetails(time, selected, records) {
+      const panelNode = panel('小时覆盖与峰值');
+      const label = el('p', '', 'monitor-note');
+      const detail = el('div');
+      let start = time.first;
+      const inspect = button('下钻这一小时', () => {
+        const end = Math.min(start + time.bucketMs, Date.now());
+        zoom(Math.min(start, end - minute), end);
+      }, 'ghost small-button');
+      panelNode.append(label, detail, inspect);
+      const rowsByTime = new Map(selected.map(({ id }) => [id, new Map((records.get(id) || []).map(row => [Date.parse(row.bucket), row]))]));
+      let shown = -1;
+      const draw = index => {
+        if (shown === index) return;
+        shown = index;
+        start = time.first + index * time.bucketMs;
+        label.textContent = `${formatTime(start)} · 图表游标联动`;
+        detail.replaceChildren(table(['实例', 'PG 有效 / 采样', '峰值阻塞', '峰值连接', '峰值回放差距', '原始证据'], selected.map(asset => {
+          const row = rowsByTime.get(asset.id)?.get(start);
+          const id = row?.blockedPeakSampleId || row?.latestSampleId;
+          return [asset.name, row?.samples ? `${row.pgAvailable} / ${row.samples}` : '缺采', display(row?.peakBlockedSessions),
+            display(row?.peakConnectionUsagePercent, percent), display(row?.peakReplicationLagBytes, bytes),
+            id ? sampleLink(asset.id, id, row.blockedPeakSampleId ? '阻塞峰值采样' : '末次采样') : '—'];
+        }), '小时覆盖与峰值'));
+      };
+      time.cursors.add(draw);
+      draw(time.count - 1);
+      return panelNode;
+    }
+
+    async function loadLongRange(asset, time, key) {
+      const query = new URLSearchParams(time.params);
+      query.append('asset', asset.id);
+      const { series, events } = await api(`/api/monitoring/series?${query}`);
+      if (key !== request || !visible) return;
+      time.cursors.clear();
+      const charts = metricCharts(series, time, events, [
+        ['transactionsPerSecond', '小时平均事务吞吐', rate, palette[0]],
+        ['peakBlockedSessions', '小时峰值阻塞会话', number, palette[1]],
+        ['peakConnectionUsagePercent', '小时峰值连接占用', percent, palette[2]],
+        ['peakReplicationLagBytes', '小时峰值复制回放差距', bytes, palette[3]]
+      ]);
+      body.replaceChildren(charts, hourlyDetails(time, [asset], new Map([[asset.id, series]])), eventList(events, '此实例的问题事件'));
     }
 
     function openQuery(value) {
@@ -1715,6 +1761,12 @@
 
     async function load(asset, time) {
       const key = ++request;
+      if (time.to - time.from > 10080 * minute) {
+        body.replaceChildren(el('p', '正在读取小时汇总…', 'monitor-note'));
+        try { await loadLongRange(asset, time, key); }
+        catch (error) { if (key === request) body.replaceChildren(el('p', error.message, 'monitor-warning')); }
+        return;
+      }
       const path = `/api/assets/${asset.id}/`;
       const query = new URLSearchParams(time.params);
       let section;

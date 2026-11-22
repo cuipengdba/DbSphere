@@ -125,7 +125,7 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		if raw := params.Get("bucketMinutes"); raw != "" {
 			bucket, err = strconv.Atoi(raw)
 			if err != nil || (bucket != 1 && bucket != 5 && bucket != 15 && bucket != 60) ||
-				params.Get("bucketHours") != "" || to.Sub(from) > time.Duration(bucket*400)*time.Minute {
+				params.Get("bucketHours") != "" || to.Sub(from) > monitoringBucketLimit(bucket) {
 				return nil, ErrInvalidRange
 			}
 		}
@@ -140,6 +140,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 }
 
 func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
 	return s.queryJSON(ctx, `WITH observed AS (
 			SELECT id,asset_id,collected_at,status,
 				metrics_json#>>'{collector,pgStatus}' AS pg_status,
@@ -190,7 +192,8 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 				lag(pg_role) OVER observed_order AS prior_role
 			FROM observed WINDOW observed_order AS (PARTITION BY asset_id ORDER BY collected_at,id)
 		), rated AS (
-			SELECT *,CASE WHEN commits>=prior_commits AND rollbacks>=prior_rollbacks
+			SELECT *,date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz) AS bucket,
+				CASE WHEN commits>=prior_commits AND rollbacks>=prior_rollbacks
 				AND extract(epoch FROM collected_at-prior_at) BETWEEN 1 AND 600
 				THEN ((commits-prior_commits)+(rollbacks-prior_rollbacks)) /
 					extract(epoch FROM collected_at-prior_at) END AS transactions_per_second,
@@ -205,7 +208,7 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			FROM compared
 		)
 		SELECT jsonb_build_object(
-			'assetId',asset_id,'bucket',date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz),
+			'assetId',asset_id,'bucket',bucket,
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
 			'pgAvailable',count(*) FILTER (WHERE status='ok' OR pg_status='ok')::int,
 			'pgUnavailable',count(*) FILTER (WHERE pg_status='availability')::int,
@@ -221,10 +224,14 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			'averageReplicationLagBytes',round(avg(replication_lag_bytes),0),
 			'averageLinuxCpuPercent',round(avg(linux_cpu),1),
 			'averageLinuxMemoryPercent',round(avg(linux_memory),1),
+			'peakBlockedSessions',max(blocked_sessions),'peakConnectionUsagePercent',round(max(connections/nullif(max_connections,0)*100),1),
+			'peakReplicationLagBytes',max(replication_lag_bytes),'peakTransactionsPerSecond',round(max(transactions_per_second),2),
+			'latestSampleId',(array_agg(id ORDER BY collected_at DESC,id DESC))[1],
+			'blockedPeakSampleId',(array_agg(id ORDER BY blocked_sessions DESC,collected_at DESC,id DESC)
+				FILTER (WHERE blocked_sessions IS NOT NULL))[1],
 			'transactionsPerSecond',round(avg(transactions_per_second),2),
 			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
-		FROM rated GROUP BY asset_id,date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)
-		ORDER BY asset_id,date_bin(make_interval(mins=>$4),collected_at,'2000-01-01T00:00:00Z'::timestamptz)`, ids, from, to, bucket)
+		FROM rated GROUP BY asset_id,bucket ORDER BY asset_id,bucket`, ids, from, to, bucket)
 }
 
 func (s *Postgres) queryJSON(ctx context.Context, query string, args ...any) ([]json.RawMessage, error) {
