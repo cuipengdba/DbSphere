@@ -103,6 +103,7 @@ func TestRealHAProxySharedDependencyLinksAndSplitsOriginalEvents(t *testing.T) {
 		t.Fatal("invalid test application connection settings")
 	}
 	cfg.Host, cfg.Port, cfg.ConnectTimeout = host, uint16(port), time.Second
+	cfg.TLSConfig, cfg.Fallbacks = nil, nil
 	start := time.Now().UTC()
 	if conn, err := pgx.ConnectConfig(ctx, cfg); err == nil {
 		conn.Close(ctx)
