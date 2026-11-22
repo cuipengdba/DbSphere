@@ -109,6 +109,7 @@ SQL
   ...postgres('pg16', 16, workers[2]),
   ...postgres('pg17', 17, workers[2]),
   ...postgres('pg18', 18, workers[2]),
+  ...postgres('pg19', 19, workers[1]),
   {
     apiVersion: 'apps/v1', kind: 'Deployment', metadata: metadata('dbsphere-go'),
     spec: { replicas: 1, selector: selector('dbsphere-go'), template: { metadata: { labels: { app: 'dbsphere-go' } },

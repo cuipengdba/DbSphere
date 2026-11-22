@@ -260,7 +260,7 @@ func TestOneEventIDAcrossFailureAndRecovery(t *testing.T) {
 	}
 	first, err := pg.CheckAsset(context.Background(), asset.ID, key)
 	if err != nil || first.Status != "ok" {
-		t.Fatalf("initial PG14–18 sample failed: %v %v", first, err)
+		t.Fatalf("initial PostgreSQL sample failed: %v %v", first, err)
 	}
 	due, err = pg.DueAssetIDs(context.Background(), time.Minute, 100)
 	if err != nil || slices.Contains(due, asset.ID) {

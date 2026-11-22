@@ -34,7 +34,7 @@ const getSample = async (assetId, sampleId) => {
   return (await response.json()).sample;
 };
 const preserved = [];
-for (let major = 14; major <= 18; major++) {
+for (let major = 14; major <= 19; major++) {
   const old = before.matrix.find(item => item.major === major);
   const fresh = after.matrix.find(item => item.major === major);
   assert.ok(old && fresh, `PostgreSQL ${major} missing from matrix`);

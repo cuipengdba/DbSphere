@@ -26,7 +26,8 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := metrics["version_num"].(int)
-	if version/10000 < 14 || version/10000 > 18 || metrics["role"] != "primary" ||
+	major := version / 10000
+	if !PostgresMajorSupported(major) || metrics["role"] != "primary" ||
 		metrics["database_bytes"].(int64) <= 0 || metrics["replication_observed"] != true {
 		t.Fatalf("unexpected PostgreSQL read-only metrics: %v", metrics)
 	}
@@ -58,6 +59,23 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 			t.Fatalf("PostgreSQL %d checkpoint metric unavailable: %s", version/10000, field)
 		}
 	}
+	compat := metrics["pgCompatibility"].(map[string]any)
+	for _, signal := range compat["signals"].([]postgresSignal) {
+		switch signal.Key {
+		case "instanceIO":
+			if (signal.Status == "ok") != (major >= 16) || (major < 16 && signal.Status != "not_supported") {
+				t.Fatalf("unexpected PG%d I/O capability: %+v", major, signal)
+			}
+		case "checkpoints":
+			wantSource := "pg_stat_bgwriter"
+			if major >= 17 {
+				wantSource = "pg_stat_checkpointer"
+			}
+			if signal.Source != wantSource || signal.Status != "ok" {
+				t.Fatalf("unexpected PG%d checkpoint capability: %+v", major, signal)
+			}
+		}
+	}
 }
 
 func TestSQLPerformanceEnabledWithoutRawSQL(t *testing.T) {
@@ -79,9 +97,9 @@ func TestSQLPerformanceEnabledWithoutRawSQL(t *testing.T) {
 	if _, err := conn.Exec(context.Background(), "SELECT 42424242"); err != nil {
 		t.Fatal(err)
 	}
-	conn.Close(context.Background())
-	metrics, err := PostgreSQL(context.Background(), Target{Host: "127.0.0.1", Port: port,
-		Database: "postgres", Username: "postgres", SSLMode: "disable"}, os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"))
+	defer conn.Close(context.Background())
+	target := Target{Host: "127.0.0.1", Port: port, Database: "postgres", Username: "postgres", SSLMode: "disable"}
+	metrics, err := PostgreSQL(context.Background(), target, os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +119,23 @@ func TestSQLPerformanceEnabledWithoutRawSQL(t *testing.T) {
 			if _, leaked := item[field]; leaked {
 				t.Fatalf("raw SQL field %s leaked", field)
 			}
+		}
+	}
+	if metrics["version_num"].(int)/10000 == 19 {
+		before, _ := performance["resetAt"].(*time.Time)
+		if before == nil {
+			t.Fatal("PG19 baseline stats reset time is missing")
+		}
+		if _, err := conn.Exec(context.Background(), "SELECT pg_stat_statements_reset()"); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := PostgreSQL(context.Background(), target, os.Getenv("DBSPHERE_TEST_PG_TARGET_PASSWORD"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, _ := fresh["sqlPerformance"].(map[string]any)["resetAt"].(*time.Time)
+		if after == nil || !after.After(*before) {
+			t.Fatalf("PG19 stats reset time failed to advance from %v to %v", before, after)
 		}
 	}
 }

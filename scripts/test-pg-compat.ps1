@@ -1,4 +1,4 @@
-param([int[]]$Versions = @(14,15,16,17,18))
+param([int[]]$Versions = @(14,15,16,17,18,19))
 
 $ErrorActionPreference = 'Stop'
 $failed = $false

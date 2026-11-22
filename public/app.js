@@ -44,7 +44,7 @@ const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
-  assets: ['资产与实例', '纳管 PostgreSQL 14–18，并查看实例与基础设施状态。'],
+  assets: ['资产与实例', '纳管 PostgreSQL 14–19，并查看实例与基础设施状态。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
   inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
   settings: ['系统状态', '检查监控数据存储与部署状态。']
@@ -635,7 +635,25 @@ function renderSignalCoverage(target, asset, sample, performance) {
   for (const [label, status] of rows) {
     const row = document.createElement('div'); row.append(cell('strong', label), cell('span', status)); list.append(row);
   }
-  panel.append(list); target.append(panel);
+  panel.append(list);
+  const compatibility = metrics.pgCompatibility;
+  if (compatibility?.signals?.length) {
+    const labels = { activeWaits: '活动等待', instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL',
+      replicationLinks: '复制链路', walReceiver: 'WAL 接收', sqlPerformance: 'Top SQL 指纹' };
+    const statuses = { ok: '已采集', unavailable: '采集失败', not_configured: '当前数据库未安装扩展',
+      not_supported: '此版本无对应视图', limited_permissions: '权限受限', inactive: '当前无活动接收器' };
+    const signals = cell('div', '', 'diagnostic-list');
+    for (const signal of compatibility.signals) {
+      const status = statuses[signal.status] || '未知';
+      const reason = signal.status === 'limited_permissions' ? ' · 需可用的 pg_read_all_stats 权限'
+        : signal.status === 'unavailable' && signal.reason ? ` · ${signal.reason}` : '';
+      const row = cell('div', '');
+      row.append(cell('strong', labels[signal.key] || signal.key), cell('span', `${signal.source} · ${status}${reason}`));
+      signals.append(row);
+    }
+    panel.append(cell('h4', `PostgreSQL ${compatibility.major} 版本能力${compatibility.lifecycle === 'upstream_eol' ? ' · 上游已停止支持' : ''}`), signals);
+  }
+  target.append(panel);
 }
 
 function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false) {
@@ -782,7 +800,7 @@ function renderRelatedEventButtons(target, eventIds = []) {
 
 function renderSlowLogs(target, asset, entries) {
   const heading = cell('h3', '慢 SQL 日志'); heading.id = 'slow-logs'; target.append(heading);
-  target.append(cell('p', '导入 PostgreSQL csvlog（PG14–18）或 jsonlog（PG15–18）的已轮转片段。每批不超过 60 KiB；仅保存时间、耗时和 Query ID，语句正文与参数在导入时丢弃。', 'hint'));
+  target.append(cell('p', '导入 PostgreSQL csvlog（PG14 起）或 jsonlog（PG15 起）的已轮转片段。每批不超过 60 KiB；仅保存时间、耗时和 Query ID，语句正文与参数在导入时丢弃。', 'hint'));
   const form = document.createElement('form'); form.className = 'actions';
   const format = document.createElement('select');
   for (const value of ['csvlog', 'jsonlog']) {

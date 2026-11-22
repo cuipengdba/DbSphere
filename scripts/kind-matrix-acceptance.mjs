@@ -62,7 +62,7 @@ assert.ok(cookie && csrf, 'admin session cookie and CSRF token must be present')
 
 const existing = (await call('/api/assets')).body.assets;
 const report = [];
-for (let major = 14; major <= 18; major++) {
+for (let major = 14; major <= 19; major++) {
   const name = `kind-matrix-pg${major}`;
   let asset = existing.find(item => item.name === name);
   if (!asset) {
@@ -84,6 +84,8 @@ for (let major = 14; major <= 18; major++) {
   assert.equal(Math.floor(sampled.metrics.version_num / 10000), major, `${name} sample version mismatch`);
   assert.equal(sampled.metrics.monitor_role, true, `${name} monitor role missing`);
   assert.equal(sampled.metrics.privileged_role, false, `${name} monitor role is privileged`);
+  assert.equal(sampled.metrics.pgCompatibility?.major, major, `${name} capability matrix version mismatch`);
+  assert.equal(sampled.metrics.pgCompatibility?.signals.find(signal => signal.key === 'activeWaits')?.status, 'ok');
   assert.equal(sampled.metrics?.k8s?.status, 'ok', `${name} K8S signal missing`);
   assert.match(sampled.metrics.k8s.pod.name, new RegExp(`^pg${major}-`), `${name} pod association wrong`);
   assert.equal(sampled.metrics.k8s.pod.phase, 'Running', `${name} pod is not running`);

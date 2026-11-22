@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/cuipengdba/dbsphere/internal/collector"
 )
 
 var ErrInvalidFleetQuery = errors.New("invalid fleet query")
@@ -16,7 +18,7 @@ type FleetQuery struct {
 
 func (s *Postgres) MonitoringFleet(ctx context.Context, q FleetQuery, ids []string) (any, error) {
 	if q.Page < 1 || q.Page > 1000 || q.Limit < 1 || q.Limit > 50 || len(q.Search) > 384 ||
-		len(q.Environment) > 80 || len(q.Tag) > 64 || (q.Major != 0 && (q.Major < 14 || q.Major > 18)) ||
+		len(q.Environment) > 80 || len(q.Tag) > 64 || (q.Major != 0 && !collector.PostgresMajorSupported(q.Major)) ||
 		(q.Runtime != "" && q.Runtime != "linux" && q.Runtime != "k8s" && q.Runtime != "managed") ||
 		(q.Status != "" && q.Status != "incident" && q.Status != "coverage" && q.Status != "healthy") {
 		return nil, ErrInvalidFleetQuery

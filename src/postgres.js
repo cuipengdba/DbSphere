@@ -22,7 +22,7 @@ export async function collectPostgres(asset, password) {
     await client.query('SET statement_timeout = 3000');
     const identity = (await client.query("SELECT current_setting('server_version_num')::int AS version_num, pg_is_in_recovery() AS in_recovery")).rows[0];
     const major = Math.floor(identity.version_num / 10000);
-    if (major < 14 || major > 18) throw new Error(`PostgreSQL ${major} is outside the supported 14–18 range`);
+    if (major < 14 || major > 19) throw new Error(`PostgreSQL ${major} is outside the supported 14–19 range`);
     const permission = (await client.query(`SELECT pg_has_role(current_user, 'pg_monitor', 'member') AS monitor_role,
       rolsuper, rolcreatedb, rolcreaterole, rolreplication FROM pg_roles WHERE rolname = current_user`)).rows[0];
     const stat = (await client.query('SELECT numbackends, xact_commit, xact_rollback FROM pg_stat_database WHERE datname = current_database()')).rows[0];

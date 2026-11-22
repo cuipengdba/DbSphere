@@ -131,7 +131,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ['14', '15', '16', '17', '18']
+        pg: ['14', '15', '16', '17', '18', '19']
     services:
       store:
         image: postgres:18-bookworm
@@ -404,8 +404,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.18.0'
-          previous_sha='887dfb84d4b5e0900b5b7273f6f3212706059c6df166f9bf68a8b8e7fef07866'
+          previous_version='1.19.0'
+          previous_sha='733ddfbbb2b6adf39158b1edbddad7499931eca059e3837a3879e6274f4c78fc'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -512,7 +512,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [14, 15, 16, 17, 18]
+        pg: [14, 15, 16, 17, 18, 19]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -878,7 +878,7 @@ jobs:
               -f test/patroni-drill/compose.yaml down -v --remove-orphans
           fi
 
-  kind-pg14-18-matrix:
+  kind-pg14-19-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -922,7 +922,7 @@ jobs:
           kind get kubeconfig --name dbsphere-ci > "$KUBECONFIG"
           chmod 600 "$KUBECONFIG"
           kubectl get nodes -o wide
-      - name: Deploy Go console, PostgreSQL 18 store and five target versions
+      - name: Deploy Go console, PostgreSQL 18 store and six target versions
         run: |
           docker build -f Dockerfile-go -t dbsphere/kind-matrix:local .
           docker build -f examples/trace-lock-app/Dockerfile -t dbsphere/trace-lock-app:kind-oom .
@@ -968,7 +968,7 @@ jobs:
           DBSPHERE_TEST_K8S_APP_PVC=pg18-data \
           DBSPHERE_TEST_K8S_APP_PVC_PHASE=Bound \
             go test ./internal/collector -run '^TestRealKubernetesApplicationPodIdentity$' -count=1 -v
-      - name: Verify PG14-18 and cross-node Kubernetes evidence after Pod replacement
+      - name: Verify PG14-19 and cross-node Kubernetes evidence after Pod replacement
         run: |
           node --check scripts/kind-matrix-verify-persistence.mjs
           forward_pid=''
@@ -1119,7 +1119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [14, 15, 16, 17, 18]
+        pg: [14, 15, 16, 17, 18, 19]
     services:
       store:
         image: postgres:18-bookworm
