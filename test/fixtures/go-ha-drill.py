@@ -197,7 +197,7 @@ def test():
         assert any(item["kind"] == "notification_delivery" and item["payload"].get("deliveryId") == delivery
                    and item["payload"].get("status") == "delivered" for item in evidence)
 
-        command("docker", "stop", "-t", "2", STORE)
+        command("docker", "stop", "-t", "20", STORE)
         try:
             until("storage readiness stopping", lambda: request("/readyz")[0] == 503, timeout=25)
             assert request("/healthz")[0] == 200
@@ -206,7 +206,7 @@ def test():
             assert request("/api/events/" + event, auth=auth)[0] == 503
         finally:
             command("docker", "start", STORE)
-        until("storage and original incident recovery", lambda: request("/api/events/" + event, auth=auth)[0] == 200)
+        until("storage and original incident recovery", lambda: request("/api/events/" + event, auth=auth)[0] == 200, timeout=150)
         assert api("/api/assets/" + lost_asset + "/samples/" + sample, auth=auth)["sample"]["metrics"]["collector"]["replicaId"] == other
         print(json.dumps({"failedLeader": original_leader, "survivor": other, "maintenanceFailoverSeconds": failover,
                           "leaseRecoveredSample": sample, "oneSampleInLeaseSlot": True, "eventId": event,

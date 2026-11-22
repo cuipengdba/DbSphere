@@ -37,7 +37,7 @@ func runPlatform(ctx context.Context, pg *store.Postgres, replica store.Platform
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	var cancelLeader context.CancelFunc
-	var leaderDone chan struct{}
+	var leaderDone <-chan struct{}
 	stopWorkers := func() {
 		if cancelLeader != nil {
 			cancelLeader()
@@ -63,13 +63,7 @@ func runPlatform(ctx context.Context, pg *store.Postgres, replica store.Platform
 		if !leader || err != nil {
 			stopWorkers()
 		} else if cancelLeader == nil && ctx.Err() == nil {
-			var leaderCtx context.Context
-			leaderCtx, cancelLeader = context.WithCancel(ctx)
-			leaderDone = make(chan struct{})
-			go func(done chan struct{}) {
-				defer close(done)
-				start(leaderCtx)
-			}(leaderDone)
+			cancelLeader, leaderDone = startMaintenance(ctx, start)
 			log.Info("platform maintenance acquired", "replicaId", replica.ID)
 		}
 		select {
@@ -78,6 +72,17 @@ func runPlatform(ctx context.Context, pg *store.Postgres, replica store.Platform
 		case <-ticker.C:
 		}
 	}
+}
+
+func startMaintenance(ctx context.Context, run func(context.Context)) (context.CancelFunc, <-chan struct{}) {
+	leaderCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer cancel()
+		run(leaderCtx)
+	}()
+	return cancel, done
 }
 
 func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, notifications notify.Config,
