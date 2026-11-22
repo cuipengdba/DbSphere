@@ -851,7 +851,7 @@
           show(Math.floor((event.clientX - rect.left) * time.count / rect.width));
         };
         track.addEventListener('pointermove', inspectAt);
-        track.addEventListener('click', event => { if (event.target === track) inspectAt(event); });
+        track.addEventListener('click', event => { if (!event.target.closest('.cluster-marker')) inspectAt(event); });
         track.addEventListener('focus', () => show(index));
         track.addEventListener('keydown', event => {
           if (event.target !== track || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
