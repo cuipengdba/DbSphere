@@ -33,6 +33,10 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.SQLSummary(ctx, id)
 	case "wait-history":
 		return s.waitHistory(ctx, id, params)
+	case "lock-history":
+		return s.lockHistory(ctx, id, params)
+	case "query-traces":
+		return s.queryTraceHistory(ctx, id, params)
 	case "sql-window":
 		return s.sqlWindow(ctx, id, params)
 	case "monitoring-context":

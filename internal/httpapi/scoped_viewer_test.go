@@ -143,6 +143,7 @@ func TestScopedViewerCannotReadOtherAssetsOrAggregates(t *testing.T) {
 		"/api/assets/" + scopeAssetB + "/catalog", "/api/assets/" + scopeAssetB + "/replication",
 		"/api/assets/" + scopeAssetB + "/environment",
 		"/api/assets/" + scopeAssetB + "/instance-history",
+		"/api/assets/" + scopeAssetB + "/lock-history", "/api/assets/" + scopeAssetB + "/query-traces",
 		"/api/events/" + scopeEventB, "/api/events/" + scopeEventB + "/report",
 		"/api/inspection-runs/" + scopeEventB + "/report"} {
 		if got := get(path); got.Code != http.StatusNotFound {

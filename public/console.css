@@ -105,6 +105,8 @@ body:not([data-role="admin"]) .admin-only { display: none !important; }
 .monitor-fleet, .monitor-layout { display: grid; gap: 10px; min-width: 0; }
 .monitor-members, .monitor-latest { scroll-margin-top: 156px; }
 .monitor-table th { white-space: nowrap; }
+.lock-tree, .lock-tree ul { margin: 8px 0; padding-inline-start: 20px; }
+.lock-tree li { line-height: 1.65; overflow-wrap: anywhere; }
 .monitor-table table[aria-label="集群成员"] { min-width: 540px; }
 .monitor-breadcrumb { justify-self: start; }
 .monitor-plot svg { height: 175px; }

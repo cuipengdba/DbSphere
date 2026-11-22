@@ -395,7 +395,7 @@
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
     let focusAt = null, focusSample = '';
-    let sqlOrder = 'time';
+    let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null;
     let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
     let rangeEvents = [];
     let memberSeries = new Map();
@@ -492,7 +492,8 @@
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
-        ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, '']
+        ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''],
+        ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -514,6 +515,10 @@
       focusAt = eventAnchor && Number.isFinite(evidenceTime) ? evidenceTime : null;
       focusSample = focusAt != null && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('sample') || '') ? params.get('sample') : '';
       sqlOrder = sqlOrders.some(([key]) => key === params.get('sqlOrder')) ? params.get('sqlOrder') : 'time';
+      baseline = ['previous', 'day'].includes(params.get('baseline')) ? params.get('baseline') : '';
+      lockPick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('lockSample') || '') ? params.get('lockSample') : '';
+      const lockTime = Date.parse(params.get('lockAt'));
+      lockAt = Number.isFinite(lockTime) ? lockTime : null;
       dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
       objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
       objectKind = objectOid && ['table', 'index'].includes(params.get('objectKind')) ? params.get('objectKind') : '';
@@ -564,7 +569,7 @@
 
     function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; memberSeries = new Map(); }
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
-    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; }
+    function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; }
 
     function openCluster(key) {
       if (!assets.some(asset => clusterKey(asset) === key)) return;
@@ -895,24 +900,72 @@
       change();
     }
 
-    function lockPanel(context, asset) {
+    function blockerTree(edges) {
+      const connections = new Map();
+      const waiting = new Set(edges.map(edge => edge.waitingPid));
+      for (const edge of edges) {
+        if (!connections.has(edge.blockerPid)) connections.set(edge.blockerPid, []);
+        connections.get(edge.blockerPid).push(edge);
+      }
+      const naturalRoots = [...connections.keys()].filter(pid => !waiting.has(pid));
+      const visited = new Set();
+      const tree = el('ul', null, 'lock-tree');
+      tree.setAttribute('aria-label', '历史锁树');
+      function walk(pid, chain, edge) {
+        const row = el('li', null);
+        row.append(el('strong', `${edge ? '等待' : '阻塞方'} PID ${pid}`));
+        const identifier = edge?.waitingQueryId;
+        if (identifier) row.append(' · ', button(`Query ID ${identifier}`, () => openQuery(identifier), 'monitor-link'));
+        if (chain.has(pid)) { row.append(el('small', ' · 循环关系')); return row; }
+        if (visited.has(pid)) return row;
+        visited.add(pid);
+        const children = connections.get(pid) || [];
+        if (children.length) {
+          const branch = el('ul');
+          for (const child of children) branch.append(walk(child.waitingPid, new Set([...chain, pid]), child));
+          row.append(branch);
+        }
+        return row;
+      }
+      for (const pid of [...naturalRoots, ...connections.keys()]) if (!visited.has(pid)) tree.append(walk(pid, new Set()));
+      return tree;
+    }
+
+    function lockPanel(asset, history, time) {
       const panelNode = panel('锁阻塞链');
-      const snapshot = context.blockingSample || context.snapshot;
+      const available = history?.samples || [];
+      const bucket = lockAt == null ? null : time.first + Math.floor((lockAt - time.first) / time.bucketMs) * time.bucketMs;
+      const nearest = bucket == null ? null : available.filter(row => {
+        const at = Date.parse(row.collectedAt);
+        return row.locks.data.length && at >= bucket && at < bucket + time.bucketMs;
+      })
+        .sort((a, b) => Math.abs(Date.parse(a.collectedAt) - lockAt) - Math.abs(Date.parse(b.collectedAt) - lockAt))[0];
+      const snapshot = available.find(row => row.id === (lockPick || focusSample)) || nearest ||
+        available.find(row => row.locks.data.length) || available[0];
+      if (available.length) {
+        const choices = select('区间锁链采样', id => { lockPick = id; change(); });
+        options(choices, available.map(row => [row.id, `${formatTime(row.collectedAt)} · ${row.locks.data.length} 条阻塞关系`]), snapshot?.id || '');
+        const controls = el('div', null, 'monitor-wait-controls');
+        controls.append(labeled('采样', choices));
+        panelNode.append(controls);
+      }
+      if (lockAt != null && !nearest && !lockPick) panelNode.append(el('p', '等待峰值所在时间桶无锁链采样。下方保留区间内已有的锁链记录。', 'monitor-note'));
       if (snapshot) {
-        const source = el('a', '原始采样', 'monitor-link');
-        source.href = `/api/assets/${asset.id}/samples/${snapshot.id}`;
-        source.target = '_blank';
-        source.rel = 'noopener';
-        const label = context.blockingSample ? '区间最后一次观测到阻塞' : '区间最后一次采样';
+        const source = sampleLink(asset.id, snapshot.id);
+        const label = snapshot === nearest ? '等待峰值同桶锁链快照' : '锁链采样';
         const caption = el('p', `${label} · ${formatTime(snapshot.collectedAt)} · `, 'monitor-note');
         caption.append(source);
         panelNode.append(caption);
+        panelNode.append(button('回看采样时的等待趋势', () => {
+          lockAt = Date.parse(snapshot.collectedAt); mode = 'waits'; change();
+        }));
       }
       const sample = snapshot?.locks;
       if (sample?.status !== 'ok') panelNode.append(el('p', '所选时段无可用锁链采样。', 'monitor-empty'));
       else if (!sample.data.length) panelNode.append(el('p', '最后一次采样时没有观测到阻塞关系。', 'monitor-empty'));
       else {
         const queryLink = value => value ? button(value, () => openQuery(value), 'monitor-link') : '—';
+        panelNode.append(blockerTree(sample.data));
         panelNode.append(table(['阻塞 PID', '阻塞 Query ID', '等待 PID', '等待 Query ID', '等待事件', '事务开始'],
           sample.data.map(edge => [edge.blockerPid, queryLink(edge.blockerQueryId), edge.waitingPid, queryLink(edge.waitingQueryId),
             [edge.waitType, edge.waitEvent].filter(Boolean).join(' / '), edge.waitingSince && formatTime(edge.waitingSince)]), '锁阻塞关系'));
@@ -926,6 +979,9 @@
       const order = select('SQL 排序', value => { sqlOrder = value; change(); });
       options(order, sqlOrders, sqlOrder);
       controls.append(labeled('排序', order));
+      const comparison = select('SQL 基线窗口', value => { baseline = value; change(); });
+      options(comparison, [['', '仅当前窗口'], ['previous', '前一等长窗口'], ['day', '昨日同时段（最多 24 小时）']], baseline);
+      controls.append(labeled('基线', comparison));
       if (queryId) controls.append(button('返回 SQL 排名', () => { queryId = ''; change(); }));
       if (queryId && group === 'query') controls.append(button('返回等待排行', () => { mode = 'waits'; queryId = ''; change(); }));
       card.append(controls);
@@ -939,15 +995,16 @@
       if (performance.truncated || performance.collectionLimited || performance.total > 50)
         card.append(el('p', '已达到采样或排行上限，排名只包含已覆盖的指纹和区间。', 'monitor-warning'));
       if (performance.statements.length) {
-        card.append(table(['Query ID', '角色 OID', '调用/s', '总耗时', '平均耗时', '共享块读', '临时块写', '覆盖时长'],
+        card.append(table(['Query ID', '数据库 OID', '角色 OID', '调用/s', '总耗时', '平均耗时', '共享块读', '临时块写', '覆盖时长'],
           performance.statements.map(row => [
             queryId ? row.queryId : button(row.queryId, () => openQuery(row.queryId), 'monitor-link'),
-            row.userOid, number(row.callsPerSecond, 2), milliseconds(row.totalExecMs), milliseconds(row.averageExecMs),
+            row.databaseOid, row.userOid, number(row.callsPerSecond, 2), milliseconds(row.totalExecMs), milliseconds(row.averageExecMs),
             number(row.sharedBlocksRead, 0), number(row.tempBlocksWritten, 0), `${number(row.coveredSeconds)} s`
           ]), 'SQL 区间排行'));
       }
+      if (baseline) card.append(sqlComparison(performance, evidence.baseline, time));
       if (!queryId) return card;
-      const trail = panel('同窗慢日志与计划');
+      const trail = panel('同窗慢日志、执行计划与应用 Trace');
       for (const [kind, items] of [
         ['slow-logs', evidence?.entries || []],
         ['sql-plans', (evidence?.plans || []).filter(plan => Date.parse(plan.observedAt) >= time.from && Date.parse(plan.observedAt) < time.to)]
@@ -960,8 +1017,23 @@
           const duration = item.durationMs ?? item.summary?.executionMs;
           const row = el('p', `${formatTime(item.observedAt)}${finite(duration) ? ' · ' + milliseconds(duration) : ''} · `, 'monitor-note');
           row.append(link);
+          if (kind === 'sql-plans' && item.comparison) {
+            const cmp = item.comparison;
+            row.append(` · ${cmp.shapeChanged ? '计划形状变化' : '计划形状一致'}`);
+            if (finite(cmp.executionRatio)) row.append(` · 执行耗时 ${number(cmp.executionRatio, 2)} 倍`);
+            const previous = el('a', '上次计划', 'monitor-link');
+            previous.href = `${path}sql-plans/${cmp.priorId}`; previous.target = '_blank'; previous.rel = 'noopener';
+            row.append(' · ', previous);
+          }
+          for (const id of (item.eventIds || []).slice(0, 2)) row.append(' · ', button(`事件 ${id.slice(0, 8)}`, () => openEvent(id), 'monitor-link'));
           trail.append(row);
         }
+      }
+      for (const trace of (evidence.traces || []).slice(0, 8)) {
+        const origin = el('a', `Trace ${trace.traceId.slice(0, 12)}`, 'monitor-link');
+        origin.href = `${path}traces/${trace.traceId}`; origin.target = '_blank'; origin.rel = 'noopener';
+        const row = el('p', `${formatTime(trace.firstAt)} · ${trace.services.join(' / ')} · ${trace.databaseSpans} 条 PG Span · `, 'monitor-note');
+        row.append(origin); trail.append(row);
       }
       if (trail.children.length === 1) trail.append(el('p', '所选时段没有已纳管的匹配证据。', 'monitor-empty'));
       trail.append(button('查看实例的执行计划留存', () => openPlans(instance)));
@@ -969,10 +1041,45 @@
       return card;
     }
 
+    function baselineWindow(time) {
+      const duration = time.to - time.from;
+      if (baseline === 'day' && duration > 1440 * minute) return null;
+      const shift = baseline === 'day' ? 1440 * minute : duration;
+      return { from: time.from - shift, to: time.to - shift };
+    }
+
+    function sqlComparison(current, prior, time) {
+      const card = panel('基线与当前 SQL 对比');
+      const range = baselineWindow(time);
+      if (!range) {
+        card.append(el('p', '昨日同时段支持不超过 24 小时的固定或滚动窗口。', 'monitor-note'));
+        return card;
+      }
+      card.append(el('p', `基线 ${formatTime(range.from)} 至 ${formatTime(range.to)} · ${prior?.comparablePairs ?? 0} 个可比采样对`, 'monitor-note'));
+      const before = new Map((prior?.statements || []).map(item => [item.fingerprint, item]));
+      const rows = current.statements.map(row => {
+        const old = before.get(row.fingerprint);
+        const ratio = old?.averageExecMs > 0 ? row.averageExecMs / old.averageExecMs : null;
+        return [button(row.queryId, () => openQuery(row.queryId), 'monitor-link'), row.databaseOid, row.userOid,
+          display(old?.callsPerSecond, rate), display(row.callsPerSecond, rate), display(old?.averageExecMs, milliseconds),
+          display(row.averageExecMs, milliseconds), display(ratio, value => `${number(value, 2)} 倍`),
+          `${display(old?.coveredSeconds)} / ${display(row.coveredSeconds)} s`];
+      });
+      if (!prior) card.append(el('p', '未成功读取基线窗口。', 'monitor-note'));
+      if (rows.length) card.append(table(['Query ID', '库 OID', '角色 OID', '基线调用', '当前调用', '基线均耗', '当前均耗', '变化', '可比时长'], rows, 'SQL 基线对比'));
+      else card.append(el('p', '当前窗口缺少可对照的 SQL 执行数据。', 'monitor-empty'));
+      return card;
+    }
+
     function waitOverview(rows, time, events, depth, callback, context) {
       const split = waitChart(rows, time, events, depth, callback);
       const locked = context.blockingSample?.locks?.data?.length;
       if (locked) split.lastElementChild.append(button(`查看区间锁链 · ${locked} 条关系`, () => { mode = 'locks'; change(); }));
+      const peaks = rows.map(row => ({ at: Date.parse(row.bucket), load: row.groups.reduce((sum, group) => sum + group.averageSessions, 0) }));
+      const peak = peaks.reduce((highest, row) => row.load > highest.load ? row : highest, { load: 0 });
+      if (peak.load > 0) split.lastElementChild.append(button(`查峰值锁链 · ${formatTime(peak.at)}`, () => {
+        lockPick = ''; lockAt = peak.at; mode = 'locks'; change();
+      }));
       return split;
     }
 
@@ -1341,6 +1448,10 @@
       if (mode === 'replication') section = 'series';
       if (mode === 'metrics') section = 'instance-history';
       if (mode === 'infra' && asset.runtime !== 'managed') section = 'environment';
+      if (mode === 'locks') {
+        section = 'lock-history';
+        if (lockPick || focusSample) query.set('sample', lockPick || focusSample);
+      }
       if (mode === 'waits') {
         section = 'wait-history';
         query.set('group', group);
@@ -1360,15 +1471,23 @@
       const contextParams = new URLSearchParams(time.params);
       if (['metrics', 'waits', 'locks'].includes(mode)) contextParams.set('blocking', 'true');
       const linkedSQL = mode === 'sql' && queryId;
+      const range = mode === 'sql' && baseline ? baselineWindow(time) : null;
+      const baselineParams = new URLSearchParams(query);
+      if (range) {
+        baselineParams.set('from', new Date(range.from).toISOString());
+        baselineParams.set('to', new Date(range.to).toISOString());
+      }
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data, waits, slow, plans, replication] = await Promise.all([
+        const [context, data, waits, slow, plans, replication, prior, traces] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
           linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
-          mode === 'replication' ? api(`${path}replication?${time.params}`) : null
+          mode === 'replication' ? api(`${path}replication?${time.params}`) : null,
+          range ? api(`${path}sql-window?${baselineParams}`).catch(() => null) : null,
+          linkedSQL ? api(`${path}query-traces?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -1414,6 +1533,7 @@
           const dimension = select('等待分组', value => { group = value; waitType = ''; waitEvent = ''; change(); });
           options(dimension, [['type', '等待类型'], ['event', '具体等待事件'], ['query', 'Query ID']], group);
           filter.append(labeled('分组方式', dimension));
+          if (lockAt != null) filter.append(el('span', `锁链定位 · ${formatTime(lockAt)}`, 'monitor-note'));
           if (waitType) filter.append(button(`返回上一级 · ${waitType}${waitEvent ? '/' + waitEvent : ''}`, () => {
             if (waitEvent) { waitEvent = ''; group = 'event'; }
             else { resetWaitFilters(); }
@@ -1421,15 +1541,16 @@
           }));
           fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context));
         }
-        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans }, path, time));
-        if (mode === 'locks') fragment.append(lockPanel(context, asset));
+        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, baseline: prior?.performance }, path, time));
+        if (mode === 'locks') fragment.append(lockPanel(asset, data, time));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events));
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
         if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
         if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
-        if (focusAt != null && focusAt >= time.from && focusAt < time.to) {
-          const index = Math.floor((focusAt - time.first) / time.bucketMs);
+        const marker = mode === 'waits' && lockAt != null ? lockAt : focusAt;
+        if (marker != null && marker >= time.from && marker < time.to) {
+          const index = Math.floor((marker - time.first) / time.bucketMs);
           for (const cursor of time.cursors) cursor(index);
         }
       } catch (error) {

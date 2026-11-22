@@ -96,7 +96,7 @@ func rankSQLWindow(snapshots []sqlSnapshot, queryID, metric string) ([]map[strin
 	for i := 0; i+1 < len(snapshots); i++ {
 		after, before := snapshots[i], snapshots[i+1]
 		seconds := after.At.Sub(before.At).Seconds()
-		if seconds <= 0 || stringValue(after.Data["status"]) != "ok" || stringValue(before.Data["status"]) != "ok" {
+		if seconds <= 0 || seconds > 600 || stringValue(after.Data["status"]) != "ok" || stringValue(before.Data["status"]) != "ok" {
 			continue
 		}
 		deltas := sqlIntervalDelta(after.Data, before.Data, true)
