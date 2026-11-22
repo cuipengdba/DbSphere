@@ -535,7 +535,7 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now, ""); err != nil {
 		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
 	}
-	if err := resolveGoCollectionFailures(ctx, tx, id, sampleID, group, now); err != nil {
+	if err := s.resolveGoCollectionFailures(ctx, tx, id, sampleID, group, now); err != nil {
 		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
 	}
 	if lease != nil {
@@ -564,7 +564,7 @@ func encodeStateEvidence(state map[string]any, sampleID string) []byte {
 	return encoded
 }
 
-func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup string, now time.Time) error {
+func (s *Postgres) resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup string, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT id::text FROM events WHERE asset_id=$1 AND status='open'
 		AND kind='collection_failure' FOR UPDATE`, assetID)
 	if err != nil {
