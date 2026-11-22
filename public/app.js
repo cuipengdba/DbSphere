@@ -2450,7 +2450,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       const form = document.createElement('form'); form.className = 'response-form operator-action';
       const label = cell('label', '申请原因（5–300 字）');
       const reason = document.createElement('textarea'); reason.required = true; reason.minLength = 5;
-      reason.maxLength = 300; reason.rows = 2; reason.placeholder = '说明为什么需要对当前事件重新采样';
+      reason.maxLength = 300; reason.rows = 2; reason.placeholder = '说明该作业如何帮助处理当前事件';
       label.append(reason);
       const actions = new Set(['collect_once', 'inspect_once', ...(workOrders.profiles || []).map(item => item.action)]);
       const action = accessSelect(form, '作业类型', 'action', [...actions].map(id => [id, workActionLabels[id]]), ['collect_once']);
@@ -2504,7 +2504,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (currentRole === 'admin' && !approvalEnabled) panel.append(cell('p', '启用独立审批账号后可申请受控只读采样。', 'hint'));
     if (!workOrders.orders?.length) panel.append(cell('p', '当前事件暂无工单。', 'empty'));
     for (const order of workOrders.orders || []) {
-      const row = document.createElement('div'); row.className = 'evidence';
+      const row = cell('div', '', 'evidence work-order-entry');
       const states = { requested: '待审批', approved: '已批准待执行', rejected: '已驳回',
         executing: '执行中', completed: '已完成', failed: '执行失败', expired: '已过期', interrupted: '执行中断，待复核' };
       const actionLabel = workActionLabels[order.action] || order.action;

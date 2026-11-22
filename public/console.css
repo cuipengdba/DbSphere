@@ -67,6 +67,8 @@ body[data-role="operator"] #workspace .write-action:not(.operator-action) { disp
 body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 #access-directory-content select[multiple] { min-height: 6rem; }
 #access-directory-content input[type="checkbox"] { width: auto; justify-self: start; }
+.work-order-entry > small,
+.work-order-entry > a { display: block; margin-block: 4px; }
 .incident-grid { grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1.4fr); }
 .incident-grid > .panel:first-child { position: sticky; top: 72px; }
 .incident-grid #event-list { max-height: calc(100dvh - 255px); }
