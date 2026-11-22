@@ -13,14 +13,14 @@ import (
 )
 
 func (s *Postgres) InspectionReport(ctx context.Context, id, format string) (string, error) {
-	var assetName, templateID, sampleID string
+	var assetName, assetID, templateID, sampleID string
 	var version int
 	var completed time.Time
 	var summaryJSON, findingsJSON, eventIDsJSON []byte
-	err := s.pool.QueryRow(ctx, `SELECT a.name,r.template_id,r.template_version,
+	err := s.pool.QueryRow(ctx, `SELECT a.name,a.id::text,r.template_id,r.template_version,
 		coalesce(r.sample_id::text,''),r.completed_at,r.summary_json,r.findings_json,r.event_ids_json
 		FROM inspection_runs r JOIN assets a ON a.id=r.asset_id WHERE r.id=$1`, id).
-		Scan(&assetName, &templateID, &version, &sampleID, &completed,
+		Scan(&assetName, &assetID, &templateID, &version, &sampleID, &completed,
 			&summaryJSON, &findingsJSON, &eventIDsJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrInspectionTemplateNotFound
@@ -41,11 +41,11 @@ func (s *Postgres) InspectionReport(ctx context.Context, id, format string) (str
 		return "", err
 	}
 	if format == "md" {
-		return markdownInspectionReport(id, assetName, templateID, version, sampleID,
+		return markdownInspectionReport(id, assetName, templateID, version, sampleID, assetID,
 			completed, summary, findings, eventIDs), nil
 	}
 	if format == "html" {
-		return htmlInspectionReport(id, assetName, templateID, version, sampleID,
+		return htmlInspectionReport(id, assetName, templateID, version, sampleID, assetID,
 			completed, summary, findings, eventIDs), nil
 	}
 	return "", ErrInvalidInspection
@@ -55,7 +55,7 @@ func markdownCell(value string) string {
 	return strings.NewReplacer("\\", "\\\\", "|", "\\|", "\r", " ", "\n", " ").Replace(value)
 }
 
-func markdownInspectionReport(id, asset, template string, version int, sample string,
+func markdownInspectionReport(id, asset, template string, version int, sample, assetID string,
 	at time.Time, summary inspectionSummary, findings []inspectionFinding, events []string) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "# DbSphere 巡检报告\n\n资产：%s  \n模板：%s v%d  \n巡检 ID：%s  \n样本 ID：%s  \n完成时间：%s\n\n",
@@ -65,6 +65,15 @@ func markdownInspectionReport(id, asset, template string, version int, sample st
 	if len(events) > 0 {
 		fmt.Fprintf(&out, "关联事件 ID：%s\n\n", strings.Join(events, "、"))
 	}
+	if evidenceUUID.MatchString(assetID) && evidenceUUID.MatchString(sample) {
+		fmt.Fprintf(&out, "[原始采样](/api/assets/%s/samples/%s)\n\n", assetID, sample)
+	}
+	for _, id := range events {
+		if evidenceUUID.MatchString(id) {
+			fmt.Fprintf(&out, "- [事件回放 %s](/#incidents?event=%s)\n", id, id)
+		}
+	}
+	out.WriteString("\n")
 	out.WriteString("| 巡检项 | 状态 | 观测值 | 阈值 | 来源/原因 |\n|---|---|---:|---:|---|\n")
 	for _, item := range findings {
 		observed := "未采集"
@@ -78,7 +87,7 @@ func markdownInspectionReport(id, asset, template string, version int, sample st
 	return out.String()
 }
 
-func htmlInspectionReport(id, asset, template string, version int, sample string,
+func htmlInspectionReport(id, asset, template string, version int, sample, assetID string,
 	at time.Time, summary inspectionSummary, findings []inspectionFinding, events []string) string {
 	var out strings.Builder
 	out.WriteString("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>DbSphere 巡检报告</title>")
@@ -90,6 +99,14 @@ func htmlInspectionReport(id, asset, template string, version int, sample string
 		summary.Risk, summary.Pass, summary.Unknown, summary.NotApplicable, summary.Changed)
 	if len(events) > 0 {
 		fmt.Fprintf(&out, "<p><b>关联事件 ID：</b>%s</p>", html.EscapeString(strings.Join(events, "、")))
+	}
+	if evidenceUUID.MatchString(assetID) && evidenceUUID.MatchString(sample) {
+		fmt.Fprintf(&out, "<p><a href=\"/api/assets/%s/samples/%s\">原始采样</a></p>", assetID, sample)
+	}
+	for _, id := range events {
+		if evidenceUUID.MatchString(id) {
+			fmt.Fprintf(&out, "<p><a href=\"/#incidents?event=%s\">事件回放 %s</a></p>", id, id)
+		}
 	}
 	out.WriteString("<table><thead><tr><th>巡检项</th><th>状态</th><th>观测值</th><th>阈值</th><th>来源/原因</th></tr></thead><tbody>")
 	for _, item := range findings {

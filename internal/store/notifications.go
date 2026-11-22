@@ -25,7 +25,14 @@ type Notification struct {
 
 func queueGoNotifications(ctx context.Context, tx pgx.Tx, evidenceID string, now time.Time) error {
 	_, err := tx.Exec(ctx, `INSERT INTO notification_outbox(id,evidence_id,channel,next_attempt_at)
-		SELECT gen_random_uuid(),$1,channel,$2 FROM unnest(ARRAY['webhook','email']) channel
+		SELECT gen_random_uuid(),source.id,route.channel,$2
+		FROM evidence source CROSS JOIN unnest(ARRAY['webhook','email']) AS route(channel)
+		WHERE source.id=$1 AND NOT EXISTS (
+			SELECT FROM evidence prior JOIN notification_outbox queued ON queued.evidence_id=prior.id
+			WHERE prior.event_id=source.event_id AND queued.channel=route.channel
+			AND ((source.kind='alert_recovered' AND prior.kind='alert_recovered')
+				OR (source.kind IN ('alert_firing','alert_unsuppressed') AND prior.kind IN ('alert_firing','alert_unsuppressed')
+					AND source.payload_json->>'ruleId'=prior.payload_json->>'ruleId')))
 		ON CONFLICT(evidence_id,channel) DO NOTHING`, evidenceID, now)
 	return err
 }
@@ -69,6 +76,7 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 		if sendErr == nil && outcome != "delivered" && outcome != "skipped" {
 			sendErr = errors.New("invalid notification outcome")
 		}
+		status := outcome
 		if sendErr == nil {
 			_, err = tx.Exec(ctx, `UPDATE notification_outbox SET status=$1,
 				delivered_at=now(),last_error=NULL WHERE id=$2`, outcome, item.ID)
@@ -78,7 +86,7 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			if backoff > time.Hour {
 				backoff = time.Hour
 			}
-			status := "pending"
+			status = "pending"
 			if attempts >= 5 {
 				status = "failed"
 			}
@@ -94,6 +102,13 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			_ = tx.Rollback(ctx)
 			return processed, fmt.Errorf("update notification delivery: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			VALUES(gen_random_uuid(),$1,'notification_delivery',now(),
+				jsonb_build_object('deliveryId',$2::text,'channel',$3::text,'status',$4::text,'kind',$5::text))`,
+			item.EventID, item.ID, item.Channel, status, item.Kind); err != nil {
+			_ = tx.Rollback(ctx)
+			return processed, fmt.Errorf("record notification delivery: %w", err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return processed, fmt.Errorf("commit notification delivery: %w", err)
 		}
@@ -106,8 +121,13 @@ func (s *Postgres) RetryNotification(ctx context.Context, id string) (bool, erro
 	if !silenceUUID.MatchString(id) {
 		return false, nil
 	}
-	result, err := s.pool.Exec(ctx, `UPDATE notification_outbox SET status='pending',attempts=0,
-		next_attempt_at=now(),last_error=NULL WHERE id=$1 AND status='failed'`, id)
+	result, err := s.pool.Exec(ctx, `WITH retried AS (
+		UPDATE notification_outbox SET status='pending',attempts=0,next_attempt_at=now(),last_error=NULL
+		WHERE id=$1 AND status='failed' RETURNING id,evidence_id,channel
+	) INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+	SELECT gen_random_uuid(),e.event_id,'notification_retry',now(),
+		jsonb_build_object('deliveryId',r.id,'channel',r.channel,'status','pending')
+	FROM retried r JOIN evidence e ON e.id=r.evidence_id`, id)
 	if err != nil {
 		return false, err
 	}

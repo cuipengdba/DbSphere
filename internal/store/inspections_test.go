@@ -246,13 +246,13 @@ func TestGoInspectionReportEscapesUntrustedText(t *testing.T) {
 	now := time.Now().UTC()
 	finding := inspectionFinding{Title: "bad <script>alert(1)</script>", Status: "unknown",
 		Source: "source|with|pipe", Reason: "line\nbreak"}
-	htmlBody := htmlInspectionReport("run", "asset <img src=x>", "template", 1, "sample",
+	htmlBody := htmlInspectionReport("run", "asset <img src=x>", "template", 1, "sample", "",
 		now, inspectionSummary{}, []inspectionFinding{finding}, nil)
 	if strings.Contains(htmlBody, "<script>") || strings.Contains(htmlBody, "<img src=x>") ||
 		!strings.Contains(htmlBody, "&lt;script&gt;") {
 		t.Fatal("HTML inspection report did not escape untrusted fields")
 	}
-	mdBody := markdownInspectionReport("run", "asset", "template", 1, "sample",
+	mdBody := markdownInspectionReport("run", "asset", "template", 1, "sample", "",
 		now, inspectionSummary{}, []inspectionFinding{finding}, nil)
 	if !strings.Contains(mdBody, "source\\|with\\|pipe") || strings.Contains(mdBody, "line\nbreak") {
 		t.Fatal("Markdown inspection table did not escape delimiters")

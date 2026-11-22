@@ -17,7 +17,7 @@ var ErrRecoveryNotVerified = errors.New("recovery requires a successful post-res
 // the monitored database. Recovery verification must cite an actual PG18 sample.
 func (s *Postgres) RecordEventResponse(ctx context.Context, eventID, phase, note, sampleID string) error {
 	note = strings.TrimSpace(note)
-	if (phase != "diagnosis" && phase != "mitigation" && phase != "recovery_verification") ||
+	if (phase != "diagnosis" && phase != "mitigation" && phase != "recovery_verification" && phase != "handoff" && phase != "false_positive") ||
 		len([]rune(note)) < 5 || len([]rune(note)) > 500 ||
 		(phase != "recovery_verification" && sampleID != "") ||
 		(phase == "recovery_verification" && !evidenceUUID.MatchString(sampleID)) {

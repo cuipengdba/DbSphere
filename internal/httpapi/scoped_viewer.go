@@ -74,6 +74,7 @@ var scopedCollectionKeys = map[string]string{
 	"/api/monitoring/instances": "instances",
 	"/api/events":               "events",
 	"/api/alerts":               "alerts",
+	"/api/alert-workbench":      "incidents",
 	"/api/silences":             "silences",
 	"/api/notifications":        "notifications",
 	"/api/inspection-schedules": "schedules",

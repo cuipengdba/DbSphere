@@ -46,6 +46,32 @@ func TestGoAlertPendingFiringMissingAndRecovery(t *testing.T) {
 	}
 }
 
+func TestRecoveryWindowResetsOnFlappingAndMissingSamples(t *testing.T) {
+	rule := alertRule{Operator: ">=", Threshold: 1, RecoverySeconds: 10}
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	current := &alertState{Status: "firing", EventID: "existing-event", PendingSince: start, FiredAt: &start}
+	healthy := alertSignal{Available: true, Value: 0}
+	bad := alertSignal{Available: true, Value: 1}
+	current, transition := nextGoAlert(rule, healthy, current, start.Add(time.Second))
+	if transition != "recovery_pending" || current.RecoveringSince == nil {
+		t.Fatal("first healthy sample did not start recovery observation")
+	}
+	current, transition = nextGoAlert(rule, bad, current, start.Add(2*time.Second))
+	if transition != "recovery_cancelled" || current.RecoveringSince != nil || current.EventID != "existing-event" {
+		t.Fatal("flapping replaced the original event or retained the recovery clock")
+	}
+	current, _ = nextGoAlert(rule, healthy, current, start.Add(3*time.Second))
+	current, transition = nextGoAlert(rule, alertSignal{}, current, start.Add(5*time.Second))
+	if transition != "signal_missing" || current.RecoveringSince != nil {
+		t.Fatal("missing sample did not break recovery observation")
+	}
+	current, _ = nextGoAlert(rule, healthy, current, start.Add(10*time.Second))
+	current, transition = nextGoAlert(rule, healthy, current, start.Add(20*time.Second))
+	if transition != "recovered" || current != nil {
+		t.Fatal("continuous healthy observations did not close the event")
+	}
+}
+
 func TestGoCollectorFailureSignalsDoNotClaimAvailability(t *testing.T) {
 	now := time.Now().UTC()
 	cases := []struct {

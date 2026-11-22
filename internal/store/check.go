@@ -526,6 +526,17 @@ func resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sample
 		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, eventID); err != nil {
 			return err
 		}
+		var alertRecoveryID string
+		err := tx.QueryRow(ctx, `SELECT id::text FROM evidence WHERE event_id=$1
+			AND kind='alert_recovered' AND payload_json->>'silenceId' IS NULL
+			ORDER BY observed_at DESC,id DESC LIMIT 1`, eventID).Scan(&alertRecoveryID)
+		if err == nil {
+			if err := queueGoNotifications(ctx, tx, alertRecoveryID, now); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 	}
 	return nil
 }

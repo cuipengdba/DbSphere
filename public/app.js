@@ -240,13 +240,14 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
-    { templates }, { schedules }, { runs }, audit, runtime, collector] = await Promise.all([
+    { templates }, { schedules }, { runs }, audit, runtime, collector, workbench] = await Promise.all([
     api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
     api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
     api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
     currentRole === 'admin' ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
     api('/api/version').catch(() => null),
-    currentRole === 'admin' ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null)
+    currentRole === 'admin' ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null),
+    api('/api/alert-workbench').catch(() => null)
   ]);
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
@@ -280,7 +281,7 @@ async function refresh() {
   $('event-page-controls').hidden = !eventServerPaging;
   if (eventServerPaging) await loadEventPage();
   else renderLegacyEvents(events);
-  renderAlerts(alerts);
+  renderAlerts(alerts, workbench?.incidents);
   renderSilenceOptions(assets, rules);
   renderSilences(silences, assets, rules);
   renderNotifications(notifications);
@@ -922,8 +923,44 @@ async function openEvent(id, updateHash = true) {
   }
 }
 
-function renderAlerts(alerts) {
+let workbenchStatus = 'all';
+function renderAlerts(alerts, incidents) {
   const list = $('alert-list'); list.replaceChildren();
+  if (incidents) {
+    const select = cell('select');
+    select.setAttribute('aria-label', '值班事件范围');
+    for (const [value, label] of [['all', '全部事件'], ['open', '处理中'], ['resolved', '最近 72 小时已恢复']]) {
+      const option = cell('option', label); option.value = value; select.append(option);
+    }
+    select.value = workbenchStatus;
+    const rows = cell('div', '', 'list');
+    list.append(select, rows);
+    const render = () => {
+      rows.replaceChildren();
+      const filtered = incidents.filter(item => select.value === 'all' || item.status === select.value);
+      if (!filtered.length) { rows.append(cell('p', '此范围没有值班事件。', 'empty')); return; }
+      for (const item of filtered) {
+        const line = cell('article', '', 'list-item');
+        const info = cell('div');
+        const action = cell('button', `${item.assetName} · ${item.title}`, 'event-button');
+        action.addEventListener('click', () => openEvent(item.id));
+        const state = item.status === 'resolved' ? '已恢复' : item.recoveringSignals ? '恢复观察中' : item.ack ? '已确认' : '待确认';
+        const tags = [state, item.severity || '级别未知', item.activeSignals > 0 && `${item.activeSignals} 项触发`,
+          item.missingSignals > 0 && `${item.missingSignals} 项缺采`, item.mutedSignals > 0 && `${item.mutedSignals} 项静默`,
+          item.maintenance && '有维护或静默记录', item.handoff && '已交接', item.falsePositive && '已记录误报'].filter(Boolean);
+        const time = `起点 ${formatTime(item.start)} · 最近触发 ${formatTime(item.lastTrigger)} · 恢复 ${formatTime(item.end)}`;
+        const counts = item.notifications || {};
+        const delivery = `已送达 ${counts.delivered || 0} · 待投递 ${counts.pending || 0} · 失败 ${counts.failed || 0} · 已跳过 ${counts.skipped || 0}`;
+        info.append(action, cell('small', tags.join(' · ')), cell('small', time),
+          cell('small', [item.cluster, (item.sources || []).join(' / '), delivery].filter(Boolean).join(' · ')));
+        line.append(info);
+        rows.append(line);
+      }
+    };
+    select.addEventListener('change', () => { workbenchStatus = select.value; render(); });
+    render();
+    return;
+  }
   if (!alerts.length) { list.append(cell('p', '当前没有触发中的告警。', 'empty')); return; }
   for (const alert of alerts) {
     const button = cell('button', `${alert.assetName} · ${alert.rule.title} · ${alert.rule.severity} · ${formatAlertValue(alert.rule.metric, alert.state.lastValue)}${alert.state.missingSince ? ' · 指标已失联' : ''}${alert.state.mutedBy ? ' · 通知已静默' : ''}`, 'event-button');
@@ -1060,7 +1097,7 @@ function renderRules(rules) {
   const list = $('rule-list'); list.replaceChildren();
   for (const rule of rules) {
     const details = document.createElement('details'); details.className = 'rule-card';
-    details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${formatAlertValue(rule.metric, rule.threshold)} · ${rule.durationSeconds}s`));
+    details.append(cell('summary', `${rule.enabled ? '启用' : '停用'} · ${rule.title} · ${rule.metric} ${rule.operator} ${formatAlertValue(rule.metric, rule.threshold)} · 触发 ${rule.durationSeconds}s · 恢复 ${rule.recoverySeconds || 0}s`));
     if (rule.editable === false) {
       details.append(cell('p', 'Go 采集器尚未接入此规则；历史配置可查看，暂不能修改。', 'warning'));
       list.append(details);
@@ -1071,6 +1108,7 @@ function renderRules(rules) {
     threshold.value = rule.metric === growthMetric ? Number(rule.threshold) / (1024 ** 3) : rule.threshold;
     threshold.required = true;
     const duration = document.createElement('input'); duration.type = 'number'; duration.step = '1'; duration.min = '0'; duration.max = '86400'; duration.value = rule.durationSeconds; duration.required = true;
+    const recovery = duration.cloneNode(); recovery.value = rule.recoverySeconds || 0;
     const severity = document.createElement('select');
     for (const value of ['info', 'warning', 'critical']) {
       const option = document.createElement('option'); option.value = value; option.textContent = value;
@@ -1078,7 +1116,8 @@ function renderRules(rules) {
     }
     severity.value = rule.severity;
     const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;
-    for (const [label, input] of [[rule.metric === growthMetric ? '阈值（GiB/日）' : '阈值', threshold], ['持续秒数', duration], ['级别', severity], ['启用', enabled]]) {
+    for (const [label, input] of [[rule.metric === growthMetric ? '阈值（GiB/日）' : '阈值', threshold], ['触发持续秒数', duration],
+      ['恢复持续秒数', recovery], ['级别', severity], ['启用', enabled]]) {
       const wrapper = document.createElement('label'); wrapper.append(cell('span', label), input); form.append(wrapper);
     }
     const save = cell('button', '保存规则', 'small-button'); save.type = 'submit'; form.append(save);
@@ -1086,7 +1125,7 @@ function renderRules(rules) {
       event.preventDefault();
       try {
         await api(`/api/alert-rules/${rule.id}`, 'PATCH', { threshold: Number(threshold.value) * (rule.metric === growthMetric ? 1024 ** 3 : 1),
-          durationSeconds: Number(duration.value), severity: severity.value, enabled: enabled.checked });
+          durationSeconds: Number(duration.value), recoverySeconds: Number(recovery.value), severity: severity.value, enabled: enabled.checked });
         notice(`${rule.title} 已更新；新配置将在下次采样时生效。`);
         document.activeElement?.blur(); await refresh();
       } catch (error) { notice(error.message, true); }
@@ -1131,10 +1170,12 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用',
+const replayLayers = { postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+  alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
+  notification_delivery: '通知尝试', notification_retry: '通知重试',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
@@ -1572,7 +1613,7 @@ async function showEvent(id, updateHash = true) {
   responseForm.append(cell('h4', '处置与恢复验证'));
   const phaseLabel = cell('label', '记录类型');
   const phase = document.createElement('select');
-  for (const [value, label] of [['diagnosis', '诊断记录'], ['mitigation', '处置记录'],
+  for (const [value, label] of [['diagnosis', '诊断记录'], ['mitigation', '处置记录'], ['handoff', '值班交接'], ['false_positive', '误报复核'],
     ['recovery_verification', '恢复验证']]) {
     const option = document.createElement('option'); option.value = value; option.textContent = label;
     if (value === 'recovery_verification' && event.status !== 'resolved') option.disabled = true;
@@ -1637,7 +1678,8 @@ async function showEvent(id, updateHash = true) {
         text = `${prefix} · 已恢复；先前告警值 ${formatAlertValue(alert.metric, alert.value)}`;
       } else {
         const labels = { alert_signal_missing: '指标暂不可用', alert_disabled: '规则已停用',
-          alert_suppressed: '通知已静默', alert_unsuppressed: '通知静默结束' };
+          alert_suppressed: '通知已静默', alert_unsuppressed: '通知静默结束',
+          alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现' };
         text = `${prefix} · ${labels[evidence.kind] || evidence.kind}`;
       }
       if (alert.sampleId) text += ` · 样本 ${alert.sampleId}`;
@@ -1645,6 +1687,11 @@ async function showEvent(id, updateHash = true) {
       if (alert.silenceId) text += ` · 静默窗 ${alert.silenceId}`;
     }
     if (evidence.kind === 'event_acknowledged') text = `${evidence.payload.actor || '管理员'} 已确认事件`;
+    if (evidence.kind === 'notification_delivery' || evidence.kind === 'notification_retry') {
+      const delivery = evidence.payload;
+      const status = {pending: '等待重试', delivered: '已送达', skipped: '已跳过', failed: '失败'}[delivery.status] || delivery.status;
+      text = `${delivery.channel} · ${status} · 投递 ID ${delivery.deliveryId}`;
+    }
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
@@ -1652,7 +1699,8 @@ async function showEvent(id, updateHash = true) {
     if (evidence.kind === 'work_order_decision') text = `独立审批账号${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
     if (evidence.kind === 'work_order_executed') text = `管理员执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') {
-      text = `${evidence.payload.actor || '管理员'} · ${evidence.payload.phase === 'diagnosis' ? '诊断' : evidence.payload.phase === 'mitigation' ? '处置' : '恢复验证'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
+      const responseLabels = {diagnosis: '诊断', mitigation: '处置', handoff: '值班交接', false_positive: '误报复核', recovery_verification: '恢复验证'};
+      text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${evidence.kind} · ${text}`, 'evidence');

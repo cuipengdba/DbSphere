@@ -23,6 +23,7 @@ var scopedCollectionPredicates = map[string]string{
 	"/api/monitoring/instances": "WHERE a.id = ANY($1::uuid[])",
 	"/api/events":               "WHERE e.asset_id = ANY($1::uuid[])",
 	"/api/alerts":               "AND s.asset_id = ANY($1::uuid[])",
+	"/api/alert-workbench":      "AND e.asset_id = ANY($1::uuid[])",
 	"/api/silences":             "WHERE asset_id = ANY($1::uuid[])",
 	"/api/notifications":        "WHERE v.asset_id = ANY($1::uuid[])",
 	"/api/inspection-schedules": "WHERE asset_id = ANY($1::uuid[])",
@@ -51,6 +52,7 @@ func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []s
 			'rule',r.definition_json,'state',s.state_json)
 			FROM alert_states s JOIN assets a ON a.id=s.asset_id
 			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing' /*asset_scope*/`},
+		"/api/alert-workbench": {"incidents", alertWorkbenchSQL},
 		"/api/alert-rules": {"rules", `SELECT definition_json || jsonb_build_object('editable',
 			definition_json->>'metric' IN ('pg.unavailable','collector.pg_failed',
                         'collector.missed_intervals','collector.k8s_failed','collector.linux_failed',

@@ -134,7 +134,8 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 				value := point
 				recovery = &value
 			}
-		case "operator_response", "event_acknowledged", "rca_decision", "work_order_executed":
+		case "operator_response", "event_acknowledged", "rca_decision", "work_order_executed",
+			"notification_delivery", "notification_retry":
 			point.Stage, point.Strength = "response", "record"
 		case "ai_advisory":
 			point.Strength = "correlated"
@@ -190,6 +191,8 @@ func incidentLayer(kind, metric string) string {
 	switch {
 	case kind == "ai_advisory":
 		return "ai"
+	case kind == "notification_delivery" || kind == "notification_retry":
+		return "notification"
 	case kind == "operator_response" || kind == "event_acknowledged" || kind == "rca_decision" || kind == "work_order_executed":
 		return "response"
 	case strings.HasPrefix(kind, "k8s_") || strings.HasPrefix(metric, "k8s."):
@@ -203,7 +206,7 @@ func incidentLayer(kind, metric string) string {
 		return "pooler"
 	case strings.HasPrefix(kind, "sql_") || strings.HasPrefix(metric, "pg.sql_"):
 		return "sql"
-	case kind == "alert_firing" || kind == "alert_recovered" || kind == "collection_error" || kind == "collection_recovered" ||
+	case strings.HasPrefix(kind, "alert_") || kind == "collection_error" || kind == "collection_recovered" ||
 		kind == "recovery_verified" || strings.HasPrefix(kind, "pg_"):
 		return "postgres"
 	}

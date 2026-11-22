@@ -367,6 +367,7 @@ func renderEventMarkdown(data eventReportData) string {
 		reportText(event.Title), event.ID, reportText(event.AssetName), event.AssetID,
 		reportText(event.Status), reportTime(&event.StartedAt), reportTime(event.EndedAt),
 		reportTime(event.AcknowledgedAt))
+	fmt.Fprintf(&out, "[打开同一事件](/#incidents?event=%s) · [事件证据 API](/api/events/%s)\n\n", event.ID, event.ID)
 	if len(data.RelatedEvents) > 0 {
 		out.WriteString("## 同一原始样本关联的其他事件\n\n")
 		for _, related := range data.RelatedEvents {
@@ -500,6 +501,25 @@ func renderEventMarkdown(data eventReportData) string {
 		out.WriteString("暂无人工处置或恢复验证记录。\n")
 	}
 	out.WriteString("\n")
+	deliveries := 0
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "notification_delivery" && evidence.Kind != "notification_retry" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal(evidence.Payload, &payload) != nil {
+			continue
+		}
+		if deliveries == 0 {
+			out.WriteString("## 通知投递记录\n\n")
+		}
+		deliveries++
+		fmt.Fprintf(&out, "- %s · %s · %s · 投递 ID %s · %s\n", reportTime(&evidence.ObservedAt), evidence.Kind,
+			reportText(stringValue(payload["channel"])), reportText(stringValue(payload["deliveryId"])), reportText(stringValue(payload["status"])))
+	}
+	if deliveries > 0 {
+		out.WriteString("\n")
+	}
 	out.WriteString("## 信号缺口\n\n")
 	if len(data.Analysis.MissingSignals) == 0 {
 		out.WriteString("无已标记的信号缺口。\n\n")

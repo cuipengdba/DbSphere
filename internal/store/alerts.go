@@ -22,37 +22,38 @@ type alertRule struct {
 	DurationSeconds int     `json:"durationSeconds"`
 	Version         int     `json:"version"`
 	Enabled         bool    `json:"enabled"`
+	RecoverySeconds int     `json:"recoverySeconds,omitempty"`
 }
 
 var goDefaultRules = []alertRule{
-	{"pg_unavailable", "PostgreSQL 无法连接", "pg.unavailable", "PostgreSQL", "availability", "critical", ">=", 1, 0, 1, true},
-	{"pg_collection_failed", "PostgreSQL 采集失败", "collector.pg_failed", "collector", "telemetry", "warning", ">=", 1, 0, 1, true},
-	{"collector_stale", "采样数据陈旧", "collector.missed_intervals", "collector", "telemetry", "warning", ">=", 2, 0, 1, true},
-	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true},
-	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true},
-	{"patroni_collection_failed", "Patroni 状态采集失败", "collector.patroni_failed", "Patroni REST API", "telemetry", "warning", ">=", 1, 0, 1, true},
-	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true},
-	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "storage", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true},
-	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true},
-	{"pg_sql_regression", "PostgreSQL SQL 耗时退化", "pg.sql_regression_ratio", "pg_stat_statements", "latency", "warning", ">=", 2, 0, 1, true},
-	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true},
-	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true},
-	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true},
-	{"patroni_leader_invalid", "Patroni 集群 leader 数量异常", "patroni.leader_count_invalid", "Patroni REST API", "availability", "critical", ">=", 1, 30, 1, true},
-	{"pg_archive_failures", "PostgreSQL WAL 归档失败增加", "pg.archive_fail_delta", "PostgreSQL", "storage", "warning", ">=", 1, 0, 1, true},
-	{"pg_autovacuum_disabled", "PostgreSQL autovacuum 已关闭", "pg.autovacuum_disabled", "PostgreSQL", "maintenance", "critical", ">=", 1, 0, 1, true},
-	{"pg_vacuum_backlog", "PostgreSQL 表死元组积压", "pg.vacuum_backlog_percent", "PostgreSQL", "maintenance", "warning", ">=", 20, 300, 1, true},
-	{"linux_cpu_high", "Linux CPU 使用率高", "linux.cpu_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
-	{"linux_memory_high", "Linux 内存使用率高", "linux.memory_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true},
-	{"linux_disk_high", "Linux 文件系统使用率高", "linux.disk_used_percent", "node_exporter", "storage", "warning", ">=", 90, 300, 1, true},
-	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
-	{"k8s_pod_unscheduled", "Kubernetes Pod 调度失败", "k8s.pod_unscheduled", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true},
-	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true},
-	{"k8s_pod_restarted", "Kubernetes 容器重启", "k8s.restart_delta", "Kubernetes API", "availability", "warning", ">=", 1, 0, 1, true},
-	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true},
-	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true},
-	{"k8s_pvc_high", "Kubernetes PVC 使用率高", "k8s.pvc_used_percent", "Prometheus kubelet", "storage", "warning", ">=", 85, 300, 1, true},
-	{"pgbouncer_waiting", "PgBouncer 客户端等待", "pgbouncer.waiting_clients", "PgBouncer", "latency", "warning", ">=", 1, 60, 1, true},
+	{"pg_unavailable", "PostgreSQL 无法连接", "pg.unavailable", "PostgreSQL", "availability", "critical", ">=", 1, 0, 1, true, 0},
+	{"pg_collection_failed", "PostgreSQL 采集失败", "collector.pg_failed", "collector", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
+	{"collector_stale", "采样数据陈旧", "collector.missed_intervals", "collector", "telemetry", "warning", ">=", 2, 0, 1, true, 0},
+	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
+	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
+	{"patroni_collection_failed", "Patroni 状态采集失败", "collector.patroni_failed", "Patroni REST API", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
+	{"pg_connections_high", "PostgreSQL 连接使用率高", "pg.connection_utilization", "PostgreSQL", "capacity", "warning", ">=", 85, 120, 1, true, 0},
+	{"pg_database_growth_fast", "PostgreSQL 数据库容量增长过快", "pg.database_growth_bytes_per_day", "PostgreSQL 18 历史样本", "storage", "warning", ">=", 10 * 1024 * 1024 * 1024, 120, 1, true, 0},
+	{"pg_lock_wait", "PostgreSQL 会话被锁阻塞", "pg.blocked_sessions", "PostgreSQL", "latency", "warning", ">=", 1, 60, 1, true, 0},
+	{"pg_sql_regression", "PostgreSQL SQL 耗时退化", "pg.sql_regression_ratio", "pg_stat_statements", "latency", "warning", ">=", 2, 0, 1, true, 0},
+	{"pg_long_transaction", "PostgreSQL 长事务", "pg.long_transactions", "PostgreSQL", "latency", "warning", ">=", 1, 300, 1, true, 0},
+	{"pg_replication_lag", "PostgreSQL 复制延迟", "pg.replication_lag_bytes", "PostgreSQL", "replication", "warning", ">=", 64 * 1024 * 1024, 120, 1, true, 0},
+	{"pg_wal_receiver_down", "PostgreSQL WAL 接收中断", "pg.wal_receiver_down", "PostgreSQL", "replication", "critical", ">=", 1, 60, 1, true, 0},
+	{"patroni_leader_invalid", "Patroni 集群 leader 数量异常", "patroni.leader_count_invalid", "Patroni REST API", "availability", "critical", ">=", 1, 30, 1, true, 0},
+	{"pg_archive_failures", "PostgreSQL WAL 归档失败增加", "pg.archive_fail_delta", "PostgreSQL", "storage", "warning", ">=", 1, 0, 1, true, 0},
+	{"pg_autovacuum_disabled", "PostgreSQL autovacuum 已关闭", "pg.autovacuum_disabled", "PostgreSQL", "maintenance", "critical", ">=", 1, 0, 1, true, 0},
+	{"pg_vacuum_backlog", "PostgreSQL 表死元组积压", "pg.vacuum_backlog_percent", "PostgreSQL", "maintenance", "warning", ">=", 20, 300, 1, true, 0},
+	{"linux_cpu_high", "Linux CPU 使用率高", "linux.cpu_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true, 0},
+	{"linux_memory_high", "Linux 内存使用率高", "linux.memory_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true, 0},
+	{"linux_disk_high", "Linux 文件系统使用率高", "linux.disk_used_percent", "node_exporter", "storage", "warning", ">=", 90, 300, 1, true, 0},
+	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true, 0},
+	{"k8s_pod_unscheduled", "Kubernetes Pod 调度失败", "k8s.pod_unscheduled", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true, 0},
+	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true, 0},
+	{"k8s_pod_restarted", "Kubernetes 容器重启", "k8s.restart_delta", "Kubernetes API", "availability", "warning", ">=", 1, 0, 1, true, 0},
+	{"k8s_oom_killed", "Kubernetes 容器发生 OOMKilled", "k8s.oom_recent", "Kubernetes API", "availability", "critical", ">=", 1, 0, 1, true, 0},
+	{"k8s_node_pressure", "Kubernetes Node 资源压力", "k8s.node_pressure", "Kubernetes API", "capacity", "warning", ">=", 1, 60, 1, true, 0},
+	{"k8s_pvc_high", "Kubernetes PVC 使用率高", "k8s.pvc_used_percent", "Prometheus kubelet", "storage", "warning", ">=", 85, 300, 1, true, 0},
+	{"pgbouncer_waiting", "PgBouncer 客户端等待", "pgbouncer.waiting_clients", "PgBouncer", "latency", "warning", ">=", 1, 60, 1, true, 0},
 }
 
 func seedGoRules(ctx context.Context, tx pgx.Tx) error {
@@ -77,14 +78,15 @@ func seedGoRules(ctx context.Context, tx pgx.Tx) error {
 }
 
 type alertState struct {
-	Status         string     `json:"status"`
-	PendingSince   time.Time  `json:"pendingSince"`
-	FiredAt        *time.Time `json:"firedAt"`
-	EventID        string     `json:"eventId"`
-	MissingSince   *time.Time `json:"missingSince"`
-	LastValue      float64    `json:"lastValue"`
-	LastObservedAt time.Time  `json:"lastObservedAt"`
-	MutedBy        *string    `json:"mutedBy"`
+	Status          string     `json:"status"`
+	PendingSince    time.Time  `json:"pendingSince"`
+	FiredAt         *time.Time `json:"firedAt"`
+	EventID         string     `json:"eventId"`
+	MissingSince    *time.Time `json:"missingSince"`
+	LastValue       float64    `json:"lastValue"`
+	LastObservedAt  time.Time  `json:"lastObservedAt"`
+	MutedBy         *string    `json:"mutedBy"`
+	RecoveringSince *time.Time `json:"recoveringSince,omitempty"`
 }
 
 type alertSignal struct {
@@ -460,6 +462,7 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 	if !signal.Available {
 		if old != nil && old.Status == "firing" {
 			copy := *old
+			copy.RecoveringSince = nil
 			if copy.MissingSince == nil {
 				copy.MissingSince = &now
 				return &copy, "signal_missing"
@@ -481,6 +484,17 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 	}
 	if !breach {
 		if old != nil && old.Status == "firing" {
+			if rule.RecoverySeconds > 0 {
+				next := *old
+				next.LastValue, next.LastObservedAt, next.MissingSince = signal.Value, now, nil
+				if next.RecoveringSince == nil {
+					next.RecoveringSince = &now
+					return &next, "recovery_pending"
+				}
+				if now.Sub(*next.RecoveringSince) < time.Duration(rule.RecoverySeconds)*time.Second {
+					return &next, ""
+				}
+			}
 			return nil, "recovered"
 		}
 		return nil, ""
@@ -503,6 +517,9 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 		}
 		if old == nil || old.Status != "firing" {
 			return next, "firing"
+		}
+		if old.RecoveringSince != nil {
+			return next, "recovery_cancelled"
 		}
 	}
 	return next, ""
@@ -647,6 +664,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 			payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,
 				"metric": rule.Metric, "severity": rule.Severity, "source": signal.Source,
 				"value": signal.Value, "threshold": rule.Threshold, "operator": rule.Operator,
+				"recoverySeconds": rule.RecoverySeconds, "durationSeconds": rule.DurationSeconds,
 				"sampleId": sampleID, "detail": signal.Detail, "reason": signal.Reason,
 				"silenceId": next.MutedBy})
 			var evidenceID string
@@ -698,17 +716,12 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 	}
 	payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,
 		"metric": rule.Metric, "sampleId": sampleID, "severity": rule.Severity,
-		"source": rule.Source, "value": old.LastValue})
+		"source": rule.Source, "value": old.LastValue, "silenceId": old.MutedBy})
 	var evidenceID string
 	if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,$2,$3,$4) RETURNING id::text`, old.EventID,
 		"alert_"+transition, now, payload).Scan(&evidenceID); err != nil {
 		return err
-	}
-	if transition == "recovered" && old.MutedBy == nil {
-		if err := queueGoNotifications(ctx, tx, evidenceID, now); err != nil {
-			return err
-		}
 	}
 	var firing int
 	if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM alert_states
@@ -730,6 +743,9 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 			if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE event_id=$1`, old.EventID); err != nil {
 				return err
 			}
+			if transition == "recovered" && old.MutedBy == nil {
+				return queueGoNotifications(ctx, tx, evidenceID, now)
+			}
 		}
 	}
 	return nil
@@ -737,7 +753,7 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 
 func validateGoRuleUpdate(rule alertRule) error {
 	if rule.ID == "" || !supportedAlertMetric(rule.Metric) || rule.Title == "" ||
-		rule.DurationSeconds < 0 || rule.DurationSeconds > 86400 ||
+		rule.DurationSeconds < 0 || rule.DurationSeconds > 86400 || rule.RecoverySeconds < 0 || rule.RecoverySeconds > 86400 ||
 		rule.Threshold < 0 || rule.Threshold > 1e12 ||
 		(rule.Severity != "info" && rule.Severity != "warning" && rule.Severity != "critical") ||
 		(rule.Operator != ">=" && rule.Operator != ">" && rule.Operator != "<=" && rule.Operator != "<") {
@@ -756,11 +772,12 @@ type AlertRulePatch struct {
 	Operator        *string  `json:"operator"`
 	Threshold       *float64 `json:"threshold"`
 	DurationSeconds *int     `json:"durationSeconds"`
+	RecoverySeconds *int     `json:"recoverySeconds"`
 }
 
 func (s *Postgres) UpdateAlertRule(ctx context.Context, id string, patch AlertRulePatch) (any, error) {
 	if patch.Enabled == nil && patch.Severity == nil && patch.Operator == nil &&
-		patch.Threshold == nil && patch.DurationSeconds == nil {
+		patch.Threshold == nil && patch.DurationSeconds == nil && patch.RecoverySeconds == nil {
 		return nil, ErrInvalidAlertRule
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -797,6 +814,9 @@ func (s *Postgres) UpdateAlertRule(ctx context.Context, id string, patch AlertRu
 	}
 	if patch.DurationSeconds != nil {
 		rule.DurationSeconds = *patch.DurationSeconds
+	}
+	if patch.RecoverySeconds != nil {
+		rule.RecoverySeconds = *patch.RecoverySeconds
 	}
 	if validateGoRuleUpdate(rule) != nil {
 		return nil, ErrInvalidAlertRule

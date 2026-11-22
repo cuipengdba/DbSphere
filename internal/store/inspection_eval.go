@@ -160,7 +160,7 @@ func inspectionSignal(metric string, metrics, previous map[string]any, now time.
 			}
 		}
 		return observed(count, "Kubernetes Event")
-	case "backup.age_hours", "backup.repository_problem", "backup.last_attempt_failed":
+	case "backup.age_hours", "backup.repository_problem", "backup.last_attempt_failed", "backup.wal_missing_segments":
 		backup := object(metrics["backup"])
 		if stringValue(backup["status"]) != "ok" {
 			return missing("pgBackRest info", "备份适配器未接入或采集失败")
@@ -170,6 +170,19 @@ func inspectionSignal(metric string, metrics, previous map[string]any, now time.
 			source = "pgBackRest info"
 		}
 		switch metric {
+		case "backup.wal_missing_segments":
+			checked := false
+			largest := 0.0
+			for _, raw := range list(backup["walChecks"]) {
+				if count, ok := numeric(object(raw)["missingCount"]); ok && count >= 0 {
+					checked = true
+					largest = max(largest, count)
+				}
+			}
+			if checked {
+				return observed(largest, "WAL 清单逐段核查")
+			}
+			return missing(source, "缺少 WAL 清单核查")
 		case "backup.repository_problem":
 			if healthy, ok := backup["repositoryHealthy"].(bool); ok {
 				if healthy {

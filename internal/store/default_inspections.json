@@ -281,5 +281,19 @@
         "severity": "critical"
       }
     ]
+  },
+  {
+    "id": "platform_health_daily",
+    "title": "高可用、容量与采集覆盖巡检",
+    "scope": "all",
+    "version": 1,
+    "checks": [
+      {"id":"connection","title":"PostgreSQL 连接不可用","metric":"pg.unavailable","operator":">=","threshold":1,"severity":"critical"},
+      {"id":"receive","title":"备库 WAL 接收中断","metric":"pg.wal_receiver_down","operator":">=","threshold":1,"severity":"critical"},
+      {"id":"growth","title":"数据库每日增长超过 10 GiB","metric":"pg.database_growth_bytes_per_day","operator":">=","threshold":10737418240,"severity":"warning"},
+      {"id":"freeze","title":"事务冻结阈值占比超过 80%","metric":"pg.freeze_age_percent","operator":">=","threshold":80,"severity":"critical"},
+      {"id":"collector","title":"采集返回异常","metric":"collector.pg_failed","operator":">=","threshold":1,"severity":"warning"},
+      {"id":"backup","title":"逐段核查发现缺失 WAL","metric":"backup.wal_missing_segments","operator":">=","threshold":1,"severity":"critical"}
+    ]
   }
 ]
