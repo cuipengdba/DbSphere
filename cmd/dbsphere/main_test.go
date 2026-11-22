@@ -81,17 +81,17 @@ func TestCollectorBatchRunsInParallelWithinConfiguredLimit(t *testing.T) {
 
 type collectorCycleStub struct{ scanErr error }
 
-func (stub collectorCycleStub) DueAssetIDs(context.Context, time.Duration, int) ([]string, error) {
+func (stub collectorCycleStub) ClaimCollectionJobs(context.Context, time.Duration, int) ([]store.CollectionLease, error) {
 	if stub.scanErr != nil {
 		return nil, stub.scanErr
 	}
-	return []string{"unavailable-target", "store-failure"}, nil
+	return []store.CollectionLease{{AssetID: "unavailable-target"}, {AssetID: "store-failure"}}, nil
 }
-func (collectorCycleStub) CheckStaleAsset(context.Context, string, time.Duration, time.Time) error {
+func (collectorCycleStub) RetryCollectionLease(context.Context, store.CollectionLease) error {
 	return nil
 }
-func (collectorCycleStub) CheckAsset(_ context.Context, id string, _ []byte) (store.CheckResult, error) {
-	if id == "store-failure" {
+func (collectorCycleStub) CheckCollectionLease(_ context.Context, lease store.CollectionLease, _ time.Duration, _ []byte) (store.CheckResult, error) {
+	if lease.AssetID == "store-failure" {
 		return store.CheckResult{}, errors.New("test write failure")
 	}
 	return store.CheckResult{Status: "error"}, nil

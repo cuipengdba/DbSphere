@@ -1107,8 +1107,27 @@ function renderCollectorStatus(status) {
   }
   target.append(grid);
   if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
-  if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮达到 ${status.batchLimit} 个资产的批次上限；是否存在积压尚未测量。`, 'warning'));
-  target.append(cell('p', '这些计数只覆盖当前 Go 进程；重启后归零。目标采集失败与采集器执行错误分开统计。', 'hint'));
+  if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
+  target.append(cell('p', '运行轮次按当前进程统计。下方队列保存任务、租约与重试状态。', 'hint'));
+  const queue = cell('div', '', 'monitor-table');
+  queue.setAttribute('aria-live', 'polite');
+  const loadQueue = cell('button', '查看采集队列', 'ghost small-button');
+  loadQueue.addEventListener('click', async () => {
+    loadQueue.disabled = true;
+    try {
+      const { counts, jobs } = await api('/api/admin/collector/queue');
+      const labels = { due: '到期', delayed: '调度延迟', missing: '尚无采样', running: '正在采集', backoff: '退避重试', scheduled: '已排期' };
+      const outcomes = { ok: '采样成功', target_error: '目标采集失败', execution_error: '采集器执行失败' };
+      queue.replaceChildren(cell('p', Object.entries(labels).map(([key, label]) => `${label} ${counts[key]}`).join(' · '), 'hint'));
+      if (jobs.length) queue.append(importTable(['实例', '调度状态', '最近结果', '下次到期', '租约截止', '连续失败', '采样'], jobs.map(job => [
+        job.name, labels[job.state], outcomes[job.outcome] ?? '待执行', formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures,
+        job.lastSampleId ? replaySampleLink(job.assetId, job.lastSampleId) : '—'
+      ])));
+      if (counts.total > jobs.length) queue.append(cell('p', `显示优先级最高的 ${jobs.length} 个任务，共 ${counts.total} 个。`, 'hint'));
+    } catch (error) { queue.replaceChildren(cell('p', error.message, 'warning')); }
+    finally { loadQueue.disabled = false; }
+  });
+  target.append(loadQueue, queue);
   const loadTrend = cell('button', '查看小时汇总进度', 'ghost small-button');
   const trendReport = cell('p', '', 'hint');
   trendReport.setAttribute('aria-live', 'polite');

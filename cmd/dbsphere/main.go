@@ -498,14 +498,14 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 }
 
 type collectorStore interface {
-	DueAssetIDs(context.Context, time.Duration, int) ([]string, error)
-	CheckStaleAsset(context.Context, string, time.Duration, time.Time) error
-	CheckAsset(context.Context, string, []byte) (store.CheckResult, error)
+	ClaimCollectionJobs(context.Context, time.Duration, int) ([]store.CollectionLease, error)
+	CheckCollectionLease(context.Context, store.CollectionLease, time.Duration, []byte) (store.CheckResult, error)
+	RetryCollectionLease(context.Context, store.CollectionLease) error
 }
 
 func runCollector(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
 	tracker *collectorstate.Tracker, log *slog.Logger) {
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(min(interval, 3*time.Second))
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
@@ -513,35 +513,32 @@ func runCollector(ctx context.Context, pg collectorStore, key []byte, interval t
 		}
 		tracker.Begin(time.Now())
 		cycle := collectorstate.Cycle{}
-		ids, err := pg.DueAssetIDs(ctx, interval, 100)
+		claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
+		jobs, err := pg.ClaimCollectionJobs(claimCtx, interval, workers)
+		stopClaim()
 		if err != nil {
 			cycle.DueScanFailed = true
 			log.Error("Go collector could not list due assets", "error", err)
 		} else {
-			cycle.Selected = len(ids)
-			cycle.AtBatchLimit = len(ids) == 100
+			cycle.Selected = len(jobs)
+			cycle.AtBatchLimit = len(jobs) == workers
 			var processed, targetFailures, collectorErrors atomic.Int64
-			runBoundedBatch(ctx, ids, workers, func(id string) {
-				if err := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); err != nil {
-					collectorErrors.Add(1)
-					log.Error("Go collector could not evaluate stale asset", "assetId", id, "error", err)
-				}
-				checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-				result, err := pg.CheckAsset(checkCtx, id, key)
+			runBoundedBatch(ctx, jobs, workers, func(job store.CollectionLease) {
+				checkCtx, cancel := context.WithTimeout(ctx, store.CollectionBudget)
+				result, err := pg.CheckCollectionLease(checkCtx, job, interval, key)
 				cancel()
 				processed.Add(1)
-				if err == nil {
-					if staleErr := pg.CheckStaleAsset(ctx, id, interval, time.Now().UTC()); staleErr != nil {
-						collectorErrors.Add(1)
-						log.Error("Go collector could not clear stale asset", "assetId", id, "error", staleErr)
-					}
-				}
 				if err != nil {
 					collectorErrors.Add(1)
-					log.Error("Go collector failed to persist asset sample", "assetId", id, "error", err)
+					log.Error("Go collector failed to persist asset sample", "assetId", job.AssetID, "error", err)
+					releaseCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+					defer stop()
+					if retryErr := pg.RetryCollectionLease(releaseCtx, job); retryErr != nil {
+						log.Error("Go collector could not reschedule lease", "assetId", job.AssetID, "error", retryErr)
+					}
 				} else if result.Status == "error" {
 					targetFailures.Add(1)
-					log.Warn("Go collector observed asset failure", "assetId", id, "sampleId", result.SampleID)
+					log.Warn("Go collector observed asset failure", "assetId", job.AssetID, "sampleId", result.SampleID)
 				}
 			})
 			cycle.Processed = int(processed.Load())
@@ -557,14 +554,14 @@ func runCollector(ctx context.Context, pg collectorStore, key []byte, interval t
 	}
 }
 
-func runBoundedBatch(ctx context.Context, ids []string, workers int, check func(string)) {
+func runBoundedBatch[T any](ctx context.Context, ids []T, workers int, check func(T)) {
 	if workers < 1 {
 		workers = 1
 	}
 	if workers > len(ids) {
 		workers = len(ids)
 	}
-	jobs := make(chan string)
+	jobs := make(chan T)
 	var active sync.WaitGroup
 	for range workers {
 		active.Add(1)

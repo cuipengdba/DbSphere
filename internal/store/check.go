@@ -55,6 +55,10 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 // CheckStaleAsset evaluates scheduler delay without writing a synthetic sample.
 // It can fire before collection and recover on the same event ID after a sample lands.
 func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time.Duration, now time.Time) error {
+	return s.checkStaleAsset(ctx, id, interval, now, nil)
+}
+
+func (s *Postgres) checkStaleAsset(ctx context.Context, id string, interval time.Duration, now time.Time, lease *CollectionLease) error {
 	if interval < 15*time.Second || interval > time.Hour {
 		return fmt.Errorf("invalid Go collection schedule")
 	}
@@ -78,6 +82,12 @@ func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time
 	base := created
 	if last != nil {
 		base = *last
+	}
+	if lease != nil {
+		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
+			return err
+		}
+		base = lease.DueAt.Add(-interval)
 	}
 	missed := now.Sub(base).Seconds() / interval.Seconds()
 	if missed < 0 {
@@ -118,6 +128,10 @@ func collectionError(err error) (string, string) {
 }
 
 func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (CheckResult, error) {
+	return s.checkAsset(ctx, id, key, nil, 0)
+}
+
+func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
 	var target collector.Target
 	var encrypted string
 	var runtime string
@@ -254,11 +268,7 @@ func (s *Postgres) CheckAsset(ctx context.Context, id string, key []byte) (Check
 	if backup := collector.Backup(id, time.Now().UTC()); backup != nil {
 		metrics["backup"] = backup
 	}
-	result, err := s.recordCheck(ctx, id, metrics, group, reason)
-	if err != nil {
-		return CheckResult{}, err
-	}
-	return result, nil
+	return s.recordCheckWithLease(ctx, id, metrics, group, reason, time.Now().UTC(), lease, interval)
 }
 
 func dereference(value *string) string {
@@ -273,6 +283,10 @@ func (s *Postgres) recordCheck(ctx context.Context, id string, metrics map[strin
 }
 
 func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time) (CheckResult, error) {
+	return s.recordCheckWithLease(ctx, id, metrics, group, reason, now, nil, 0)
+}
+
+func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
 	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
 		return CheckResult{}, err
 	}
@@ -287,6 +301,13 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 			return CheckResult{}, ErrAssetNotFound
 		}
 		return CheckResult{}, err
+	}
+	if lease != nil {
+		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
+			return CheckResult{}, err
+		}
+		layer := object(metrics["collector"])
+		layer["scheduledFor"] = lease.DueAt
 	}
 	var previous map[string]any
 	var previousID string
@@ -456,6 +477,19 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	}
 	if err := resolveGoCollectionFailures(ctx, tx, id, sampleID, group, now); err != nil {
 		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
+	}
+	if lease != nil {
+		if err := s.applyGoAlerts(ctx, tx, id, sampleID, map[string]any{"collectorMissedIntervals": 0}, nil, now, "collector_stale"); err != nil {
+			return CheckResult{}, fmt.Errorf("resolve Go stale alert: %w", err)
+		}
+		outcome := "ok"
+		if status == "error" {
+			outcome = "target_error"
+		}
+		if _, err := tx.Exec(ctx, finishCollectionSQL,
+			lease.AssetID, lease.Token, outcome, sampleID, int(interval.Seconds())); err != nil {
+			return CheckResult{}, fmt.Errorf("advance collection schedule: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CheckResult{}, err
