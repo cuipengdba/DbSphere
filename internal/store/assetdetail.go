@@ -140,16 +140,24 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 }
 
 func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from, to time.Time, bucket int) ([]json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	long := to.Sub(from) > 7*24*time.Hour
+	budget := 6 * time.Second
+	if long {
+		budget = 12 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	return s.queryJSON(ctx, `WITH coverage AS (
+	query := `WITH coverage AS (
 			SELECT greatest(cursor,date_trunc('hour',now(),'UTC')-interval '31 days') AS from_time
 			FROM monitoring_trend_progress WHERE singleton
 		), observed AS (
 			SELECT id,asset_id,collected_at,status,pg_status,pg_role,wal_reset,server_started,wal_timeline,xid_used,
 				linux_cpu,linux_memory,connections,max_connections,database_bytes,replication_lag_bytes,blocked_sessions,long_transactions,
 				idle_in_transaction,deadlocks,commits,rollbacks,wal_bytes
-			FROM monitoring_trend_points WHERE asset_id=ANY($1::uuid[]) AND collected_at>=greatest($2,(SELECT from_time FROM coverage)) AND collected_at<$3
+			FROM (SELECT DISTINCT asset_key FROM unnest($1::uuid[]) AS asset(asset_key)) selected
+			CROSS JOIN LATERAL (SELECT * FROM monitoring_trend_points
+				WHERE asset_id=selected.asset_key AND collected_at>=greatest($2,(SELECT from_time FROM coverage)) AND collected_at<$3
+				ORDER BY collected_at,id OFFSET 0) projected
 			UNION ALL
 			SELECT s.id,s.asset_id,s.collected_at,s.status,f.* FROM samples s
 			CROSS JOIN LATERAL dbsphere_trend_fields(s.status,s.metrics_json) f
@@ -186,7 +194,7 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 			'samples',count(*)::int,'errors',count(*) FILTER (WHERE status='error')::int,
 			'pgAvailable',count(*) FILTER (WHERE status='ok' OR pg_status='ok')::int,
 			'pgUnavailable',count(*) FILTER (WHERE pg_status='availability')::int,
-			'observedRole',CASE WHEN count(DISTINCT pg_role)=1 AND count(pg_role)=count(*) THEN min(pg_role) END,
+			'observedRole',CASE WHEN min(pg_role)=max(pg_role) AND count(pg_role)=count(*) THEN min(pg_role) END,
 			'xidUsedPercent',round(max(xid_used),1),
 			'averageConnections',round(avg(connections),1),
 			'averageConnectionUsagePercent',round(avg(connections/nullif(max_connections,0)*100),1),
@@ -205,7 +213,26 @@ func (s *Postgres) readMonitoringBuckets(ctx context.Context, ids []string, from
 				FILTER (WHERE blocked_sessions IS NOT NULL))[1],
 			'transactionsPerSecond',round(avg(transactions_per_second),2),
 			'walBytesPerSecond',round(avg(wal_bytes_per_second),1))
-		FROM rated GROUP BY asset_id,bucket ORDER BY asset_id,bucket`, ids, from, to, bucket)
+		FROM rated GROUP BY asset_id,bucket ORDER BY asset_id,bucket`
+	if !long {
+		return s.queryJSON(ctx, query, ids, from, to, bucket)
+	}
+	// Keep the bounded long-range sort in memory without changing the session
+	// settings used by collection and interactive queries.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SET LOCAL work_mem='24MB'"); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, query, ids, from, to, bucket)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return jsonRows(rows)
 }
 
 func (s *Postgres) queryJSON(ctx context.Context, query string, args ...any) ([]json.RawMessage, error) {
