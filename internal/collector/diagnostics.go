@@ -19,10 +19,13 @@ type diagnosticQuery struct {
 // PostgreSQL health; the unavailable status is retained in the raw sample.
 func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecovery bool) map[string]any {
 	checkpoint := `SELECT to_jsonb(q) FROM (
-		SELECT checkpoints_timed AS timed, checkpoints_req AS requested FROM pg_stat_bgwriter) q`
+		SELECT checkpoints_timed AS timed, checkpoints_req AS requested,
+		checkpoint_write_time AS "writeMs",checkpoint_sync_time AS "syncMs",buffers_checkpoint AS "writtenBuffers",
+		stats_reset AS "statsReset" FROM pg_stat_bgwriter) q`
 	if major >= 17 {
 		checkpoint = `SELECT to_jsonb(q) FROM (
-			SELECT num_timed AS timed, num_requested AS requested FROM pg_stat_checkpointer) q`
+			SELECT num_timed AS timed, num_requested AS requested,write_time AS "writeMs",sync_time AS "syncMs",
+			buffers_written AS "writtenBuffers",stats_reset AS "statsReset" FROM pg_stat_checkpointer) q`
 	}
 	retained := `CASE WHEN restart_lsn IS NOT NULL THEN
 		pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::text END`
@@ -48,6 +51,12 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			count(*)::int AS sessions FROM pg_stat_activity WHERE datname=current_database()
 			GROUP BY 1,2) q`},
 		{"activeWaits", activeWaitsSQL},
+		{"instanceSessions", `SELECT to_jsonb(q) FROM (
+			SELECT count(*)::int AS total,
+			round(count(*)::numeric/current_setting('max_connections')::int*100,1) AS "usedPercent",
+			CASE WHEN count(*) FILTER (WHERE state IS NULL)=0 THEN count(*) FILTER (WHERE state='active') END AS active,
+			CASE WHEN count(*) FILTER (WHERE state IS NULL)=0 THEN count(*) FILTER (WHERE state='active' AND wait_event_type IS NOT NULL) END AS waiting
+			FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()) q`},
 		{"transactions", `SELECT to_jsonb(q) FROM (
 			SELECT count(*) FILTER (WHERE xact_start < now()-interval '5 minutes')::int AS "longTransactions",
 			count(*) FILTER (WHERE state='idle in transaction')::int AS "idleInTransaction"
@@ -67,7 +76,10 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			WHERE a.datname=current_database() LIMIT 20) q`},
 		{"database", `SELECT to_jsonb(q) FROM (
 			SELECT deadlocks,blks_read AS "blocksRead",blks_hit AS "blocksHit",
-			temp_bytes AS "tempBytes" FROM pg_stat_database WHERE datname=current_database()) q`},
+			temp_bytes AS "tempBytes",temp_files AS "tempFiles",stats_reset AS "statsReset",
+			CASE WHEN current_setting('track_io_timing')='on' THEN blk_read_time END AS "readTimeMs",
+			CASE WHEN current_setting('track_io_timing')='on' THEN blk_write_time END AS "writeTimeMs"
+			FROM pg_stat_database WHERE datname=current_database()) q`},
 		{"wal", `SELECT to_jsonb(q) FROM (
 			SELECT wal_bytes::text AS bytes,wal_records AS records,wal_fpi AS "fullPageImages",
 			wal_buffers_full AS "buffersFull",stats_reset AS "statsReset" FROM pg_stat_wal) q`},

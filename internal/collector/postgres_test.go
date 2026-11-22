@@ -40,7 +40,7 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 	if !ok {
 		t.Fatal("PostgreSQL diagnostic sections missing")
 	}
-	sections := []string{"activity", "activeWaits", "transactions", "locks", "lockChain", "database",
+	sections := []string{"activity", "activeWaits", "instanceSessions", "transactions", "locks", "lockChain", "database",
 		"wal", "archiver", "checkpoints", "vacuum", "tables", "slots", "freeze",
 		"slotDetails", "settings", "databaseInventory", "tableInventory", "indexInventory"}
 	if version >= 160000 {
@@ -50,6 +50,12 @@ func TestReadOnlyPostgreSQLTarget(t *testing.T) {
 		entry, ok := diagnostics[section].(map[string]any)
 		if !ok || entry["status"] != "ok" {
 			t.Fatalf("PostgreSQL %d diagnostic %s unavailable: %v", version/10000, section, entry)
+		}
+	}
+	checkpoints := diagnostics["checkpoints"].(map[string]any)["data"].(map[string]any)
+	for _, field := range []string{"writeMs", "syncMs", "writtenBuffers"} {
+		if _, ok := checkpoints[field].(float64); !ok {
+			t.Fatalf("PostgreSQL %d checkpoint metric unavailable: %s", version/10000, field)
 		}
 	}
 }

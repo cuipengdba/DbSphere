@@ -124,4 +124,29 @@ func TestWaitHistorySeparatesZeroFromMissing(t *testing.T) {
 	if _, err := pg.ReadAssetSection(ctx, asset.ID, "sql", params); err != nil {
 		t.Fatal(err)
 	}
+	// A reset can leave the next counter higher than its previous reading.
+	// The changed reset timestamp must still cut the interval.
+	start := base.Add(4 * time.Minute)
+	for i, raw := range []string{
+		`{"xact_commit":20,"diagnostics":{"database":{"data":{"statsReset":"a"}}}}`,
+		`{"xact_commit":50,"diagnostics":{"database":{"data":{"statsReset":"b"}}}}`,
+	} {
+		if _, err := pg.pool.Exec(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+			VALUES(gen_random_uuid(),$1,$2,'ok',$3)`, asset.ID, start.Add(time.Duration(i*10)*time.Second), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	params.Set("from", start.Format(time.RFC3339Nano))
+	params.Set("to", start.Add(time.Minute).Format(time.RFC3339Nano))
+	measured, err := pg.ReadAssetSection(ctx, asset.ID, "instance-history", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row struct {
+		Values map[string]*float64 `json:"values"`
+	}
+	series := measured.(map[string]any)["series"].([]json.RawMessage)
+	if len(series) != 1 || json.Unmarshal(series[0], &row) != nil || row.Values["commits"] != nil {
+		t.Fatalf("database counter reset produced a rate: %v", series)
+	}
 }

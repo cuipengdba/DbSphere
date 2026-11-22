@@ -1291,12 +1291,55 @@
       change();
     }
 
+    function instanceIndicators(asset, history, snapshot, time, events) {
+      const result = document.createDocumentFragment();
+      const major = Math.floor(asset.versionNum / 10000);
+      const sampled = history.series.reduce((total, row) => total + row.samples, 0);
+      const visibleSamples = history.series.reduce((total, row) => total + row.observed, 0);
+      const read = el('div', null, 'monitor-wait-controls');
+      read.append(el('span', `${visibleSamples}/${sampled} 次 PG 采样可用${snapshot ? ` · 区间末次 ${formatTime(snapshot.collectedAt)}` : ''}`, 'monitor-note'));
+      if (snapshot) read.append(sampleLink(asset.id, snapshot.id));
+      result.append(read);
+      const points = history.series.map(row => {
+        const hit = row.values.blocksHit, loaded = row.values.blocksRead;
+        return { bucket: row.bucket, ...row.values,
+          cacheRatio: finite(hit) && finite(loaded) && hit + loaded > 0 ? hit / (hit + loaded) * 100 : null };
+      });
+      const formats = { count: number, percent, rate, bytes, bytesRate: value => `${bytes(value)}/s`,
+        ms: milliseconds, blocks: value => `${number(value, 0)} 块` };
+      for (const [key, label, scope] of [
+        ['sessions', '连接与等待', '客户端会话按实例采样。阻塞计数来自纳管连接库。'],
+        ['transactions', '事务与死锁', '事务与死锁来自纳管库。计数重置、重启与缺采切断增量。'],
+        ['io', '读写与缓存', '读块与缓存来自纳管库。实例级客户端关系 I/O 从 PG16 起按可用性显示。'],
+        ['wal', 'WAL 与检查点', 'WAL 和检查点来自实例。角色或 WAL 时间线变化时切断增量。']
+      ]) {
+        const section = el('details', null, 'monitor-panel monitor-topic instance-topic');
+        section.append(el('summary', label));
+        const draw = () => {
+          const definitions = history.metrics.filter(metric => metric.group === key && (!metric.minMajor || major >= metric.minMajor));
+          if (key === 'io') definitions.unshift({ key: 'cacheRatio', label: '纳管库读块命中率', unit: 'percent', source: 'pg_stat_database' });
+          const specs = definitions.map((item, i) => [item.key, item.label, formats[item.unit], palette[i % palette.length]]);
+          const grid = metricCharts(points, time, events, specs);
+          definitions.forEach((item, index) => {
+            const source = item.source === 'checkpoint' ? (major >= 17 ? 'pg_stat_checkpointer' : major ? 'pg_stat_bgwriter' : 'PG 版本待确认') : item.source;
+            grid.children[index].append(el('p', `${source} · ${item.mode === 'rate' ? '按区间时间折算' : item.mode === 'delta' ? '区间增量' : '时间桶均值'}`, 'monitor-note'));
+          });
+          section.append(el('p', scope, 'monitor-note'), grid);
+        };
+        if (key === 'sessions') { section.open = true; draw(); }
+        else section.addEventListener('toggle', () => { if (section.open && section.children.length === 1) draw(); });
+        result.append(section);
+      }
+      return result;
+    }
+
     async function load(asset, time) {
       const key = ++request;
       const path = `/api/assets/${asset.id}/`;
       const query = new URLSearchParams(time.params);
       let section;
-      if (mode === 'metrics' || mode === 'replication') section = 'series';
+      if (mode === 'replication') section = 'series';
+      if (mode === 'metrics') section = 'instance-history';
       if (mode === 'infra' && asset.runtime !== 'managed') section = 'environment';
       if (mode === 'waits') {
         section = 'wait-history';
@@ -1340,10 +1383,12 @@
         }
         if (mode === 'metrics') {
           const latest = context.snapshot;
+          const current = data.series.at(-1)?.values;
           const strip = stats([
-            ['最近采样的阻塞会话', display(latest?.blocked?.data?.blockedSessions), '', () => { mode = 'locks'; change(); }],
-            ['长事务', display(latest?.transactions?.data?.longTransactions)],
-            ['空闲事务', display(latest?.transactions?.data?.idleInTransaction)]
+            ['近时桶活跃会话', display(current?.activeSessions), '', () => { resetWaitFilters(); mode = 'waits'; change(); }],
+            ['末次采样的阻塞会话', display(latest?.blocked?.data?.blockedSessions), '', () => { mode = 'locks'; change(); }],
+            ['近时桶连接占用', display(current?.connectionUsage, percent)],
+            asset.versionNum >= 160000 ? ['近时桶实例读操作', display(current?.ioReads, rate)] : ['近时桶纳管库读块增量', display(current?.blocksRead)]
           ]);
           strip.classList.add('activity-stats');
           fragment.append(strip);
@@ -1352,23 +1397,17 @@
               resetWaitFilters(); mode = 'waits'; followWait(item);
             }, context));
           } else {
-            const load = metricCharts(data.series, time, events, [
-              ['transactionsPerSecond', '数据库负载 · 事务吞吐', rate, palette[0]]
+            const rates = data.series.map(row => ({ bucket: row.bucket, tps: finite(row.values.commits) && finite(row.values.rollbacks)
+              ? row.values.commits + row.values.rollbacks : null }));
+            const load = metricCharts(rates, time, events, [
+              ['tps', '数据库负载 · 事务吞吐', rate, palette[0]]
             ]).firstElementChild;
             load.classList.add('monitor-focus-chart');
             load.append(el('p', '此时段缺少等待采样。可在等待分析查看采集覆盖。', 'monitor-note'));
             const split = el('div', null, 'monitor-split');
             split.append(load, eventList(events, '此实例的问题事件')); fragment.append(split);
           }
-          const indicators = el('details', null, 'monitor-panel monitor-topic');
-          indicators.append(el('summary', '连接、事务、长事务与死锁'), metricCharts(data.series, time, events, [
-          ['transactionsPerSecond', '事务吞吐', rate, 'var(--plot-teal)'], ['averageConnectionUsagePercent', '连接占用率', percent, 'var(--plot-blue)'],
-          ['averageReplicationLagBytes', '复制回放差距', bytes, 'var(--plot-orange)'], ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, 'var(--plot-violet)'],
-          ['averageBlockedSessions', '阻塞会话', number, 'var(--plot-orange)'], ['averageLongTransactions', '长事务', number, 'var(--plot-pink)'],
-          ['averageIdleInTransaction', '空闲事务', number, 'var(--plot-gold)'], ['deadlockDelta', '区间死锁增量', number, 'var(--issue-line)'],
-          ['averageDatabaseBytes', '数据库容量', bytes, 'var(--plot-blue)'], ['averageConnections', '平均连接数', number, 'var(--plot-teal)']
-          ]));
-          fragment.append(indicators);
+          fragment.append(instanceIndicators(asset, data, latest, time, events));
         }
         if (mode === 'waits') {
           const filter = el('div', null, 'monitor-wait-controls');
