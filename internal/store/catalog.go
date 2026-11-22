@@ -36,7 +36,8 @@ func (s *Postgres) databaseCatalog(ctx context.Context, id string, params url.Va
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{"snapshot": snapshot, "growth": growth, "series": []json.RawMessage{}, "objectSeries": []json.RawMessage{}}
+	result := map[string]any{"snapshot": snapshot, "growth": growth, "series": []json.RawMessage{}, "objectSeries": []json.RawMessage{},
+		"maintenance": []json.RawMessage{}}
 	if database == "" {
 		return result, nil
 	}
@@ -51,6 +52,9 @@ func (s *Postgres) databaseCatalog(ctx context.Context, id string, params url.Va
 			key = "indexInventory"
 		}
 		result["objectSeries"], err = s.queryJSON(ctx, objectSeriesSQL, id, from, to, minutes, database, key, object)
+		if err == nil && kind == "table" {
+			result["maintenance"], err = s.queryJSON(ctx, objectMaintenanceSQL, id, from, to, database, object)
+		}
 	}
 	return result, err
 }
@@ -158,3 +162,35 @@ SELECT DISTINCT ON(bucket) jsonb_build_object('bucket',bucket,'sampleId',id,'col
 	'bytes',object->'bytes','deadRows',object->'deadRows','blocksRead',object->'blocksRead',
 	'modifiedSinceAnalyze',object->'modifiedSinceAnalyze','xidAge',object->'xidAge')
 FROM measured ORDER BY bucket,collected_at DESC,id DESC`
+
+const objectMaintenanceSQL = `WITH measured AS (
+	SELECT id,collected_at,metrics_json#>>'{diagnostics,walPosition,data,startedAt}' AS started,
+		CASE WHEN jsonb_path_exists(metrics_json#>'{diagnostics,databaseInventory,data,databases}',
+			'$[*] ? (@.oid == $db && @.connected == true)',jsonb_build_object('db',$4::text)) THEN
+			jsonb_path_query_first(metrics_json#>'{diagnostics,tableInventory,data,objects}',
+			'$[*] ? (@.oid == $oid)',jsonb_build_object('oid',$5::text)) END AS obj
+	FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+), compared AS (
+	SELECT *,lag(id) OVER chronological AS prior_id,lag(collected_at) OVER chronological AS prior_at,
+		lag(obj) OVER chronological AS prior,lag(started) OVER chronological AS prior_started
+	FROM measured WINDOW chronological AS (ORDER BY collected_at,id)
+), actions AS (
+	SELECT compared.*,a.kind,a.stamp::timestamptz AS action_at
+	FROM compared CROSS JOIN LATERAL (VALUES ('vacuum',obj->>'lastVacuumAt',prior->>'lastVacuumAt'),
+		('analyze',obj->>'lastAnalyzeAt',prior->>'lastAnalyzeAt')) a(kind,stamp,previous_stamp)
+	WHERE obj IS NOT NULL AND prior IS NOT NULL AND obj->>'filenode'=prior->>'filenode'
+		AND started IS NOT DISTINCT FROM prior_started AND stamp IS DISTINCT FROM previous_stamp
+		AND stamp IS NOT NULL
+)
+SELECT jsonb_build_object('kind',kind,'at',action_at,'beforeId',prior_id,'afterId',id,
+	'beforeAt',prior_at,'afterAt',collected_at,'intervalSeconds',extract(epoch FROM collected_at-prior_at),
+	'automatic',CASE
+		WHEN kind='vacuum' AND (obj->>'lastAutoVacuumAt')::timestamptz=action_at THEN true
+		WHEN kind='analyze' AND (obj->>'lastAutoAnalyzeAt')::timestamptz=action_at THEN true
+		WHEN kind='vacuum' AND (obj->>'lastManualVacuumAt')::timestamptz=action_at THEN false
+		WHEN kind='analyze' AND (obj->>'lastManualAnalyzeAt')::timestamptz=action_at THEN false END,
+	'before',jsonb_build_object('bytes',prior->'bytes','deadRows',prior->'deadRows','heapEstimate',prior->'deadHeapBytesEstimate',
+		'xidAge',prior->'xidAge','mxidAge',prior->'mxidAge','modifiedSinceAnalyze',prior->'modifiedSinceAnalyze'),
+	'after',jsonb_build_object('bytes',obj->'bytes','deadRows',obj->'deadRows','heapEstimate',obj->'deadHeapBytesEstimate',
+		'xidAge',obj->'xidAge','mxidAge',obj->'mxidAge','modifiedSinceAnalyze',obj->'modifiedSinceAnalyze'))
+FROM actions WHERE action_at>=prior_at AND action_at<=collected_at ORDER BY action_at DESC,id DESC,kind LIMIT 20`

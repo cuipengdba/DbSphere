@@ -410,11 +410,12 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			}
 		case "pg.vacuum_backlog_percent":
 			if number(payload["value"]) >= 20 {
+				table := object(payload["detail"])
 				addCandidate("vacuum_backlog", "PostgreSQL 表死元组积压", "medium", supports,
-					[]string{"表膨胀和实际查询计划的直接影响证据缺失"},
-					"pg_stat_user_tables 为估计值，积压不自动证明查询退化。",
-					map[string]any{"percent": payload["value"], "table": object(payload["detail"])["table"],
-						"schema": object(payload["detail"])["schema"]}, item.ObservedAt, condition)
+					[]string{"核对同一对象的维护阈值、维护前后采样和查询影响"},
+					"死元组统计给出了积压对象。对象工作台提供维护阈值和前后观测。",
+					map[string]any{"percent": payload["value"], "table": table["table"], "schema": table["schema"],
+						"tableOid": table["tableOid"], "databaseOid": table["databaseOid"]}, item.ObservedAt, condition)
 			}
 		case "linux.cpu_used_percent":
 			if stringValue(object(sample.Metrics["linux"])["status"]) == "ok" && number(payload["value"]) >= 90 {

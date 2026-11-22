@@ -293,6 +293,7 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 				if percent > best {
 					best = percent
 					detail = map[string]any{"schema": table["schema"], "table": table["table"],
+						"tableOid": table["tableOid"], "databaseOid": table["databaseOid"],
 						"deadRowsEstimate": dead}
 				}
 			}

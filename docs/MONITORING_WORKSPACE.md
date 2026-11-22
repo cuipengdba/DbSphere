@@ -107,6 +107,10 @@ PG14–16 的检查点采样来自 `pg_stat_bgwriter`，PG17–19 来自 `pg_sta
 
 容量排行按数据库和对象 OID 对照区间首末有效样本。重命名保留原名和 OID，存储重写保留容量变化并标记计数边界，同名重建采用新 OID。增长量附有两个原始采样。观测至少 24 小时且净增长为正时提供基于该窗口的七天线性估算。维护视图可按死元组、冻结阈值占比或 Analyze 后变化行排序。活元组和死元组为统计估计，冻结阈值采用全局设置与表级有效限制。
 
+对象维护展示主分叉容量乘以死元组比例的空间估算。采样范围和可估算对象数在表格上方显示，行宽偏斜、空闲页和 TOAST 空间需另行核对。冻结风险分别比较 XID 与 MultiXact 年龄和有效阈值。常规 Vacuum 阈值使用表级或全局基数、比例和 PG18 及以上的可用上限。Analyze 阈值对照最近分析后的估计变更行数。[PostgreSQL 维护阈值](https://www.postgresql.org/docs/18/routine-vacuuming.html)
+
+点击表名查看同一 OID 的手动或自动 Vacuum、Analyze 前后观察。两侧采样应属于同一数据库和存储标识，并覆盖统计中的维护时间。历史事件「查看对象维护证据」保留原始告警采样。分区统计标明目录的直接子分区数与采样覆盖，索引排行标明查询有效性、写入就绪和最近扫描信息。[索引状态定义](https://www.postgresql.org/docs/18/catalog-pg-index.html)
+
 ## 备份、WAL 与时间点恢复
 
 在纳管实例打开「备份与恢复」。为 Go 服务设置 `DBSPHERE_BACKUP_INFO_DIR`。一键离线部署可在 `dbsphere-go.env` 设置 `DBSPHERE_BACKUP_INFO_HOST_PATH`。该目录按只读方式挂载，文件由服务账号读取。用备份作业将 `pgbackrest --output=json --stanza=名称 info` 输出原子发布为 `<资产 UUID>.json`，每个文件只包含一个 stanza。采集最多读取 1 MiB，不执行备份命令。界面保留仓库边界、全量／差异／增量依赖、最近尝试以及原始采样。WAL 归档失败事件可进入相同时间范围。

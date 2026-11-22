@@ -2097,6 +2097,17 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       backup.addEventListener('click', () => { void openWindow('backup', trigger && {at: trigger.observedAt, sampleId: trigger.payload.sampleId}); });
       actions.append(backup);
     }
+    if (analysis.candidates.some(item => item.code === 'vacuum_backlog')) {
+      const trigger = event.evidence.find(item => item.kind === 'alert_firing' && item.payload?.metric === 'pg.vacuum_backlog_percent' &&
+        item.payload.detail?.databaseOid && item.payload.detail?.tableOid);
+      if (trigger) {
+        const object = cell('button', '查看对象维护证据', 'ghost small-button');
+        object.type = 'button';
+        object.addEventListener('click', () => { void openWindow('catalog', {at: trigger.observedAt, sampleId: trigger.payload.sampleId,
+          databaseOid: trigger.payload.detail.databaseOid, tableOid: trigger.payload.detail.tableOid}); });
+        actions.append(object);
+      }
+    }
     summary.append(actions);
   }
   if (relatedEvents.length) {

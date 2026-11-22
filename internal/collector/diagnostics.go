@@ -93,10 +93,13 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 		replication, walPosition,
 		{"checkpoints", checkpoint},
 		{"vacuum", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
-			SELECT schemaname AS schema,relname AS "table",n_live_tup AS "liveRowsEstimate",
+			SELECT s.relid::text AS "tableOid",(SELECT oid::text FROM pg_database WHERE datname=current_database()) AS "databaseOid",
+			s.schemaname AS schema,s.relname AS "table",n_live_tup AS "liveRowsEstimate",
 			n_dead_tup AS "deadRowsEstimate",last_autovacuum AS "lastAutovacuumAt",
-			autovacuum_count AS "autovacuumCount" FROM pg_stat_user_tables
-			ORDER BY n_dead_tup DESC LIMIT 10) q`},
+			autovacuum_count AS "autovacuumCount" FROM pg_stat_user_tables s JOIN pg_class c ON c.oid=s.relid
+			WHERE pg_has_role(current_user,'pg_read_all_stats','member') OR
+				(has_schema_privilege(c.relnamespace,'USAGE') AND has_table_privilege(c.oid,'SELECT'))
+			ORDER BY n_dead_tup DESC,s.relid LIMIT 20) q`},
 		{"tables", `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
 			WITH candidates AS (SELECT relid,schemaname,relname FROM pg_stat_user_tables
 			ORDER BY n_live_tup DESC LIMIT 20)

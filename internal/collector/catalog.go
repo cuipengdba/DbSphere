@@ -14,7 +14,7 @@ const databaseInventorySQL = `SELECT jsonb_build_object('databases',coalesce(jso
 ) q`
 
 const tableInventorySQL = `WITH stats AS MATERIALIZED (
-	SELECT s.*,c.relpages,c.relfilenode,c.relkind,c.relispartition,c.relfrozenxid,c.reloptions,
+	SELECT s.*,c.relpages,c.reltuples,c.relfilenode,c.relkind,c.relispartition,c.relfrozenxid,c.relminmxid,c.relpersistence,c.reloptions,
 		io.heap_blks_read,io.heap_blks_hit
 	FROM pg_stat_user_tables s JOIN pg_class c ON c.oid=s.relid
 	LEFT JOIN pg_statio_user_tables io ON io.relid=s.relid
@@ -29,36 +29,61 @@ const tableInventorySQL = `WITH stats AS MATERIALIZED (
 ), measured AS (
 	SELECT s.relid::text AS oid,s.relfilenode::text AS filenode,s.schemaname AS schema,s.relname AS name,
 		pg_total_relation_size(s.relid) AS bytes,pg_indexes_size(s.relid) AS "indexBytes",
+		CASE WHEN s.relkind IN ('r','m') THEN heap.bytes END AS "heapBytes",
+		CASE WHEN s.relkind IN ('r','m') AND s.n_live_tup+s.n_dead_tup>0 THEN
+			round(heap.bytes::numeric*s.n_dead_tup/(s.n_live_tup+s.n_dead_tup)) END AS "deadHeapBytesEstimate",
 		s.relkind AS "relationKind",s.relispartition AS partition,
-		(SELECT inhparent::text FROM pg_inherits WHERE inhrelid=s.relid ORDER BY inhseqno LIMIT 1) AS "parentOid",
+		s.relpersistence AS persistence,
+		CASE WHEN s.relispartition THEN (SELECT inhparent::text FROM pg_inherits WHERE inhrelid=s.relid ORDER BY inhseqno LIMIT 1) END AS "parentOid",
+		CASE WHEN s.relkind='p' THEN (SELECT count(*) FROM pg_inherits i WHERE i.inhparent=s.relid) END AS "directPartitions",
 		CASE WHEN s.relfrozenxid<>'0'::xid THEN age(s.relfrozenxid)::bigint END AS "xidAge",
-		least((SELECT option_value::bigint FROM pg_options_to_table(s.reloptions)
-			WHERE option_name='autovacuum_freeze_max_age'),current_setting('autovacuum_freeze_max_age')::bigint) AS "xidLimit",
-		current_setting('autovacuum')::boolean AND coalesce((SELECT option_value::boolean FROM pg_options_to_table(s.reloptions)
-			WHERE option_name='autovacuum_enabled'),true) AS "autovacuumEnabled",
+		least((opt.data->>'autovacuum_freeze_max_age')::bigint,current_setting('autovacuum_freeze_max_age')::bigint) AS "xidLimit",
+		CASE WHEN s.relminmxid<>'0'::xid THEN mxid_age(s.relminmxid)::bigint END AS "mxidAge",
+		least((opt.data->>'autovacuum_multixact_freeze_max_age')::bigint,current_setting('autovacuum_multixact_freeze_max_age')::bigint) AS "mxidLimit",
+		CASE WHEN s.relkind IN ('r','m') AND s.relpersistence<>'t' THEN current_setting('autovacuum')::boolean
+			AND coalesce((opt.data->>'autovacuum_enabled')::boolean,true) END AS "autovacuumEnabled",
+		CASE WHEN s.relkind IN ('r','m') AND s.relpersistence<>'t' THEN
+			least(thresholds.vacuum, CASE WHEN thresholds.vacuum_cap >= 0 THEN thresholds.vacuum_cap END) END AS "vacuumTriggerRows",
+		CASE WHEN s.relkind IN ('r','m') AND s.relpersistence<>'t' THEN thresholds.analyze END AS "analyzeTriggerRows",
 		s.n_mod_since_analyze AS "modifiedSinceAnalyze",s.n_ins_since_vacuum AS "insertsSinceVacuum",
 		s.vacuum_count AS "vacuumCount",s.autovacuum_count AS "autovacuumCount",s.autoanalyze_count AS "autoanalyzeCount",
+		s.last_vacuum AS "lastManualVacuumAt",s.last_autovacuum AS "lastAutoVacuumAt",
+		s.last_analyze AS "lastManualAnalyzeAt",s.last_autoanalyze AS "lastAutoAnalyzeAt",
 		s.n_live_tup AS "liveRows",s.n_dead_tup AS "deadRows",s.n_tup_ins+s.n_tup_upd+s.n_tup_del AS writes,
 		s.seq_scan AS "seqScans",s.idx_scan AS "indexScans",s.heap_blks_read AS "blocksRead",s.heap_blks_hit AS "blocksHit",
 		greatest(s.last_vacuum,s.last_autovacuum) AS "lastVacuumAt",greatest(s.last_analyze,s.last_autoanalyze) AS "lastAnalyzeAt"
 	FROM candidates c JOIN stats s USING(relid)
+	CROSS JOIN LATERAL (SELECT pg_relation_size(s.relid) bytes) heap
+	CROSS JOIN LATERAL (SELECT jsonb_object_agg(option_name,option_value) data FROM pg_options_to_table(s.reloptions)) opt
+	CROSS JOIN LATERAL (SELECT
+		coalesce((opt.data->>'autovacuum_vacuum_threshold')::double precision,current_setting('autovacuum_vacuum_threshold')::double precision)
+		+greatest(s.reltuples,0)*coalesce((opt.data->>'autovacuum_vacuum_scale_factor')::double precision,current_setting('autovacuum_vacuum_scale_factor')::double precision) AS vacuum,
+		coalesce((opt.data->>'autovacuum_vacuum_max_threshold')::double precision,current_setting('autovacuum_vacuum_max_threshold',true)::double precision) AS vacuum_cap,
+		coalesce((opt.data->>'autovacuum_analyze_threshold')::double precision,current_setting('autovacuum_analyze_threshold')::double precision)
+		+greatest(s.reltuples,0)*coalesce((opt.data->>'autovacuum_analyze_scale_factor')::double precision,current_setting('autovacuum_analyze_scale_factor')::double precision) AS analyze
+	) thresholds
 )
 SELECT jsonb_build_object('total',(SELECT count(*) FROM stats),
 	'objects',coalesce(jsonb_agg(to_jsonb(m) ORDER BY m.bytes DESC NULLS LAST,m.oid),'[]'::jsonb)) FROM measured m`
 
 const indexInventorySQL = `WITH candidates AS MATERIALIZED (
-	SELECT s.*,c.relfilenode,c.relpages,c.relispartition,io.idx_blks_read,io.idx_blks_hit
+	SELECT s.*,c.relfilenode,c.relpages,c.relispartition,io.idx_blks_read,io.idx_blks_hit,
+		i.indisvalid,i.indisready,i.indislive,i.indisprimary,i.indisunique,i.indisreplident,am.amname
 	FROM pg_stat_user_indexes s JOIN pg_class c ON c.oid=s.indexrelid
+	JOIN pg_index i ON i.indexrelid=s.indexrelid LEFT JOIN pg_am am ON am.oid=c.relam
 	LEFT JOIN pg_statio_user_indexes io ON io.indexrelid=s.indexrelid
 	WHERE pg_has_role(current_user,'pg_read_all_stats','member') OR
 		(has_schema_privilege(c.relnamespace,'USAGE') AND has_table_privilege(s.relid,'SELECT'))
 ), selected AS (
-	(SELECT indexrelid FROM candidates ORDER BY relpages DESC,indexrelid LIMIT 24) UNION
+	(SELECT indexrelid FROM candidates ORDER BY (indisvalid AND indisready AND indislive),relpages DESC,indexrelid LIMIT 24) UNION
 	(SELECT indexrelid FROM candidates ORDER BY idx_scan DESC NULLS LAST,indexrelid LIMIT 24)
 ), measured AS (
 	SELECT c.indexrelid::text AS oid,c.relfilenode::text AS filenode,c.schemaname AS schema,c.indexrelname AS name,
 		c.relname AS "table",c.relid::text AS "tableOid",c.relispartition AS partition,
 		pg_relation_size(c.indexrelid) AS bytes,c.idx_scan AS scans,
+		c.amname AS method,c.indisvalid AS valid,c.indisready AS ready,c.indislive AS live,
+		c.indisprimary AS primary,c.indisunique AS unique,c.indisreplident AS "replicaIdentity",
+		to_jsonb(c)->>'last_idx_scan' AS "lastScanAt",
 		c.idx_tup_read AS "rowsRead",c.idx_blks_read AS "blocksRead",c.idx_blks_hit AS "blocksHit"
 	FROM candidates c JOIN selected s USING(indexrelid)
 )

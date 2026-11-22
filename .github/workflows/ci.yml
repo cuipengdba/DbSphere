@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.34.0'
-          previous_sha='50b6ef9f5be512f5d71cbfb9a21b52eae34a7a679c64e0ea2d6c6c8da70d8a28'
+          previous_version='1.35.0'
+          previous_sha='d4e108cb899232d7b0b0a939a8b4389753c991359fbcde6131e7be4164577d39'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.34.0'
-          previous_arm_sha='0bf2c6af40571077dcdcb4d926e43923539c0fa99af73a0bc13803ef53b2da7c'
+          previous_version='1.35.0'
+          previous_arm_sha='f1bb8a929c210b46c3183aa1cb5e202b8c76dff2b4e77ff4fcc6138620589f74'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -902,6 +902,7 @@ jobs:
           node --check scripts/replication-drill-verify.mjs
           node --check scripts/wal-archive-drill-acceptance.mjs
           node --check scripts/autovacuum-drill-acceptance.mjs
+          node --check scripts/object-maintenance-drill.mjs
           node --check scripts/connection-pressure-drill-acceptance.mjs
           node scripts/replication-drill-secrets.mjs \
             "$RUNNER_TEMP/dbsphere-replication.env" "$RUNNER_TEMP/dbsphere-replication-credentials.json"
@@ -945,6 +946,19 @@ jobs:
           node scripts/connection-pressure-drill-acceptance.mjs http://127.0.0.1:18092 \
             "$RUNNER_TEMP/dbsphere-replication-credentials.json" > "$RUNNER_TEMP/dbsphere-connection-result.json"
           cat "$RUNNER_TEMP/dbsphere-connection-result.json"
+      - name: Verify real object growth, skewed partitions, vacuum and freeze evidence
+        run: |
+          target=$(docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
+            -f test/replication-drill/compose.yaml ps -q maintenance)
+          test -n "$target"
+          node scripts/object-maintenance-drill.mjs http://127.0.0.1:18092 \
+            "$RUNNER_TEMP/dbsphere-replication-credentials.json" "$target" maintenance \
+            "$RUNNER_TEMP/dbsphere-objects-result.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-object-maintenance-drill
+          path: ${{ runner.temp }}/dbsphere-objects-result.json
+          if-no-files-found: error
       - name: Remove isolated replication drill
         if: always()
         run: |
