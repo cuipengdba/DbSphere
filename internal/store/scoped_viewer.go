@@ -15,6 +15,8 @@ func (s *Postgres) AssetIDForResource(ctx context.Context, kind, id string) (str
 		query = "SELECT asset_id::text FROM event_keys WHERE id=$1"
 	case "inspection":
 		query = "SELECT asset_id::text FROM inspection_runs WHERE id=$1"
+	case "work_order":
+		query = "SELECT asset_id::text FROM work_orders WHERE id=$1"
 	default:
 		return "", errors.New("unsupported scoped resource")
 	}

@@ -25,6 +25,7 @@
       <p>输入账号密码进入数据库运维工作台。</p>
       <p id="login-error" class="notice error" role="alert"></p>
       <form id="login-form">
+        <label>账号<input name="username" autocomplete="username" maxlength="48" placeholder="初始账号可留空"></label>
         <label>登录密码<input name="password" type="password" required autocomplete="current-password"></label>
         <button type="submit">登录</button>
       </form>
@@ -75,7 +76,7 @@
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
       <div data-view="assets">
         <section class="panel">
-          <div class="section-head"><div><h2>PostgreSQL 资产</h2></div><div class="section-actions"><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
+          <div class="section-head"><div><h2>PostgreSQL 资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
           <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索 PostgreSQL 资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></div>
           <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <div id="asset-list" class="list"></div>
@@ -195,7 +196,8 @@
         <section class="panel" data-section-panel="templates"><div class="section-head"><h2>巡检模板与阈值</h2></div><div id="inspection-templates" class="list"></div></section>
         <section class="panel" data-section-panel="history"><div class="section-head"><div><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
       </div>
-      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="collector">采集器</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="collector">采集器</button><button type="button" class="admin-only" data-section="access">账号和团队</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <section class="panel admin-only" data-view="settings" data-section-panel="access" id="access-directory" hidden><div class="section-head"><h2>账号和团队</h2></div><p class="hint">团队授予指定资产的访问范围，账号角色决定可以执行的动作。</p><div id="access-directory-content" class="list"></div></section>
       <section class="panel" data-view="settings" data-section-panel="storage"><div class="section-head"><div><h2>长期数据存储</h2></div></div><div id="storage-detail" class="empty">正在读取存储状态。</div></section>
       <section class="panel admin-only" data-view="settings" data-section-panel="collector" id="collector-status-panel"><div class="section-head"><div><h2>自动采集运行状态</h2></div></div><div id="collector-status-detail" class="empty">正在读取当前进程的采集状态。</div></section>
       <section class="panel admin-only" data-view="settings" data-section-panel="audit" id="admin-audit-panel"><div class="section-head"><div><h2>管理员操作记录</h2></div></div><p class="hint">最近 100 次已认证的写入请求。记录请求路径与 HTTP 结果，不包含密码或请求正文。</p><div id="admin-audit-list" class="list"></div></section>

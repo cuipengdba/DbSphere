@@ -1,5 +1,6 @@
 let csrf = null;
 let currentRole = null;
+let currentUsername = '';
 let approvalEnabled = false;
 let viewerScoped = false;
 let selectedAsset = null;
@@ -75,7 +76,7 @@ function setView(route, updateHash = true) {
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
     } else {
-      showSection(selected, selected === 'settings' && section === 'collector' ? 'collector' : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -103,6 +104,112 @@ function showSection(view, section, eventId, ruleCode) {
     panel.hidden = panel.dataset.sectionPanel !== section || (panel.classList.contains('admin-only') && currentRole !== 'admin');
   }
   if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
+  if (view === 'settings' && section === 'access') void loadAccessDirectory();
+}
+
+const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
+
+function accessField(form, label, field) {
+  const container = cell('label', label);
+  container.append(field);
+  form.append(container);
+  return field;
+}
+
+function accessInput(form, label, name, value, attributes = {}) {
+  const field = Object.assign(document.createElement('input'), { name, value }, attributes);
+  return accessField(form, label, field);
+}
+
+function accessSelect(form, label, name, entries, selected, multiple = false) {
+  const field = Object.assign(document.createElement('select'), { name, multiple });
+  for (const [value, title] of entries) {
+    const isSelected = selected.includes(value);
+    field.add(new Option(title, value, isSelected, isSelected));
+  }
+  return accessField(form, label, field);
+}
+
+function accessForm(title, parent, existing, save) {
+  const section = cell(existing ? 'details' : 'div', '', 'settings-details');
+  section.append(cell(existing ? 'summary' : 'h4', title));
+  const form = cell('form', '', 'response-form');
+  section.append(form);
+  parent.append(section);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      await save(new FormData(form));
+      form.reset();
+      notice('已保存账号或团队设置。');
+      await loadAccessDirectory();
+    } catch (error) {
+      notice(error.message, true);
+      button.disabled = false;
+    }
+  });
+  return form;
+}
+
+async function loadAccessDirectory() {
+  const content = $('access-directory-content');
+  let directory;
+  try {
+    directory = await api('/api/admin/access');
+  } catch (error) {
+    content.replaceChildren(cell('p', error.message, 'empty'));
+    return;
+  }
+  const { accounts = [], teams = [] } = directory;
+  const teamPanel = cell('div', '', 'list');
+  teamPanel.append(cell('h3', '项目团队'));
+  for (const team of [null, ...teams]) {
+    const form = accessForm(team ? team.project + ' / ' + team.name : '新建团队', teamPanel, !!team, data => {
+      const rawIDs = data.get('assetIds').split(/[\\s,，]+/).filter(Boolean);
+      return api(team ? '/api/admin/teams/' + team.id : '/api/admin/teams', team ? 'PATCH' : 'POST', {
+        project: data.get('project').trim(), name: data.get('name').trim(), assetIds: [...new Set(rawIDs)]
+      });
+    });
+    accessInput(form, '项目', 'project', team?.project || '', { required: true, maxLength: 80 });
+    accessInput(form, '团队名称', 'name', team?.name || '', { required: true, maxLength: 80 });
+    const ids = Object.assign(document.createElement('textarea'), { name: 'assetIds', rows: 2, value: (team?.assetIds || []).join('\n') });
+    accessField(form, '资产 ID（空格、逗号或换行分隔）', ids);
+    form.append(cell('button', team ? '保存团队' : '创建团队'));
+    form.lastChild.type = 'submit';
+  }
+  const accountPanel = cell('div', '', 'list');
+  accountPanel.append(cell('h3', '独立账号'));
+  for (const account of [null, ...accounts]) {
+    const form = accessForm(account ? account.username + ' · ' + accessRoleLabels[account.role] : '新建或迁移账号', accountPanel, !!account, data => {
+      const update = { role: data.get('role'), teamIds: data.getAll('teamIds'), enabled: data.get('enabled') === 'on' };
+      if (account) return api('/api/admin/accounts/' + account.id, 'PATCH', update);
+      return api('/api/admin/accounts', 'POST', { ...update, username: data.get('username').trim(), password: data.get('password'), legacyRole: data.get('legacyRole') });
+    });
+    if (!account) accessInput(form, '账号', 'username', '', { required: true, minLength: 3, maxLength: 48, pattern: '[a-z][a-z0-9_.\\-]{2,47}', autocomplete: 'off' });
+    accessSelect(form, '角色', 'role', Object.entries(accessRoleLabels), [account?.role || 'viewer']);
+    accessSelect(form, '团队授权', 'teamIds', teams.map(team => [team.id, team.project + ' / ' + team.name]), account?.teamIds || [], true);
+    accessInput(form, '启用账号', 'enabled', 'on', { type: 'checkbox', checked: account?.enabled ?? true });
+    if (!account) {
+      const password = accessInput(form, '初始密码（至少 12 字符）', 'password', '', { type: 'password', minLength: 12, maxLength: 256, autocomplete: 'new-password', required: true });
+      const legacy = accessSelect(form, '迁移初始凭据', 'legacyRole', [['', '创建新密码'], ['admin', '初始管理员'], ['viewer', '初始只读账号'], ['approver', '初始审批账号']], ['']);
+      legacy.addEventListener('change', () => {
+        password.disabled = !!legacy.value;
+        password.required = !legacy.value;
+        if (legacy.value) form.elements.role.value = legacy.value;
+      });
+    }
+    form.append(cell('button', account ? '保存账号' : '创建账号'));
+    form.lastChild.type = 'submit';
+    if (!account) continue;
+    const rotate = accessForm('轮换凭据 · ' + account.username, accountPanel, true, data =>
+      api('/api/admin/accounts/' + account.id + '/rotate', 'POST', { password: data.get('password') }));
+    accessInput(rotate, '新密码（会撤销该账号已有会话）', 'password', '', { type: 'password', required: true, minLength: 12, maxLength: 256, autocomplete: 'new-password' });
+    rotate.append(cell('button', '轮换密码'));
+    rotate.lastChild.type = 'submit';
+  }
+  content.replaceChildren(teamPanel, accountPanel);
 }
 
 const rcaEvaluationLabels = {
@@ -1729,7 +1836,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
-  event_acknowledged: '事件确认', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
+  event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
 
 function replaySampleLink(assetId, sampleId) {
   const link = cell('a', '原始采样', 'monitor-link');
@@ -1988,11 +2095,14 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, replay, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
-  const [eventAudit, workOrders, aiStatus, impact] = await Promise.all([
+  const canRespond = ['admin', 'operator'].includes(currentRole);
+  const canReviewOrders = canRespond || currentRole === 'approver';
+  const [eventAudit, workOrders, aiStatus, impact, handoff] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
-    currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
+    canReviewOrders ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
     api('/api/ai/status').catch(() => ({ enabled: false })),
-    replay ? api(`/api/events/${id}/impact`).catch(() => null) : null
+    replay ? api(`/api/events/${id}/impact`).catch(() => null) : null,
+    canRespond ? api(`/api/events/${id}/handoff`).catch(() => null) : null
   ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
@@ -2304,17 +2414,42 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     reports.append(button);
   }
   timelinePanel.append(reports);
-  if (currentRole === 'admin' || currentRole === 'approver') {
+  if (handoff) {
+    const panel = cell('section', '', 'response-form');
+    panel.append(cell('h4', '值班交接'));
+    const assignment = handoff.assignment;
+    panel.append(cell('p', assignment ? `${assignment.assignedBy} 于 ${formatTime(assignment.assignedAt)} 交接给 ${assignment.username}` : '当前事件暂无接班人。', 'hint'));
+    if (event.status === 'open' && handoff.eligible?.length) {
+      const form = cell('form', '', 'response-form operator-action');
+      const assignee = accessSelect(form, '接班人', 'accountId', handoff.eligible.map(account => [account.id, account.username]), [assignment?.accountId]);
+      const note = Object.assign(document.createElement('textarea'), { required: true, minLength: 5, maxLength: 500, rows: 2 });
+      accessField(form, '交接记录', note);
+      const submit = cell('button', '交接当前事件', 'ghost small-button');
+      submit.type = 'submit';
+      form.append(submit);
+      form.addEventListener('submit', async formEvent => {
+        formEvent.preventDefault();
+        submit.disabled = true;
+        try {
+          await api(`/api/events/${event.id}/handoff`, 'POST', { accountId: assignee.value, note: note.value.trim() });
+          await showEvent(event.id);
+        } catch (error) { notice(error.message, true); submit.disabled = false; }
+      });
+      panel.append(form);
+    }
+    responsePanel.append(panel);
+  }
+  if (canReviewOrders) {
     const panel = document.createElement('section'); panel.className = 'response-form';
     panel.append(cell('h4', '事件工单 · 双人审批'));
     panel.append(cell('p', '受控动作：审批后只对该事件资产执行一次只读采样；不执行 SQL 变更或 Kubernetes 操作。工单 15 分钟后失效。', 'hint'));
-    if (currentRole === 'admin' && event.status === 'open' && approvalEnabled) {
-      const form = document.createElement('form'); form.className = 'response-form';
+    if (canRespond && event.status === 'open' && approvalEnabled) {
+      const form = document.createElement('form'); form.className = 'response-form operator-action';
       const label = cell('label', '申请原因（5–300 字）');
       const reason = document.createElement('textarea'); reason.required = true; reason.minLength = 5;
       reason.maxLength = 300; reason.rows = 2; reason.placeholder = '说明为什么需要对当前事件重新采样';
       label.append(reason);
-      const submit = cell('button', '提交只读采样工单', 'ghost small-button write-action'); submit.type = 'submit';
+      const submit = cell('button', '提交只读采样工单', 'ghost small-button write-action operator-action'); submit.type = 'submit';
       form.append(label, submit);
       form.addEventListener('submit', async e => {
         e.preventDefault(); submit.disabled = true;
@@ -2330,9 +2465,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       const states = { requested: '待审批', approved: '已批准待执行', rejected: '已驳回',
         executing: '执行中', completed: '已完成', failed: '采样失败', expired: '已过期' };
       row.append(cell('p', `${states[order.status] || order.status} · ${order.reason}`),
-        cell('small', `工单 ${order.id} · 申请 ${formatTime(order.requestedAt)} · 到期 ${formatTime(order.expiresAt)}`));
+        cell('small', `工单 ${order.id} · 申请人 ${order.requestedBy} · 申请时间 ${formatTime(order.requestedAt)} · 到期 ${formatTime(order.expiresAt)}`));
+      if (order.approvedBy) row.append(cell('small', `审批人 ${order.approvedBy}`));
       if (order.result?.sampleId) row.append(cell('small', `采样 ID ${order.result.sampleId} · 状态 ${order.result.sampleStatus || '未知'}`));
-      if (currentRole === 'approver' && order.status === 'requested') {
+      if (currentRole === 'approver' && order.status === 'requested' && order.requestedBy !== currentUsername) {
         for (const [action, label] of [['approve', '批准'], ['reject', '驳回']]) {
           const button = cell('button', label, 'ghost small-button approval-action');
           button.addEventListener('click', async () => {
@@ -2408,16 +2544,16 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     });
     evidencePanel.append(analyze, questionForm, aiResult);
   }
-  if (event.acknowledgedAt) responsePanel.prepend(cell('p', `管理员已于 ${formatTime(event.acknowledgedAt)} 确认。`));
-  else if (event.status === 'open') {
-    const acknowledge = cell('button', '确认事件', 'ghost small-button write-action');
+  if (event.acknowledgedAt) responsePanel.prepend(cell('p', `事件已于 ${formatTime(event.acknowledgedAt)} 确认。`));
+  else if (event.status === 'open' && canRespond) {
+    const acknowledge = cell('button', '确认事件', 'ghost small-button write-action operator-action');
     acknowledge.addEventListener('click', async () => {
       try { await api(`/api/events/${event.id}/ack`, 'POST'); await showEvent(event.id); await refresh(); }
       catch (error) { notice(error.message, true); }
     });
     responsePanel.prepend(acknowledge);
   }
-  const responseForm = document.createElement('form'); responseForm.className = 'response-form';
+  const responseForm = document.createElement('form'); responseForm.className = 'response-form operator-action';
   responseForm.append(cell('h4', '处置与恢复验证'));
   const phaseLabel = cell('label', '记录类型');
   const phase = document.createElement('select');
@@ -2450,7 +2586,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       notice('处理记录已保存到当前事件。'); await showEvent(event.id); await refresh();
     } catch (error) { notice(error.message, true); }
   });
-  responsePanel.append(responseForm);
+  if (canRespond) responsePanel.append(responseForm);
   if (currentRole === 'viewer' && !event.acknowledgedAt)
     responsePanel.append(cell('p', '此账号可以查看已记录的处置和恢复验证。', 'hint'));
   const condensedTimeline = event.evidence.length > 12;
@@ -2506,9 +2642,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
-    if (evidence.kind === 'work_order_requested') text = `管理员申请只读采样工单 ${evidence.payload.workOrderId}：${evidence.payload.reason}`;
-    if (evidence.kind === 'work_order_decision') text = `独立审批账号${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
-    if (evidence.kind === 'work_order_executed') text = `管理员执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
+    if (evidence.kind === 'event_handoff') text = `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
+    if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请只读采样工单 ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
+    if (evidence.kind === 'work_order_decision') text = `${evidence.payload.actor || '独立审批账号'} ${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
+    if (evidence.kind === 'work_order_executed') text = `${evidence.payload.actor || '管理员'} 执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') {
       const responseLabels = {diagnosis: '诊断', mitigation: '处置', handoff: '值班交接', false_positive: '误报复核', recovery_verification: '恢复验证'};
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
@@ -2533,10 +2670,12 @@ async function boot() {
   const session = await api('/api/session');
   csrf = session.csrf;
   currentRole = session.authenticated ? (session.role || 'admin') : null;
+  currentUsername = session.username || '';
   approvalEnabled = session.approvalEnabled === true;
   viewerScoped = session.authenticated && session.viewerScoped === true;
   document.body.dataset.role = currentRole || '';
-  $('role-label').textContent = currentRole === 'viewer' ? '只读查看' : currentRole === 'approver' ? '独立审批' : '管理员';
+  $('role-label').textContent = currentUsername ? `${currentUsername} · ${accessRoleLabels[currentRole]}` : accessRoleLabels[currentRole] || '';
+  $('scoped-asset-export').hidden = !currentUsername || !viewerScoped;
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
@@ -2591,7 +2730,7 @@ window.addEventListener('hashchange', () => setView(location.hash.slice(1), fals
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('login-error').textContent = '';
-  try { const data = await api('/api/login', 'POST', { password: new FormData(event.target).get('password') }); event.target.reset(); csrf = data.csrf; await boot(); }
+  try { const data = await api('/api/login', 'POST', Object.fromEntries(new FormData(event.target))); event.target.reset(); csrf = data.csrf; await boot(); }
   catch (e) { $('login-error').textContent = e.message; }
 });
 

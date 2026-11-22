@@ -42,21 +42,7 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 		if item.match == nil {
 			continue
 		}
-		lookup, ok := db.(scopedResourceLookup)
-		if !ok {
-			respond(w, http.StatusForbidden, map[string]string{"error": "Asset scope unavailable"})
-			return false
-		}
-		assetID, err := lookup.AssetIDForResource(r.Context(), item.kind, item.match[1])
-		if err != nil {
-			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset scope unavailable"})
-			return false
-		}
-		if assetID == "" || !allowed[assetID] {
-			respond(w, http.StatusNotFound, map[string]string{"error": "Resource not found"})
-			return false
-		}
-		return true
+		return authorizeScopedResource(w, r, db, allowed, item.kind, item.match[1])
 	}
 	if path == "/api/ai/status" || path == "/api/alert-rules" || path == "/api/inspection-templates" ||
 		path == "/api/monitoring/series" ||
@@ -68,6 +54,24 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 	}
 	respond(w, http.StatusForbidden, map[string]string{"error": "Endpoint unavailable to asset-scoped viewer"})
 	return false
+}
+
+func authorizeScopedResource(w http.ResponseWriter, r *http.Request, db HealthStore, allowed map[string]bool, kind, id string) bool {
+	lookup, ok := db.(scopedResourceLookup)
+	if !ok {
+		respond(w, http.StatusForbidden, map[string]string{"error": "Asset scope unavailable"})
+		return false
+	}
+	assetID, err := lookup.AssetIDForResource(r.Context(), kind, id)
+	if err != nil {
+		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Asset scope unavailable"})
+		return false
+	}
+	if assetID == "" || !allowed[assetID] {
+		respond(w, http.StatusNotFound, map[string]string{"error": "Resource not found"})
+		return false
+	}
+	return true
 }
 
 var scopedCollectionKeys = map[string]string{

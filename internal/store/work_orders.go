@@ -59,14 +59,15 @@ func (s *Postgres) CreateWorkOrder(ctx context.Context, eventID, reason string) 
 		return nil, ErrWorkOrderConflict
 	}
 	var id string
+	actor := accessActor(ctx, "admin")
 	err = tx.QueryRow(ctx, `INSERT INTO work_orders(id,event_id,asset_id,action,reason,status,
 		requested_by,expires_at) VALUES(gen_random_uuid(),$1,$2,'collect_once',$3,'requested',
-		'admin',now()+interval '15 minutes') RETURNING id::text`, eventID, assetID, reason).Scan(&id)
+		$4,now()+interval '15 minutes') RETURNING id::text`, eventID, assetID, reason, actor).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 	payload, _ := json.Marshal(map[string]string{"workOrderId": id, "action": "collect_once",
-		"reason": reason, "actor": "admin", "assetId": assetID})
+		"reason": reason, "actor": actor, "assetId": assetID})
 	if _, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,'work_order_requested',now(),$2)`, eventID, payload); err != nil {
 		return nil, err
@@ -111,16 +112,17 @@ func (s *Postgres) DecideWorkOrder(ctx context.Context, id, decision string) (js
 	}
 	defer tx.Rollback(ctx)
 	var eventID string
-	err = tx.QueryRow(ctx, `UPDATE work_orders SET status=$2,approved_by='approver',
-		approved_at=now() WHERE id=$1 AND status='requested' AND expires_at>now()
-		RETURNING event_id::text`, id, decision).Scan(&eventID)
+	actor := accessActor(ctx, "approver")
+	err = tx.QueryRow(ctx, `UPDATE work_orders SET status=$2,approved_by=$3,
+		approved_at=now() WHERE id=$1 AND status='requested' AND expires_at>now() AND requested_by<>$3
+		RETURNING event_id::text`, id, decision, actor).Scan(&eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrWorkOrderConflict
 	}
 	if err != nil {
 		return nil, err
 	}
-	payload, _ := json.Marshal(map[string]string{"workOrderId": id, "decision": decision, "actor": "approver"})
+	payload, _ := json.Marshal(map[string]string{"workOrderId": id, "decision": decision, "actor": actor})
 	if _, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,'work_order_decision',now(),$2)`, eventID, payload); err != nil {
 		return nil, err
@@ -173,7 +175,7 @@ func (s *Postgres) FinishWorkOrder(ctx context.Context, id string, result CheckR
 	if err != nil {
 		return nil, err
 	}
-	evidence, _ := json.Marshal(map[string]any{"workOrderId": id, "actor": "admin",
+	evidence, _ := json.Marshal(map[string]any{"workOrderId": id, "actor": accessActor(ctx, "admin"),
 		"status": status, "sampleId": result.SampleID, "sampleStatus": result.Status})
 	if _, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,'work_order_executed',now(),$2)`, eventID, evidence); err != nil {

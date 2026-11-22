@@ -61,7 +61,7 @@ func (s *Postgres) RecordEventResponse(ctx context.Context, eventID, phase, note
 	if phase == "recovery_verification" {
 		kind = "recovery_verified"
 	}
-	payload, err := json.Marshal(map[string]string{"phase": phase, "note": note, "actor": "admin", "sampleId": sampleID})
+	payload, err := json.Marshal(map[string]string{"phase": phase, "note": note, "actor": accessActor(ctx, "admin"), "sampleId": sampleID})
 	if err != nil {
 		return err
 	}

@@ -16,7 +16,7 @@ func (s *Postgres) StartAdminAudit(ctx context.Context, method, path string) (st
 }
 
 func (s *Postgres) StartRoleAudit(ctx context.Context, actor, method, path string) (string, error) {
-	if actor != "admin" && actor != "approver" {
+	if actor != "admin" && actor != "approver" && (!accessName.MatchString(actor) || actor != accessActor(ctx, "")) {
 		return "", errors.New("unsupported audit actor")
 	}
 	if method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" {

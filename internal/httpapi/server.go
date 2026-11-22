@@ -316,6 +316,19 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		adminKey := security.AdminSessionKey(credentials.MasterKey, credentials.PasswordHash)
 		role, loggedIn := security.SessionRole(adminKey, token, time.Now())
+		namedDB, _ := store.(accessStore)
+		var principal storepkg.AccessAccount
+		if !loggedIn && namedDB != nil && validAccessToken(token) {
+			var err error
+			principal, err = namedDB.AccessSession(r.Context(), accessDigest(credentials.MasterKey, token), time.Now())
+			if err != nil && !errors.Is(err, storepkg.ErrAccessMissing) {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
+				return
+			}
+			if err == nil && principal.Enabled {
+				role, loggedIn = principal.Role, true
+			}
+		}
 		if !loggedIn && credentials.ViewerPasswordHash != "" {
 			viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
 			role, loggedIn = security.SessionRole(viewerKey, token, time.Now())
@@ -340,21 +353,17 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			attemptsMu.Unlock()
 			var input struct {
+				Username string `json:"username"`
 				Password string `json:"password"`
 			}
 			if err := readJSON(w, r, &input); err != nil {
 				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid login request"})
 				return
 			}
-			loginRole := "admin"
-			if !security.VerifyPassword(input.Password, credentials.PasswordHash) {
-				loginRole = ""
-				if credentials.ViewerPasswordHash != "" && security.VerifyPassword(input.Password, credentials.ViewerPasswordHash) {
-					loginRole = "viewer"
-				} else if credentials.ApproverPasswordHash != "" &&
-					security.VerifyPassword(input.Password, credentials.ApproverPasswordHash) {
-					loginRole = "approver"
-				}
+			loginRole, loginAccount, err := authenticateAccessLogin(r.Context(), namedDB, credentials, input.Username, input.Password)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
+				return
 			}
 			if loginRole == "" {
 				attemptsMu.Lock()
@@ -373,8 +382,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			delete(attempts, ip)
 			attemptsMu.Unlock()
 			var session string
-			var err error
-			if loginRole == "viewer" {
+			if loginAccount.ID != "" {
+				session, err = issueAccessSession(r.Context(), namedDB, credentials.MasterKey, loginAccount, time.Now())
+			} else if loginRole == "viewer" {
 				viewerKey := security.ViewerSessionKey(credentials.MasterKey, credentials.ViewerPasswordHash)
 				session, err = security.CreateViewerSession(viewerKey, time.Now())
 			} else if loginRole == "approver" {
@@ -389,9 +399,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
+			approval := credentials.ApproverPasswordHash != "" || namedDB != nil && namedDB.HasAccessApprover(r.Context(), "")
 			respond(w, http.StatusOK, map[string]any{"authenticated": true, "role": loginRole,
-				"viewerScoped":    loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"approvalEnabled": credentials.ApproverPasswordHash != "",
+				"viewerScoped":    loginAccount.ID != "" && loginRole != "admin" || loginRole == "viewer" && len(credentials.ViewerAssetIDs) > 0,
+				"username":        loginAccount.Username,
+				"approvalEnabled": approval,
 				"csrf":            security.CSRFToken(credentials.MasterKey, session)})
 			return
 		}
@@ -404,9 +416,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if loggedIn {
 				sessionRole = role
 			}
+			approval := credentials.ApproverPasswordHash != "" || loggedIn && namedDB != nil && namedDB.HasAccessApprover(r.Context(), "")
 			respond(w, http.StatusOK, map[string]any{"authenticated": loggedIn, "role": sessionRole,
-				"viewerScoped":    loggedIn && role == "viewer" && len(credentials.ViewerAssetIDs) > 0,
-				"approvalEnabled": credentials.ApproverPasswordHash != "",
+				"viewerScoped":    loggedIn && (principal.ID != "" && role != "admin" || role == "viewer" && len(credentials.ViewerAssetIDs) > 0),
+				"username":        principal.Username,
+				"approvalEnabled": approval,
 				"csrf":            csrf})
 			return
 		}
@@ -420,6 +434,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/logout" {
+			if principal.ID != "" {
+				if err := namedDB.RevokeAccessSession(r.Context(), accessDigest(credentials.MasterKey, token)); err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
+					return
+				}
+			}
 			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Path: "/", MaxAge: -1,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
@@ -434,13 +454,28 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Approver account can only review work orders"})
 			return
 		}
+		var scopeIDs []string
+		actor := role
+		if principal.ID != "" {
+			actor = principal.Username
+			r = r.WithContext(storepkg.WithAccessActor(r.Context(), actor))
+			if role != "admin" {
+				scopeIDs = append([]string{}, principal.AssetIDs...)
+			}
+		} else if role == "viewer" && len(credentials.ViewerAssetIDs) > 0 {
+			scopeIDs = credentials.ViewerAssetIDs
+		}
 		viewerScope := map[string]bool(nil)
-		if role == "viewer" && len(credentials.ViewerAssetIDs) > 0 {
-			viewerScope = make(map[string]bool, len(credentials.ViewerAssetIDs))
-			for _, id := range credentials.ViewerAssetIDs {
+		if scopeIDs != nil {
+			viewerScope = make(map[string]bool, len(scopeIDs))
+			for _, id := range scopeIDs {
 				viewerScope[id] = true
 			}
-			if !authorizeScopedViewerRead(w, r, store, viewerScope) {
+			if principal.ID != "" {
+				if !authorizeNamedScope(w, r, store, role, viewerScope) {
+					return
+				}
+			} else if !authorizeScopedViewerRead(w, r, store, viewerScope) {
 				return
 			}
 		}
@@ -561,10 +596,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				return
 			}
 		}
-		if (role == "admin" || role == "approver") && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
+		if (role == "admin" || role == "approver" || role == "operator") && (r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
 			if auditor, ok := store.(AdminAuditStore); ok {
-				id, err := auditor.StartRoleAudit(r.Context(), role, r.Method, r.URL.Path)
+				id, err := auditor.StartRoleAudit(r.Context(), actor, r.Method, r.URL.Path)
 				if err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Audit unavailable; operation was not run"})
 					return
@@ -584,6 +619,32 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}()
 			}
 		}
+		if handleAccessDirectory(w, r, namedDB, role, credentials) {
+			return
+		}
+		if match := eventHandoffPath.FindStringSubmatch(r.URL.Path); match != nil {
+			handleEventHandoff(w, r, namedDB, role, match[1])
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/access/assets/export" && principal.ID != "" && viewerScope != nil {
+			reader, ok := store.(ScopedCollectionReader)
+			if !ok {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Scoped export unavailable"})
+				return
+			}
+			data, _, err := reader.ReadScopedCollection(r.Context(), "/api/assets", scopeIDs)
+			if err == nil {
+				data, err = filterScopedCollection("/api/assets", data, viewerScope)
+			}
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Scoped export unavailable"})
+				return
+			}
+			w.Header().Set("Content-Disposition", "attachment; filename=\"dbsphere-scoped-assets.json\"")
+			w.Header().Set("Cache-Control", "no-store")
+			respond(w, http.StatusOK, data)
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/rca/rules" {
 			handleRCAPolicy(w, r, store, role, "", "")
 			return
@@ -599,16 +660,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if match := eventImpactPath.FindStringSubmatch(r.URL.Path); match != nil &&
 			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
-			var permitted []string
-			if viewerScope != nil {
-				permitted = credentials.ViewerAssetIDs
-			}
-			handleIncidentImpact(w, r, store, match[1], permitted)
+			handleIncidentImpact(w, r, store, match[1], scopeIDs)
 			return
 		}
 		if match := eventWorkOrdersPath.FindStringSubmatch(r.URL.Path); match != nil &&
 			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
-			if role != "admin" && role != "approver" {
+			if role != "admin" && role != "approver" && role != "operator" {
 				respond(w, http.StatusForbidden, map[string]string{"error": "Work order access required"})
 				return
 			}
@@ -626,7 +683,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusOK, value)
 				return
 			}
-			if role != "admin" || credentials.ApproverPasswordHash == "" {
+			hasApprover := credentials.ApproverPasswordHash != ""
+			if !hasApprover && namedDB != nil {
+				if lookup, ok := store.(scopedResourceLookup); ok {
+					assetID, err := lookup.AssetIDForResource(r.Context(), "event", match[1])
+					hasApprover = err == nil && assetID != "" && namedDB.HasAccessApprover(r.Context(), assetID)
+				}
+			}
+			if (role != "admin" && role != "operator") || !hasApprover {
 				respond(w, http.StatusForbidden, map[string]string{"error": "A separate approver account is required"})
 				return
 			}
@@ -1393,7 +1457,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			if r.URL.Path == "/api/monitoring/fleet" {
 				var ids []string
 				if viewerScope != nil {
-					ids = credentials.ViewerAssetIDs
+					ids = scopeIDs
 				}
 				stale := 0
 				if credentials != nil && credentials.AutoCollect {
@@ -1427,7 +1491,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				var scopedIDs []string
 				if viewerScope != nil {
-					scopedIDs = credentials.ViewerAssetIDs
+					scopedIDs = scopeIDs
 				}
 				page, err := pager.AssetPage(r.Context(), options, scopedIDs)
 				if errors.Is(err, storepkg.ErrInvalidAssetPage) {
@@ -1449,7 +1513,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				var scopedIDs []string
 				if viewerScope != nil {
-					scopedIDs = credentials.ViewerAssetIDs
+					scopedIDs = scopeIDs
 				}
 				value, err := reader.EventOverview(r.Context(), scopedIDs)
 				if err != nil {
@@ -1477,7 +1541,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				var scopedIDs []string
 				if viewerScope != nil {
-					scopedIDs = credentials.ViewerAssetIDs
+					scopedIDs = scopeIDs
 				}
 				page, err := pager.EventPage(r.Context(), options, scopedIDs)
 				if errors.Is(err, storepkg.ErrInvalidEventPage) {
@@ -1501,7 +1565,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 						respond(w, http.StatusForbidden, map[string]string{"error": "Scoped collection unavailable"})
 						return
 					}
-					value, found, err = scopedReader.ReadScopedCollection(r.Context(), r.URL.Path, credentials.ViewerAssetIDs)
+					value, found, err = scopedReader.ReadScopedCollection(r.Context(), r.URL.Path, scopeIDs)
 				} else {
 					value, found, err = reader.ReadCollection(r.Context(), r.URL.Path)
 				}

@@ -595,7 +595,7 @@ func (s *Postgres) AcknowledgeEvent(ctx context.Context, id string) (any, error)
 		if _, err := tx.Exec(ctx, "UPDATE events SET acknowledged_at=$1 WHERE id=$2", now, id); err != nil {
 			return nil, err
 		}
-		payload, _ := json.Marshal(map[string]string{"actor": "admin"})
+		payload, _ := json.Marshal(map[string]string{"actor": accessActor(ctx, "admin")})
 		if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'event_acknowledged',$2,$3)`, id, now, payload); err != nil {
 			return nil, err
@@ -637,7 +637,7 @@ func (s *Postgres) RecordRCADecision(ctx context.Context, id, code, decision, re
 	}
 	payload, err := json.Marshal(map[string]any{
 		"code": code, "decision": decision, "reason": reason,
-		"supports": supports, "actor": "admin"})
+		"supports": supports, "actor": accessActor(ctx, "admin")})
 	if err != nil {
 		return err
 	}

@@ -307,7 +307,7 @@ func incidentLayer(kind, metric string) string {
 		return "ai"
 	case kind == "notification_delivery" || kind == "notification_retry":
 		return "notification"
-	case kind == "operator_response" || kind == "event_acknowledged" || kind == "rca_decision" || kind == "work_order_executed":
+	case kind == "operator_response" || kind == "event_acknowledged" || kind == "rca_decision" || kind == "event_handoff" || strings.HasPrefix(kind, "work_order_"):
 		return "response"
 	case strings.HasPrefix(kind, "k8s_") || strings.HasPrefix(metric, "k8s."):
 		return "k8s"

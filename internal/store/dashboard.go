@@ -32,7 +32,7 @@ var scopedCollectionPredicates = map[string]string{
 
 // ReadScopedCollection applies the asset filter before list limits.
 func (s *Postgres) ReadScopedCollection(ctx context.Context, path string, assetIDs []string) (any, bool, error) {
-	if len(assetIDs) == 0 || scopedCollectionPredicates[path] == "" {
+	if assetIDs == nil || scopedCollectionPredicates[path] == "" {
 		return nil, true, errors.New("collection has no scoped asset query")
 	}
 	return s.readCollection(ctx, path, assetIDs)
