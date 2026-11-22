@@ -130,6 +130,15 @@ type trendBucketRow struct {
 	value   json.RawMessage
 }
 
+func (s *Postgres) HourlyTrendCoverage(ctx context.Context) (json.RawMessage, error) {
+	var report json.RawMessage
+	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('from',first_hour,'through',through_hour,
+		'pendingHours',greatest(0,720-extract(epoch FROM through_hour-first_hour)::int / 3600),
+		'dirtyHours',(SELECT count(DISTINCT bucket) FROM monitoring_hourly_dirty WHERE bucket >= first_hour AND bucket < through_hour))
+		FROM monitoring_hourly_status WHERE singleton`).Scan(&report)
+	return report, err
+}
+
 func (s *Postgres) readHourlyTrend(ctx context.Context, ids []string, from, to time.Time, long bool) ([]json.RawMessage, error) {
 	// Keep the coverage decision, late-sample markers and raw edge buckets on one snapshot.
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})

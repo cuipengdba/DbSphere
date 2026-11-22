@@ -471,6 +471,28 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusOK, credentials.CollectorState.Snapshot(time.Now()))
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector/hourly-trends" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "需要管理员权限"})
+				return
+			}
+			coverage, ok := store.(interface {
+				HourlyTrendCoverage(context.Context) (json.RawMessage, error)
+			})
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "小时汇总状态暂不可用"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			result, err := coverage.HourlyTrendCoverage(ctx)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "小时汇总状态暂不可用"})
+				return
+			}
+			respond(w, http.StatusOK, result)
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector/coverage" {
 			if role != "admin" {
 				respond(w, http.StatusForbidden, map[string]string{"error": "需要管理员权限"})

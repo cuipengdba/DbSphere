@@ -382,11 +382,7 @@ func (s *Postgres) CollectionCoverage(ctx context.Context, interval int) (any, e
 		GROUP BY 1
 	), bucket AS (
 		SELECT generate_series(date_trunc('day',now(),'UTC')-interval '6 days',date_trunc('day',now(),'UTC'),interval '1 day') AS day
-	) SELECT jsonb_build_object('targets',target.total,'due',target.due,'fresh',target.fresh,'hourlyTrend',(
-		SELECT jsonb_build_object('from',first_hour,'through',through_hour,
-			'pendingHours',greatest(0,720-extract(epoch FROM through_hour-first_hour)::int / 3600),
-			'dirtyHours',(SELECT count(DISTINCT bucket) FROM monitoring_hourly_dirty WHERE bucket >= first_hour AND bucket < through_hour))
-		FROM monitoring_hourly_status WHERE singleton),'days',(
+	) SELECT jsonb_build_object('targets',target.total,'due',target.due,'fresh',target.fresh,'days',(
 		SELECT jsonb_agg(jsonb_build_object('day',bucket.day,'samples',coalesce(days.total,0),
 			'postgresOK',coalesce(days.ok,0),'failed',coalesce(days.failed,0),'observed',coalesce(days.observed,0),
 			'sampleBytes',coalesce(days.bytes,0)) ORDER BY bucket.day) FROM bucket LEFT JOIN days USING(day)))

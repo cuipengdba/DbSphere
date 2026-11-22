@@ -1091,6 +1091,19 @@ function renderCollectorStatus(status) {
   if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
   if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮达到 ${status.batchLimit} 个资产的批次上限；是否存在积压尚未测量。`, 'warning'));
   target.append(cell('p', '这些计数只覆盖当前 Go 进程；重启后归零。目标采集失败与采集器执行错误分开统计。', 'hint'));
+  const loadTrend = cell('button', '查看小时汇总进度', 'ghost small-button');
+  const trendReport = cell('p', '', 'hint');
+  trendReport.setAttribute('aria-live', 'polite');
+  loadTrend.addEventListener('click', async () => {
+    loadTrend.disabled = true;
+    try {
+      const trend = await api('/api/admin/collector/hourly-trends');
+      const window = trend.from === trend.through ? '等待首次计算' : `${formatTime(trend.from)} 至 ${formatTime(trend.through)}`;
+      trendReport.textContent = `小时汇总 · ${window} · 待补算 ${trend.pendingHours} 小时 · 待重算 ${trend.dirtyHours} 小时`;
+    } catch (error) { trendReport.textContent = error.message; }
+    finally { loadTrend.disabled = false; }
+  });
+  target.append(loadTrend, trendReport);
   const loadCoverage = cell('button', '查看近 7 天采集覆盖', 'ghost small-button');
   const report = document.createElement('div');
   loadCoverage.addEventListener('click', async () => {
@@ -1098,11 +1111,6 @@ function renderCollectorStatus(status) {
     try {
       const coverage = await api('/api/admin/collector/coverage');
       report.replaceChildren(cell('p', `当前资产 ${coverage.targets} · 已到采集时间 ${coverage.due} · 近两周期有效 ${coverage.fresh}`, 'hint'));
-      if (coverage.hourlyTrend) {
-        const trend = coverage.hourlyTrend;
-        const window = trend.from === trend.through ? '等待首次计算' : `${formatTime(trend.from)} 至 ${formatTime(trend.through)}`;
-        report.append(cell('p', `小时汇总 · ${window} · 待补算 ${trend.pendingHours} 小时 · 待重算 ${trend.dirtyHours} 小时`, 'hint'));
-      }
       const rows = coverage.days.map(day => [day.day.slice(0, 10), day.observed, day.samples, day.postgresOK,
         day.samples ? `${(100 * day.failed / day.samples).toFixed(1)}%` : '无样本', `${(day.sampleBytes / 1048576).toFixed(2)} MiB`]);
       report.append(importTable(['日期 UTC', '覆盖资产', '采样数', 'PG 有效采样', '失败占比', '指标载荷'], rows));
