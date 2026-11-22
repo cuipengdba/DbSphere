@@ -584,6 +584,15 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}()
 			}
 		}
+		if match := eventImpactPath.FindStringSubmatch(r.URL.Path); match != nil &&
+			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
+			var permitted []string
+			if viewerScope != nil {
+				permitted = credentials.ViewerAssetIDs
+			}
+			handleIncidentImpact(w, r, store, match[1], permitted)
+			return
+		}
 		if match := eventWorkOrdersPath.FindStringSubmatch(r.URL.Path); match != nil &&
 			(r.Method == http.MethodGet || r.Method == http.MethodPost) {
 			if role != "admin" && role != "approver" {

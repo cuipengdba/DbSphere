@@ -646,6 +646,11 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 				return err
 			}
 			next.EventID = eventID
+			if rule.Metric == "routing.entry_fault" {
+				if err := recordDependencyIncident(ctx, tx, assetID, eventID, sampleID, now, metrics); err != nil {
+					return err
+				}
+			}
 		}
 		if next != nil {
 			body, err := json.Marshal(next)

@@ -241,7 +241,13 @@ func readMonitoringBucketRows(ctx context.Context, tx pgx.Tx, query string, args
 }
 
 func (s *Postgres) queryJSON(ctx context.Context, query string, args ...any) ([]json.RawMessage, error) {
-	rows, err := s.pool.Query(ctx, query, args...)
+	return queryJSONRows(ctx, s.pool, query, args...)
+}
+
+func queryJSONRows(ctx context.Context, db interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, query string, args ...any) ([]json.RawMessage, error) {
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

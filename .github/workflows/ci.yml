@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.29.0'
-          previous_sha='d2b40f844ad7eed0ca7787016f800191c8bda6321a6e0cdd8c5cafeed622aee8'
+          previous_version='1.30.0'
+          previous_sha='b8ec5b1e888b48e7faad2a101a45fb8575556c3b1cc573767614d4f813690d93'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.29.0'
-          previous_arm_sha='552540dc8ca01d9396ed86a7c92e8786ab4e9d20855c4846822abe91b369a6ea'
+          previous_version='1.30.0'
+          previous_arm_sha='8394cc423cccfefbcb43e60a3f473f6be7bdd365dea7d4f57b1deba47d2f3615'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1403,6 +1403,8 @@ jobs:
           DBSPHERE_TEST_HAPROXY_RECOVERY: 127.0.0.1:16436
           DBSPHERE_TEST_HAPROXY_STATS: http://reader:route-stats-test@127.0.0.1:16437/stats
           DBSPHERE_TEST_CHANGE_TARGET_ADMIN_URL: postgres://postgres:dbsphere-root-test@127.0.0.1:15435/postgres
+          DBSPHERE_TEST_IMPACT_PEER_URL: postgres://dbsphere_monitor:dbsphere-monitor-test@127.0.0.1:15436/postgres
+          DBSPHERE_TEST_IMPACT_PROXY: dbsphere-route-haproxy
         run: |
           docker run -d --rm --name dbsphere-route-limited --network dbsphere-pooltest -p 16434:5432 \
             -e DB_USER=dbsphere_monitor -e DB_PASSWORD=dbsphere-monitor-test -e DB_HOST=dbsphere-pg-pooltest \
@@ -1415,7 +1417,7 @@ jobs:
           docker exec -e PGPASSWORD=dbsphere-monitor-test dbsphere-pg-pooltest \
             psql -h dbsphere-route-limited -U dbsphere_monitor -d postgres -v ON_ERROR_STOP=1 -c 'SELECT 1'
           docker run -d --rm --name dbsphere-route-other --network dbsphere-pooltest \
-            -e POSTGRES_PASSWORD=dbsphere-root-test postgres:18-bookworm
+            -p 15436:5432 -e POSTGRES_PASSWORD=dbsphere-root-test postgres:18-bookworm
           for attempt in {1..60}; do
             if docker exec dbsphere-route-other pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
             sleep 1
@@ -1446,7 +1448,7 @@ jobs:
             stats uri /stats
             stats auth reader:route-stats-test
           CONFIG
-          docker run -d --rm --name dbsphere-route-haproxy --network dbsphere-pooltest \
+          docker run -d --name dbsphere-route-haproxy --network dbsphere-pooltest \
             -p 16435:5433 -p 16436:5434 -p 16437:8404 \
             --mount "type=bind,source=$RUNNER_TEMP/dbsphere-route-haproxy.cfg,target=/usr/local/etc/haproxy/haproxy.cfg,readonly" \
             haproxy:3.2-alpine@sha256:7816a9801a6846b912bc37e48529808e2fa87c3c47992441940f68e393ebcfeb
@@ -1456,6 +1458,7 @@ jobs:
             exit 1
           fi
           go test ./internal/store -run '^TestReal((PgBouncerPoolExhaustion|HAProxyRouteMismatch)KeepsOneEvent|PG18ChangeTimelineSeparatesObservedAndOperator)$' -count=1 -v
+          go test ./internal/store -run '^TestRealHAProxySharedDependencyLinksAndSplitsOriginalEvents$' -count=1 -v
       - uses: actions/upload-artifact@v4
         with:
           name: dbsphere-multiservice-trace-pg${{ matrix.pg }}

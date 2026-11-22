@@ -433,6 +433,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateChangeTimeline(ctx, tx); err != nil {
 		return fmt.Errorf("migrate asset change timeline: %w", err)
 	}
+	if err := migrateIncidentImpact(ctx, tx); err != nil {
+		return fmt.Errorf("migrate cross-instance incident impact: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

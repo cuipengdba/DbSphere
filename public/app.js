@@ -1743,6 +1743,94 @@ function traceRequestEvidence(paths, assetId, limited) {
   return section;
 }
 
+function incidentImpactPanel(impact, event) {
+  const panel = cell('section', '', 'evidence incident-impact');
+  const members = impact.members || [];
+  const history = impact.history || [];
+  const resolved = members.filter(item => item.status === 'resolved').length;
+  const open = members.filter(item => item.status === 'open').length;
+  panel.append(cell('h4', '跨实例影响范围'),
+    cell('p', `${impact.truncated ? '当前展示 ' : ''}${members.length} 个实例事件 · ${open} 个处理中 · ${resolved} 个已恢复`, 'hint'));
+  const eventLink = (id, label) => {
+    const link = cell('a', label, 'monitor-link');
+    link.href = `#incidents?event=${encodeURIComponent(id)}`;
+    return link;
+  };
+  for (const member of members) {
+    const row = cell('div', '', 'evidence impact-member');
+    const prefix = member.eventId === impact.primaryEventId ? '主事件' : '子事件';
+    row.append(eventLink(member.eventId, `${prefix} · ${member.assetName} · ${member.title}`),
+      cell('span', `${member.cluster ? member.cluster + ' · ' : ''}${member.status === 'resolved' ? '已恢复' : member.status === 'open' ? '处理中' : member.status}`, 'hint'));
+    if (member.dependency) {
+      const observed = cell('p', `${member.dependency.entry} · ${routingStatus[member.dependency.signal] || member.dependency.signal} · `, 'hint');
+      observed.append(replaySampleLink(member.assetId, member.dependency.sampleId));
+      row.append(observed);
+    }
+    if (member.services?.length) row.append(cell('p', `同窗数据库失败调用 · ${member.services.map(service => `${service.name} ${service.failures} 次`).join(' · ')}`));
+    panel.append(row);
+  }
+  if (history.length) {
+    const details = cell('details', '', 'settings-details');
+    details.append(cell('summary', '关联与拆分历史'));
+    for (const item of history) {
+      const line = cell('p', '', 'impact-history');
+      line.append(eventLink(item.parentEventId, item.parentAsset), document.createTextNode(' → '),
+        eventLink(item.childEventId, item.childAsset), document.createTextNode(
+          ` · ${item.source === 'dependency' ? '共同入口观测' : '人工关联'} · ${formatTime(item.linkedAt)} · ${item.reason}`));
+      if (item.unlinkedAt) line.append(document.createTextNode(` · 已拆分 ${formatTime(item.unlinkedAt)} · ${item.unlinkReason}`));
+      details.append(line);
+    }
+    panel.append(details);
+  }
+  if (currentRole === 'admin') {
+    const details = cell('details', '', 'settings-details');
+    details.append(cell('summary', '管理事件关联'));
+    const form = cell('form', '', 'form-grid routing-form');
+    const field = (labelText, control) => {
+      const label = cell('label', labelText);
+      control.setAttribute('aria-label', labelText);
+      label.append(control);
+      form.append(label);
+    };
+    const action = document.createElement('select');
+    for (const [value, label] of [['link', '关联子事件'], ['split', '拆分子事件']]) {
+      const option = cell('option', label); option.value = value; action.append(option);
+    }
+    const parent = document.createElement('input');
+    const child = document.createElement('input');
+    const reason = document.createElement('input');
+    parent.required = child.required = reason.required = true;
+    parent.maxLength = child.maxLength = 36; reason.maxLength = 200;
+    parent.value = impact.primaryEventId;
+    if (event.id !== impact.primaryEventId) child.value = event.id;
+    field('操作', action); field('主事件 ID', parent); field('子事件 ID', child); field('关联或拆分原因', reason);
+    const submit = cell('button', '保存关联操作');
+    submit.type = 'submit';
+    form.append(submit);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const primary = parent.value.trim(), secondary = child.value.trim();
+      if (![primary, secondary].every(id => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))) {
+        notice('请填写有效的主事件和子事件 ID。', true);
+        return;
+      }
+      submit.disabled = true;
+      try {
+        await api(`/api/events/${primary}/impact`, 'POST',
+          {action: action.value, childEventId: secondary, reason: reason.value.trim()});
+        notice(action.value === 'link' ? '事件已关联。' : '事件已拆分。');
+        if (selectedEvent === event.id) await showEvent(event.id, false);
+      } catch (error) {
+        notice(error.message, true);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    details.append(form); panel.append(details);
+  }
+  return panel;
+}
+
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   if (updateHash) setView(`incidents?event=${encodeURIComponent(id)}`);
@@ -1750,10 +1838,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, replay, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
-  const [eventAudit, workOrders, aiStatus] = await Promise.all([
+  const [eventAudit, workOrders, aiStatus, impact] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
     currentRole === 'admin' || currentRole === 'approver' ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
-    api('/api/ai/status').catch(() => ({ enabled: false }))
+    api('/api/ai/status').catch(() => ({ enabled: false })),
+    replay ? api(`/api/events/${id}/impact`).catch(() => null) : null
   ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
@@ -1850,6 +1939,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     related.append(cell('small', '共享样本表示两个事件记录了同一次采样，不证明它们具有相同根因。'));
     evidencePanel.append(related);
   }
+  if (impact && (impact.members?.length > 1 || impact.history?.length || impact.members?.[0]?.dependency || currentRole === 'admin'))
+    evidencePanel.append(incidentImpactPanel(impact, event));
   const diagnosis = document.createElement('div'); diagnosis.className = 'evidence';
   diagnosis.append(cell('h4', '同一事件 ID 的证据链与根因候选'));
   diagnosis.append(cell('p', `证据图：${analysis.graph.nodes.length} 个节点、${analysis.graph.edges.length} 条关系；${analysis.timeline.length} 条时间线记录。`));
