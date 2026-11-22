@@ -10,8 +10,8 @@
 | Kubernetes CloudNativePG 1.30.2 | — | — | — | — | CI | — | Kubernetes 1.35.8 与 PostgreSQL 18.7，验证读写 Service、只读副本、故障切换、原事件恢复和隔离逻辑恢复。 [Operator 版本说明](https://cloudnative-pg.io/releases/cloudnative-pg-1-30.2-released/) |
 | Linux Patroni 双节点 | CI | CI | CI | CI | CI | — | 只读拓扑、选主、原节点重入及同事件恢复。[Patroni 验收](PATRONI_ACCEPTANCE.md) |
 | Kubernetes Patroni | 本机 | — | — | — | — | — | 单节点 kind 的 PG14 故障闭环。 |
-| 托管模式的数据库协议路径 | CI | CI | CI | CI | CI | — | 本地 PostgreSQL 容器的数据库侧采集与缺口显示。 |
-| 实际云厂商托管 PostgreSQL | — | — | — | — | — | — | 待验收厂商的 TLS、角色权限、系统视图限制及连接策略。 |
+| 托管模式的数据库协议路径 | CI | CI | CI | CI | CI、本机专项 | — | 本地 PostgreSQL 容器的数据库侧采集与缺口显示。PG18 本机专项包含主库和物理只读副本、CA 校验、受限权限和原事件恢复。[托管 PostgreSQL 接入](MANAGED_POSTGRESQL.md) |
+| 实际云厂商托管 PostgreSQL | — | — | — | — | — | — | AWS RDS 适配器可识别厂商特征，实云 TLS、角色权限、系统视图限制及连接故障恢复待验收。 |
 
 `CI` 表示独立 Ubuntu Linux runner 的真实数据库容器或 kind 测试；`本机` 表示隔离本机测试。`—` 表示未验收，不能据此推断支持。Linux 裸机/虚机上的 PostgreSQL 使用相同数据库协议，但不同发行版、文件系统、服务管理和生产持续负载未完成独立验收。生产 Kubernetes 集群、Operator、跨区域和持续高负载不在已测矩阵内。
 

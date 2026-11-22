@@ -2,22 +2,20 @@ package collector
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/jackc/pgx/v5"
 )
 
-type Target struct {
-	Host     string
-	Port     int
-	Database string
-	Username string
-	SSLMode  string
-}
+type Target = collectoradapter.Target
 
 const (
 	minPostgresMajor = 14
@@ -33,13 +31,43 @@ func readOnlyPostgresConfig(target Target, password string) (*pgx.ConnConfig, er
 	if target.SSLMode == "require" {
 		mode = "verify-full"
 	}
+	profile := postgresAdapterProfile(target)
+	if profile == "aws-rds-postgresql" && mode != "verify-full" {
+		return nil, fmt.Errorf("AWS RDS PostgreSQL requires verified TLS")
+	}
 	address := url.URL{Scheme: "postgres", Host: net.JoinHostPort(target.Host, strconv.Itoa(target.Port)),
 		Path: "/" + target.Database, User: url.UserPassword(target.Username, password)}
 	params := url.Values{"sslmode": {mode}}
+	var pem64 string
+	if mode == "verify-full" {
+		file := os.Getenv("DBSPHERE_POSTGRES_CA_FILE")
+		pem64 = os.Getenv("DBSPHERE_POSTGRES_CA_PEM_BASE64")
+		if profile == "aws-rds-postgresql" {
+			rdsFile := os.Getenv("DBSPHERE_RDS_CA_FILE")
+			rdsPEM := os.Getenv("DBSPHERE_RDS_CA_PEM_BASE64")
+			if rdsFile != "" || rdsPEM != "" {
+				file, pem64 = rdsFile, rdsPEM
+			}
+		}
+		if file != "" {
+			if pem64 != "" {
+				return nil, fmt.Errorf("configure one PostgreSQL CA source")
+			}
+			params.Set("sslrootcert", file)
+		}
+	}
 	address.RawQuery = params.Encode()
 	config, err := pgx.ParseConfig(address.String())
 	if err != nil {
 		return nil, fmt.Errorf("invalid PostgreSQL connection settings")
+	}
+	if pem64 != "" {
+		pem, err := base64.StdEncoding.DecodeString(pem64)
+		roots := x509.NewCertPool()
+		if err != nil || !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("invalid base64 PostgreSQL CA bundle")
+		}
+		config.TLSConfig.RootCAs = roots
 	}
 	config.ConnectTimeout = 4 * time.Second
 	config.RuntimeParams["application_name"] = "dbsphere-monitor-go"
@@ -50,19 +78,32 @@ func readOnlyPostgresConfig(target Target, password string) (*pgx.ConnConfig, er
 
 // PostgreSQL only receives read-only sessions from this collector.
 func PostgreSQL(ctx context.Context, target Target, password string) (map[string]any, error) {
-	config, err := readOnlyPostgresConfig(target, password)
+	snapshot, err := (PostgreSQLAdapter{}).Collect(ctx, target, password)
 	if err != nil {
 		return nil, err
+	}
+	snapshot.Metrics["adapter"] = snapshot.Report
+	return snapshot.Metrics, nil
+}
+
+type PostgreSQLAdapter struct{}
+
+var _ collectoradapter.Adapter = PostgreSQLAdapter{}
+
+func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password string) (collectoradapter.Snapshot, error) {
+	config, err := readOnlyPostgresConfig(target, password)
+	if err != nil {
+		return collectoradapter.Snapshot{}, err
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	conn, err := pgx.ConnectConfig(connectCtx, config)
 	if err != nil {
-		return nil, err
+		return collectoradapter.Snapshot{}, err
 	}
 	defer conn.Close(context.Background())
 	var version, connections, maxConnections int
-	var recovery, monitor, readStats, super, createDB, createRole, replicationRole bool
+	var recovery, monitor, readStats, super, createDB, createRole, replicationRole, readOnly bool
 	var commits, rollbacks, databaseBytes int64
 	var serverAddress, databaseName string
 	var serverPort int
@@ -74,16 +115,16 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 		coalesce(s.numbackends,0)::int,coalesce(s.xact_commit,0)::bigint,
 		coalesce(s.xact_rollback,0)::bigint,pg_database_size(current_database())::bigint,
 		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0),
-		current_database(),pg_postmaster_start_time()
+		current_database(),pg_postmaster_start_time(),current_setting('transaction_read_only')='on'
 		FROM pg_roles r LEFT JOIN pg_stat_database s ON s.datname=current_database()
 		WHERE r.rolname=current_user`).Scan(&version, &recovery, &monitor, &readStats, &super, &createDB, &createRole,
-		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName, &startedAt)
+		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName, &startedAt, &readOnly)
 	if err != nil {
-		return nil, err
+		return collectoradapter.Snapshot{}, err
 	}
 	major := version / 10000
 	if !PostgresMajorSupported(major) {
-		return nil, fmt.Errorf("PostgreSQL %d is outside the supported %d–%d range", major, minPostgresMajor, maxPostgresMajor)
+		return collectoradapter.Snapshot{}, fmt.Errorf("PostgreSQL %d is outside the supported %d–%d range", major, minPostgresMajor, maxPostgresMajor)
 	}
 	role := "primary"
 	if recovery {
@@ -128,6 +169,8 @@ func PostgreSQL(ctx context.Context, target Target, password string) (map[string
 	defer stopSQL()
 	performance := collectSQLPerformance(sqlCtx, conn)
 	metrics["sqlPerformance"] = performance
-	metrics["pgCompatibility"] = postgresCompatibility(major, recovery, readStats, diagnostics, performance)
-	return metrics, nil
+	compatibility := postgresCompatibility(major, recovery, readStats, diagnostics, performance)
+	metrics["pgCompatibility"] = compatibility
+	report := postgresAdapterReport(ctx, target, conn, version, role, readOnly, compatibility)
+	return collectoradapter.Snapshot{Metrics: metrics, Report: report}, nil
 }

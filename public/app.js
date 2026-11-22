@@ -1096,6 +1096,17 @@ function renderSignalCoverage(target, asset, sample, performance) {
     ['PgBouncer', asset.poolerConfigured ? (metrics.pgbouncer?.status === 'ok' ? '已采集' : `未采集：${metrics.pgbouncer?.reason || '连接或权限待检查'}`) : asset.poolerEndpoint ? '仅配置应用端点，未接入统计采集' : '未接入'],
     ['Patroni', asset.patroniConfigured ? (metrics.patroni?.status === 'ok' ? '已采集' : `未采集：${metrics.patroni?.reason || '端点待检查'}`) : '未接入']
   ];
+  const adapter = metrics.adapter;
+  if (asset.runtime === 'managed' && adapter?.engine === 'postgresql') {
+    const transport = adapter.transport;
+    const rds = adapter.profile === 'aws-rds-postgresql';
+    const provider = adapter.providerStatus === 'provider_signals_observed' ? '已观测到厂商特征' : '厂商特征待核验';
+    rows.push(
+      ['采集适配器', rds ? `AWS RDS for PostgreSQL · ${provider}` : '通用托管 PostgreSQL'],
+      ['采集会话', `${transport.verified ? '证书与主机名已验证' : transport.encrypted ? '已加密，身份未验证' : '未启用 TLS'}${transport.protocol ? ` · ${transport.protocol}` : ''} · ${transport.readOnly ? '只读' : '只读状态异常'}`],
+      ['数据库角色', adapter.role === 'standby' ? '只读副本' : '主库']
+    );
+  }
   const panel = document.createElement('details'); panel.className = 'settings-details';
   panel.append(cell('summary', `采集能力与缺口 · ${assetHealth(asset).label}`));
   const list = document.createElement('div'); list.className = 'diagnostic-list';

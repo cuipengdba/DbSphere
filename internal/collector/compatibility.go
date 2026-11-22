@@ -1,11 +1,8 @@
 package collector
 
-type postgresSignal struct {
-	Key    string `json:"key"`
-	Source string `json:"source"`
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
+import "github.com/cuipengdba/dbsphere/pkg/collectoradapter"
+
+type postgresSignal = collectoradapter.Signal
 
 func sampledSignal(key, source string, result map[string]any) postgresSignal {
 	status, _ := result["status"].(string)

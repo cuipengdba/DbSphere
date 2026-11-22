@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,6 +120,10 @@ func collectionError(err error) (string, string) {
 	if strings.Contains(err.Error(), "outside the supported") {
 		return "telemetry", err.Error()
 	}
+	var certificateError *tls.CertificateVerificationError
+	if errors.As(err, &certificateError) {
+		return "telemetry", "PostgreSQL TLS certificate or hostname verification failed"
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
 		return "availability", "PostgreSQL connection refused"
 	}
@@ -162,6 +167,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if runtime != "linux" && runtime != "k8s" && runtime != "managed" {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
+	target.Runtime = runtime
 	password, err := security.Decrypt(key, encrypted)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("decrypt monitoring credential: %w", err)
