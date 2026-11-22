@@ -1,6 +1,8 @@
 services:
-  app:
+  app: &kubeconfig
     environment:
       DBSPHERE_KUBECONFIG: /etc/dbsphere/kubeconfig
     volumes:
       - '${DBSPHERE_KUBECONFIG_HOST_PATH:?Set an absolute read-only kubeconfig path}:/etc/dbsphere/kubeconfig:ro'
+  replica:
+    <<: *kubeconfig

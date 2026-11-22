@@ -189,6 +189,8 @@ type AuthConfig struct {
 	AI                   *ai.Client
 	AIDailyLimit         int
 	WorkOrderProfiles    map[string]WorkOrderProfile
+	ReplicaID            string
+	StorageAvailable     func() bool
 }
 
 type loginAttempt struct {
@@ -219,8 +221,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := store.Health(r.Context()); err != nil {
+			w.Header().Set("X-DbSphere-Storage", "unavailable")
 			respond(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
+		}
+		if credentials != nil && credentials.ReplicaID != "" {
+			w.Header().Set("X-DbSphere-Replica", credentials.ReplicaID)
 		}
 		respond(w, http.StatusOK, map[string]string{"status": "ready", "storage": "postgresql18"})
 	})
@@ -298,6 +304,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		if credentials == nil {
 			respond(w, http.StatusNotImplemented, map[string]string{"error": "Go API migration in progress"})
+			return
+		}
+		if credentials.StorageAvailable != nil && !credentials.StorageAvailable() {
+			w.Header().Set("X-DbSphere-Storage", "unavailable")
+			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "长期存储暂不可用，恢复后请重试"})
 			return
 		}
 		if r.Method != http.MethodGet && r.Header.Get("Origin") != "" {
@@ -493,6 +504,26 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				return
 			}
 			respond(w, http.StatusOK, entries)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/platform" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Administrator access required"})
+				return
+			}
+			platform, ok := store.(interface {
+				PlatformStatus(context.Context) (storepkg.PlatformStatus, error)
+			})
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Platform replica status unavailable"})
+				return
+			}
+			status, err := platform.PlatformStatus(r.Context())
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Platform replica status unavailable"})
+				return
+			}
+			respond(w, http.StatusOK, status)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector" {

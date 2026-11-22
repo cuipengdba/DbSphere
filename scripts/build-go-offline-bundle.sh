@@ -53,6 +53,8 @@ cp -- "$repo_dir/deploy/compose/compose.go.external.yaml" "$stage/deploy/compose
 cp -- "$repo_dir/deploy/compose/compose.go.k8s.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/deploy/compose/compose.backup.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/deploy/compose/compose.go.offline.yaml" "$stage/deploy/compose/"
+cp -- "$repo_dir/deploy/compose/compose.go.ha.yaml" "$stage/deploy/compose/"
+cp -- "$repo_dir/deploy/compose/compose.go.replica-backup.yaml" "$stage/deploy/compose/"
 cp -- "$repo_dir/scripts/install-go-offline.sh" "$stage/install.sh"
 cp -- "$repo_dir/scripts/backup-go-store.sh" "$stage/backup.sh"
 chmod 0755 "$stage/install.sh"

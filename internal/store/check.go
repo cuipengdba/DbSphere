@@ -362,6 +362,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		}
 		layer := object(metrics["collector"])
 		layer["scheduledFor"] = lease.DueAt
+		if s.platformReplicaID != "" {
+			layer["replicaId"] = s.platformReplicaID
+		}
 	}
 	var previous map[string]any
 	var previousID string

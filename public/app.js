@@ -25,6 +25,7 @@ let eventPageRequest = 0;
 let eventSearchTimer = null;
 let editingAsset = null;
 let pg18Store = false;
+let longTermStoreUnavailable = false;
 let collectorSchedule = { known: false, enabled: false, intervalMs: 60000, clockOffsetMs: 0 };
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
@@ -76,7 +77,7 @@ function setView(route, updateHash = true) {
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
     } else {
-      showSection(selected, selected === 'settings' && ['storage', 'collector', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -105,6 +106,7 @@ function showSection(view, section, eventId, ruleCode) {
   }
   if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
   if (view === 'settings' && section === 'access') void loadAccessDirectory();
+  if (view === 'settings' && section === 'platform') void loadPlatformStatus();
 }
 
 const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
@@ -440,9 +442,32 @@ async function api(path, method = 'GET', payload) {
     headers: { ...(payload ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
     body: payload ? JSON.stringify(payload) : undefined
   });
+  if (response.headers.get('X-DbSphere-Storage') === 'unavailable') showStorageAvailability(false);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
+}
+
+function showStorageAvailability(available) {
+  longTermStoreUnavailable = !available;
+  $('storage-unavailable').hidden = available;
+}
+
+async function pollStorageAvailability() {
+  try {
+    const ready = await fetch('/readyz', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+    if (ready.status === 404) return;
+    const wasUnavailable = longTermStoreUnavailable;
+    showStorageAvailability(ready.ok);
+    if (ready.ok && wasUnavailable) {
+      $('login-error').textContent = '';
+      await boot();
+    }
+  } catch {
+    showStorageAvailability(false);
+  } finally {
+    window.setTimeout(pollStorageAvailability, 5000);
+  }
 }
 
 function notice(message, error = false) {
@@ -1537,6 +1562,23 @@ function renderStorage(storage) {
     record.append(digest);
     target.append(record);
   }
+}
+
+async function loadPlatformStatus() {
+  const target = $('platform-status-detail');
+  try {
+    const { replicas, maintenance } = await api('/api/admin/platform');
+    const owner = replicas.find(replica => replica.id === maintenance?.owner);
+    target.replaceChildren(cell('p', maintenance ? `维护主节点 ${owner?.name || maintenance.owner} · 第 ${maintenance.generation} 任 · 租约到期 ${formatTime(maintenance.leaseUntil)}` : '等待选出维护主节点。', 'hint'));
+    if (replicas.length) {
+      const table = cell('div', '', 'monitor-table');
+      table.append(importTable(['副本', '运行状态', '自动采集', '本进程采集轮次', '最近心跳'], replicas.map(replica => [
+        `${replica.name} · ${replica.id.slice(0, 8)}`, replica.online ? '在线' : '离线',
+        replica.collector ? '启用' : '关闭', replica.completedCycles, formatTime(replica.seenAt)
+      ])));
+      target.append(table);
+    } else target.append(cell('p', '尚无平台注册记录。', 'empty'));
+  } catch (error) { target.replaceChildren(cell('p', error.message, 'warning')); }
 }
 
 function renderCollectorStatus(status) {
@@ -2891,6 +2933,8 @@ $('asset-form').addEventListener('submit', async (event) => {
 $('fleet-filters').addEventListener('submit', event => { event.preventDefault(); fleetPage = 1; void loadFleetOverview(); });
 $('fleet-prev').addEventListener('click', () => { if (fleetPage > 1) { fleetPage--; void loadFleetOverview(); } });
 $('fleet-next').addEventListener('click', () => { fleetPage++; void loadFleetOverview(); });
+$('platform-refresh').addEventListener('click', loadPlatformStatus);
 
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
-setInterval(() => { if (csrf) refresh().catch(() => {}); }, 30000);
+window.setTimeout(pollStorageAvailability, 5000);
+setInterval(() => { if (csrf && !longTermStoreUnavailable) refresh().catch(() => {}); }, 30000);

@@ -151,6 +151,7 @@ func (cfg Config) Send(ctx context.Context, item store.Notification) (string, er
 		}
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("X-DbSphere-Delivery-Id", item.ID)
+		request.Header.Set("Idempotency-Key", item.ID)
 		if len(cfg.Secret) != 0 {
 			mac := hmac.New(sha256.New, cfg.Secret)
 			_, _ = mac.Write(body)
@@ -236,8 +237,8 @@ func (cfg Config) sendEmail(ctx context.Context, item store.Notification, severi
 	for _, recipient := range cfg.SMTPTo {
 		to = append(to, recipient.String())
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n事件 ID: %s\r\n资产: %s (%s)\r\n告警: %v\r\n状态: %s\r\n级别: %s\r\n时间: %s\r\n指标来源: %v\r\n",
-		cfg.SMTPFrom.String(), strings.Join(to, ", "), subject, item.EventID,
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMessage-ID: <%s@dbsphere.local>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n事件 ID: %s\r\n资产: %s (%s)\r\n告警: %v\r\n状态: %s\r\n级别: %s\r\n时间: %s\r\n指标来源: %v\r\n",
+		cfg.SMTPFrom.String(), strings.Join(to, ", "), subject, item.ID, item.EventID,
 		item.AssetName, item.AssetID, payload["ruleId"], item.Kind, severity,
 		item.ObservedAt.Format(time.RFC3339), payload["source"])
 	if _, err := io.WriteString(writer, message); err != nil {

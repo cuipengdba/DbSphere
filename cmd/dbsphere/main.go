@@ -25,6 +25,13 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) == 2 && os.Args[1] == "gateway" {
+		if err := runGateway(); err != nil {
+			log.Error("DbSphere gateway exited", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -164,6 +171,10 @@ func run(log *slog.Logger) error {
 	}
 	collectorRuntime := collectorstate.New(cfg.AutoCollect, time.Duration(cfg.CollectEvery)*time.Second,
 		cfg.CollectWorkers, time.Now())
+	replica := newPlatformReplica(cfg.AutoCollect)
+	pg.SetPlatformReplica(replica.ID)
+	var storageAvailable atomic.Bool
+	storageAvailable.Store(true)
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash:   viewerHash,
@@ -172,6 +183,8 @@ func run(log *slog.Logger) error {
 			AutoCollect:          cfg.AutoCollect,
 			CollectEvery:         cfg.CollectEvery,
 			CollectorState:       collectorRuntime,
+			ReplicaID:            replica.ID,
+			StorageAvailable:     storageAvailable.Load,
 			WorkOrderProfiles:    workProfiles,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
@@ -192,50 +205,17 @@ func run(log *slog.Logger) error {
 		_ = server.Shutdown(shutdown)
 	}()
 	var collectorDone <-chan struct{}
-	notifierDone := make(chan struct{})
-	go func() {
-		defer close(notifierDone)
-		runNotifier(ctx, pg, notifyConfig, log)
-	}()
-	tracePrunerDone := make(chan struct{})
-	go func() {
-		defer close(tracePrunerDone)
-		runTracePruner(ctx, pg, cfg.TraceDays, log)
-	}()
-	partitionDone := make(chan struct{})
-	go func() {
-		defer close(partitionDone)
-		runPartitionMaintainer(ctx, pg, log)
-	}()
-	trendDone := make(chan struct{})
-	go func() {
-		defer close(trendDone)
-		runTrendMaintainer(ctx, pg, log)
-	}()
-	var retentionDone <-chan struct{}
-	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
-		done := make(chan struct{})
-		retentionDone = done
-		go func() {
-			defer close(done)
-			runDataRetention(ctx, pg, cfg.SampleDays, cfg.EventDays, log)
-		}()
-	}
-	inspectionDone := make(chan struct{})
-	go func() {
-		defer close(inspectionDone)
-		runInspectionScheduler(ctx, pg, cfg.MasterKey, log)
-	}()
-	var autoAIDone <-chan struct{}
+	maintenanceDone := make(chan struct{})
+	var autoModel *ai.Client
 	if autoAI == "true" {
-		done := make(chan struct{})
-		autoAIDone = done
-		go func() {
-			defer close(done)
-			runAutoAI(ctx, pg, aiClient, aiDailyLimit, log)
-		}()
-		log.Info("automatic critical event AI summaries enabled", "dailyLimit", aiDailyLimit)
+		autoModel = aiClient
 	}
+	go func() {
+		defer close(maintenanceDone)
+		runPlatform(ctx, pg, replica, collectorRuntime, &storageAvailable, func(leaderCtx context.Context) {
+			runMaintenance(leaderCtx, pg, cfg, notifyConfig, autoModel, aiDailyLimit, log)
+		}, log)
+	}()
 	if cfg.AutoCollect {
 		done := make(chan struct{})
 		collectorDone = done
@@ -252,17 +232,7 @@ func run(log *slog.Logger) error {
 	if collectorDone != nil {
 		<-collectorDone
 	}
-	<-notifierDone
-	<-tracePrunerDone
-	<-partitionDone
-	<-trendDone
-	if retentionDone != nil {
-		<-retentionDone
-	}
-	<-inspectionDone
-	if autoAIDone != nil {
-		<-autoAIDone
-	}
+	<-maintenanceDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

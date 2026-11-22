@@ -32,6 +32,7 @@ if [[ $# -ge 2 ]]; then
 fi
 
 image='dbsphere/airgap-dind:local'
+ha_test="${DBSPHERE_HA_SMOKE:-false}"
 container="dbsphere-airgap-dind-$$"
 log="$(mktemp "${TMPDIR:-/tmp}/dbsphere-airgap.XXXXXX")"
 cleanup() {
@@ -39,10 +40,11 @@ cleanup() {
   rm -f -- "$log"
 }
 trap cleanup EXIT
-docker build -q -t "$image" -f "$repo_dir/test/fixtures/Dockerfile.airgap-dind" \
+docker build -q --build-arg "WITH_HA_TEST=$ha_test" -t "$image" -f "$repo_dir/test/fixtures/Dockerfile.airgap-dind" \
   "$repo_dir/test/fixtures" >/dev/null
 mounts=(-v "$(dirname -- "$archive"):/bundle:ro")
 if [[ -n "$previous_archive" ]]; then mounts+=(-v "$(dirname -- "$previous_archive"):/previous:ro"); fi
+if [[ "$ha_test" == true ]]; then mounts+=(-v "$repo_dir/test/fixtures/go-ha-drill.py:/ha-smoke.py:ro"); fi
 docker run -d --privileged --network none --name "$container" \
   -e DOCKER_TLS_CERTDIR= -e DBSPHERE_NO_PRINT_PASSWORD=true \
   "${mounts[@]}" "$image" >/dev/null
@@ -112,6 +114,10 @@ marker="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
 if [[ "$marker" != persisted-before-reinstall ]]; then
   echo 'PostgreSQL 18 data did not survive repeated offline installation.' >&2
   exit 1
+fi
+if [[ "$ha_test" == true ]]; then
+  docker exec "$container" python3 /ha-smoke.py "/bundle/$archive_name"
+  check_health "$version"
 fi
 if [[ -n "$previous_archive" ]]; then
   install "/previous/$previous_name"

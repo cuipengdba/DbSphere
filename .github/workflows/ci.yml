@@ -406,13 +406,15 @@ jobs:
             psql -h 127.0.0.1 -U postgres -d postgres -Atqc 'SELECT max(version) FROM dbsphere_schema_migrations')"
           test "$version" -ge 20
       - name: Install with a network-isolated Docker 27 daemon and preserve PG18 data
+        env:
+          DBSPHERE_HA_SMOKE: 'true'
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.37.0'
-          previous_sha='c1087b1a77e9b246bedca19bf2dc4cfed20ac536b308d34cc0ba76c7b60218a7'
+          previous_version='1.38.0'
+          previous_sha='0686e382c18bbf78de38e78a4a1be0e2b38d3a56c6af1ff76897c18597054d2d'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -481,8 +483,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.37.0'
-          previous_arm_sha='ae7925ee664d3bb3dc4885a6ffd189db9a5b3199cde09273036cb99a8de8584b'
+          previous_version='1.38.0'
+          previous_arm_sha='4ac0079aa3b3c3ec3dd0603bbc3dfce48f7208fa10ff2940f7103dcbc5ac7a37'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

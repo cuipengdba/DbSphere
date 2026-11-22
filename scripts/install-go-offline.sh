@@ -47,6 +47,7 @@ if [[ $# -eq 2 ]]; then
 fi
 export DBSPHERE_GO_OFFLINE_APP_IMAGE
 export DBSPHERE_PG18_IMAGE=postgres:18-bookworm
+export COMPOSE_PROFILES=
 
 config_dir="${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}"
 if [[ "$config_dir" != /* ]]; then echo 'DBSPHERE_GO_CONFIG_DIR must be absolute.' >&2; exit 1; fi
@@ -65,6 +66,7 @@ if [[ ! -e "$env_file" ]]; then
   master_key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
   printf 'DBSPHERE_ADMIN_PASSWORD=%s\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_KEY=%s\nDBSPHERE_WEB_PORT=8081\nDBSPHERE_COOKIE_SECURE=false\n' \
     "$new_admin_password" "$store_password" "$master_key" > "$env_file"
+  if [[ "${DBSPHERE_GO_HA:-false}" == true ]]; then printf 'DBSPHERE_GO_HA=true\n' >> "$env_file"; fi
   unset store_password master_key
 fi
 chmod 0600 "$env_file"
@@ -89,6 +91,20 @@ if grep -q '^DBSPHERE_BACKUP_INFO_HOST_PATH=' "$env_file"; then
   fi
   compose_args+=(-f "$bundle_dir/deploy/compose/compose.backup.yaml")
 fi
+compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.offline.yaml")
+ha_mode="${DBSPHERE_GO_HA:-$(sed -n 's/^DBSPHERE_GO_HA=//p' "$env_file" | tail -n 1)}"
+restart_apps=(app)
+case "$ha_mode" in
+  true)
+    compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.ha.yaml" --profile ha)
+    if [[ -n "${backup_info_path:-}" ]]; then
+      compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.replica-backup.yaml")
+    fi
+    restart_apps+=(replica)
+    ;;
+  ''|false) ;;
+  *) echo 'DBSPHERE_GO_HA must be true or false.' >&2; exit 1 ;;
+esac
 loaded_images="$(docker image load --input "$bundle_dir/images.tar.gz")"
 if ! grep -Fqx "Loaded image: $DBSPHERE_GO_OFFLINE_APP_IMAGE" <<< "$loaded_images" ||
    ! grep -Fqx 'Loaded image: postgres:18-bookworm' <<< "$loaded_images"; then
@@ -103,18 +119,17 @@ if [[ "$(docker image inspect --format '{{.Id}}' "$DBSPHERE_GO_OFFLINE_APP_IMAGE
   # source of identity for this installation.
   echo 'Docker normalized image IDs; verified archive and loaded tags match the bundle.' >&2
 fi
-docker compose --env-file "$env_file" "${compose_args[@]}" \
-  -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" config -q
+docker compose --env-file "$env_file" "${compose_args[@]}" config -q
+if [[ "$ha_mode" != true ]]; then
+  docker compose --env-file "$env_file" "${compose_args[@]}" --profile ha stop gateway replica
+fi
 if [[ "$rotate_admin" == true ]]; then
   docker compose --env-file "$env_file" "${compose_args[@]}" \
-    -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
     run --rm --no-deps --pull never app rotate-admin-password
   docker compose --env-file "$env_file" "${compose_args[@]}" \
-    -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
-    up -d --no-build --pull never --no-deps --force-recreate app
+    up -d --no-build --pull never --no-deps --force-recreate "${restart_apps[@]}"
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
-  -f "$bundle_dir/deploy/compose/compose.go.offline.yaml" \
   up -d --no-build --pull never --wait --wait-timeout 180
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
 echo "DbSphere Go is ready at http://127.0.0.1:${web_port:-8081}"

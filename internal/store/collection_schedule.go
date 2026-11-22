@@ -71,9 +71,9 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 		AND a.runtime IN ('linux','k8s','managed')
 		ORDER BY j.due_at,j.asset_id LIMIT $1 FOR UPDATE OF j SKIP LOCKED
 	) UPDATE collection_jobs j SET lease_token=gen_random_uuid(),
-		lease_until=clock_timestamp()+make_interval(secs=>$2)
+		lease_until=clock_timestamp()+make_interval(secs=>$2),lease_replica_id=nullif($3,'')
 	FROM ready WHERE j.asset_id=ready.asset_id RETURNING j.asset_id::text,j.lease_token::text,j.due_at`,
-		limit, collectionLeaseSeconds)
+		limit, collectionLeaseSeconds, s.platformReplicaID)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func lockCollectionLease(ctx context.Context, tx pgx.Tx, lease CollectionLease) 
 }
 
 const finishCollectionSQL = `UPDATE collection_jobs SET
-	lease_token=NULL,lease_until=NULL,
+	lease_token=NULL,lease_until=NULL,lease_replica_id=NULL,
 	failures=CASE WHEN $3='ok' THEN 0 ELSE least(failures+1,7) END,
 	last_outcome=$3,last_finished_at=now(),last_sample_id=coalesce($4,last_sample_id),
 	due_at=now()+make_interval(secs=>CASE WHEN $3='ok' THEN $5
@@ -122,7 +122,7 @@ func (s *Postgres) CheckCollectionLease(ctx context.Context, lease CollectionLea
 
 const collectionQueueSQL = `WITH queue AS (
 	SELECT a.id AS "assetId",a.name,a.last_sample_at AS "lastSampleAt",j.last_sample_id AS "lastSampleId",
-		j.lease_until AS "leaseUntil",j.last_finished_at AS "lastFinishedAt",j.due_at AS "dueAt",
+		j.lease_until AS "leaseUntil",j.lease_replica_id AS "leaseReplicaId",j.last_finished_at AS "lastFinishedAt",j.due_at AS "dueAt",
 		coalesce(j.failures,0) AS failures,coalesce(j.last_outcome,'') AS outcome,
 		CASE WHEN j.lease_until>now() THEN 'running'
 		WHEN j.due_at<=now() AND (j.lease_until IS NOT NULL OR j.due_at<=now()-make_interval(secs=>$1)) THEN 'delayed'

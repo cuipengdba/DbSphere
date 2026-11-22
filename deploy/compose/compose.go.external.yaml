@@ -1,14 +1,14 @@
 name: dbsphere-go-dev
 
 services:
-  app:
+  app: &go-app
     build:
       context: ../..
       dockerfile: Dockerfile-go
     restart: unless-stopped
     extra_hosts:
       - 'host.docker.internal:host-gateway'
-    environment:
+    environment: &go-environment
       DBSPHERE_DATABASE_URL: ${DBSPHERE_DATABASE_URL:?Set an independent PostgreSQL 18 URL in .env.go}
       DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click-go.sh first}
       DBSPHERE_VIEWER_PASSWORD: ${DBSPHERE_VIEWER_PASSWORD:-}
@@ -20,6 +20,7 @@ services:
       DBSPHERE_MASTER_KEY: ${DBSPHERE_MASTER_KEY:?Run scripts/one-click-go.sh first}
       DBSPHERE_HOST: 0.0.0.0
       DBSPHERE_PORT: 8080
+      DBSPHERE_REPLICA_NAME: app
       DBSPHERE_COOKIE_SECURE: ${DBSPHERE_COOKIE_SECURE:-false}
       DBSPHERE_ENABLE_GO_COLLECTOR: ${DBSPHERE_ENABLE_GO_COLLECTOR:-false}
       DBSPHERE_COLLECT_INTERVAL_SECONDS: ${DBSPHERE_COLLECT_INTERVAL_SECONDS:-60}
@@ -47,5 +48,27 @@ services:
       DBSPHERE_AI_MODEL: ${DBSPHERE_AI_MODEL:-}
       DBSPHERE_AI_API_KEY: ${DBSPHERE_AI_API_KEY:-}
       DBSPHERE_AI_ALLOW_REMOTE: ${DBSPHERE_AI_ALLOW_REMOTE:-false}
+    ports:
+      - '127.0.0.1:${DBSPHERE_WEB_PORT:-8080}:8080'
+
+  replica:
+    <<: *go-app
+    profiles: [ha]
+    ports: []
+    environment:
+      <<: *go-environment
+      DBSPHERE_REPLICA_NAME: replica
+
+  gateway:
+    profiles: [ha]
+    build:
+      context: ../..
+      dockerfile: Dockerfile-go
+    restart: unless-stopped
+    command: [gateway]
+    environment:
+      DBSPHERE_HOST: 0.0.0.0
+      DBSPHERE_PORT: 8080
+      DBSPHERE_GATEWAY_UPSTREAMS: http://app:8080,http://replica:8080
     ports:
       - '127.0.0.1:${DBSPHERE_WEB_PORT:-8080}:8080'

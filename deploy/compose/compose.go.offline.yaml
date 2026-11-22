@@ -1,3 +1,7 @@
 services:
   app:
     image: ${DBSPHERE_GO_OFFLINE_APP_IMAGE:?Go offline application image is required}
+  replica:
+    image: ${DBSPHERE_GO_OFFLINE_APP_IMAGE:?Go offline application image is required}
+  gateway:
+    image: ${DBSPHERE_GO_OFFLINE_APP_IMAGE:?Go offline application image is required}

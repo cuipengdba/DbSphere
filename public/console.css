@@ -69,6 +69,7 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 #access-directory-content input[type="checkbox"] { width: auto; justify-self: start; }
 .work-order-entry > small,
 .work-order-entry > a { display: block; margin-block: 4px; }
+.platform-status { margin: 12px auto; max-width: 1180px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 8px; }
 .incident-grid { grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1.4fr); }
 .incident-grid > .panel:first-child { position: sticky; top: 72px; }
 .incident-grid #event-list { max-height: calc(100dvh - 255px); }

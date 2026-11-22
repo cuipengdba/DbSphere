@@ -26,6 +26,7 @@ func TestWebhookSignedDeliveryAndSeverity(t *testing.T) {
 		mac := hmac.New(sha256.New, []byte("test-secret"))
 		_, _ = mac.Write(body)
 		if r.Method != http.MethodPost || r.Header.Get("X-DbSphere-Delivery-Id") != "delivery-id" ||
+			r.Header.Get("Idempotency-Key") != "delivery-id" ||
 			r.Header.Get("X-DbSphere-Signature") != "sha256="+hex.EncodeToString(mac.Sum(nil)) ||
 			!strings.Contains(string(body), `"eventId":"incident-id"`) {
 			t.Errorf("signed webhook payload mismatch: %s", body)

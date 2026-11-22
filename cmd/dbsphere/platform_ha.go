@@ -1,0 +1,98 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
+	"github.com/cuipengdba/dbsphere/internal/config"
+	"github.com/cuipengdba/dbsphere/internal/notify"
+	"github.com/cuipengdba/dbsphere/internal/store"
+)
+
+func newPlatformReplica(collectorEnabled bool) store.PlatformReplica {
+	var identity [16]byte
+	_, _ = rand.Read(identity[:])
+	id := hex.EncodeToString(identity[:])
+	name := strings.TrimSpace(os.Getenv("DBSPHERE_REPLICA_NAME"))
+	if name == "" || len(name) > 100 {
+		name, _ = os.Hostname()
+	}
+	if name == "" {
+		name = id[:8]
+	}
+	return store.PlatformReplica{ID: id, Name: name, Collector: collectorEnabled}
+}
+
+func runPlatform(ctx context.Context, pg *store.Postgres, replica store.PlatformReplica, tracker *collectorstate.Tracker,
+	available *atomic.Bool, start func(context.Context), log *slog.Logger) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	var cancelLeader context.CancelFunc
+	var leaderDone chan struct{}
+	stopWorkers := func() {
+		if cancelLeader != nil {
+			cancelLeader()
+			<-leaderDone
+			cancelLeader = nil
+			log.Info("platform maintenance paused", "replicaId", replica.ID)
+		}
+	}
+	defer func() {
+		stopWorkers()
+		cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		pg.ReleasePlatformReplica(cleanup, replica.ID)
+	}()
+	for ctx.Err() == nil {
+		replica.CompletedCycles = int64(tracker.Snapshot(time.Now()).CompletedCycles)
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		leader, err := pg.RegisterPlatformReplica(probe, replica)
+		cancel()
+		if available.Swap(err == nil) != (err == nil) && ctx.Err() == nil {
+			log.Info("platform storage availability changed", "available", err == nil, "replicaId", replica.ID)
+		}
+		if !leader || err != nil {
+			stopWorkers()
+		} else if cancelLeader == nil && ctx.Err() == nil {
+			var leaderCtx context.Context
+			leaderCtx, cancelLeader = context.WithCancel(ctx)
+			leaderDone = make(chan struct{})
+			go func(done chan struct{}) {
+				defer close(done)
+				start(leaderCtx)
+			}(leaderDone)
+			log.Info("platform maintenance acquired", "replicaId", replica.ID)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, notifications notify.Config,
+	autoModel *ai.Client, aiDailyLimit int, log *slog.Logger) {
+	var tasks sync.WaitGroup
+	tasks.Go(func() { runNotifier(ctx, pg, notifications, log) })
+	tasks.Go(func() { runTracePruner(ctx, pg, cfg.TraceDays, log) })
+	tasks.Go(func() { runPartitionMaintainer(ctx, pg, log) })
+	tasks.Go(func() { runTrendMaintainer(ctx, pg, log) })
+	tasks.Go(func() { runInspectionScheduler(ctx, pg, cfg.MasterKey, log) })
+	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
+		tasks.Go(func() { runDataRetention(ctx, pg, cfg.SampleDays, cfg.EventDays, log) })
+	}
+	if autoModel != nil {
+		tasks.Go(func() { runAutoAI(ctx, pg, autoModel, aiDailyLimit, log) })
+	}
+	tasks.Wait()
+}

@@ -15,11 +15,15 @@ import (
 
 type Postgres struct {
 	pool                *pgxpool.Pool
+	platformReplicaID   string
 	sampleRetentionDays int
 	eventRetentionDays  int
 	tracePodMu          sync.Mutex
 	tracePodCache       map[string]tracePodCacheEntry
 }
+
+// SetPlatformReplica records the local collector identity before starting workers.
+func (s *Postgres) SetPlatformReplica(id string) { s.platformReplicaID = id }
 
 // ConfigureRetention is called once before the HTTP server starts. Zero means
 // that historical samples or events are kept indefinitely.
@@ -448,6 +452,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateWorkPlans(ctx, tx); err != nil {
 		return fmt.Errorf("migrate controlled work plans: %w", err)
 	}
+	if err := migratePlatformHA(ctx, tx); err != nil {
+		return fmt.Errorf("migrate platform replica leadership: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}
@@ -520,11 +527,16 @@ func (s *Postgres) Health(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var version int
-	if err := s.pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::integer").Scan(&version); err != nil {
+	var writable bool
+	if err := s.pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::integer, NOT pg_is_in_recovery() AND current_setting('transaction_read_only')='off'").Scan(&version, &writable); err != nil {
 		return fmt.Errorf("check PostgreSQL 18 storage: %w", err)
 	}
 	if version/10000 != 18 {
 		return errors.New("DbSphere long-term store requires PostgreSQL 18")
+	}
+	if !writable {
+		s.pool.Reset()
+		return errors.New("DbSphere long-term store requires a writable primary")
 	}
 	return nil
 }
