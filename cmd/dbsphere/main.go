@@ -110,6 +110,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	workProfiles, err := httpapi.ParseWorkOrderProfiles(os.Getenv("DBSPHERE_WORK_ORDER_TARGETS"))
+	if err != nil {
+		return fmt.Errorf("DBSPHERE_WORK_ORDER_TARGETS: %w", err)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	pg, err := store.Open(ctx, cfg.DatabaseURL)
@@ -168,6 +172,7 @@ func run(log *slog.Logger) error {
 			AutoCollect:          cfg.AutoCollect,
 			CollectEvery:         cfg.CollectEvery,
 			CollectorState:       collectorRuntime,
+			WorkOrderProfiles:    workProfiles,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

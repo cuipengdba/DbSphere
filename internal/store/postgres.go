@@ -445,6 +445,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateAccess(ctx, tx); err != nil {
 		return fmt.Errorf("migrate named account access: %w", err)
 	}
+	if err := migrateWorkPlans(ctx, tx); err != nil {
+		return fmt.Errorf("migrate controlled work plans: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

@@ -411,8 +411,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.36.0'
-          previous_sha='e1c50fbce7815641a2d0ae630cbf634f96b66c48ba384b18e7e54619e1a1aea2'
+          previous_version='1.37.0'
+          previous_sha='c1087b1a77e9b246bedca19bf2dc4cfed20ac536b308d34cc0ba76c7b60218a7'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -481,8 +481,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.36.0'
-          previous_arm_sha='7dce62812c7846f4bc1226b02687fad2337dfab5abc507d5f5e8f2a37c65279d'
+          previous_version='1.37.0'
+          previous_arm_sha='ae7925ee664d3bb3dc4885a6ffd189db9a5b3199cde09273036cb99a8de8584b'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -748,6 +748,18 @@ jobs:
           - 15434:5432
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      pg18-restore:
+        image: postgres:18-bookworm
+        ports:
+          - 15435:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-restore-test
+          POSTGRES_DB: isolated_restore
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d isolated_restore"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -1425,6 +1437,7 @@ jobs:
       - name: Keep Linux evidence in one Go PostgreSQL failure event
         env:
           DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_PG18_RESTORE_URL: postgres://postgres:dbsphere-restore-test@127.0.0.1:15435/isolated_restore
           DBSPHERE_TEST_PG_TARGET_PORT: '15435'
           DBSPHERE_TEST_PG_TARGET_PASSWORD: dbsphere-root-test
           DBSPHERE_TEST_NODE_EXPORTER_PORT: '19100'

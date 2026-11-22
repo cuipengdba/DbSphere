@@ -101,11 +101,8 @@ type EventAIStore interface {
 	CompleteAIInvocation(context.Context, string, string, string, []string) error
 }
 type WorkOrderStore interface {
-	CreateWorkOrder(context.Context, string, string) (json.RawMessage, error)
 	EventWorkOrders(context.Context, string) (any, error)
 	DecideWorkOrder(context.Context, string, string) (json.RawMessage, error)
-	BeginWorkOrder(context.Context, string) (string, string, error)
-	FinishWorkOrder(context.Context, string, storepkg.CheckResult, error) (json.RawMessage, error)
 }
 type AdminAuditStore interface {
 	StartAdminAudit(context.Context, string, string) (string, error)
@@ -191,6 +188,7 @@ type AuthConfig struct {
 	OTLPToken            string
 	AI                   *ai.Client
 	AIDailyLimit         int
+	WorkOrderProfiles    map[string]WorkOrderProfile
 }
 
 type loginAttempt struct {
@@ -680,6 +678,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work orders unavailable"})
 					return
 				}
+				if result, ok := value.(map[string]any); ok {
+					result["profiles"] = workProfilesForEvent(r.Context(), store, credentials, match[1])
+				}
 				respond(w, http.StatusOK, value)
 				return
 			}
@@ -694,27 +695,15 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusForbidden, map[string]string{"error": "A separate approver account is required"})
 				return
 			}
-			var input struct {
-				Reason string `json:"reason"`
-			}
-			if readJSONLimit(w, r, &input, 2048) != nil {
-				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid work order request"})
+			handleWorkOrder(w, r, store, credentials, match[1], false)
+			return
+		}
+		if match := workOrderPreviewPath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodPost {
+			if role != "admin" && role != "operator" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "Operator access required"})
 				return
 			}
-			order, err := orders.CreateWorkOrder(r.Context(), match[1], input.Reason)
-			switch {
-			case errors.Is(err, storepkg.ErrInvalidWorkOrder):
-				respond(w, http.StatusBadRequest, map[string]string{"error": "Reason must be 5–300 characters"})
-			case errors.Is(err, storepkg.ErrEventNotFound):
-				respond(w, http.StatusNotFound, map[string]string{"error": "Event not found"})
-			case errors.Is(err, storepkg.ErrWorkOrderConflict):
-				respond(w, http.StatusConflict, map[string]string{"error": "Event is closed or has too many active work orders"})
-			case err != nil:
-				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order storage unavailable"})
-			default:
-				respond(w, http.StatusCreated, map[string]any{"order": order,
-					"preview": "审批后仅对该事件的资产运行一次只读采样；不执行 SQL 变更或 Kubernetes 操作。"})
-			}
+			handleWorkOrder(w, r, store, credentials, match[1], true)
 			return
 		}
 		if match := workOrderDecisionPath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodPost {
@@ -748,32 +737,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusForbidden, map[string]string{"error": "Administrator execution required"})
 				return
 			}
-			orders, ok := store.(WorkOrderStore)
-			checker, checkOK := store.(AssetChecker)
-			if !ok || !checkOK {
-				respond(w, http.StatusNotImplemented, map[string]string{"error": "Controlled collection unavailable"})
-				return
-			}
-			_, assetID, err := orders.BeginWorkOrder(r.Context(), match[1])
-			if errors.Is(err, storepkg.ErrWorkOrderConflict) {
-				respond(w, http.StatusConflict, map[string]string{"error": "Approval required, event resolved, or work order expired"})
-				return
-			}
-			if err != nil {
-				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order unavailable"})
-				return
-			}
-			collectionCtx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
-			result, collectionErr := checker.CheckAsset(collectionCtx, assetID, credentials.MasterKey)
-			cancel()
-			auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer auditCancel()
-			order, err := orders.FinishWorkOrder(auditCtx, match[1], result, collectionErr)
-			if err != nil {
-				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Work order execution audit unavailable"})
-				return
-			}
-			respond(w, http.StatusOK, map[string]any{"order": order, "result": result})
+			executeWorkOrder(w, r, store, credentials, match[1])
 			return
 		}
 		if r.Method == http.MethodPost {

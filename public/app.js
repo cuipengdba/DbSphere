@@ -108,6 +108,9 @@ function showSection(view, section, eventId, ruleCode) {
 }
 
 const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
+const workActionLabels = { collect_once: '只读采样', inspect_once: '运行巡检', verify_restore: '隔离恢复核验', analyze_relation: '单表 ANALYZE' };
+const workErrorLabels = { execution_timeout: '达到执行期限', restore_marker_mismatch: '恢复数据标记不匹配',
+  execution_profile_unavailable: '执行配置已变更或不可用', execution_failed: '执行失败' };
 
 function accessField(form, label, field) {
   const container = cell('label', label);
@@ -2441,19 +2444,59 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   if (canReviewOrders) {
     const panel = document.createElement('section'); panel.className = 'response-form';
-    panel.append(cell('h4', '事件工单 · 双人审批'));
-    panel.append(cell('p', '受控动作：审批后只对该事件资产执行一次只读采样；不执行 SQL 变更或 Kubernetes 操作。工单 15 分钟后失效。', 'hint'));
+    panel.append(cell('h4', '受控作业 · 双人审批'));
+    panel.append(cell('p', '先预检作业范围和期限，独立审批通过后由管理员执行。', 'hint'));
     if (canRespond && event.status === 'open' && approvalEnabled) {
       const form = document.createElement('form'); form.className = 'response-form operator-action';
       const label = cell('label', '申请原因（5–300 字）');
       const reason = document.createElement('textarea'); reason.required = true; reason.minLength = 5;
       reason.maxLength = 300; reason.rows = 2; reason.placeholder = '说明为什么需要对当前事件重新采样';
       label.append(reason);
-      const submit = cell('button', '提交只读采样工单', 'ghost small-button write-action operator-action'); submit.type = 'submit';
-      form.append(label, submit);
+      const actions = new Set(['collect_once', 'inspect_once', ...(workOrders.profiles || []).map(item => item.action)]);
+      const action = accessSelect(form, '作业类型', 'action', [...actions].map(id => [id, workActionLabels[id]]), ['collect_once']);
+      const template = accessInput(form, '巡检模板 ID', 'templateId', 'pg_daily');
+      const profile = accessSelect(form, '执行配置', 'profile', [], []);
+      const expiry = accessInput(form, '审批有效期（分钟）', 'expiresMinutes', '15', { type: 'number', min: 1, max: 60, required: true });
+      const timeout = accessInput(form, '最长执行时间（秒）', 'timeoutSeconds', '35', { type: 'number', min: 1, max: 35, required: true });
+      const preview = cell('button', '预检与预演', 'ghost small-button'); preview.type = 'button';
+      const description = cell('p', '', 'hint'); description.setAttribute('aria-live', 'polite');
+      const submit = cell('button', '提交作业审批', 'ghost small-button write-action operator-action'); submit.type = 'submit';
+      const path = `/api/events/${event.id}/work-orders`;
+      const draft = () => ({ action: action.value, reason: reason.value.trim(),
+        templateId: template.disabled ? '' : template.value.trim(), profile: profile.disabled ? '' : profile.value,
+        expiresMinutes: expiry.valueAsNumber, timeoutSeconds: timeout.valueAsNumber });
+      let idempotencyKey = '';
+      const invalidate = () => { idempotencyKey = ''; description.textContent = ''; submit.disabled = true; };
+      const configureAction = () => {
+        template.disabled = action.value !== 'inspect_once';
+        template.parentElement.hidden = template.disabled;
+        profile.replaceChildren(...(workOrders.profiles || []).filter(item => item.action === action.value)
+          .map(item => new Option(item.name, item.name)));
+        profile.disabled = !profile.options.length;
+        profile.parentElement.hidden = profile.disabled;
+        invalidate();
+      };
+      action.addEventListener('change', configureAction);
+      form.addEventListener('input', invalidate);
+      configureAction();
+      preview.addEventListener('click', async () => {
+        if (!expiry.reportValidity() || !timeout.reportValidity()) return;
+        const input = draft();
+        preview.disabled = true;
+        try {
+          const result = await api(`${path}/preview`, 'POST', input);
+          if (JSON.stringify(input) !== JSON.stringify(draft())) return;
+          description.textContent = `${result.plan.description} · 审批有效 ${result.expiresMinutes} 分钟 · 最长执行 ${result.timeoutSeconds} 秒`;
+          idempotencyKey ||= Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
+          submit.disabled = false;
+        } catch (error) { notice(error.message, true); }
+        finally { preview.disabled = false; }
+      });
+      form.append(label, preview, description, submit);
       form.addEventListener('submit', async e => {
         e.preventDefault(); submit.disabled = true;
-        try { await api(`/api/events/${event.id}/work-orders`, 'POST', { reason: reason.value.trim() }); await showEvent(event.id); }
+        if (!idempotencyKey) return;
+        try { await api(path, 'POST', { ...draft(), idempotencyKey }); await showEvent(event.id); }
         catch (error) { notice(error.message, true); submit.disabled = false; }
       });
       panel.append(form);
@@ -2463,11 +2506,26 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     for (const order of workOrders.orders || []) {
       const row = document.createElement('div'); row.className = 'evidence';
       const states = { requested: '待审批', approved: '已批准待执行', rejected: '已驳回',
-        executing: '执行中', completed: '已完成', failed: '采样失败', expired: '已过期' };
-      row.append(cell('p', `${states[order.status] || order.status} · ${order.reason}`),
+        executing: '执行中', completed: '已完成', failed: '执行失败', expired: '已过期', interrupted: '执行中断，待复核' };
+      const actionLabel = workActionLabels[order.action] || order.action;
+      row.append(cell('p', `${states[order.status] || order.status} · ${actionLabel} · ${order.reason}`),
         cell('small', `工单 ${order.id} · 申请人 ${order.requestedBy} · 申请时间 ${formatTime(order.requestedAt)} · 到期 ${formatTime(order.expiresAt)}`));
+      if (order.plan) row.append(cell('small', `${order.plan.description} · ${order.timeoutSeconds} 秒上限`));
       if (order.approvedBy) row.append(cell('small', `审批人 ${order.approvedBy}`));
-      if (order.result?.sampleId) row.append(cell('small', `采样 ID ${order.result.sampleId} · 状态 ${order.result.sampleStatus || '未知'}`));
+      if (order.result?.sampleId) {
+        const sample = cell('a', `查看原始样本 ${order.result.sampleId}`);
+        sample.href = `/api/assets/${event.assetId}/samples/${order.result.sampleId}`;
+        row.append(sample);
+        if (order.result.sampleStatus) row.append(cell('small', `采样状态 ${order.result.sampleStatus}`));
+      }
+      if (order.result?.inspectionRunId) {
+        const report = cell('a', '下载巡检报告');
+        report.href = `/api/inspection-runs/${order.result.inspectionRunId}/report`;
+        row.append(report);
+      }
+      if (order.result?.restoredDatabase) row.append(cell('small',
+        `恢复库 ${order.result.restoredDatabase} · 恢复点前标记${order.result.expectedPresent ? '存在' : '缺失'} · 后续标记${order.result.laterMarkerAbsent ? '未出现' : '存在'}`));
+      if (order.result?.errorCode) row.append(cell('small', workErrorLabels[order.result.errorCode] || order.result.errorCode));
       if (currentRole === 'approver' && order.status === 'requested' && order.requestedBy !== currentUsername) {
         for (const [action, label] of [['approve', '批准'], ['reject', '驳回']]) {
           const button = cell('button', label, 'ghost small-button approval-action');
@@ -2480,7 +2538,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
         }
       }
       if (currentRole === 'admin' && order.status === 'approved') {
-        const execute = cell('button', '执行已审批的只读采样', 'ghost small-button write-action');
+        const execute = cell('button', `执行已审批的${actionLabel}`, 'ghost small-button write-action');
         execute.addEventListener('click', async () => {
           execute.disabled = true;
           try { await api(`/api/work-orders/${order.id}/execute`, 'POST'); await showEvent(event.id); await refresh(); }
@@ -2643,9 +2701,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'event_handoff') text = `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
-    if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请只读采样工单 ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
+    if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
     if (evidence.kind === 'work_order_decision') text = `${evidence.payload.actor || '独立审批账号'} ${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
-    if (evidence.kind === 'work_order_executed') text = `${evidence.payload.actor || '管理员'} 执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '采样完成' : '采样失败'} · 样本 ${evidence.payload.sampleId || '无'}`;
+    if (evidence.kind === 'work_order_executed') text = `${evidence.payload.actor || '管理员'} 执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '已完成' : workErrorLabels[evidence.payload.errorCode] || '执行失败'}${evidence.payload.sampleId ? ' · 样本 ' + evidence.payload.sampleId : ''}`;
     if (evidence.kind === 'operator_response' || evidence.kind === 'recovery_verified') {
       const responseLabels = {diagnosis: '诊断', mitigation: '处置', handoff: '值班交接', false_positive: '误报复核', recovery_verification: '恢复验证'};
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
