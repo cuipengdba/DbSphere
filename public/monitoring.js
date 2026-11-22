@@ -165,6 +165,7 @@
       marks.push(marker);
     }
     const previous = new Map();
+    const linePaths = new Map();
     buckets.forEach((point, index) => {
       if (!point) { previous.clear(); return; }
       const cx = x(index);
@@ -183,14 +184,21 @@
           const cy = y(value.value);
           const key = value.key || value.label;
           const last = previous.get(key);
-          if (last) chart.append(svg('line', { x1: last.x, x2: cx, y1: last.y, y2: cy, stroke: value.color, class: 'monitor-trendline' }));
-          chart.append(svg('circle', { cx, cy, r: 2.3, fill: value.color }));
+          if (pointCount > 240) {
+            if (!linePaths.has(key)) linePaths.set(key, { color: value.color, points: [] });
+            linePaths.get(key).points.push(`${last ? 'L' : 'M'}${cx.toFixed(2)},${cy.toFixed(2)}`);
+            if (!last) linePaths.get(key).points.push(`l0.01,0`);
+          } else {
+            if (last) chart.append(svg('line', { x1: last.x, x2: cx, y1: last.y, y2: cy, stroke: value.color, class: 'monitor-trendline' }));
+            chart.append(svg('circle', { cx, cy, r: 2.3, fill: value.color }));
+          }
           next.set(key, { x: cx, y: cy });
         }
         previous.clear();
         for (const [label, location] of next) previous.set(label, location);
       }
     });
+    for (const path of linePaths.values()) chart.append(svg('path', { d: path.points.join(' '), fill: 'none', stroke: path.color, class: 'monitor-trendline' }));
     const cursor = svg('line', { y1: top, y2: bottom, class: 'monitor-crosshair' });
     const brush = svg('rect', { y: top, height: bottom - top, width: 0, class: 'monitor-brush' });
     chart.append(cursor, brush, ...marks);
