@@ -147,6 +147,8 @@ def test():
         leader = next(p for p in cluster["replicas"] if p["id"] == original_leader)
         assert leader["name"] in ("app", "replica")
         other = next(p["id"] for p in cluster["replicas"] if p["id"] != original_leader and p["online"])
+        leader_container = "dbsphere-go-dev-" + leader["name"] + "-1"
+        command("docker", "update", "--restart=no", leader_container)
 
         notifying = create_asset("HA notification fixture", address, 1, auth)
         delivery, event = until("first webhook attempt", lambda: notification_for(notifying, "pg_unavailable"))
@@ -164,7 +166,8 @@ def test():
         assert UUID.fullmatch(lost_asset) and UUID.fullmatch(lease)
         assert re.fullmatch(r"[0-9 .:+-]+", due)
         killed_at = time.monotonic()
-        command("docker", "stop", "-t", "0", "dbsphere-go-dev-" + leader["name"] + "-1")
+        command("docker", "kill", "--signal=KILL", leader_container)
+        assert command("docker", "inspect", "--format", "{{.State.ExitCode}}", leader_container) == "137"
         assert sql(f"SELECT lease_token::text FROM collection_jobs WHERE asset_id='{lost_asset}'") == lease
 
         def takeover():
