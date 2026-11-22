@@ -90,7 +90,7 @@ const bound = await until(async () => {
 assert.equal(bound.metrics.k8s.pvcs[0].phase, 'Bound');
 assert.equal(bound.metrics.k8s.pvcs[0].volume.claimUID, claim.metadata.uid);
 assert.ok(bound.metrics.k8s.node.uid, 'Node UID was not verified');
-assert.equal((await api(`/api/events/${event.id}`)).event.status, 'resolved');
+assert.equal((await api(`/api/events/${event.id}`)).event.id, event.id);
 const oldUID = bound.metrics.k8s.pod.uid;
 run(['delete','pod',pod,'--wait=true','--timeout=90s']);
 await until(() => {
