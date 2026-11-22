@@ -395,7 +395,7 @@
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
     let focusAt = null, focusSample = '';
-    let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null;
+    let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
     let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
     let rangeEvents = [];
     let memberSeries = new Map();
@@ -415,6 +415,7 @@
     const fleetLabel = el('p', null, 'monitor-range-caption');
     const clusterSelect = select('PG 集群', value => {
       cluster = value; instance = ''; database = ''; chooseCluster = false;
+      replicaAt = null;
       resetCatalog();
       focusAt = null; focusSample = '';
       if (cluster) {
@@ -493,7 +494,8 @@
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
         ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''],
-        ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), '']
+        ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
+        ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
       return params.size ? `monitoring?${params}` : 'monitoring';
@@ -519,6 +521,8 @@
       lockPick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('lockSample') || '') ? params.get('lockSample') : '';
       const lockTime = Date.parse(params.get('lockAt'));
       lockAt = Number.isFinite(lockTime) ? lockTime : null;
+      const replicaTime = Date.parse(params.get('replicaAt'));
+      replicaAt = Number.isFinite(replicaTime) ? replicaTime : null;
       dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
       objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
       objectKind = objectOid && ['table', 'index'].includes(params.get('objectKind')) ? params.get('objectKind') : '';
@@ -574,6 +578,7 @@
     function openCluster(key) {
       if (!assets.some(asset => clusterKey(asset) === key)) return;
       cluster = key; instance = ''; database = ''; chooseCluster = false; mode = 'metrics';
+      replicaAt = null;
       eventAnchor = ''; focusAt = null; focusSample = '';
       resetWaitFilters(); resetCatalog(); resetFleet();
       try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
@@ -584,6 +589,7 @@
       const asset = assets.find(item => item.id === id);
       if (!asset) return;
       if (id !== instance) {
+        if (clusterKey(asset) !== cluster) replicaAt = null;
         resetWaitFilters();
         resetCatalog();
         mode = 'metrics';
@@ -1083,7 +1089,7 @@
       return split;
     }
 
-    function replicationPanel(asset, history, rows, time, events) {
+    function replicationPanel(asset, history, rows, time, events, topology) {
       const result = document.createDocumentFragment();
       const charts = metricCharts(rows, time, events, [
         ['averageReplicationLagBytes', '发送端最大回放差距', bytes, palette[2]],
@@ -1160,8 +1166,80 @@
           row.gapSeconds > 600 && '采样间隔超过 10 分钟'].filter(Boolean).join(' · ') || '—', sampleLink(asset.id, row.id)
       ]), '复制角色变化'));
       else changes.append(el('p', '所选时段未观测到角色、时间线或采集边界变化。', 'monitor-note'));
-      result.append(observation, charts, changes);
+      result.append(topologyPanel(topology, time), observation, charts, changes);
       return result;
+    }
+
+    function topologyPanel(views, time) {
+      const card = panel('集群复制拓扑与服务入口');
+      const end = replicaAt != null && replicaAt >= time.from && replicaAt < time.to ? replicaAt : time.to;
+      const changes = views.flatMap(({ asset, observations }) => observations.filter(row => row.kind === 'change')
+        .map(row => ({ at: Date.parse(row.collectedAt), asset, row })));
+      changes.sort((left, right) => right.at - left.at || left.asset.name.localeCompare(right.asset.name));
+      const chooser = select('拓扑观测时间', value => { replicaAt = value ? Number(value) : null; change(); });
+      const points = new Map();
+      for (const change of changes.slice(0, 60)) {
+        const key = Math.min(change.at + 1, time.to - 1);
+        if (!points.has(key)) points.set(key, `${formatTime(change.at)} · ${change.asset.name} · ${roleLabels[change.row.role] || '角色未知'}`);
+      }
+      if (end < time.to && !points.has(end)) points.set(end, formatTime(end));
+      options(chooser, [['', '区间末次观测'], ...Array.from(points, ([at, title]) => [String(at), title])], end === time.to ? '' : String(end));
+      card.append(labeled('拓扑时间', chooser));
+      const peers = views.map(({ asset, observations }) => ({ asset, point: observations.find(row => row.kind === 'point') }));
+      const address = (host, port) => host ? `${host.includes(':') ? '[' + host + ']' : host}:${port || '—'}` : '—';
+      const recent = point => point && point.postgresState === 'available' && end - Date.parse(point.collectedAt) <= 600000;
+      const edge = peer => {
+        const { point } = peer;
+        const receiver = point?.receiver;
+        if (!recent(point) || !receiver?.senderHost) return '—';
+        const candidates = peers.filter(({ asset, point: source }) => recent(source) && source.role &&
+          Math.abs(Date.parse(source.collectedAt) - Date.parse(point.collectedAt)) <= Math.min(time.bucketMs, 600000) &&
+          ((asset.host === receiver.senderHost && asset.port === receiver.senderPort) ||
+            (source.endpoint?.address === receiver.senderHost && source.endpoint?.port === receiver.senderPort)));
+        const source = candidates.length === 1 ? candidates[0] : null;
+        if (source?.point.senders?.some(link => link.clientAddress && link.clientAddress === point.endpoint?.address))
+          return button(`双端匹配 · ${source.asset.name}`, () => openInstance(source.asset.id, 'replication'), 'monitor-link');
+        return `接收端报告 · ${address(receiver.senderHost, receiver.senderPort)}`;
+      };
+      const readings = {available: '可连通', unavailable: '连接失败', unknown: '连通性未知'};
+      card.append(table(['成员', 'PG 观测', '时间线', '上游', '复制状态', '观测时间', '采样'], peers.map(peer => {
+        const { asset, point } = peer;
+        const state = !point ? '缺采' : end - Date.parse(point.collectedAt) > 600000 ? '采样间隔超过 10 分钟' :
+          [readings[point.postgresState], roleLabels[point.role]].filter(Boolean).join(' · ');
+        const replication = point?.paused ? `回放暂停 · ${display(point.replayGap, bytes)}` :
+          point?.receiverState ? (point.receiverState === 'absent' ? '接收端无 WAL 进程' : point.receiverState) :
+            point?.senders ? `${point.senders.length} 条发送会话` : '—';
+        const archiveFailure = point?.archive?.lastFailedAt &&
+          (!point.archive.lastArchivedAt || Date.parse(point.archive.lastFailedAt) > Date.parse(point.archive.lastArchivedAt));
+        return [button(asset.name, () => openInstance(asset.id, 'replication'), 'monitor-link'), state, point?.timeline,
+          edge(peer), archiveFailure ? `${replication} · 最近归档失败` : replication,
+          point && formatTime(point.collectedAt), point && sampleLink(asset.id, point.id)];
+      }), '集群拓扑'));
+      const scopedPeers = assets.filter(asset => clusterKey(asset) === clusterKey(peers[0].asset)).length;
+      if (scopedPeers > peers.length) card.append(el('p', `此视图读取当前实例及同集群最多四个成员（${peers.length} / ${scopedPeers}）。`, 'monitor-note'));
+      const routeRows = [];
+      for (const { asset, point } of peers) {
+        if (!point || end - Date.parse(point.collectedAt) > 600000) continue;
+        const evidence = () => sampleLink(asset.id, point.id);
+        routeRows.push([asset.tags?.includes('haproxy') ? 'HAProxy · PostgreSQL 探测' : 'PostgreSQL 探测', asset.name,
+          address(asset.host, asset.port), address(point.endpoint?.address, point.endpoint?.port),
+          [readings[point.postgresState], roleLabels[point.role]].filter(Boolean).join(' · '), evidence()]);
+        if (asset.poolerConfigured || point.pool) {
+          const pool = point.pool, route = pool?.route;
+          const waiting = pool?.pools?.reduce((sum, item) => sum + (item.clientWaiting || 0), 0);
+          const observed = [...new Set((pool?.servers || []).map(server => address(server.address, server.port)))].slice(0, 5);
+          const reported = route ? address(route.host, route.port) : '—';
+          routeRows.push(['PgBouncer', asset.name, asset.poolerEndpoint,
+            observed.length ? observed.join(' / ') : `SHOW DATABASES · ${reported}`,
+            route?.disabled ? '已禁用' : route?.paused ? '已暂停' : waiting > 0 ? `${waiting} 个客户端排队` : pool?.status === 'ok' ? '统计可读' : '当前无统计', evidence()]);
+        }
+        for (const service of point.services || []) routeRows.push(['Kubernetes Service', asset.name,
+          `${point.namespace}/${service.name} · ${service.clusterIP || '—'} · ${(service.ports || []).join(', ')}`,
+          point.pod && `标签选择 · ${point.pod}`, point.podReady === 'True' ? 'Pod 就绪' : point.podReady === 'False' ? 'Pod 未就绪' : 'Pod 就绪未知', evidence()]);
+      }
+      if (routeRows.length) card.append(table(['来源', '成员', '配置／服务地址', '采样观测', '状态', '采样'], routeRows, '服务入口与后端'));
+      else card.append(el('p', '该时间点缺少服务入口采样。', 'monitor-note'));
+      return card;
     }
 
     function servicesPanel(asset, sample) {
@@ -1471,6 +1549,11 @@
       const contextParams = new URLSearchParams(time.params);
       if (['metrics', 'waits', 'locks'].includes(mode)) contextParams.set('blocking', 'true');
       const linkedSQL = mode === 'sql' && queryId;
+      const topologyQuery = new URLSearchParams(time.params);
+      const topologyAt = replicaAt;
+      if (topologyAt != null && topologyAt >= time.from && topologyAt < time.to)
+        topologyQuery.set('at', new Date(topologyAt).toISOString());
+      const peers = mode === 'replication' ? assets.filter(row => row.id !== asset.id && clusterKey(row) === clusterKey(asset)).slice(0, 4) : [];
       const range = mode === 'sql' && baseline ? baselineWindow(time) : null;
       const baselineParams = new URLSearchParams(query);
       if (range) {
@@ -1480,14 +1563,16 @@
       body.setAttribute('aria-busy', 'true');
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
-        const [context, data, waits, slow, plans, replication, prior, traces] = await Promise.all([
+        const [context, data, waits, slow, plans, replication, prior, traces, topology] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
           linkedSQL ? api(`${path}sql-plans?queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
-          mode === 'replication' ? api(`${path}replication?${time.params}`) : null,
+          mode === 'replication' ? api(`${path}replication?${topologyQuery}`) : null,
           range ? api(`${path}sql-window?${baselineParams}`).catch(() => null) : null,
-          linkedSQL ? api(`${path}query-traces?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null
+          linkedSQL ? api(`${path}query-traces?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
+          Promise.all(peers.map(peer => api(`/api/assets/${peer.id}/replication?${topologyQuery}&view=topology`)
+            .then(value => ({ asset: peer, observations: value.topology })).catch(() => ({ asset: peer, observations: [] }))))
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -1543,7 +1628,8 @@
         }
         if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, baseline: prior?.performance }, path, time));
         if (mode === 'locks') fragment.append(lockPanel(asset, data, time));
-        if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events));
+        if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events,
+          [{ asset, observations: replication.topology }, ...topology]));
         if (mode === 'catalog') fragment.append(catalogPanel(asset, data, time, events));
         if (mode === 'infra') fragment.append(environmentPanel(asset, context.snapshot, data, time, events));
         if (mode !== 'metrics' || waits?.buckets.some(bucket => bucket.observed > 0)) fragment.append(eventList(events, '此实例的问题事件'));
@@ -1651,6 +1737,7 @@
         resetWaitFilters();
         resetCatalog();
         focusAt = Number.isFinite(selectedAt) ? selectedAt : null;
+        replicaAt = mode === 'replication' && focusAt != null ? Math.min(to - 1, focusAt + 1) : null;
         focusSample = point?.sampleId || '';
       }
     };

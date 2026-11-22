@@ -11,13 +11,71 @@ func (s *Postgres) replicationHistory(ctx context.Context, id string, params url
 	if err != nil || params.Get("to") == "" {
 		return nil, ErrInvalidRange
 	}
+	at := to
+	if params.Get("at") != "" {
+		at, err = time.Parse(time.RFC3339Nano, params.Get("at"))
+		if err != nil || at.Before(from) || !at.Before(to) {
+			return nil, ErrInvalidRange
+		}
+	}
+	topology, err := s.queryJSON(ctx, replicationTopologySQL, id, from, to, at)
+	if err != nil || params.Get("view") == "topology" {
+		return map[string]any{"topology": topology}, err
+	}
 	observations, err := s.queryJSON(ctx, replicationObservationsSQL, id, from, to)
 	if err != nil {
 		return nil, err
 	}
 	changes, err := s.queryJSON(ctx, replicationChangesSQL, id, from, to)
-	return map[string]any{"observations": observations, "changes": changes}, err
+	return map[string]any{"observations": observations, "changes": changes, "topology": topology}, err
 }
+
+const replicationTopologySQL = `WITH metadata AS (
+	SELECT id,collected_at,metrics_json,
+		CASE WHEN status='ok' OR metrics_json#>>'{collector,pgStatus}'='ok' THEN 'available'
+			WHEN metrics_json#>>'{collector,pgStatus}'='availability' THEN 'unavailable' ELSE 'unknown' END AS pg_state
+	FROM samples WHERE asset_id=$1 AND collected_at >= $2 AND collected_at < $3
+), signatures AS (
+	SELECT id,collected_at,pg_state,jsonb_build_object(
+		'status',pg_state,'role',metrics_json->'role','endpoint',metrics_json->'postgresEndpoint',
+		'timeline',metrics_json#>'{diagnostics,walPosition,data,timeline}',
+		'paused',metrics_json#>'{diagnostics,walPosition,data,replayPaused}',
+		'receiver',metrics_json->'wal_receiver','upstream',metrics_json#>'{diagnostics,walReceiver,data,senderHost}',
+		'senders',metrics_json->'replicas','pool',metrics_json#>'{pgbouncer,route}',
+		'senderStates',(SELECT jsonb_agg(jsonb_build_array(link->'application',link->'clientAddress',link->'state',link->'syncState')
+			ORDER BY link->>'pid') FROM jsonb_array_elements(coalesce(metrics_json#>'{diagnostics,replicationLinks,data,links}','[]')) link),
+		'archiveFailure',metrics_json#>'{diagnostics,archiver,data,lastFailedAt}',
+		'poolWaiting',EXISTS(SELECT FROM jsonb_array_elements(coalesce(metrics_json#>'{pgbouncer,pools}','[]')) p
+			WHERE jsonb_typeof(p->'clientWaiting')='number' AND (p->>'clientWaiting')::numeric>0),
+		'poolStatus',metrics_json#>'{pgbouncer,status}','patroniStatus',metrics_json#>'{patroni,status}',
+		'patroniRoles',(SELECT jsonb_object_agg(m->>'name',m->'role')
+			FROM jsonb_array_elements(coalesce(metrics_json#>'{patroni,members}','[]')) m WHERE m->>'name' IS NOT NULL),
+		'services',metrics_json#>'{k8s,services}',
+		'podUid',metrics_json#>'{k8s,pod,uid}',
+		'podReady',jsonb_path_query_first(metrics_json,'$.k8s.pod.conditions[*] ? (@.type == "Ready").status')) AS signature
+	FROM metadata
+), compared AS (
+	SELECT *,lag(signature) OVER chronological AS previous,lag(collected_at) OVER chronological AS previous_at
+	FROM signatures WINDOW chronological AS (ORDER BY collected_at,id)
+), chosen AS (
+	(SELECT id,'point' AS kind FROM metadata WHERE collected_at <= $4 ORDER BY collected_at DESC,id DESC LIMIT 1)
+	UNION ALL
+	(SELECT id,'change' AS kind FROM compared WHERE previous IS DISTINCT FROM signature OR collected_at-previous_at > interval '10 minutes'
+		ORDER BY collected_at DESC,id DESC LIMIT 60)
+)
+SELECT jsonb_build_object('id',m.id,'kind',c.kind,'collectedAt',m.collected_at,'postgresState',m.pg_state,
+	'role',m.metrics_json->'role','endpoint',m.metrics_json->'postgresEndpoint',
+	'timeline',m.metrics_json#>'{diagnostics,walPosition,data,timeline}',
+	'paused',m.metrics_json#>'{diagnostics,walPosition,data,replayPaused}',
+	'replayGap',m.metrics_json#>'{diagnostics,walPosition,data,localReplayGapBytes}',
+	'receiverState',m.metrics_json->'wal_receiver','receiver',m.metrics_json#>'{diagnostics,walReceiver,data}',
+	'senders',m.metrics_json#>'{diagnostics,replicationLinks,data,links}',
+	'archive',m.metrics_json#>'{diagnostics,archiver,data}',
+	'patroni',m.metrics_json->'patroni','pool',m.metrics_json->'pgbouncer',
+	'services',m.metrics_json#>'{k8s,services}','namespace',m.metrics_json#>'{k8s,namespace}',
+	'pod',m.metrics_json#>'{k8s,pod,name}',
+	'podReady',jsonb_path_query_first(m.metrics_json,'$.k8s.pod.conditions[*] ? (@.type == "Ready").status'))
+FROM chosen c JOIN metadata m ON m.id=c.id ORDER BY c.kind DESC,m.collected_at DESC,m.id DESC`
 
 const replicationObservationsSQL = `WITH recent AS (
 	SELECT id,collected_at,status,metrics_json FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3

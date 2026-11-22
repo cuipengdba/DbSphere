@@ -618,7 +618,8 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 			for _, rawPort := range kubeList(serviceSpec["ports"]) {
 				ports = append(ports, kubeObject(rawPort)["port"])
 			}
-			services = append(services, map[string]any{"name": kubeObject(service["metadata"])["name"], "ports": ports})
+			services = append(services, map[string]any{"name": kubeObject(service["metadata"])["name"], "ports": ports,
+				"type": serviceSpec["type"], "clusterIP": serviceSpec["clusterIP"]})
 		}
 		result["services"] = services
 		if kubeString(kubeObject(serviceList["metadata"])["continue"]) != "" {

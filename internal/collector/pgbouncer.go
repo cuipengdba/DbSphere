@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// PgBouncer reads only SHOW POOLS and SHOW STATS from the admin console.
+// PgBouncer reads pool statistics and route metadata from the admin console.
 func PgBouncer(ctx context.Context, connectionURL, database string) (map[string]any, error) {
 	parsed, err := url.Parse(connectionURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") ||
@@ -54,8 +54,23 @@ func PgBouncer(ctx context.Context, connectionURL, database string) (map[string]
 		statValues = append(statValues, map[string]any{"transactionsTotal": poolNumber(row["total_xact_count"]),
 			"queriesTotal": poolNumber(row["total_query_count"]), "avgQueryMicroseconds": poolNumber(row["avg_query_time"])})
 	}
-	return map[string]any{"status": "ok", "source": "PgBouncer SHOW POOLS/STATS", "observedAt": time.Now().UTC(),
-		"database": database, "pools": poolValues, "stats": statValues}, nil
+	result := map[string]any{"status": "ok", "source": "PgBouncer SHOW POOLS/STATS", "observedAt": time.Now().UTC(),
+		"database": database, "pools": poolValues, "stats": statValues}
+	if routes, err := pgBouncerRows(ctx, conn, "SHOW DATABASES", database); err == nil && len(routes) == 1 {
+		route := routes[0]
+		result["route"] = map[string]any{"source": "PgBouncer SHOW DATABASES", "host": route["host"], "port": route["port"],
+			"database": route["database"], "paused": poolNumber(route["paused"]) > 0, "disabled": poolNumber(route["disabled"]) > 0}
+	}
+	if servers, err := pgBouncerRows(ctx, conn, "SHOW SERVERS", database); err == nil {
+		observed := make([]map[string]any, 0, len(servers))
+		for _, row := range servers {
+			if row["addr"] != nil && poolNumber(row["port"]) > 0 {
+				observed = append(observed, map[string]any{"address": row["addr"], "port": row["port"], "state": row["state"]})
+			}
+		}
+		result["servers"] = observed
+	}
+	return result, nil
 }
 
 func pgBouncerRows(ctx context.Context, conn *pgx.Conn, command, database string) ([]map[string]any, error) {
@@ -77,7 +92,11 @@ func pgBouncerRows(ctx context.Context, conn *pgx.Conn, command, database string
 		for i, field := range fields {
 			item[string(field.Name)] = values[i]
 		}
-		if fmt.Sprint(item["database"]) != database {
+		key := "database"
+		if command == "SHOW DATABASES" {
+			key = "name"
+		}
+		if fmt.Sprint(item[key]) != database {
 			continue
 		}
 		if len(result) >= 100 {
