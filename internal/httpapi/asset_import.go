@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/store"
 )
 
@@ -34,6 +36,12 @@ func handleAssetImport(w http.ResponseWriter, r *http.Request, db any, role stri
 	var err error
 	action := strings.TrimPrefix(r.URL.Path, prefix)
 	switch {
+	case action == "cloudnativepg" && r.Method == http.MethodGet:
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		result = collector.PreviewCloudNativePG(ctx, collector.KubernetesTarget{
+			Cluster: r.URL.Query().Get("context"), Namespace: r.URL.Query().Get("namespace"),
+		})
 	case action == "export" && r.Method == http.MethodGet:
 		result, err = importer.ExportAssets(r.Context(), r.URL.Query().Get("after"))
 	case action == "probe" && r.Method == http.MethodPost:

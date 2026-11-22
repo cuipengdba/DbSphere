@@ -95,6 +95,15 @@
           <div id="asset-import-plan" class="monitor-table"></div>
           <div class="section-actions"><button id="asset-import-probe" class="ghost" type="button" hidden>分批检查连接与权限</button></div>
           <div id="asset-import-results" class="monitor-table"></div>
+          <details class="settings-details">
+            <summary>发现 CloudNativePG 集群</summary>
+            <form id="cnpg-preview-form" class="form-grid">
+              <label>Kubernetes 上下文<input name="context" maxlength="253" autocomplete="off" placeholder="使用既有 Kubernetes 配置"></label>
+              <label>命名空间<input name="namespace" maxlength="63" required autocomplete="off"></label>
+              <div class="section-actions wide"><button type="submit">读取集群预览</button><button id="cnpg-preview-fill" type="button" class="ghost" hidden>填入纳管清单</button></div>
+            </form>
+            <div id="cnpg-preview-results" class="monitor-table" aria-live="polite"></div>
+          </details>
         </details>
         <dialog id="asset-dialog" class="asset-drawer" aria-labelledby="asset-dialog-title">
           <div class="section-head"><h2 id="asset-dialog-title">纳管 PostgreSQL 实例</h2><button id="asset-close" class="ghost" type="button">关闭</button></div>

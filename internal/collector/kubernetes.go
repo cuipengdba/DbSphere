@@ -362,6 +362,8 @@ func (k *kubeClient) listBounded(ctx context.Context, path string) ([]any, error
 	return nil, errors.New("Kubernetes list exceeds 10 pages; mapping is uncertain")
 }
 
+var errKubernetesWorkloadNotFound = errors.New("Kubernetes Workload was not found for Pod mapping")
+
 func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload, preferred string) (map[string]any, map[string]any, error) {
 	base := "/apis/apps/v1/namespaces/" + url.PathEscape(namespace)
 	var selector map[string]any
@@ -401,7 +403,7 @@ func (k *kubeClient) resolveWorkloadPod(ctx context.Context, namespace, workload
 		}
 	}
 	if selector == nil {
-		return nil, nil, errors.New("Kubernetes Workload was not found for Pod mapping")
+		return nil, nil, errKubernetesWorkloadNotFound
 	}
 	replicaSetUIDs := map[string]bool{}
 	if workloadKind == "deployments" {
@@ -508,8 +510,16 @@ func (k *kubeClient) readMappedPod(ctx context.Context, target KubernetesTarget)
 	var workload map[string]any
 	if target.Workload != "" {
 		selected, identity, err := k.resolveWorkloadPod(ctx, target.Namespace, target.Workload, target.Pod)
+		if errors.Is(err, errKubernetesWorkloadNotFound) || errors.Is(err, kubeHTTPError(http.StatusForbidden)) {
+			cnpgPod, cnpgIdentity, cnpgErr := k.resolveCNPGPod(ctx, target)
+			if cnpgIdentity != nil || cnpgErr == nil {
+				selected, identity, err = cnpgPod, cnpgIdentity, cnpgErr
+			} else if errors.Is(err, errKubernetesWorkloadNotFound) && !errors.Is(cnpgErr, kubeHTTPError(http.StatusNotFound)) {
+				return nil, nil, fmt.Errorf("read CloudNativePG Cluster: %w", cnpgErr)
+			}
+		}
 		if err != nil {
-			return nil, nil, err
+			return nil, identity, err
 		}
 		metadata := kubeObject(selected["metadata"])
 		name, expectedUID, workload = kubeString(metadata["name"]), kubeString(metadata["uid"]), identity
@@ -520,13 +530,13 @@ func (k *kubeClient) readMappedPod(ctx context.Context, target KubernetesTarget)
 	path := "/api/v1/namespaces/" + url.PathEscape(target.Namespace) + "/pods/" + url.PathEscape(name)
 	pod, err := k.get(ctx, path, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, workload, err
 	}
 	metadata := kubeObject(pod["metadata"])
 	uid, namespace := kubeString(metadata["uid"]), kubeString(metadata["namespace"])
 	if !kubeUID.MatchString(uid) || metadata["name"] != name ||
 		(namespace != "" && namespace != target.Namespace) || (expectedUID != "" && uid != expectedUID) {
-		return nil, nil, errors.New("Kubernetes Pod identity changed or could not be verified")
+		return nil, workload, errors.New("Kubernetes Pod identity changed or could not be verified")
 	}
 	return pod, workload, nil
 }
@@ -550,8 +560,14 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 	}
 	base := "/api/v1/namespaces/" + url.PathEscape(target.Namespace)
 	pod, workload, err := k.readMappedPod(ctx, target)
+	operator := kubeObject(workload["operator"])
+	delete(workload, "operator")
 	if err != nil {
-		return map[string]any{"status": "error", "reason": err.Error()}
+		result := map[string]any{"status": "error", "reason": err.Error(), "cluster": target.Cluster, "namespace": target.Namespace}
+		if operator != nil {
+			result["workload"], result["cloudNativePG"] = workload, operator
+		}
+		return result
 	}
 	metadata, spec, state := kubeObject(pod["metadata"]), kubeObject(pod["spec"]), kubeObject(pod["status"])
 	uid, nodeName := kubeString(metadata["uid"]), kubeString(spec["nodeName"])
@@ -588,6 +604,9 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		"observedAt": time.Now().UTC()}
 	if workload != nil {
 		result["workload"] = workload
+	}
+	if operator != nil {
+		result["cloudNativePG"] = operator
 	}
 	resourceSpecs := map[string]any{}
 	for _, raw := range kubeList(spec["containers"]) {
@@ -861,6 +880,9 @@ func DiscoverAssetPod(ctx context.Context, target KubernetesTarget, port int) ma
 		return unknown
 	}
 	pod, workload, err := client.readMappedPod(ctx, target)
+	if workload != nil {
+		unknown["workloadIdentity"] = workload
+	}
 	if err != nil {
 		return unknown
 	}
@@ -877,8 +899,5 @@ func DiscoverAssetPod(ctx context.Context, target KubernetesTarget, port int) ma
 		}
 	}
 	unknown["status"], unknown["pod"], unknown["uid"] = "observed", metadata["name"], metadata["uid"]
-	if workload != nil {
-		unknown["workloadIdentity"] = workload
-	}
 	return unknown
 }

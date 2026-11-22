@@ -404,8 +404,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.22.0'
-          previous_sha='276110a076fecb82a560553aab57fd53ae4b3fda13557e4e8d0e1e48b23cb6b0'
+          previous_version='1.23.0'
+          previous_sha='8fd8df5acdc1afeb8ece30dfe2d8012cef40ce6b1ed419b4c77c7b93073903b3'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -1035,6 +1035,80 @@ jobs:
         if: always()
         run: |
           if command -v kind >/dev/null 2>&1; then kind delete cluster --name dbsphere-ci; fi
+
+  cnpg-operator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install verified Kubernetes test tooling
+        run: |
+          mkdir -p "$RUNNER_TEMP/dbsphere-bin"
+          cd "$RUNNER_TEMP/dbsphere-bin"
+          curl -fLsS --retry 4 -O https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fLsS --retry 4 -O https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum
+          sha256sum --check kind-linux-amd64.sha256sum
+          mv kind-linux-amd64 kind
+          curl -fLsS --retry 4 -O https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
+          curl -fLsS --retry 4 -O https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl.sha256
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          chmod +x kind kubectl
+          echo "$RUNNER_TEMP/dbsphere-bin" >> "$GITHUB_PATH"
+          echo "KUBECONFIG=$RUNNER_TEMP/dbsphere-cnpg.kubeconfig" >> "$GITHUB_ENV"
+      - name: Start CloudNativePG 1.30.2 on Kubernetes 1.35.8
+        run: |
+          cat > "$RUNNER_TEMP/dbsphere-cnpg-kind.yaml" <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+            - role: worker
+          YAML
+          kind create cluster --name dbsphere-cnpg --config "$RUNNER_TEMP/dbsphere-cnpg-kind.yaml" \
+            --image kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0 --wait 180s
+          manifest="$RUNNER_TEMP/cnpg-1.30.2.yaml"
+          curl -fLsS --retry 4 https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.2/cnpg-1.30.2.yaml -o "$manifest"
+          echo "ea4cc355b394e10661d30c6b409cefb19029dd973bccb76b1ed8c789985bc68c  $manifest" | sha256sum --check
+          kubectl apply --server-side -f "$manifest"
+          kubectl -n cnpg-system rollout status deployment/cnpg-controller-manager --timeout=180s
+      - name: Deploy DbSphere and verify operator failover and recovery
+        run: |
+          docker build -f Dockerfile-go -t dbsphere/kind-matrix:local .
+          kind load docker-image dbsphere/kind-matrix:local --name dbsphere-cnpg
+          node scripts/kind-matrix-manifest.mjs dbsphere-cnpg "$RUNNER_TEMP/dbsphere-cnpg-full.json"
+          node scripts/kind-matrix-secrets.mjs "$RUNNER_TEMP/dbsphere-cnpg-secret.json" "$RUNNER_TEMP/dbsphere-cnpg-credentials.json"
+          jq '.items |= (map(.metadata.name as $name | select([
+                "dbsphere-matrix","dbsphere-reader","dbsphere-matrix-node-reader","dbsphere-store-data","dbsphere-store","dbsphere-go"
+              ] | index($name))) | map(if .kind=="Role" and .metadata.name=="dbsphere-reader"
+              then .rules += [{apiGroups:["postgresql.cnpg.io"],resources:["clusters"],verbs:["get","list"]}] else . end))' \
+            "$RUNNER_TEMP/dbsphere-cnpg-full.json" > "$RUNNER_TEMP/dbsphere-cnpg-app.json"
+          kubectl create namespace dbsphere-matrix
+          kubectl apply -f "$RUNNER_TEMP/dbsphere-cnpg-secret.json"
+          kubectl apply -f "$RUNNER_TEMP/dbsphere-cnpg-app.json"
+          kubectl -n dbsphere-matrix wait --for=condition=available deployment --all --timeout=240s
+          kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18094:8080 > "$RUNNER_TEMP/dbsphere-cnpg-forward.log" 2>&1 &
+          forward=$!
+          trap 'kill "$forward" 2>/dev/null || true' EXIT
+          for attempt in {1..45}; do
+            if curl -fsS http://127.0.0.1:18094/readyz 2>/dev/null | jq -e '.storage=="postgresql18"' >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18094/readyz | jq -e '.storage=="postgresql18"' >/dev/null
+          node scripts/kind-cnpg-acceptance.mjs http://127.0.0.1:18094 \
+            "$RUNNER_TEMP/dbsphere-cnpg-credentials.json" "$KUBECONFIG" kind-dbsphere-cnpg "$RUNNER_TEMP/dbsphere-cnpg-result.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-cnpg-acceptance
+          path: ${{ runner.temp }}/dbsphere-cnpg-result.json
+          if-no-files-found: error
+      - name: Remove isolated operator cluster
+        if: always()
+        run: |
+          if command -v kind >/dev/null 2>&1; then kind delete cluster --name dbsphere-cnpg; fi
 
   external-compose:
     runs-on: ubuntu-latest

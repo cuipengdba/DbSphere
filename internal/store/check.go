@@ -223,6 +223,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	metrics["collector"] = map[string]any{"pgStatus": pgStatus}
 	if runtime == "k8s" {
+		collector.CompareCNPGRole(kube, metrics)
 		metrics["k8s"] = kube
 		if kube["status"] != "ok" && collectErr == nil {
 			group, reason = "telemetry", "Kubernetes resource collection is unavailable"

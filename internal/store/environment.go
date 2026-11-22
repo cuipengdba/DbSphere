@@ -122,6 +122,9 @@ const environmentChangesSQL = `WITH frames AS (
 		kube#>>'{node,uid}' AS node_uid,kube->'owner' AS owner,kube->'workload' AS workload,kube->'endpointRoutes' AS routes,
 		kube->>'status' AS kube_status,kube->>'reason' AS kube_reason,kube#>>'{pod,phase}' AS pod_phase,
 		kube#>>'{pod,reason}' AS pod_reason,kube#>>'{pod,deletingAt}' AS deleting_at,
+		CASE WHEN kube->'cloudNativePG' IS NOT NULL THEN jsonb_build_object(
+			'phase',kube#>'{cloudNativePG,phase}','currentPrimary',kube#>'{cloudNativePG,currentPrimary}',
+			'targetPrimary',kube#>'{cloudNativePG,targetPrimary}','observation',kube#>'{cloudNativePG,databaseObservation}') END AS cnpg,
 		linux->>'endpoint' AS host_endpoint,
 		(SELECT status FROM jsonb_to_recordset(NULLIF(kube#>'{pod,conditions}','null'::jsonb)) AS c(type text,status text) WHERE type='Ready' LIMIT 1) AS ready,
 		(SELECT status FROM jsonb_to_recordset(NULLIF(kube#>'{pod,conditions}','null'::jsonb)) AS c(type text,status text) WHERE type='PodScheduled' LIMIT 1) AS scheduled,
@@ -146,6 +149,7 @@ const environmentChangesSQL = `WITH frames AS (
 		lag(workload) OVER chronological AS prior_workload,lag(kube_status) OVER chronological AS prior_kube_status,
 		lag(kube_reason) OVER chronological AS prior_kube_reason,lag(pod_phase) OVER chronological AS prior_pod_phase,
 		lag(pod_reason) OVER chronological AS prior_pod_reason,lag(deleting_at) OVER chronological AS prior_deleting_at,
+		lag(cnpg) OVER chronological AS prior_cnpg,
 		lag(volumes) OVER chronological AS prior_volumes,lag(node_uid) OVER chronological AS prior_node_uid,
 		lag(host_endpoint) OVER chronological AS prior_host_endpoint,
 		lag(boot) OVER chronological AS prior_boot,row_number() OVER chronological AS n
@@ -155,6 +159,7 @@ SELECT jsonb_build_object('id',id,'collectedAt',collected_at,'pg',pg,'previousPG
 	'node',node,'ready',ready,'scheduled',scheduled,'restarts',restarts,'nodePressure',node_pressure,'pvcs',pvcs,
 	'nodeUID',node_uid,'owner',owner,'workload',workload,'endpointRoutes',routes,'volumes',volumes,'routesChanged',routes IS DISTINCT FROM prior_routes,
 	'kubeStatus',kube_status,'kubeReason',kube_reason,'podPhase',pod_phase,'podReason',pod_reason,'deletingAt',deleting_at,
+	'cloudNativePG',cnpg,
 	'hostEndpoint',host_endpoint,'hostEndpointChanged',host_endpoint IS DISTINCT FROM prior_host_endpoint,
 	'hostRestart',boot<>prior_boot,'events',kube->'events')
 FROM compared WHERE n=1 OR pg IS DISTINCT FROM prior_pg OR uid IS DISTINCT FROM prior_uid OR ready IS DISTINCT FROM prior_ready
@@ -163,5 +168,6 @@ FROM compared WHERE n=1 OR pg IS DISTINCT FROM prior_pg OR uid IS DISTINCT FROM 
 	OR owner IS DISTINCT FROM prior_owner OR routes IS DISTINCT FROM prior_routes OR volumes IS DISTINCT FROM prior_volumes
 	OR workload IS DISTINCT FROM prior_workload OR kube_status IS DISTINCT FROM prior_kube_status OR kube_reason IS DISTINCT FROM prior_kube_reason
 	OR pod_phase IS DISTINCT FROM prior_pod_phase OR pod_reason IS DISTINCT FROM prior_pod_reason OR deleting_at IS DISTINCT FROM prior_deleting_at
+	OR cnpg IS DISTINCT FROM prior_cnpg
 	OR node_uid IS DISTINCT FROM prior_node_uid OR host_endpoint IS DISTINCT FROM prior_host_endpoint
 ORDER BY collected_at DESC,id DESC LIMIT 60`

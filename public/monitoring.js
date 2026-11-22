@@ -1738,6 +1738,45 @@
       return card;
     }
 
+    function cloudNativePGPanel(asset, cluster, changes) {
+      const card = panel('CloudNativePG');
+      const observed = cluster.databaseObservation || {};
+      const agreement = { aligned: '角色一致', mismatch: '角色观测不同步', unverified: '后端身份或角色待确认' };
+      const role = key => roleLabels[key] || '未知';
+      card.append(el('p', `${cluster.namespace}/${cluster.name} · UID ${cluster.uid}`, 'monitor-note'), stats([
+        ['阶段', cluster.phase || '未知'], ['当前主库', cluster.currentPrimary || '未知'], ['目标主库', cluster.targetPrimary || '未知'],
+        ['实例就绪', `${cluster.readyInstances ?? '—'} / ${cluster.instanceCount ?? '—'}`],
+        ['PostgreSQL 实测', `${role(observed.pgRole)}${observed.pod ? ` · ${observed.pod}` : ''}`]
+      ]));
+      card.append(el('p', [agreement[observed.status] || agreement.unverified,
+        observed.operatorRole && `控制器报告 ${role(observed.operatorRole)}`,
+        observed.matchesMappedPod === false && '连接命中其他成员',
+        cluster.readWriteService && `读写 ${cluster.readWriteService}`,
+        cluster.readService && `读服务 ${cluster.readService}`].filter(Boolean).join(' · '),
+      observed.status === 'mismatch' ? 'monitor-warning' : 'monitor-note'));
+      if (cluster.phaseReason) card.append(el('p', cluster.phaseReason, 'monitor-note'));
+      if (cluster.members?.length) card.append(table(['实例', 'Pod UID', '地址', '控制器角色标签', '就绪'], cluster.members.map(member => [
+        member.name, member.uid, member.address, member.roleLabel || '—', member.deleting ? '终止中' :
+          member.ready === 'True' ? '就绪' : member.ready === 'False' ? '未就绪' : '未知'
+      ]), 'CloudNativePG 成员'));
+      if (cluster.conditions?.length) card.append(table(['条件', '状态', '原因', '观测时间'], cluster.conditions.map(condition => [
+        condition.type, condition.status, [condition.reason, condition.message].filter(Boolean).join(' · '), formatTime(condition.changedAt)
+      ]), 'CloudNativePG 条件'));
+      const backup = cluster.backup || {};
+      card.append(el('p', backup.status === 'observed' ? [
+        backup.lastSuccessfulBackup && `最近备份成功 ${formatTime(backup.lastSuccessfulBackup)}`,
+        backup.lastFailedBackup && `最近备份失败 ${formatTime(backup.lastFailedBackup)}`,
+        backup.firstRecoverabilityPoint && `最早可恢复 ${formatTime(backup.firstRecoverabilityPoint)}`
+      ].filter(Boolean).join(' · ') : 'Cluster 状态未报告可读取的备份时间。', 'monitor-note'));
+      const history = changes.filter(row => row.cloudNativePG).slice(0, 12);
+      if (history.length) card.append(table(['观测时间', '阶段', '当前 / 目标主库', '数据库角色核对', '采样'], history.map(row => {
+        const state = row.cloudNativePG;
+        return [formatTime(row.collectedAt), state.phase, `${state.currentPrimary || '未知'} / ${state.targetPrimary || '未知'}`,
+          agreement[state.observation?.status] || agreement.unverified, sampleLink(asset.id, row.id)];
+      }), 'CloudNativePG 切换历史'));
+      return card;
+    }
+
     function kubernetesIdentityPanel(asset, snapshot, changes) {
       const card = panel('Workload、Pod、节点和服务端点');
       const kube = snapshot?.k8s;
@@ -1745,6 +1784,7 @@
       const workload = kube?.workload;
       const pod = kube?.pod;
       const node = kube?.node;
+      if (kube?.cloudNativePG) card.append(cloudNativePGPanel(asset, kube.cloudNativePG, changes));
       const named = item => item && [item.kind, item.name].filter(Boolean).join('/');
       const endpoints = routes => Object.entries(routes?.slices || {}).map(([name, slice]) => {
         const conditions = slice.endpoint.conditions || {};

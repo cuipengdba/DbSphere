@@ -1220,7 +1220,40 @@ function setupAssetImport() {
   const form = $('asset-import-form'), apply = $('asset-import-apply'), probe = $('asset-import-probe');
   const output = $('asset-import-plan'), results = $('asset-import-results'), status = $('asset-import-status');
   const download = $('asset-import-export');
+  const cnpgForm = $('cnpg-preview-form'), cnpgResults = $('cnpg-preview-results'), cnpgFill = $('cnpg-preview-fill');
   let plan, checkedIDs = [], nextExport = '', exportPage = 1;
+  let cnpgCandidates = [];
+  cnpgForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    cnpgFill.hidden = true;
+    const context = cnpgForm.elements.context.value.trim(), namespace = cnpgForm.elements.namespace.value.trim();
+    const submit = event.submitter;
+    if (submit) submit.disabled = true;
+    cnpgResults.replaceChildren(cell('p', '正在读取 CloudNativePG Cluster', 'hint'));
+    try {
+      const result = await api(`/api/assets/import/cloudnativepg?${new URLSearchParams({context, namespace})}`);
+      if (result.status !== 'ok') throw Error(result.reason || '集群观测暂不可用');
+      cnpgCandidates = result.clusters.filter(cluster => cluster.readWriteService).map(cluster => ({
+        name: cluster.name, host: `${cluster.readWriteService}.${namespace}.svc`, port: 5432, database: 'postgres',
+        runtime: 'k8s', clusterName: cluster.name, k8sCluster: context, namespace, workload: cluster.name
+      }));
+      cnpgResults.replaceChildren();
+      if (result.clusters.length) cnpgResults.append(importTable(['名称', 'Cluster UID', '主库 / 目标', '就绪实例', '读写 Service', '阶段'],
+        result.clusters.map(cluster => [cluster.name, cluster.uid, `${cluster.currentPrimary || '未知'} / ${cluster.targetPrimary || '未知'}`,
+          `${cluster.readyInstances ?? '—'} / ${cluster.instanceCount ?? '—'}`, cluster.readWriteService || '—', cluster.phase || '未知'])));
+      else cnpgResults.append(cell('p', '该命名空间没有可读取的 CloudNativePG 集群。', 'hint'));
+      if (result.truncated) cnpgResults.append(cell('p', '显示当前命名空间的前 100 个 Cluster。', 'hint'));
+      cnpgFill.hidden = !cnpgCandidates.length;
+    } catch (error) { cnpgResults.replaceChildren(cell('p', error.message, 'warning')); }
+    finally { if (submit) submit.disabled = false; }
+  });
+  cnpgFill.addEventListener('click', () => {
+    form.elements.format.value = 'yaml';
+    form.elements.content.value = JSON.stringify({assets: cnpgCandidates}, null, 2);
+    form.elements.discover.checked = true;
+    form.dispatchEvent(new Event('input'));
+    form.elements.content.focus();
+  });
   const payload = () => ({ format: form.elements.format.value, content: form.elements.content.value,
     username: form.elements.username.value.trim(), credentialRef: form.elements.credentialRef.value.trim(),
     discover: form.elements.discover.checked });
@@ -1231,7 +1264,8 @@ function setupAssetImport() {
       ? `${discovery.namespace}/${discovery.pod} · ${discovery.port} ${discovery.portDeclared ? '已声明' : '未声明'}`
       : discovery ? `${discovery.namespace || '未知命名空间'} · 未取得 Kubernetes 观测` : '';
     return [row.name || `第 ${row.index} 项`, row.endpoint, labels[row.action],
-      [row.reason, row.changes?.join('、'), location].filter(Boolean).join(' · ')];
+      [row.reason, row.changes?.join('、'), location,
+        discovery?.workloadIdentity?.operator && `CloudNativePG · ${discovery.workloadIdentity.uid}`].filter(Boolean).join(' · ')];
   })));
   form.addEventListener('input', () => { plan = null; apply.disabled = true; output.replaceChildren(); });
   form.addEventListener('submit', async event => {

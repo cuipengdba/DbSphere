@@ -7,6 +7,7 @@
 | Linux 容器中的单实例 PostgreSQL | CI | CI | CI | CI | CI | CI | 真实只读连接、诊断采样、角色识别和同事件锁故障演练。 |
 | Linux PgBouncer → PostgreSQL | CI | CI | CI | CI | CI | CI | 真实 HTTP 请求经池发生 PG 锁等待，同一事件关联后端 PID、阻塞会话及恢复。[故障链演练](TRACE_POOLER_INCIDENT.md) · [业务代理地址](TRACE_POOLER_ROUTE.md) |
 | Kubernetes 中的单实例 PostgreSQL | CI | CI | CI | CI | CI | CI | 四节点 kind 的 Pod/Service/Node 关联及独立 PG18 PVC。PG18 另通过真实应用和 Go SDK 的 Pod OOM 事件演练。[多节点矩阵](KIND_MATRIX_ACCEPTANCE.md) · [应用 OOM](KIND_APP_OOM_ACCEPTANCE.md) · [Go SDK OOM](SDK_KIND_OOM_ACCEPTANCE.md) |
+| Kubernetes CloudNativePG 1.30.2 | — | — | — | — | CI | — | Kubernetes 1.35.8 与 PostgreSQL 18.7，验证读写 Service、只读副本、故障切换、原事件恢复和隔离逻辑恢复。 [Operator 版本说明](https://cloudnative-pg.io/releases/cloudnative-pg-1-30.2-released/) |
 | Linux Patroni 双节点 | CI | CI | CI | CI | CI | — | 只读拓扑、选主、原节点重入及同事件恢复。[Patroni 验收](PATRONI_ACCEPTANCE.md) |
 | Kubernetes Patroni | 本机 | — | — | — | — | — | 单节点 kind 的 PG14 故障闭环。 |
 | 托管模式的数据库协议路径 | CI | CI | CI | CI | CI | — | 本地 PostgreSQL 容器的数据库侧采集与缺口显示。 |

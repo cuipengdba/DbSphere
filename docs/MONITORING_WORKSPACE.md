@@ -72,6 +72,12 @@ Kubernetes 通过只读 API 保存命名空间、Pod UID、控制器、Node 和�
 
 命名空间权限包含 `discovery.k8s.io/endpointslices` 的 `list` 时，页面显示指向当前 Pod UID 的端点及其就绪、服务和终止状态，也会指明权限缺口或可见范围截断。PVC 历史记录待绑定、已绑定、请求、容量和 PVC UID。PV 关联需核对 `claimRef` 的 namespace、名称和 UID。用量数据仅查询当前 PVC 创建后的样本。旧采样保留当时的对象身份，可从同一个问题事件打开。[EndpointSlice 条件](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) · [Kubernetes 对象 UID](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/)
 
+### CloudNativePG
+
+在资产中填写 Kubernetes 上下文、命名空间和 CloudNativePG Cluster 名称，使用目标 `rw` Service 作为主库入口，或指定 Pod 观测独立副本。`postgresql.cnpg.io` 组的 `clusters` 需要命名空间级 `get` 和 `list`。采集器不读取 Secret，数据库凭据沿用纳管时配置的监控账号。管理员可在「资产与实例 → 批量纳管与清单导出 → 发现 CloudNativePG 集群」预览当前命名空间，将候选填入清单并核对凭据后应用。
+
+运行环境页显示 Cluster 条件、当前主库、目标主库、Pod 就绪、服务入口和可读取的备份时间。DbSphere 通过 `inet_server_addr()` 核对实际 PostgreSQL 后端的 Pod 地址，再对照 `pg_is_in_recovery()` 和控制器报告。当控制器状态与实际角色不同步，页面会标注该观测及其原始采样。备份插件没有在 Cluster 状态发布相关时间时，页面显示未知。[CloudNativePG API](https://cloudnative-pg.io/docs/1.30/cloudnative-pg.v1/) · [CloudNativePG 服务](https://cloudnative-pg.io/docs/1.30/service_management/)
+
 ## 全链路故障回放
 
 在「问题事件」打开一个事件查看首次发现、影响实例、已有信号和恢复观测。按 PostgreSQL、SQL、复制、连接池、Linux 或 Kubernetes 查阅同一事件的证据轨迹。点击「原始采样」核验保存内容，或点击「定位同窗」在对应专题标出观测时刻，再返回原事件。开始、恢复和处置记录引用同一个事件 ID。
