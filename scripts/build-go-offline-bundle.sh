@@ -40,7 +40,8 @@ if ! grep -Fq "DBSPHERE_PG18_IMAGE:-$pg_source" "$repo_dir/deploy/compose/compos
   echo 'Go Compose PostgreSQL image must match the pinned offline source.' >&2
   exit 1
 fi
-docker build --platform "linux/$arch" -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
+docker build --platform "linux/$arch" --build-arg TARGETOS=linux --build-arg "TARGETARCH=$arch" \
+  -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
 docker pull --platform "linux/$arch" "$pg_source"
 docker image tag "$pg_source" postgres:18-bookworm
 mkdir -p -- "$stage/deploy/compose"
