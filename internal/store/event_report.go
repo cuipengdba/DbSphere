@@ -128,6 +128,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	data.Event.AssetName = "[资产名称已省略]"
 	data.RelatedEvents = nil
+	data.Replay.Points = nil
 	data.Analysis.TraceCoverage.Services = nil
 	data.Analysis.TraceCoverage.ServiceImpact = nil
 	for i := range data.Analysis.Candidates {
