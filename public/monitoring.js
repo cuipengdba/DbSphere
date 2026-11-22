@@ -20,6 +20,7 @@
     return `${number(value, 2)} B`;
   };
   const rate = value => `${number(value, 2)} 次/s`;
+  const signedBytes = value => `${value < 0 ? '−' : value > 0 ? '+' : ''}${bytes(Math.abs(value))}`;
   const percent = value => `${number(value)}%`;
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const display = (value, formatter = number) => finite(value) ? formatter(value) : '—';
@@ -1266,6 +1267,7 @@
 
     function catalogPanel(asset, data, time, events) {
       const result = document.createDocumentFragment();
+      const growth = new Map((data.growth || []).map(row => [`${row.kind}:${row.oid}`, row]));
       const sample = data.snapshot;
       const inventory = sample?.databases?.data;
       const databases = inventory?.databases || [];
@@ -1281,15 +1283,17 @@
         const order = select('数据库排行', key => drawRank(key));
         const chooser = select('实例内数据库', oid => chooseDatabase(oid));
         const controls = el('div', null, 'monitor-wait-controls');
-        options(order, [['bytes', '容量'], ['sessions', '连接']], 'bytes');
+        options(order, [['bytes', '容量'], ['growthBytes', '区间容量变化'], ['sessions', '连接']], 'bytes');
         options(chooser, [['', '查看数据库排行'], ...databases.map(row => [row.oid, row.name])], selected?.oid || '');
         controls.append(labeled('数据库', chooser), labeled('排行', order));
-        catalog.append(controls, rank);
+        catalog.append(controls, el('p', '容量变化按 OID 比较所选范围内的首末有效采样。7 天估算仅使用覆盖至少 24 小时的正增长。', 'monitor-note'), rank);
         const drawRank = key => {
-          const sorted = [...databases].sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1) || a.name.localeCompare(b.name));
-          rank.replaceChildren(table(['数据库', '容量', '连接', '读取块', '命中块'], sorted.map(row => [
-            button(row.name, () => chooseDatabase(row.oid), 'monitor-link'), display(row.bytes, bytes), display(row.sessions),
-            display(row.blocksRead), display(row.blocksHit)
+          const sorted = databases.map(row => ({ ...row, ...growth.get(`database:${row.oid}`) }))
+            .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity) || a.name.localeCompare(b.name));
+          rank.replaceChildren(table(['数据库', '容量', '区间变化', '7 天增长估算', '读取块增量', '连接', 'XID 年龄', '证据'], sorted.map(row => [
+            button(row.previousName ? `${row.previousName} → ${row.name}` : row.name, () => chooseDatabase(row.oid), 'monitor-link'),
+            display(row.bytes, bytes), display(row.growthBytes, signedBytes), display(row.projectedGrowth7d, signedBytes),
+            display(row.blocksReadDelta), display(row.sessions), display(row.xidAge), growthEvidence(asset.id, row)
           ]), '数据库排行'));
         };
         drawRank('bytes');
@@ -1332,13 +1336,15 @@
           focus.append(button('返回对象排行', () => { objectOid = ''; objectKind = ''; change(); }));
           focus.append(metricCharts(data.objectSeries, time, events, [
             ['bytes', '对象容量', bytes, palette[2]], ['deadRows', '死元组估计', number, palette[1]],
-            ['blocksRead', '累计读取块', number, palette[0]]
-          ].filter(([key]) => key !== 'deadRows' || objectKind === 'table')));
+            ['blocksRead', '累计读取块', number, palette[0]], ['modifiedSinceAnalyze', 'Analyze 后变化行数', number, palette[2]],
+            ['xidAge', '冻结 XID 年龄', number, palette[0]]
+          ].filter(([key]) => objectKind === 'table' || !['deadRows', 'modifiedSinceAnalyze', 'xidAge'].includes(key))));
           const last = data.objectSeries.findLast(row => finite(row.bytes));
           if (last) focus.append(sampleLink(asset.id, last.sampleId, '对象原始采样'));
           result.append(focus);
         }
-        result.append(objectRanking(sample.tables, activeDB, 'table'), objectRanking(sample.indexes, activeDB, 'index'));
+        result.append(maintenancePanel(asset, sample.tables, activeDB, growth),
+          objectRanking(asset, sample.tables, activeDB, 'table', growth), objectRanking(asset, sample.indexes, activeDB, 'index', growth));
       }
       const io = sample?.instanceIO?.data;
       const major = Math.floor((sample?.versionNum || asset.versionNum || 0) / 10000);
@@ -1354,7 +1360,44 @@
       dbOid = oid; objectOid = ''; objectKind = ''; change();
     }
 
-    function objectRanking(inventory, db, kind) {
+    function growthEvidence(assetId, row) {
+      if (!row.lastSample) return '—';
+      const evidence = el('span');
+      if (finite(row.seconds)) evidence.append(sampleLink(assetId, row.firstSample, '起点'), ' · ');
+      evidence.append(sampleLink(assetId, row.lastSample, '末点'));
+      return evidence;
+    }
+
+    function maintenancePanel(asset, inventory, db, growth) {
+      const card = panel('表维护、冻结与 Analyze');
+      const objects = inventory?.data?.objects || [];
+      if (!objects.length) {
+        card.append(el('p', '此范围缺少可见的表维护采样。', 'monitor-note'));
+        return card;
+      }
+      const list = objects.map(row => ({ ...row, ...growth.get(`table:${row.oid}`) }));
+      const coverage = list.find(row => finite(row.seconds));
+      card.append(el('p', `死元组和活元组为 PostgreSQL 统计估计。${coverage ? ' 对照窗口 ' + formatTime(coverage.firstAt) + ' 至 ' + formatTime(coverage.lastAt) + '。' : ''}`, 'monitor-note'));
+      const rank = el('div');
+      const order = select('表维护排序', render);
+      options(order, [['deadRows', '死元组'], ['freeze', '冻结阈值占比'], ['modifiedSinceAnalyze', '未分析变化行']], 'deadRows');
+      card.append(labeled('排序', order), rank);
+      function render(key) {
+        const rows = list.map(row => ({ ...row, freeze: row.xidLimit > 0 && finite(row.xidAge) ? Math.max(row.xidAge, 0) / row.xidLimit * 100 : null }))
+          .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity)).slice(0, 10);
+        rank.replaceChildren(table(['表', '死元组估计 · 前 → 后', '死元组占比', '冻结阈值占比', 'Autovacuum', '未分析变化行', '最近 Vacuum', '最近 Analyze', '证据'], rows.map(row => {
+          const total = (row.liveRows || 0) + (row.deadRows || 0);
+          return [button(`${row.schema}.${row.name}`, () => { dbOid = db.oid; objectOid = row.oid; objectKind = 'table'; change(); }, 'monitor-link'),
+            `${display(row.previousDeadRows)} → ${display(row.deadRows)}`, total > 0 ? percent(100 * row.deadRows / total) : '—',
+            display(row.freeze, percent), typeof row.autovacuumEnabled === 'boolean' ? (row.autovacuumEnabled ? '启用' : '常规关闭') : '—',
+            display(row.modifiedSinceAnalyze), formatTime(row.lastVacuumAt), formatTime(row.lastAnalyzeAt), growthEvidence(asset.id, row)];
+        }), '表维护排行'));
+      }
+      render('deadRows');
+      return card;
+    }
+
+    function objectRanking(asset, inventory, db, kind, growth) {
       const isTable = kind === 'table';
       const title = isTable ? '表排行' : '索引排行';
       const card = panel(`${title} · ${db.name}`);
@@ -1365,30 +1408,36 @@
       }
       const controls = el('div', null, 'monitor-wait-controls');
       const order = select(`${title}排序`, value => { by = value; currentPage = 0; render(); });
+      const schemaFilter = select(`${title} Schema`, value => { schema = value; currentPage = 0; render(); });
       const output = el('div');
-      let by = 'bytes', currentPage = 0;
+      let by = 'bytes', currentPage = 0, schema = '';
       const pageSize = 10;
-      const labels = isTable ? ['容量', '表级读取块', '死元组', '累计写入'] : ['容量', '索引读取块', '累计扫描'];
-      const fields = isTable ? ['bytes', 'blocksRead', 'deadRows', 'writes'] : ['bytes', 'blocksRead', 'scans'];
+      const labels = isTable ? ['容量', '区间容量变化', '表级读取增量', '死元组', '写入增量'] : ['容量', '区间容量变化', '索引读取增量', '扫描增量'];
+      const fields = isTable ? ['bytes', 'growthBytes', 'blocksReadDelta', 'deadRows', 'writesDelta'] : ['bytes', 'growthBytes', 'blocksReadDelta', 'scansDelta'];
       options(order, fields.map((field, i) => [field, labels[i]]), by);
-      controls.append(labeled('排序', order));
+      options(schemaFilter, [['', '全部 Schema'], ...[...new Set(objects.map(row => row.schema))].sort().map(schema => [schema, schema])], schema);
+      controls.append(labeled('Schema', schemaFilter), labeled('排序', order));
       card.append(el('p', `已采样 ${objects.length} / ${inventory.data.total} 个可见对象 · 依容量、活动和维护信号选取`, 'monitor-note'), controls, output);
       function render() {
-        const rows = [...objects].sort((a, b) => (b[by] ?? -1) - (a[by] ?? -1) || a.name.localeCompare(b.name));
-        output.replaceChildren(table(isTable ? ['表', '容量', '读取块', '死元组', '累计写入', '最近 Vacuum', '最近 Analyze'] :
-          ['索引', '所属表', '容量', '读取块', '累计扫描'], rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(row => {
-          const name = button(`${row.schema}.${row.name}`, () => { dbOid = db.oid; objectOid = row.oid; objectKind = kind; change(); }, 'monitor-link');
-          return isTable ? [name, display(row.bytes, bytes), display(row.blocksRead), display(row.deadRows), display(row.writes),
-            formatTime(row.lastVacuumAt), formatTime(row.lastAnalyzeAt)] :
-            [name, row.table, display(row.bytes, bytes), display(row.blocksRead), display(row.scans)];
+        const rows = objects.filter(row => !schema || row.schema === schema).map(row => ({ ...row, ...growth.get(`${kind}:${row.oid}`) }))
+          .sort((a, b) => (b[by] ?? -Infinity) - (a[by] ?? -Infinity) || a.name.localeCompare(b.name));
+        output.replaceChildren(table(isTable ? ['表', '类型 / 父 OID', '容量', '区间变化', '读取增量', '写入增量', '死元组', '证据'] :
+          ['索引', '所属表', '容量', '区间变化', '读取增量', '扫描增量', '证据'], rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(row => {
+          const label = [row.schema + '.' + row.name, row.previousName && `原名 ${row.previousName}`, row.rewritten && '存储重写'].filter(Boolean).join(' · ');
+          const name = button(label, () => { dbOid = db.oid; objectOid = row.oid; objectKind = kind; change(); }, 'monitor-link');
+          return isTable ? [name, row.partition ? `分区 / ${row.parentOid || '—'}` : row.relationKind === 'p' ? '分区根表' : '表',
+            display(row.bytes, bytes), display(row.growthBytes, signedBytes), display(row.blocksReadDelta), display(row.writesDelta),
+            display(row.deadRows), growthEvidence(asset.id, row)] :
+            [name, row.table, display(row.bytes, bytes), display(row.growthBytes, signedBytes), display(row.blocksReadDelta),
+              display(row.scansDelta), growthEvidence(asset.id, row)];
         }), title));
-        if (objects.length > pageSize) {
+        if (rows.length > pageSize) {
           const nav = el('div', null, 'monitor-wait-controls');
           const previous = button('上一页', () => { currentPage--; render(); });
           const next = button('下一页', () => { currentPage++; render(); });
           previous.disabled = currentPage === 0;
-          next.disabled = (currentPage + 1) * pageSize >= objects.length;
-          nav.append(previous, el('span', `${currentPage + 1} / ${Math.ceil(objects.length / pageSize)}`, 'monitor-note'), next);
+          next.disabled = (currentPage + 1) * pageSize >= rows.length;
+          nav.append(previous, el('span', `${currentPage + 1} / ${Math.ceil(rows.length / pageSize)}`, 'monitor-note'), next);
           output.append(nav);
         }
       }

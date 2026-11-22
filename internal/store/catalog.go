@@ -27,11 +27,16 @@ func (s *Postgres) databaseCatalog(ctx context.Context, id string, params url.Va
 		'tables',metrics_json#>'{diagnostics,tableInventory}','indexes',metrics_json#>'{diagnostics,indexInventory}',
 		'instanceIO',metrics_json#>'{diagnostics,instanceIO}')
 		FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
+		AND metrics_json#>>'{diagnostics,databaseInventory,status}'='ok'
 		ORDER BY collected_at DESC,id DESC LIMIT 1`, id, from, to).Scan(&snapshot)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	result := map[string]any{"snapshot": snapshot, "series": []json.RawMessage{}, "objectSeries": []json.RawMessage{}}
+	growth, err := s.queryJSON(ctx, catalogGrowthSQL, id, from, to, database)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"snapshot": snapshot, "growth": growth, "series": []json.RawMessage{}, "objectSeries": []json.RawMessage{}}
 	if database == "" {
 		return result, nil
 	}
@@ -49,6 +54,56 @@ func (s *Postgres) databaseCatalog(ctx context.Context, id string, params url.Va
 	}
 	return result, err
 }
+
+const catalogGrowthSQL = `WITH kinds(kind,inventory,items) AS (
+	VALUES ('database','databaseInventory','databases'),('table','tableInventory','objects'),('index','indexInventory','objects')
+), edges AS (
+	SELECT k.kind,e.* FROM kinds k CROSS JOIN LATERAL (
+		WITH eligible AS NOT MATERIALIZED (
+			SELECT id,collected_at AS at,metrics_json#>ARRAY['diagnostics',k.inventory,'data',k.items] AS objects,
+				db->>'oid' AS connected,db->>'statsReset' AS stats_reset,
+				metrics_json#>>'{diagnostics,walPosition,data,startedAt}' AS started
+			FROM samples CROSS JOIN LATERAL
+				(SELECT jsonb_path_query_first(metrics_json#>'{diagnostics,databaseInventory,data,databases}','$[*] ? (@.connected == true)') AS db) connected
+			WHERE asset_id=$1 AND collected_at >= $2 AND collected_at < $3
+			AND metrics_json#>>ARRAY['diagnostics',k.inventory,'status']='ok'
+			AND jsonb_typeof(metrics_json#>ARRAY['diagnostics',k.inventory,'data',k.items])='array'
+			AND (k.kind='database' OR (db->>'oid' IS NOT NULL AND ($4='' OR db->>'oid'=$4)))
+		)
+		SELECT first.id AS first_id,first.at AS first_at,first.connected AS first_db,first.objects AS prior,
+			last.id AS last_id,last.at AS last_at,last.connected AS last_db,last.objects AS current,
+			first.stats_reset AS first_reset,last.stats_reset AS last_reset,first.started AS first_start,last.started AS last_start
+		FROM (SELECT * FROM eligible ORDER BY at,id LIMIT 1) first
+		CROSS JOIN (SELECT * FROM eligible ORDER BY at DESC,id DESC LIMIT 1) last
+	) e
+), paired AS (
+	SELECT e.*,n AS latest,p AS previous,extract(epoch FROM last_at-first_at) AS seconds,
+		first_id<>last_id AND (kind='database' OR first_db=last_db) AND p IS NOT NULL AS comparable
+	FROM edges e CROSS JOIN LATERAL jsonb_array_elements(e.current) n
+	LEFT JOIN LATERAL jsonb_path_query_first(e.prior,'$[*] ? (@.oid == $oid)',jsonb_build_object('oid',n->>'oid')) p ON true
+), measured AS (
+	SELECT *,CASE WHEN comparable THEN (latest->>'bytes')::bigint-(previous->>'bytes')::bigint END AS growth,
+		comparable AND first_start IS NOT DISTINCT FROM last_start AND
+		(CASE WHEN kind='database' THEN (latest->>'statsReset') IS NOT DISTINCT FROM (previous->>'statsReset')
+			ELSE first_reset IS NOT DISTINCT FROM last_reset AND (latest->>'filenode') IS NOT DISTINCT FROM (previous->>'filenode') END) AS counters
+	FROM paired
+)
+SELECT jsonb_build_object('kind',kind,'oid',latest->'oid','databaseOid',CASE WHEN kind='database' THEN latest->>'oid' ELSE last_db END,
+	'firstSample',first_id,'lastSample',last_id,'firstAt',first_at,'lastAt',last_at,'seconds',CASE WHEN comparable THEN seconds END,
+	'previousName',CASE WHEN comparable AND latest->>'name' <> previous->>'name' THEN previous->>'name' END,
+	'rewritten',comparable AND latest->>'filenode'<>previous->>'filenode',
+	'growthBytes',growth,
+	'projectedGrowth7d',CASE WHEN growth>0 AND seconds>=86400 THEN round(growth * 604800.0 / seconds) END,
+	'blocksReadDelta',CASE WHEN counters AND (latest->>'blocksRead')::bigint >= (previous->>'blocksRead')::bigint
+		THEN (latest->>'blocksRead')::bigint-(previous->>'blocksRead')::bigint END,
+	'writesDelta',CASE WHEN counters AND (latest->>'writes')::bigint >= (previous->>'writes')::bigint
+		THEN (latest->>'writes')::bigint-(previous->>'writes')::bigint END,
+	'scansDelta',CASE WHEN counters AND (latest->>'scans')::bigint >= (previous->>'scans')::bigint
+		THEN (latest->>'scans')::bigint-(previous->>'scans')::bigint END,
+	'previousDeadRows',CASE WHEN comparable THEN previous->'deadRows' END,
+	'previousVacuumAt',CASE WHEN comparable THEN previous->'lastVacuumAt' END,
+	'previousAnalyzeAt',CASE WHEN comparable THEN previous->'lastAnalyzeAt' END)
+FROM measured ORDER BY kind,growth DESC NULLS LAST,latest->>'oid'`
 
 func validCatalogOID(oid string) bool {
 	if oid == "" {
@@ -100,5 +155,6 @@ const objectSeriesSQL = `WITH measured AS (
 	FROM samples WHERE asset_id=$1 AND collected_at>=$2 AND collected_at<$3
 )
 SELECT DISTINCT ON(bucket) jsonb_build_object('bucket',bucket,'sampleId',id,'collectedAt',collected_at,
-	'bytes',object->'bytes','deadRows',object->'deadRows','blocksRead',object->'blocksRead')
+	'bytes',object->'bytes','deadRows',object->'deadRows','blocksRead',object->'blocksRead',
+	'modifiedSinceAnalyze',object->'modifiedSinceAnalyze','xidAge',object->'xidAge')
 FROM measured ORDER BY bucket,collected_at DESC,id DESC`
