@@ -2127,6 +2127,7 @@ const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', sql: 'SQL', 
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
+  ai_evidence_review: '模型证据审核',
   risk_forecast: '无模型风险预警', risk_forecast_cleared: '风险信号回落',
   routing_observed: '入口诊断更新',
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
@@ -2135,6 +2136,58 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
+
+function evidenceReviewPanel(event, showSource) {
+  const panel = cell('details', '', 'settings-details ai-evidence-panel');
+  panel.append(cell('summary', '证据助手'));
+  const output = cell('div', '', 'list');
+  panel.append(output);
+  const path = '/api/events/' + event.id + '/ai-evidence-review';
+  const kinds = {candidate: '候选解释', counterevidence: '反证', verification: '核查建议'};
+  const status = {
+    no_model: '规则核查 · 模型未接入', ready: '规则核查 · 可请求模型审核', model: '模型审核已记录',
+    model_saved: '上次模型审核', model_unavailable: '模型暂不可用 · 显示规则核查',
+    invalid_citations: '模型引用无法验证 · 显示规则核查', insufficient: '证据不足',
+    budget_exhausted: '当日模型预算已用完 · 显示规则核查'
+  };
+  let loaded = false;
+  const load = async (method = 'GET') => {
+    loaded = true;
+    try {
+      const review = await api(path, method, method === 'POST' ? {} : undefined);
+      output.replaceChildren(cell('p', status[review.status] || review.status, 'hint'),
+        cell('small', '事件证据 ' + review.sources.length + ' 项 · ' + review.inputBytes + '/' + review.maxInputBytes +
+          ' 字节 · 每日模型请求上限 ' + review.dailyLimit, 'hint'));
+      const sources = new Map(review.sources.map(source => [source.id,source]));
+      for (const claim of review.result.claims) {
+        const row = cell('article', '', 'evidence');
+        row.append(cell('strong', kinds[claim.kind]), cell('p', claim.text));
+        const actions = cell('div', '', 'actions');
+        for (const id of claim.evidenceIds) {
+          const source = sources.get(id);
+          if (!source) continue;
+          const link = cell('button', '证据 ' + id.slice(0,8), 'monitor-link');
+          link.type = 'button';
+          link.title = id + ' · ' + formatTime(source.observedAt);
+          link.addEventListener('click', () => showSource(id));
+          actions.append(link);
+          if (source.sampleId) actions.append(replaySampleLink(event.assetId,source.sampleId));
+        }
+        row.append(actions);
+        output.append(row);
+      }
+      if (review.result.uncertainty) output.append(cell('p', review.result.uncertainty, 'hint'));
+      if (review.canRequest && review.status !== 'budget_exhausted') {
+        const analyze = cell('button', '请求模型审核', 'ghost small-button');
+        analyze.type = 'button';
+        analyze.addEventListener('click', () => { analyze.disabled = true; void load('POST'); });
+        output.append(analyze);
+      }
+    } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); }
+  };
+  panel.addEventListener('toggle', () => { if (panel.open && !loaded) void load(); });
+  return panel;
+}
 
 function replaySampleLink(assetId, sampleId) {
   const link = cell('a', '原始采样', 'monitor-link');
@@ -2750,6 +2803,17 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
   evidencePanel.append(diagnosis, window.DbSphereObservability.eventGraph(analysis.graph, event), coverageDetails, graphDetails);
+  evidencePanel.append(evidenceReviewPanel(event, id => {
+    activate('timeline');
+    const record = timelinePanel.querySelector('#event-evidence-' + id);
+    if (record) {
+      const timeline = record.closest('details');
+      if (timeline) timeline.open = true;
+      record.tabIndex = -1;
+      record.focus({preventScroll: true});
+      record.scrollIntoView({block:'center'});
+    }
+  }));
   timelinePanel.append(window.DbSphereObservability.incidentTimeline(event));
   const reports = document.createElement('div'); reports.className = 'actions';
   for (const [format, label] of [['md', '下载事件报告 · Markdown'], ['html', '下载事件报告 · HTML']]) {
@@ -3049,6 +3113,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
+    if (evidence.kind === 'ai_evidence_review') text = (evidence.payload.result?.model || '模型') + ' · ' +
+      (evidence.payload.result?.claims?.length || 0) + ' 条带引用的审核结论';
     if (evidence.kind === 'event_handoff') text = `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
     if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
     if (evidence.kind === 'work_order_decision') text = `${evidence.payload.actor || '独立审批账号'} ${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
@@ -3058,8 +3124,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = external || risk ? replayKinds[evidence.kind] : evidence.kind;
+    const label = external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
+    row.id = 'event-evidence-' + evidence.id;
     if (risk && evidence.payload.sampleId) row.append(document.createTextNode(' · '), replaySampleLink(event.assetId, evidence.payload.sampleId));
     if (external && evidence.payload.url?.startsWith('https://')) {
       const link = cell('a', '打开外部记录', 'monitor-link');
@@ -3074,7 +3141,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       evidence.kind === 'alert_firing' || evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered' ||
       evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' ||
       external || risk || (noLeader && !highlightedNoLeader))) {
-      highlights.append(row.cloneNode(true));
+      const highlight = row.cloneNode(true);
+      highlight.removeAttribute('id');
+      highlights.append(highlight);
       highlightCount++;
       if (noLeader) highlightedNoLeader = true;
     }

@@ -168,9 +168,20 @@ func run(log *slog.Logger) error {
 	if remoteAI != "" && remoteAI != "true" && remoteAI != "false" {
 		return fmt.Errorf("DBSPHERE_AI_ALLOW_REMOTE must be true or false")
 	}
+	reviewSchema := os.Getenv("DBSPHERE_AI_EVIDENCE_SCHEMA")
+	if reviewSchema != "" && reviewSchema != "true" && reviewSchema != "false" {
+		return fmt.Errorf("DBSPHERE_AI_EVIDENCE_SCHEMA must be true or false")
+	}
+	reviewTimeout := 28
+	if raw := os.Getenv("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS"); raw != "" {
+		reviewTimeout, err = strconv.Atoi(raw)
+		if err != nil || reviewTimeout < 1 || reviewTimeout > 35 {
+			return fmt.Errorf("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS must be between 1 and 35")
+		}
+	}
 	aiClient, err := ai.New(ai.Config{URL: os.Getenv("DBSPHERE_AI_CHAT_URL"),
 		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"),
-		AllowRemote: remoteAI == "true"})
+		AllowRemote: remoteAI == "true", ReviewSchema: reviewSchema == "true", ReviewTimeout: time.Duration(reviewTimeout) * time.Second})
 	if err != nil {
 		return err
 	}

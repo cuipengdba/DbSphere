@@ -275,3 +275,8 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .risk-panel > .list {
   grid-template-columns: minmax(0, 1fr);
 }
+
+.ai-evidence-panel .evidence {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

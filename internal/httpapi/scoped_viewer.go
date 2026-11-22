@@ -36,6 +36,7 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 	}{
 		{"event", eventPath.FindStringSubmatch(path)},
 		{"event", eventReportPath.FindStringSubmatch(path)},
+		{"event", eventReviewPath.FindStringSubmatch(path)},
 		{"event", eventImpactPath.FindStringSubmatch(path)},
 		{"inspection", inspectionReportPath.FindStringSubmatch(path)},
 	} {

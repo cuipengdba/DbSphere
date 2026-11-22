@@ -126,7 +126,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	ids := make([]string, 0, len(data.Event.Evidence))
 	for _, item := range data.Event.Evidence {
-		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" &&
+		if !strings.HasPrefix(item.Kind, "ai_") &&
 			item.Kind != "operator_response" && item.Kind != "rca_decision" && item.Kind != "event_handoff" &&
 			!strings.HasPrefix(item.Kind, "work_order_") {
 			ids = append(ids, item.ID)
@@ -158,7 +158,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	}
 	filtered := data.Event.Evidence[:0]
 	for _, item := range data.Event.Evidence {
-		if item.Kind != "ai_invocation" && item.Kind != "ai_advisory" && item.Kind != "event_handoff" &&
+		if !strings.HasPrefix(item.Kind, "ai_") && item.Kind != "event_handoff" &&
 			!strings.HasPrefix(item.Kind, "work_order_") {
 			filtered = append(filtered, item)
 		}

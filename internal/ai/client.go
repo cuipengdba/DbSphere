@@ -18,17 +18,21 @@ var ErrInvalidConfiguration = errors.New("invalid AI endpoint configuration")
 var ErrInvalidEvidence = errors.New("AI cited unknown evidence")
 
 type Config struct {
-	URL         string
-	Model       string
-	APIKey      string
-	AllowRemote bool
+	URL           string
+	Model         string
+	APIKey        string
+	AllowRemote   bool
+	ReviewSchema  bool
+	ReviewTimeout time.Duration
 }
 
 type Client struct {
-	endpoint string
-	model    string
-	apiKey   string
-	http     *http.Client
+	endpoint     string
+	model        string
+	apiKey       string
+	http         *http.Client
+	reviewHTTP   *http.Client
+	reviewSchema bool
 }
 
 type Result struct {
@@ -62,9 +66,19 @@ func New(cfg Config) (*Client, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	return &Client{endpoint: u.String(), model: cfg.Model, apiKey: cfg.APIKey,
-		http: &http.Client{Timeout: 12 * time.Second, Transport: transport,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	timeout := cfg.ReviewTimeout
+	if timeout == 0 {
+		timeout = 28 * time.Second
+	}
+	if timeout < 0 || timeout > 35*time.Second {
+		return nil, ErrInvalidConfiguration
+	}
+	base := http.Client{Timeout: 12 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	review := base
+	review.Timeout = timeout
+	return &Client{endpoint: u.String(), model: cfg.Model, apiKey: cfg.APIKey, http: &base, reviewHTTP: &review, reviewSchema: cfg.ReviewSchema}, nil
 }
 
 func (c *Client) Model() string { return c.model }
@@ -95,40 +109,12 @@ func (c *Client) Analyze(ctx context.Context, evidence string, allowedIDs []stri
 	if err != nil {
 		return Result{}, ErrUnavailable
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
+	content, err := c.completion(ctx, c.http, requestBody)
 	if err != nil {
-		return Result{}, ErrUnavailable
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	response, err := c.http.Do(request)
-	if err != nil {
-		return Result{}, ErrUnavailable
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Result{}, ErrUnavailable
-	}
-	limited, err := io.ReadAll(io.LimitReader(response.Body, 32769))
-	if err != nil || len(limited) > 32768 {
-		return Result{}, ErrUnavailable
-	}
-	var completion struct {
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-			Message      struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal(limited, &completion) != nil || len(completion.Choices) != 1 ||
-		(completion.Choices[0].FinishReason != "" && completion.Choices[0].FinishReason != "stop") {
-		return Result{}, ErrUnavailable
+		return Result{}, err
 	}
 	var result Result
-	if json.Unmarshal([]byte(completion.Choices[0].Message.Content), &result) != nil ||
+	if json.Unmarshal([]byte(content), &result) != nil ||
 		len([]rune(result.Summary)) < 3 || len([]rune(result.Summary)) > 800 ||
 		len([]rune(result.Uncertainty)) < 3 || len([]rune(result.Uncertainty)) > 500 ||
 		len(result.EvidenceIDs) == 0 || len(result.EvidenceIDs) > 12 ||
@@ -154,4 +140,40 @@ func (c *Client) Analyze(ctx context.Context, evidence string, allowedIDs []stri
 	result.Model = c.model
 	result.Notice = "AI 建议仅供排查，须以原始证据和人工验证为准。"
 	return result, nil
+}
+
+func (c *Client) completion(ctx context.Context, client *http.Client, requestBody []byte) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		return "", ErrUnavailable
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", ErrUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", ErrUnavailable
+	}
+	limited, err := io.ReadAll(io.LimitReader(response.Body, 32769))
+	if err != nil || len(limited) > 32768 {
+		return "", ErrUnavailable
+	}
+	var completion struct {
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(limited, &completion) != nil || len(completion.Choices) != 1 ||
+		(completion.Choices[0].FinishReason != "" && completion.Choices[0].FinishReason != "stop") {
+		return "", ErrUnavailable
+	}
+	return completion.Choices[0].Message.Content, nil
 }
