@@ -19,6 +19,10 @@ func (s *Postgres) PruneSamples(ctx context.Context, cutoff time.Time, limit int
 			WHERE refs.sample_id=candidate.id::text)
 		AND NOT EXISTS (SELECT 1 FROM inspection_runs run
 			WHERE run.sample_id=candidate.id)
+		AND (NOT EXISTS (SELECT 1 FROM history_tier_policy) OR NOT EXISTS (
+			SELECT 1 FROM assets a JOIN history_tier_policy p ON p.organization_id=a.organization_id
+			WHERE a.id=candidate.asset_id AND candidate.collected_at>=date_trunc('hour',now(),'UTC')-make_interval(days=>p.hourly_days)
+			AND jsonb_typeof(candidate.metrics_json#>dbsphere_tier_path(p.metric))='number'))
 		ORDER BY collected_at,id LIMIT $2
 	) DELETE FROM samples s USING doomed d
 	  WHERE s.id=d.id AND s.collected_at=d.collected_at`, cutoff.UTC(), limit)

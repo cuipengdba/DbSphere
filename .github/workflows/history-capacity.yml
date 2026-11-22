@@ -1,0 +1,84 @@
+name: PostgreSQL history capacity
+
+on:
+  workflow_dispatch:
+
+jobs:
+  history-capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    services:
+      pg18:
+        image: postgres:18-bookworm
+        ports:
+          - 15434:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-scale-test
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    env:
+      DBSPHERE_TEST_HISTORY_SCALE_URL: postgres://postgres:dbsphere-scale-test@127.0.0.1:15434/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Record Linux runner and seed 7,776,000 PostgreSQL samples
+        env:
+          PG18_CONTAINER: ${{ job.services.pg18.id }}
+          PROOF_DIR: ${{ runner.temp }}/dbsphere-history-proof
+        run: |
+          printf 'PROOF_DIR=%s\nPG18_CONTAINER=%s\n' "$PROOF_DIR" "$PG18_CONTAINER" >> "$GITHUB_ENV"
+          mkdir -p "$PROOF_DIR"
+          {
+            uname -a
+            nproc
+            free -h
+            lsblk -d -o NAME,TYPE,TRAN,ROTA,SIZE
+            docker info --format 'docker_data_root={{.DockerRootDir}} storage_driver={{.Driver}}'
+            df -h "$RUNNER_TEMP"
+          } > "$PROOF_DIR/environment.txt"
+          DBSPHERE_TEST_HISTORY_SCALE_PHASE=seed DBSPHERE_TEST_HISTORY_SCALE_OUTPUT="$PROOF_DIR/seed.json" \
+            go test ./internal/store -run '^TestPG18HistoryCapacity$' -count=1 -timeout 27m -v
+      - name: Clear PostgreSQL and runner page caches before cold queries
+        run: |
+          docker stop -t 60 "$PG18_CONTAINER"
+          sync
+          if printf '3\n' | sudo tee /proc/sys/vm/drop_caches >/dev/null; then
+            printf '%s\n' 'PostgreSQL restarted and Linux page caches cleared' > "$PROOF_DIR/cold-scope.txt"
+          else
+            printf '%s\n' 'PostgreSQL restarted; Linux page caches retained' > "$PROOF_DIR/cold-scope.txt"
+          fi
+          docker start "$PG18_CONTAINER"
+          for _ in $(seq 1 75); do
+            if docker exec "$PG18_CONTAINER" pg_isready -h 127.0.0.1 -U postgres; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Measure cold and warm history with five clients
+        run: |
+          DBSPHERE_TEST_HISTORY_SCALE_PHASE=measure DBSPHERE_TEST_HISTORY_SCALE_OUTPUT="$PROOF_DIR/measure.json" \
+            go test ./internal/store -run '^TestPG18HistoryCapacity$' -count=1 -timeout 8m -v
+      - name: Back up all samples and restore to a separate PostgreSQL database
+        run: |
+          archive="$RUNNER_TEMP/history-capacity.dump"
+          started=$(date +%s%3N)
+          docker exec "$PG18_CONTAINER" pg_dump -U postgres -Fc -Z3 postgres > "$archive"
+          backed_up=$(date +%s%3N)
+          docker exec "$PG18_CONTAINER" createdb -U postgres capacity_restore
+          docker exec -i "$PG18_CONTAINER" pg_restore -U postgres --exit-on-error -d capacity_restore < "$archive"
+          restored=$(date +%s%3N)
+          printf 'backup_ms=%s\nrestore_ms=%s\nbackup_bytes=%s\n' "$((backed_up-started))" \
+            "$((restored-backed_up))" "$(stat -c %s "$archive")" > "$PROOF_DIR/backup.txt"
+          sha256sum "$archive" >> "$PROOF_DIR/backup.txt"
+          DBSPHERE_TEST_HISTORY_SCALE_URL=postgres://postgres:dbsphere-scale-test@127.0.0.1:15434/capacity_restore \
+            DBSPHERE_TEST_HISTORY_SCALE_PHASE=restore DBSPHERE_TEST_HISTORY_SCALE_OUTPUT="$PROOF_DIR/restore.json" \
+            go test ./internal/store -run '^TestPG18HistoryCapacity$' -count=1 -timeout 5m -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dbsphere-history-capacity
+          path: ${{ runner.temp }}/dbsphere-history-proof
+          if-no-files-found: warn

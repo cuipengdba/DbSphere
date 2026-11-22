@@ -2535,5 +2535,18 @@
     };
   }
 
-  window.DbSphereMonitoring = { create };
+  function historyChart(title, rows, from, to, format, zoom) {
+    const bucketMs = 60 * minute;
+    const window = { from, to, first: from, bucketMs, count: (to - from) / bucketMs, cursors: new Set(), zoom };
+    const buckets = aligned(rows, window, row => {
+      const source = row.hourly ? row.raw ? '原始与归档' : '归档' : '原始';
+      return { samples: row.samples, observed: row.samples, values: [
+        { key: 'average', label: source + '均值', value: row.average, color: 'var(--plot-blue)' },
+        { key: 'max', label: '最大值', value: row.max, color: 'var(--plot-orange)' }
+      ] };
+    });
+    return graph(title, window, buckets, [], format);
+  }
+
+  window.DbSphereMonitoring = { create, historyChart };
 })();

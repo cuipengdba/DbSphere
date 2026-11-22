@@ -88,7 +88,7 @@ function setView(route, updateHash = true) {
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
     } else {
-      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit'].includes(section) ? section : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -121,6 +121,7 @@ function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && section === 'platform') void loadPlatformStatus();
   if (view === 'settings' && section === 'organizations') void loadOrganizations();
   if (view === 'settings' && section === 'audit') renderOrganizationAudit();
+  if (view === 'settings' && section === 'history-tiers') void loadHistoryPolicies();
 }
 
 const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
@@ -845,6 +846,7 @@ async function showAsset(id, layer) {
     }
     trendHead.append(periods); detail.append(trendHead, trend);
     await loadTrend(selectedAssetTrendHours, selectedAssetTrendHours === 168 ? 6 : 1);
+    detail.append(historyTierChart(id));
   }
   if (currentSample?.status === 'ok' && currentSample.metrics) {
     const metrics = currentSample.metrics;
@@ -1639,6 +1641,85 @@ function renderStorage(storage) {
     record.append(digest);
     target.append(record);
   }
+}
+
+const historyMetrics = {
+  connections: '连接数', replicationLagBytes: '复制延迟', databaseBytes: '数据库容量', linuxCpuPercent: 'Linux CPU 使用率'
+};
+
+async function loadHistoryPolicies() {
+  const target = $('history-policies');
+  if (currentRole !== 'admin') return;
+  target.replaceChildren(cell('p', '正在读取指标保留策略。', 'empty'));
+  try {
+    const [{ policies }] = await Promise.all([api('/api/admin/history-retention'), loadOrganizations(false)]);
+    const form = cell('form', '', 'response-form');
+    const org = accessSelect(form, '组织', 'organization', organizationOptions(), [currentOrganization || defaultOrganizationID]);
+    const metric = accessSelect(form, '指标', 'metric', Object.entries(historyMetrics), ['connections']);
+    const raw = accessInput(form, '原始值保留天数', 'rawDays', '7', { type: 'number', min: 1, max: 90, required: true });
+    const hourly = accessInput(form, '小时汇总保留天数', 'hourlyDays', '90', { type: 'number', min: 1, max: 365, required: true });
+    const submit = cell('button', '保存保留策略'); submit.type = 'submit';
+    form.append(submit);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        await api('/api/admin/history-retention', 'PUT', {
+          organizationId: org.value, metric: metric.value, rawDays: raw.valueAsNumber, hourlyDays: hourly.valueAsNumber
+        });
+        notice('已保存保留策略。');
+        await loadHistoryPolicies();
+      } catch (error) { notice(error.message, true); submit.disabled = false; }
+    });
+    target.replaceChildren(form);
+    if (!policies.length) target.append(cell('p', '暂无指标分层策略。', 'empty'));
+    for (const policy of policies) {
+      const line = cell('div', '', 'list-item');
+      line.append(cell('span', organizationName(policy.organizationId) + ' · ' + historyMetrics[policy.metric] +
+        ' · 原始 ' + policy.rawDays + ' 天 · 小时汇总 ' + policy.hourlyDays + ' 天 · 归档至 ' + formatTime(policy.archiveThrough)));
+      const edit = cell('button', '编辑', 'ghost small-button'); edit.type = 'button';
+      edit.addEventListener('click', () => {
+        org.value = policy.organizationId; metric.value = policy.metric;
+        raw.value = policy.rawDays; hourly.value = policy.hourlyDays; raw.focus();
+      });
+      line.append(edit);
+      target.append(line);
+    }
+  } catch (error) { target.replaceChildren(cell('p', error.message, 'warning')); }
+}
+
+function historyTierChart(assetId) {
+  const panel = cell('details', '', 'settings-details');
+  panel.append(cell('summary', '分层历史趋势'));
+  const controls = cell('form', '', 'response-form');
+  const metric = accessSelect(controls, '指标', 'metric', Object.entries(historyMetrics), ['connections']);
+  const period = accessSelect(controls, '时间范围', 'period', [['7', '最近 7 天'], ['30', '最近 30 天'], ['90', '最近 90 天']], ['30']);
+  const apply = cell('button', '查看历史', 'ghost'); apply.type = 'submit'; controls.append(apply);
+  const output = cell('div');
+  panel.append(controls, output);
+  let sequence = 0;
+  const load = async (start, end) => {
+    const request = ++sequence;
+    const hour = 3600000;
+    const to = end ?? Math.floor(Date.now() / hour) * hour;
+    const from = start ?? to - Number(period.value) * 24 * hour;
+    const key = metric.value;
+    output.replaceChildren(cell('p', '正在读取分层历史。', 'empty'));
+    const query = new URLSearchParams({ metric: key, from: new Date(from).toISOString(), to: new Date(to).toISOString() });
+    try {
+      const { buckets } = await api('/api/assets/' + assetId + '/history-tier?' + query);
+      if (!output.isConnected || sequence !== request) return;
+      const format = key === 'linuxCpuPercent' ? value => value.toFixed(1) + '%' :
+        key.endsWith('Bytes') ? value => (value / (1024 * 1024)).toFixed(1) + ' MiB' :
+        value => value.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+      output.replaceChildren(window.DbSphereMonitoring.historyChart(historyMetrics[key], buckets, from, to, format, load));
+    } catch (error) {
+      if (sequence === request) output.replaceChildren(cell('p', error.message, 'warning'));
+    }
+  };
+  panel.addEventListener('toggle', () => { if (panel.open && !sequence) void load(); });
+  controls.addEventListener('submit', event => { event.preventDefault(); void load(); });
+  return panel;
 }
 
 async function loadPlatformStatus() {

@@ -423,6 +423,26 @@ func runTrendMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logge
 	}
 }
 
+func runHistoryTierMaintainer(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	for ctx.Err() == nil {
+		workCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		pass, err := pg.AdvanceHistoryTier(workCtx, time.Now(), 5000)
+		cancel()
+		wait := time.Minute
+		if err != nil && ctx.Err() == nil {
+			log.Warn("Go history tier maintenance paused", "error", err)
+		}
+		if err == nil && (pass.Advanced || pass.RemovedHours > 0) {
+			wait = 250 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+}
+
 func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, eventDays int, log *slog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()

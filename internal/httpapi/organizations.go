@@ -48,6 +48,9 @@ func scopedPrincipalIDs(ctx context.Context, db HealthStore, config *AuthConfig,
 
 func authorizeOrganizationAdmin(w http.ResponseWriter, r *http.Request, db HealthStore, allowed map[string]bool) bool {
 	path := r.URL.Path
+	if path == historyPolicyPath && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
+		return true
+	}
 	if r.Method == http.MethodGet && (path == "/api/admin/access" || path == "/api/admin/organizations" || path == "/api/admin/organization-audit") ||
 		r.Method != http.MethodGet && (path == "/api/admin/accounts" || path == "/api/admin/teams" ||
 			accessAccountPath.MatchString(path) || accessTeamPath.MatchString(path)) {
