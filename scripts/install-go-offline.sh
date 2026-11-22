@@ -9,9 +9,14 @@ elif [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
   exit 1
 fi
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]] ||
+case "$(uname -m)" in
+  x86_64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) arch='' ;;
+esac
+if [[ "$(uname -s)" != Linux || -z "$arch" ]] ||
    ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-  echo 'Linux x86_64, Docker Engine and Compose v2 are required.' >&2
+  echo 'Linux x86_64 or arm64, Docker Engine and Compose v2 are required.' >&2
   exit 1
 fi
 if [[ ! -f "$bundle_dir/SHA256SUMS" || ! -f "$bundle_dir/bundle.env" ||
@@ -23,11 +28,11 @@ fi
   echo 'Go offline bundle checksum verification failed.' >&2
   exit 1
 }
-if [[ $# -eq 2 ]]; then
-  bash "$bundle_dir/backup.sh" "$2"
-  exit 0
-fi
 source "$bundle_dir/bundle.env"
+if [[ "${DBSPHERE_GO_OFFLINE_ARCH:-amd64}" != "$arch" ]]; then
+  echo "Offline bundle targets ${DBSPHERE_GO_OFFLINE_ARCH:-amd64}; this Linux host is $arch." >&2
+  exit 1
+fi
 if [[ ! "${DBSPHERE_GO_OFFLINE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ||
   "${DBSPHERE_GO_OFFLINE_APP_IMAGE:-}" != "dbsphere/offline-go-app:$DBSPHERE_GO_OFFLINE_VERSION" ||
   ! "${DBSPHERE_GO_OFFLINE_APP_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ||
@@ -35,6 +40,10 @@ if [[ ! "${DBSPHERE_GO_OFFLINE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]
   ! "${DBSPHERE_GO_OFFLINE_PG_SOURCE:-}" =~ ^postgres:18\.[0-9]+-bookworm@sha256:[0-9a-f]{64}$ ]]; then
   echo 'Go offline bundle manifest is invalid.' >&2
   exit 1
+fi
+if [[ $# -eq 2 ]]; then
+  bash "$bundle_dir/backup.sh" "$2"
+  exit 0
 fi
 export DBSPHERE_GO_OFFLINE_APP_IMAGE
 export DBSPHERE_PG18_IMAGE=postgres:18-bookworm

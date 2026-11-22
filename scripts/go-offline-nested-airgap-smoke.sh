@@ -12,18 +12,19 @@ if [[ ! -f "$archive" || ! -f "$archive.sha256" ]]; then
 fi
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 archive_name="$(basename -- "$archive")"
-version="$(sed -n 's/^DbSphere-go-offline-\(.*\)-linux-amd64\.run$/\1/p' <<< "$archive_name")"
-if [[ -z "$version" ]]; then
+if [[ ! "$archive_name" =~ ^DbSphere-go-offline-(.+)-linux-(amd64|arm64)\.run$ ]]; then
   echo 'Unexpected Go offline installer filename.' >&2
   exit 1
 fi
+version="${BASH_REMATCH[1]}"
+arch="${BASH_REMATCH[2]}"
 previous_archive=''
 previous_name=''
 previous_version=''
 if [[ $# -ge 2 ]]; then
   previous_archive="$(realpath -- "$2")"
   previous_name="$(basename -- "$previous_archive")"
-  previous_version="$(sed -n 's/^DbSphere-go-offline-\(.*\)-linux-amd64\.run$/\1/p' <<< "$previous_name")"
+  previous_version="$(sed -n "s/^DbSphere-go-offline-\(.*\)-linux-$arch\.run$/\1/p" <<< "$previous_name")"
   if [[ ! -f "$previous_archive" || ! -f "$previous_archive.sha256" || -z "$previous_version" || "$previous_version" == "$version" ]]; then
     echo 'A distinct previous Go offline installer and adjacent SHA-256 file are required.' >&2
     exit 1
@@ -49,6 +50,10 @@ if [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$container")" !=
   echo 'Nested Docker host unexpectedly has an external network.' >&2
   exit 1
 fi
+case "$arch:$(docker exec "$container" uname -m)" in
+  amd64:x86_64|arm64:aarch64|arm64:arm64) ;;
+  *) echo "Nested Docker architecture does not match $arch." >&2; exit 1 ;;
+esac
 ready=false
 for _ in $(seq 1 60); do
   if docker exec "$container" docker info >/dev/null 2>&1; then

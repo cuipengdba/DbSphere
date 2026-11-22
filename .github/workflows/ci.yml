@@ -265,7 +265,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate Go deployment scripts
-        run: bash -n scripts/one-click-go.sh scripts/build-go-offline-bundle.sh scripts/install-go-offline.sh scripts/backup-go-store.sh scripts/go-offline-airgap-smoke.sh scripts/go-offline-nested-airgap-smoke.sh scripts/offline-self-extract.sh
+        run: |
+          for script in one-click-go build-go-offline-bundle install-go-offline backup-go-store go-offline-airgap-smoke go-offline-nested-airgap-smoke offline-self-extract build-go-systemd-bundle install-go-systemd go-systemd-smoke; do
+            bash -n "scripts/$script.sh"
+          done
       - name: Build Go static container and PostgreSQL 18 offline bundle
         run: bash scripts/build-go-offline-bundle.sh "$RUNNER_TEMP/dbsphere-go-offline-output"
       - name: Extract static Linux Go binary for external PostgreSQL 18
@@ -285,6 +288,7 @@ jobs:
           licenses="$RUNNER_TEMP/dbsphere-go-native/DbSphere-go-licenses-$version.tar.gz"
           tar -C "$RUNNER_TEMP/dbsphere-go-native" -czf "$licenses" licenses
           (cd "$RUNNER_TEMP/dbsphere-go-native" && sha256sum "$(basename "$licenses")" > "$(basename "$licenses").sha256")
+          bash scripts/build-go-systemd-bundle.sh "$binary" "$RUNNER_TEMP/dbsphere-go-native"
       - name: Reject missing and altered offline checksums
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
@@ -404,14 +408,24 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.23.0'
-          previous_sha='8fd8df5acdc1afeb8ece30dfe2d8012cef40ce6b1ed419b4c77c7b93073903b3'
+          previous_version='1.24.0'
+          previous_sha='c784ba89ed62d0a6eb78e0e48290de1da69aad1cee3769444d12e41e99a16a62'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
           printf '%s  %s\n' "$previous_sha" "$(basename "$previous")" > "$previous.sha256"
           (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"
+      - name: Switch to systemd with the same external PostgreSQL 18 store
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-native/DbSphere-go-systemd-*.run)
+          test "${#archive[@]}" -eq 1
+          bash scripts/go-systemd-smoke.sh "${archive[0]}" | tee "$RUNNER_TEMP/native-amd64-proof.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-native-amd64-proof
+          path: ${{ runner.temp }}/native-amd64-proof.log
+          if-no-files-found: error
       - name: Preserve tested Go offline and native packages
         if: success()
         uses: actions/upload-artifact@v4
@@ -424,6 +438,75 @@ jobs:
             ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-*-linux-amd64.sha256
             ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-licenses-*.tar.gz
             ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-licenses-*.tar.gz.sha256
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-systemd-*.run
+            ${{ runner.temp }}/dbsphere-go-native/DbSphere-go-systemd-*.run.sha256
+          if-no-files-found: error
+
+  go-offline-package-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Build and check the arm64 Go and PostgreSQL 18 bundle
+        run: |
+          test "$(uname -m)" = aarch64
+          version="$(jq -er .version package.json)"
+          out="$RUNNER_TEMP/dbsphere-go-arm64"
+          bash scripts/build-go-offline-bundle.sh "$out"
+          docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm --format '{{.Architecture}}' |
+            awk '$0 != "arm64" { exit 1 } END { if (NR != 2) exit 1 }'
+          binary="$out/DbSphere-go-$version-linux-arm64"
+          container="$(docker create "dbsphere/offline-go-app:$version")"
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/dbsphere" "$binary"
+          chmod 0755 "$binary"
+          file -b "$binary" | grep -Fq 'statically linked'
+          readelf -h "$binary" | grep -Eq 'Machine:[[:space:]]+AArch64'
+          (cd "$out" && sha256sum "$(basename "$binary")" > "$(basename "$binary").sha256")
+          bash scripts/build-go-systemd-bundle.sh "$binary" "$out"
+          (cd "$out" && sha256sum --check --strict ./*.sha256)
+      - name: Upgrade and roll back arm64 with an offline Docker daemon
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
+          test "${#archive[@]}" -eq 1
+          previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
+          previous_version='1.24.0'
+          previous_arm_sha=''
+          previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
+          mkdir -p "$previous_dir"
+          if [[ -n "$previous_arm_sha" ]]; then
+            curl -fL --retry 3 --output "$previous" \
+              "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
+            printf '%s  %s\n' "$previous_arm_sha" "$(basename "$previous")" > "$previous.sha256"
+          else
+            # v1.24.0 had no published arm64 artifact. Only its packaging scripts
+            # are replaced so the exact previous application can run on arm64.
+            test "$previous_version" = 1.24.0
+            previous_source="$RUNNER_TEMP/dbsphere-arm64-previous-source"
+            mkdir -p "$previous_source"
+            git archive "v$previous_version" | tar -x -C "$previous_source"
+            cp scripts/{build-go-offline-bundle,install-go-offline}.sh "$previous_source/scripts/"
+            bash "$previous_source/scripts/build-go-offline-bundle.sh" "$previous_dir"
+          fi
+          (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
+          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous" | tee "$RUNNER_TEMP/arm64-airgap-proof.log"
+      - name: Switch arm64 to systemd with the same external PostgreSQL 18 store
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-systemd-*.run)
+          test "${#archive[@]}" -eq 1
+          bash scripts/go-systemd-smoke.sh "${archive[0]}" | tee "$RUNNER_TEMP/native-arm64-proof.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-native-arm64-proof
+          path: |
+            ${{ runner.temp }}/arm64-airgap-proof.log
+            ${{ runner.temp }}/native-arm64-proof.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-go-arm64-tested-packages
+          path: ${{ runner.temp }}/dbsphere-go-arm64/*
           if-no-files-found: error
 
   go-external-store:

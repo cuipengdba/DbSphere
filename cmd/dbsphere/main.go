@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +34,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "check-store" {
+		if err := checkStore(log); err != nil {
+			log.Error("DbSphere store preflight failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "rotate-admin-password" {
 		if err := rotateAdminPassword(); err != nil {
 			log.Error("DbSphere administrator password rotation failed", "error", err)
@@ -45,6 +53,21 @@ func main() {
 		log.Error("DbSphere Go startup failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func checkStore(log *slog.Logger) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	version, migration, err := store.CheckMigrationTarget(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	log.Info("PostgreSQL 18 migration target verified", "serverVersion", version, "schemaVersion", migration)
+	return nil
 }
 
 func rotateAdminPassword() error {
@@ -149,6 +172,14 @@ func run(log *slog.Logger) error {
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	if err := notifySystemdReady(); err != nil {
+		return fmt.Errorf("notify systemd readiness: %w", err)
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -211,7 +242,7 @@ func run(log *slog.Logger) error {
 		log.Info("Go PostgreSQL collector enabled", "intervalSeconds", cfg.CollectEvery)
 	}
 	log.Info("DbSphere Go migration server listening", "address", cfg.ListenAddr)
-	err = server.ListenAndServe()
+	err = server.Serve(listener)
 	cancel()
 	if collectorDone != nil {
 		<-collectorDone

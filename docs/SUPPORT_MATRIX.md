@@ -23,11 +23,12 @@ PG18 的 OOM 全链路结论来自 V1.0.10–V1.0.11 的明确 `OOMKilled` 作�
 
 | 交付方式 | 已验证平台 | 运行时依赖 | 监控存储 |
 | --- | --- | --- | --- |
-| 一键离线容器包 | Linux x86_64、Docker Engine 27 与 Compose v2 的独立 CI；含无外网嵌套守护进程验收 | 目标机预装 Docker Engine/Compose；安装过程无需 Node.js、Go、包管理器或镜像仓库 | 包内 PostgreSQL 18 镜像，独立持久卷；可改用已有独立 PG18 |
-| 静态 Go 程序 | Linux amd64 CI，`CGO_ENABLED=0` | 独立 PG18、服务管理与 HTTPS 入口由部署者提供 | 外部独立 PG18 |
+| 一键离线容器包 | Linux amd64、arm64 实机架构 CI，含无外网的 Docker Engine 27 与 Compose v2 升级回退 | 目标机预装 Docker Engine/Compose | 包内 PostgreSQL 18 镜像，独立持久卷；可改用已有独立 PG18 |
+| 静态 Go 程序 | Linux amd64、arm64 CI，`CGO_ENABLED=0` | 已可访问的独立 PG18、服务管理与 HTTPS 入口 | 外部独立 PG18 |
+| 原生 systemd 离线包 | Linux amd64、arm64 CI，含启用开机启动、重启、原资产和事件保留 | systemd、Bash 与基础 Linux 工具 | 外部独立 PG18 |
 | 源码在线 Compose | Ubuntu Linux CI | Docker Engine/Compose 与构建时网络 | 独立 PG18 容器或外部 PG18 |
 
-Linux arm64 尚未构建与验收，不属于 V1.0 交付范围。当前只支持一个启用自动采集的 DbSphere 服务副本；采集租约和高可用控制台尚未完成。离线安装的“断网”指安装器及 Docker 守护进程均无法访问外网时使用本地镜像；它不代替物理服务器的离线升级、硬件故障或生产演练。
+容器验收在隔绝外网的 Docker 守护进程中完成。首次 arm64 发布使用上一版源代码构建前序 arm64 应用进行升级回退演练。当前部署验证范围为单个 DbSphere 服务。原生服务使用独立 PG18，监控目标和外部存储的可达性由现场网络决定。
 
 V1.0.8 的管理员系统状态页显示当前 Go 进程的自动采集循环、批次耗时及执行结果。状态在进程重启后重新计数；命中每轮 100 个资产的选择上限不代表测得的积压量，见[采集进程状态](COLLECTOR_RUNTIME.md)。
 
