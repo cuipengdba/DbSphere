@@ -38,3 +38,24 @@ func TestBackupCatalogChecksOnlyMatchingRepositoryAndTimeline(t *testing.T) {
 		t.Fatalf("unmeasured RPO or incorrect RTO: %v", tests)
 	}
 }
+
+func TestRecoveryChainRequiresEveryAncestor(t *testing.T) {
+	job := func(label, kind, prior string, start, stop int64) backupJob {
+		result := backupJob{Label: label, Type: kind, Prior: prior}
+		result.Timestamp.Start, result.Timestamp.Stop = start, stop
+		return result
+	}
+	repo := map[string]backupJob{
+		"full": job("full", "full", "", 10, 20),
+		"diff": job("diff", "diff", "full", 21, 30),
+		"incr": job("incr", "incr", "diff", 31, 40),
+	}
+	chain, ok := recoveryChain(repo, "incr")
+	if !ok || len(chain) != 3 || chain[0] != "full" || chain[2] != "incr" {
+		t.Fatalf("expected a full recovery chain, got %v, %v", chain, ok)
+	}
+	delete(repo, "full")
+	if _, ok := recoveryChain(repo, "incr"); ok {
+		t.Fatal("an intermediate backup concealed a missing full backup")
+	}
+}

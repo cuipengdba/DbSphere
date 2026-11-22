@@ -1657,12 +1657,15 @@
           }), 'WAL 逐段核查'));
         if (report.jobs.length) body.append(table(['备份标识', '类型', '仓库', '完成时间', '容量', '依赖', '状态'],
           report.jobs.map(job => [job.label, {full: '全量', diff: '差异', incr: '增量'}[job.type], job.repoKey || '未知',
-            formatTime(job.completedAt), display(job.bytes, bytes), [job.prior, ...job.references].filter(Boolean).join(' / '),
+            formatTime(job.completedAt), display(job.bytes, bytes), (job.dependenciesAvailable && job.chain ? job.chain.slice(0, -1) : [job.prior, ...job.references].filter(Boolean)).join(' → '),
             job.failed ? '失败' : job.dependenciesAvailable ? '清单完整' : '依赖未齐']), '备份清单'));
         if (report.jobLimit) body.append(el('p', '当前采样最多保留 100 个备份条目。', 'monitor-note'));
-        if (report.restoreTests.length) body.append(table(['演练目标时刻', '备份', '仓库', '目标前事务', '目标后事务', '实测 RPO', '实测 RTO', '结束时间'],
-          report.restoreTests.map(test => [formatTime(test.targetAt), test.label, test.repoKey, test.confirmedBefore ? '已核对' : '核对失败',
-            test.excludedAfter ? '已排除' : '排除失败', display(test.rpoSeconds, seconds), display(test.rtoSeconds, seconds), formatTime(test.finishedAt)]), '隔离恢复演练记录'));
+        if (report.restoreTests.length) body.append(table(['演练目标时刻', '恢复链', '仓库', '目标前事务', '目标后事务', '实测 RPO', '实测 RTO', '核验结果', '结束时间'],
+          report.restoreTests.map(test => [formatTime(test.targetAt), (test.chain || [test.label]).join(' → '), test.repoKey,
+            test.confirmedBefore ? (test.beforeMarker || '已核对') : '核对失败', test.excludedAfter ? (test.afterMarker || '已排除') : '排除失败',
+            display(test.rpoSeconds, seconds), display(test.rtoSeconds, seconds),
+            test.verification === 'verified' ? '隔离核验通过' : test.verification === 'incomplete' ? '证据不完整' : '已上报',
+            formatTime(test.finishedAt)]), '隔离恢复演练记录'));
       }
     }
 

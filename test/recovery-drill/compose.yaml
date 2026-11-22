@@ -1,0 +1,78 @@
+name: dbsphere-recovery-drill
+
+x-store: &store
+  image: postgres:18-bookworm
+  command: [postgres, -c, track_commit_timestamp=on]
+  environment:
+    PGDATA: /var/lib/postgresql/drill
+    POSTGRES_DB: dbsphere
+    POSTGRES_USER: dbsphere
+    POSTGRES_PASSWORD: ${DBSPHERE_DRILL_STORE_PASSWORD:?Generate the drill env file first}
+  tmpfs:
+    - /var/lib/postgresql/drill:size=384m
+  healthcheck:
+    test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U dbsphere -d dbsphere']
+    interval: 3s
+    timeout: 3s
+    retries: 40
+
+x-go: &go
+  image: ${DBSPHERE_RECOVERY_APP_IMAGE:-dbsphere/recovery-app:local}
+  volumes:
+    - ${DBSPHERE_RECOVERY_REPORTS:?Set the recovery report directory}:/backup-reports:ro
+
+x-go-env: &go-env
+  DBSPHERE_HOST: 0.0.0.0
+  DBSPHERE_PORT: 8080
+  DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_DRILL_ADMIN_PASSWORD:?Generate the drill env file first}
+  DBSPHERE_MASTER_KEY: ${DBSPHERE_DRILL_MASTER_KEY:?Generate the drill env file first}
+  DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+  DBSPHERE_BACKUP_INFO_DIR: /backup-reports
+
+services:
+  business:
+    image: ${DBSPHERE_RECOVERY_BUSINESS_IMAGE:-dbsphere/recovery-pgbackrest:local}
+    environment:
+      PGDATA: /lab/source
+      POSTGRES_PASSWORD: ${DBSPHERE_DRILL_PG_PASSWORD:?Generate the drill env file first}
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - track_commit_timestamp=on
+      - -c
+      - archive_command=/usr/local/bin/dbsphere-test-archive-push %p
+    tmpfs:
+      - /lab:size=768m,mode=1777
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U postgres -d postgres']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  store:
+    <<: *store
+  store-restore:
+    <<: *store
+  app:
+    <<: *go
+    environment:
+      <<: *go-env
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store:5432/dbsphere?sslmode=disable
+    depends_on:
+      business:
+        condition: service_healthy
+      store:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${DBSPHERE_RECOVERY_APP_PORT:-18135}:8080'
+  restored-console:
+    <<: *go
+    environment:
+      <<: *go-env
+      DBSPHERE_DATABASE_URL: postgres://dbsphere:${DBSPHERE_DRILL_STORE_PASSWORD}@store-restore:5432/dbsphere?sslmode=disable
+    depends_on:
+      store-restore:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${DBSPHERE_RECOVERY_RESTORED_PORT:-18136}:8080'

@@ -43,15 +43,17 @@ type backupStanza struct {
 		Min      string
 		Max      string
 	} `json:"archive"`
-	Backup []struct {
-		Label, Type, Prior string
-		Reference          []string
-		Error              bool
-		Database           backupDatabase
-		Timestamp          struct{ Start, Stop int64 }
-		Archive            struct{ Start, Stop string }
-		Info               struct{ Size, Delta int64 }
-	} `json:"backup"`
+	Backup []backupJob `json:"backup"`
+}
+
+type backupJob struct {
+	Label, Type, Prior string
+	Reference          []string
+	Error              bool
+	Database           backupDatabase
+	Timestamp          struct{ Start, Stop int64 }
+	Archive            struct{ Start, Stop string }
+	Info               struct{ Size, Delta int64 }
 }
 
 type backupDatabase struct {
@@ -69,13 +71,23 @@ type backupWALCheck struct {
 }
 
 type backupRestore struct {
-	RepoKey          int       `json:"repoKey"`
-	Backup           string    `json:"backup"`
+	RepoKey    int    `json:"repoKey"`
+	DatabaseID int    `json:"databaseId,omitempty"`
+	Backup     string `json:"backup"`
+	recoveryWitness
+}
+
+type recoveryWitness struct {
+	ID               string    `json:"id,omitempty"`
+	Isolated         bool      `json:"isolated,omitempty"`
+	BeforeMarker     string    `json:"beforeMarker,omitempty"`
+	AfterMarker      string    `json:"afterMarker,omitempty"`
 	TargetAt         time.Time `json:"targetAt"`
 	StartedAt        time.Time `json:"startedAt"`
 	FinishedAt       time.Time `json:"finishedAt"`
 	SourceCommitAt   time.Time `json:"sourceCommitAt"`
 	RestoredCommitAt time.Time `json:"restoredCommitAt"`
+	AfterCommitAt    time.Time `json:"afterCommitAt,omitempty"`
 	ConfirmedBefore  bool      `json:"confirmedBefore"`
 	ExcludedAfter    bool      `json:"excludedAfter"`
 }
@@ -163,7 +175,7 @@ func readBackupCatalog(data []byte, now time.Time) (map[string]any, bool) {
 				"first": validWAL(archive.Min), "last": validWAL(archive.Max)})
 		}
 	}
-	labels := map[backupDatabase]map[string]int64{}
+	labels := map[backupDatabase]map[string]backupJob{}
 	var lastSuccess int64
 	jobs := make([]map[string]any, 0, min(len(stanza.Backup), 100))
 	for i := len(stanza.Backup) - 1; i >= 0; i-- {
@@ -174,11 +186,9 @@ func readBackupCatalog(data []byte, now time.Time) (map[string]any, bool) {
 			continue
 		}
 		if labels[job.Database] == nil {
-			labels[job.Database] = map[string]int64{}
+			labels[job.Database] = map[string]backupJob{}
 		}
-		if !job.Error {
-			labels[job.Database][job.Label] = stop
-		}
+		labels[job.Database][job.Label] = job
 		if !job.Error && stop > lastSuccess {
 			lastSuccess = stop
 		}
@@ -198,14 +208,8 @@ func readBackupCatalog(data []byte, now time.Time) (map[string]any, bool) {
 	}
 	for _, job := range jobs {
 		byRepo := labels[backupDatabase{ID: job["databaseId"].(int), Key: job["repoKey"].(int)}]
-		references := job["references"].([]string)
-		complete := !job["failed"].(bool) && (job["type"] == "full" || job["prior"] != "" || len(references) > 0)
-		if prior := job["prior"].(string); prior != "" {
-			complete = complete && byRepo[prior] > 0
-		}
-		for _, ref := range references {
-			complete = complete && byRepo[ref] > 0
-		}
+		chain, complete := recoveryChain(byRepo, job["label"].(string))
+		job["chain"] = chain
 		job["dependenciesAvailable"] = complete
 	}
 	if lastSuccess > 0 {
@@ -222,28 +226,92 @@ func readBackupCatalog(data []byte, now time.Time) (map[string]any, bool) {
 	}
 	restores := []map[string]any{}
 	for _, restore := range envelope.Restores[:min(20, len(envelope.Restores))] {
-		matches, backupStop := 0, int64(0)
+		matches, backupStop, databaseID := 0, int64(0), 0
+		var chain []string
 		for scope, backups := range labels {
-			if stop := backups[restore.Backup]; scope.Key == restore.RepoKey && stop > 0 {
+			if scope.Key != restore.RepoKey || restore.DatabaseID > 0 && scope.ID != restore.DatabaseID {
+				continue
+			}
+			job, found := backups[restore.Backup]
+			if dependencies, complete := recoveryChain(backups, restore.Backup); found && complete {
 				matches++
-				backupStop = stop
+				backupStop, databaseID, chain = job.Timestamp.Stop, scope.ID, dependencies
 			}
 		}
 		if matches == 1 && restore.TargetAt.Unix() >= backupStop &&
-			!restore.StartedAt.Before(restore.TargetAt) && !restore.FinishedAt.Before(restore.StartedAt) &&
-			!restore.FinishedAt.After(now.Add(5*time.Minute)) {
-			proof := map[string]any{"repoKey": restore.RepoKey, "label": restore.Backup, "targetAt": restore.TargetAt,
-				"finishedAt": restore.FinishedAt, "rtoSeconds": restore.FinishedAt.Sub(restore.StartedAt).Seconds(),
-				"confirmedBefore": restore.ConfirmedBefore, "excludedAfter": restore.ExcludedAfter}
-			if restore.ConfirmedBefore && restore.ExcludedAfter && !restore.RestoredCommitAt.IsZero() &&
-				!restore.RestoredCommitAt.After(restore.TargetAt) && !restore.SourceCommitAt.Before(restore.RestoredCommitAt) {
-				proof["rpoSeconds"] = restore.SourceCommitAt.Sub(restore.RestoredCommitAt).Seconds()
-			}
+			restore.validTimes(now) {
+			proof := restore.projection()
+			proof["repoKey"], proof["databaseId"], proof["label"], proof["chain"] = restore.RepoKey, databaseID, restore.Backup, chain
 			restores = append(restores, proof)
 		}
 	}
 	catalog["walChecks"], catalog["restoreTests"] = coverage, restores
 	return catalog, true
+}
+
+func recoveryChain(backups map[string]backupJob, label string) ([]string, bool) {
+	chain := []string{}
+	state := map[string]uint8{}
+	var visit func(string) bool
+	visit = func(name string) bool {
+		if state[name] == 2 {
+			return true
+		}
+		job, found := backups[name]
+		if !found || job.Error || state[name] == 1 || len(state) >= 128 {
+			return false
+		}
+		state[name] = 1
+		dependencies := job.Reference
+		if job.Prior != "" {
+			dependencies = append([]string{job.Prior}, dependencies...)
+		}
+		if (job.Type == "full") != (len(dependencies) == 0) {
+			return false
+		}
+		for _, dependency := range dependencies {
+			if !backupName.MatchString(dependency) || backups[dependency].Timestamp.Stop > job.Timestamp.Start || !visit(dependency) {
+				return false
+			}
+		}
+		state[name] = 2
+		chain = append(chain, name)
+		return true
+	}
+	complete := visit(label)
+	return chain, complete
+}
+
+func (r recoveryWitness) validTimes(now time.Time) bool {
+	return !r.TargetAt.IsZero() && !r.StartedAt.Before(r.TargetAt) && !r.FinishedAt.Before(r.StartedAt) &&
+		!r.FinishedAt.After(now.Add(5*time.Minute))
+}
+
+func (r recoveryWitness) verified() bool {
+	return backupName.MatchString(r.ID) && r.Isolated && backupName.MatchString(r.BeforeMarker) &&
+		backupName.MatchString(r.AfterMarker) && r.BeforeMarker != r.AfterMarker && r.ConfirmedBefore && r.ExcludedAfter &&
+		!r.RestoredCommitAt.IsZero() && !r.RestoredCommitAt.After(r.TargetAt) && r.AfterCommitAt.After(r.TargetAt) &&
+		!r.SourceCommitAt.Before(r.AfterCommitAt) && !r.SourceCommitAt.After(r.StartedAt)
+}
+
+func (r recoveryWitness) projection() map[string]any {
+	verified := r.verified()
+	proof := map[string]any{"targetAt": r.TargetAt, "finishedAt": r.FinishedAt,
+		"rtoSeconds": r.FinishedAt.Sub(r.StartedAt).Seconds(), "confirmedBefore": r.ConfirmedBefore,
+		"excludedAfter": r.ExcludedAfter, "verification": "reported"}
+	if backupName.MatchString(r.ID) {
+		proof["id"], proof["verification"] = r.ID, "incomplete"
+	}
+	if verified {
+		proof["verification"], proof["isolated"] = "verified", true
+		proof["beforeMarker"], proof["afterMarker"] = r.BeforeMarker, r.AfterMarker
+		proof["restoredCommitAt"], proof["sourceCommitAt"], proof["afterCommitAt"] = r.RestoredCommitAt, r.SourceCommitAt, r.AfterCommitAt
+	}
+	if (verified || r.ID == "") && r.ConfirmedBefore && r.ExcludedAfter && !r.RestoredCommitAt.IsZero() &&
+		!r.RestoredCommitAt.After(r.TargetAt) && !r.SourceCommitAt.Before(r.RestoredCommitAt) {
+		proof["rpoSeconds"] = r.SourceCommitAt.Sub(r.RestoredCommitAt).Seconds()
+	}
+	return proof
 }
 
 func refName(value string) string {
@@ -321,8 +389,10 @@ func StoreBackup(now time.Time) map[string]any {
 	}
 	var manifest struct {
 		Status, BackupID string
+		SHA256           string
 		CompletedAt      time.Time
 		RestorePointAt   time.Time
+		RestoreTests     []storeRestore
 	}
 	if err := json.Unmarshal(payload, &manifest); err != nil || manifest.Status != "success" ||
 		!backupName.MatchString(manifest.BackupID) || manifest.CompletedAt.IsZero() ||
@@ -334,5 +404,33 @@ func StoreBackup(now time.Time) map[string]any {
 	if !manifest.RestorePointAt.IsZero() {
 		result["restorePointAt"] = manifest.RestorePointAt
 	}
+	tests := []map[string]any{}
+	for _, restore := range manifest.RestoreTests[:min(len(manifest.RestoreTests), 20)] {
+		if !archiveSHA256.MatchString(manifest.SHA256) || restore.BackupID != manifest.BackupID ||
+			restore.ArchiveSHA256 != manifest.SHA256 || !restore.validTimes(now) ||
+			restore.StartedAt.Before(manifest.CompletedAt) || !restore.TargetAt.Equal(manifest.RestorePointAt) {
+			continue
+		}
+		proof := restore.projection()
+		proof["archiveSha256"], proof["backupId"] = restore.ArchiveSHA256, restore.BackupID
+		proof["eventsReadable"], proof["configurationReadable"], proof["samplesReadable"] = restore.EventsReadable, restore.ConfigurationReadable, restore.SamplesReadable
+		if !restore.EventsReadable || !restore.ConfigurationReadable || !restore.SamplesReadable {
+			proof["verification"] = "incomplete"
+			delete(proof, "rpoSeconds")
+		}
+		tests = append(tests, proof)
+	}
+	result["restoreTests"] = tests
 	return result
+}
+
+var archiveSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+type storeRestore struct {
+	BackupID              string `json:"backupId"`
+	ArchiveSHA256         string `json:"archiveSha256"`
+	EventsReadable        bool   `json:"eventsReadable"`
+	ConfigurationReadable bool   `json:"configurationReadable"`
+	SamplesReadable       bool   `json:"samplesReadable"`
+	recoveryWitness
 }

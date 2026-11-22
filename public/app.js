@@ -1404,7 +1404,29 @@ function renderStorage(storage) {
     const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
   }
   target.append(grid);
-  if (storage.backup?.status !== 'ok') target.append(cell('p', storage.backup?.reason ?? '监控存储备份状态未知', 'warning'));
+  if (storage.backup?.status !== 'ok') {
+    target.append(cell('p', storage.backup?.reason ?? '监控存储备份状态未知', 'warning'));
+    return;
+  }
+  if (!storage.backup.restoreTests?.length) {
+    target.append(cell('p', '当前备份尚未上报隔离恢复演练。', 'hint'));
+    return;
+  }
+  const seconds = value => Number.isFinite(value) ? `${value.toLocaleString('zh-CN', {maximumFractionDigits: 3})} 秒` : '—';
+  target.append(cell('h3', 'PG18 监控库恢复演练'));
+  for (const test of storage.backup.restoreTests) {
+    const record = cell('div', '', 'evidence');
+    const verified = test.verification === 'verified';
+    record.append(cell('strong', `${test.id || test.backupId} · ${verified ? '隔离核验通过' : '待核对'}`),
+      cell('p', `备份 ${test.backupId} · 备份恢复点 ${formatTime(test.targetAt)} · 恢复验收 ${formatTime(test.finishedAt)}`),
+      cell('p', `实测 RPO ${seconds(test.rpoSeconds)} · 实测 RTO ${seconds(test.rtoSeconds)}`),
+      cell('p', `事件 ${test.eventsReadable ? '可读' : '待核对'} · 配置 ${test.configurationReadable ? '可读' : '待核对'} · 历史采样 ${test.samplesReadable ? '可读' : '待核对'}`));
+    if (test.isolated) record.append(cell('p', `备份前标记 ${test.beforeMarker} · 排除备份后标记 ${test.afterMarker}`));
+    const digest = document.createElement('details');
+    digest.append(cell('summary', '归档 SHA-256'), cell('p', test.archiveSha256));
+    record.append(digest);
+    target.append(record);
+  }
 }
 
 function renderCollectorStatus(status) {
@@ -2067,6 +2089,13 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
         item.payload?.metric === 'pg.logical_slot_retained_bytes' && logicalCandidate.supports.includes(`sample:${item.payload.sampleId}`));
       slot.addEventListener('click', () => { void openWindow('replication', trigger && {at: trigger.observedAt, sampleId: trigger.payload.sampleId}); });
       actions.append(slot);
+    }
+    if (analysis.candidates.some(item => item.code === 'wal_archive_failures')) {
+      const backup = cell('button', '查看备份与 WAL 证据', 'ghost small-button');
+      backup.type = 'button';
+      const trigger = event.evidence.find(item => item.kind === 'alert_firing' && item.payload?.metric === 'pg.archive_fail_delta');
+      backup.addEventListener('click', () => { void openWindow('backup', trigger && {at: trigger.observedAt, sampleId: trigger.payload.sampleId}); });
+      actions.append(backup);
     }
     summary.append(actions);
   }

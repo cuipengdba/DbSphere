@@ -376,10 +376,17 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		case "pg.archive_fail_delta":
 			archiver := object(object(sample.Metrics["diagnostics"])["archiver"])
 			if stringValue(archiver["status"]) == "ok" && number(payload["value"]) > 0 {
+				report := object(sample.Metrics["backup"])
+				gaps := []any{}
+				for _, entry := range list(report["walChecks"]) {
+					if number(object(entry)["missingCount"]) > 0 {
+						gaps = append(gaps, entry)
+					}
+				}
 				addCandidate("wal_archive_failures", "WAL 归档失败增加", "medium", supports,
-					[]string{"归档命令错误日志与仓库状态未关联"},
-					"失败计数增加是恢复风险，尚未确认失败命令原因。",
-					map[string]any{"failureDelta": payload["value"]}, item.ObservedAt, condition)
+					[]string{"核对归档命令错误日志和缺失段的后续入库记录"},
+					"失败计数增加提示恢复风险。同一采样中的仓库缺口可逐段回查。",
+					map[string]any{"failureDelta": payload["value"], "stanza": report["stanza"], "walGaps": gaps}, item.ObservedAt, condition)
 			}
 		case "pg.autovacuum_disabled":
 			if number(payload["value"]) == 1 {

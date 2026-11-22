@@ -113,6 +113,10 @@ PG14–16 的检查点采样来自 `pg_stat_bgwriter`，PG17–19 来自 `pg_sta
 
 包装格式使用 `pgbackrest` 数组与可选 `lastAttempt` 对象（`status`、`at`）。`walChecks` 条目包含 `repoKey`、`databaseId`、同时间线的 `from` 和 `to`、`segmentBytes` 以及从仓库实际盘点出的 `segments`。界面展示逐段覆盖和缺失标识。单个核查窗最多 8,192 段。归档最早和最近标识只来自仓库报告。
 
+业务库演练通过 `restoreTests` 登记。每条记录包含 `id`、`repoKey`、`databaseId`、`backup`、`isolated`、`targetAt`、`startedAt`、`finishedAt`、`beforeMarker`、`afterMarker`、`restoredCommitAt`、`afterCommitAt`、`sourceCommitAt`、`confirmedBefore` 和 `excludedAfter`。界面在仓库和数据库编号内逐层检查完整恢复链，核对恢复对象中的前置标记和目标之后应排除的标记。归档异常事件可直接打开触发采样及缺失段清单。
+
+监控 PG18 的 `monitor-store.json` 可在已有 `backupId`、`restorePointAt`、`completedAt`、`sha256` 旁加入 `restoreTests`。每条还原验证沿用相同的时间与标记字段，并填入对应的 `backupId`、`archiveSha256`、`eventsReadable`、`configurationReadable` 和 `samplesReadable`。在「系统状态」核对独立恢复结果及归档校验值。RPO 使用本次验收的源端参考提交与恢复标记提交之间的时间差，RTO 从开始恢复到验收结束。
+
 `restoreTests` 条目引用 `repoKey` 和已有 `backup` 标识，记录 `targetAt`、`startedAt`、`finishedAt`、`confirmedBefore` 和 `excludedAfter`。有准确来源与恢复提交时间时填写 `sourceCommitAt` 和 `restoredCommitAt` 供实测 RPO 对照。目标值用 `targetRpoSeconds` 和 `targetRtoSeconds` 设置。恢复验证在隔离实例执行。PG18 监控存储另读取目录中的 `monitor-store.json` 或原生服务配置的 `DBSPHERE_STORE_BACKUP_MANIFEST`，显示逻辑备份上报时间及恢复点。
 
 ## 页面与主题

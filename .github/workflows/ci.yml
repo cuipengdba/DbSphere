@@ -408,8 +408,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.33.0'
-          previous_sha='f6a032d78ad5dce61df655f3cfd1b5e79e9d419610f1ac6619e17dec3bf351d7'
+          previous_version='1.34.0'
+          previous_sha='50b6ef9f5be512f5d71cbfb9a21b52eae34a7a679c64e0ea2d6c6c8da70d8a28'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -478,8 +478,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.33.0'
-          previous_arm_sha='6d2cb06635d629efe338f9ccd16d47631d51c2792d5c1bb8bae131e68a61b2d1'
+          previous_version='1.34.0'
+          previous_arm_sha='0bf2c6af40571077dcdcb4d926e43923539c0fa99af73a0bc13803ef53b2da7c'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -951,6 +951,51 @@ jobs:
           if [ -f "$RUNNER_TEMP/dbsphere-replication.env" ]; then
             docker compose --env-file "$RUNNER_TEMP/dbsphere-replication.env" \
               -f test/replication-drill/compose.yaml down -v --remove-orphans
+          fi
+
+  recovery-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build and start isolated pgBackRest, PostgreSQL 18 and Go services
+        run: |
+          node --check scripts/recovery-drill.mjs
+          bash -n test/recovery-drill/init.sh
+          bash -n test/recovery-drill/archive-push.sh
+          reports="$RUNNER_TEMP/dbsphere-recovery-reports"
+          mkdir -p "$reports"
+          chmod 755 "$reports"
+          node scripts/replication-drill-secrets.mjs \
+            "$RUNNER_TEMP/dbsphere-recovery.env" "$RUNNER_TEMP/dbsphere-recovery-credentials.json"
+          printf 'DBSPHERE_RECOVERY_REPORTS=%s\n' "$reports" >> "$RUNNER_TEMP/dbsphere-recovery.env"
+          docker build -f test/recovery-drill/Dockerfile -t dbsphere/recovery-pgbackrest:local .
+          docker build -f Dockerfile-go -t dbsphere/recovery-app:local .
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-recovery.env" \
+            -f test/recovery-drill/compose.yaml config --quiet
+          docker compose --env-file "$RUNNER_TEMP/dbsphere-recovery.env" \
+            -f test/recovery-drill/compose.yaml up -d --wait --wait-timeout 180 app store-restore
+          curl --fail --silent --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:18135/readyz |
+            jq -e '.storage=="postgresql18"' >/dev/null
+      - name: Verify real business PITR, WAL gap and isolated Go store restore
+        run: |
+          node scripts/recovery-drill.mjs http://127.0.0.1:18135 http://127.0.0.1:18136 \
+            "$RUNNER_TEMP/dbsphere-recovery-credentials.json" "$RUNNER_TEMP/dbsphere-recovery.env" \
+            "$RUNNER_TEMP/dbsphere-recovery-reports" "$RUNNER_TEMP/dbsphere-recovery-result.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-postgres-recovery-drill
+          path: ${{ runner.temp }}/dbsphere-recovery-result.json
+          if-no-files-found: error
+      - name: Remove the isolated recovery topology
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/dbsphere-recovery.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/dbsphere-recovery.env" \
+              -f test/recovery-drill/compose.yaml down -v --remove-orphans
           fi
 
   logical-replication-drill:
