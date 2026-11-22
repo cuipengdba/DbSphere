@@ -80,6 +80,8 @@ psql('publisher', monitorRole + '\n' + table +
   "\nCREATE ROLE dbsphere_feed LOGIN REPLICATION PASSWORD '" + secret.replPassword + "';\n" +
   'GRANT SELECT ON public.ledger TO dbsphere_feed;\nCREATE PUBLICATION ' + publicationName + ' FOR TABLE public.ledger;');
 psql('subscriber', monitorRole + '\n' + table +
+  '\nGRANT SELECT ON pg_catalog.pg_replication_origin_status TO dbsphere_monitor;' +
+  '\nGRANT EXECUTE ON FUNCTION pg_catalog.pg_show_replication_origin_status() TO dbsphere_monitor;' +
   "\nCREATE SUBSCRIPTION " + subscriptionName + " CONNECTION 'host=publisher port=5432 dbname=postgres " +
   'user=dbsphere_feed sslmode=disable password=' + secret.replPassword + "' PUBLICATION " + publicationName +
   " WITH (copy_data=false,slot_name='" + slotName + "');");
@@ -136,9 +138,10 @@ await waitUntil('all 5500 rows to reach the subscriber', () =>
 const caughtUp = await collect(subscriber);
 assert.equal(subscription(caughtUp).state, 'running');
 const applyProgress = diag(caughtUp, 'logicalApplyProgress');
-if (applyProgress.status === 'ok') {
-  assert.ok(applyProgress.data.some(row => row.oid === subscription(caughtUp).oid && row.appliedOriginLsn !== '0/0'));
-}
+assert.equal(applyProgress.status, 'ok');
+assert.ok(applyProgress.data.some(row => row.oid === subscription(caughtUp).oid && row.appliedOriginLsn && row.appliedOriginLsn !== '0/0'));
+if (Number(pgMajor) >= 15) assert.ok(diag(caughtUp, 'logicalSubscriptionErrors').data.some(row =>
+  row.oid === subscription(caughtUp).oid && Number.isFinite(row.syncErrors)));
 const recovered = await waitUntil('slot restart position and retained WAL to advance', async () => {
   psql('publisher', "INSERT INTO public.ledger VALUES (6000,'feedback') ON CONFLICT (id) DO UPDATE SET payload='feedback';\nCHECKPOINT;");
   const current = await collect(publisher);

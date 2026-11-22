@@ -1424,12 +1424,14 @@
           const states = {running: '应用进程运行', disabled: '订阅已停用', worker_absent: '已启用，应用进程未运行', worker_unknown: '已启用，进程可见性受限'};
           const applied = new Map((sample.logicalApplyProgress?.data || []).map(item => [item.oid, item]));
           const errors = new Map((sample.logicalSubscriptionErrors?.data || []).map(item => [item.oid, item]));
-          view.append(table(['Subscription', '状态', '上游复制槽', '订阅的 Publication', '表同步', '最近收信', '收到 / 回报 LSN', '已应用的上游 LSN', '应用 / 同步错误'],
+          const errorFields = sample.postgresMajor >= 19 ? ['applyErrors', 'syncErrors', 'sequenceSyncErrors'] : ['applyErrors', 'syncErrors'];
+          view.append(table(['Subscription', '状态', '上游复制槽', '订阅的 Publication', '表同步', '最近收信', '收到 / 回报 LSN', '已应用的上游 LSN',
+            sample.postgresMajor >= 19 ? '应用 / 表同步 / 序列同步错误' : '应用 / 表同步错误'],
             subs.data.entries.map(item => [item.name, states[item.state] || item.state, item.slot,
               [...item.publications, ...(item.publicationCount > item.publications.length ? ['…'] : [])].join(' / '),
               `${item.readyTableCount} / ${item.tableCount} 就绪`, formatTime(item.lastMessageAt),
               [item.receivedLsn, item.reportedLsn].filter(Boolean).join(' / '), applied.get(item.oid)?.appliedOriginLsn,
-              errors.has(item.oid) ? `${errors.get(item.oid).applyErrors} / ${errors.get(item.oid).syncErrors}` : '—'
+              errors.has(item.oid) ? errorFields.map(key => display(errors.get(item.oid)[key])).join(' / ') : '—'
             ]), '逻辑复制 Subscription'));
           if (subs.data.total > subs.data.entries.length) note(`显示 ${subs.data.entries.length} / ${subs.data.total} 个 subscription。`);
           if (sample.logicalApplyProgress?.status !== 'ok') note(`上游应用位置 · ${unavailable(sample.logicalApplyProgress)}`);

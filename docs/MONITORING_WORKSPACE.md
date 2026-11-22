@@ -12,6 +12,13 @@
 
 保留 WAL 由主库当前位置与槽重启位置计算，未确认 WAL 由主库当前位置与消费者确认位置计算。回放确认耗时来自发送进程近期反馈，订阅端分别显示收到的、向上游回报的和已经应用的上游位置。缺采或权限不足时对应指标留空。PostgreSQL 14 的订阅应用和同步错误计数显示为不支持。
 
+需要读取已应用的上游位置时，在订阅数据库为监控角色授权只读视图及其状态函数。其余逻辑复制指标继续按各自的可见权限采集。
+
+```sql
+GRANT SELECT ON pg_catalog.pg_replication_origin_status TO dbsphere_monitor;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_show_replication_origin_status() TO dbsphere_monitor;
+```
+
 默认在当前连接库的非临时逻辑槽持续 120 秒保留至少 512 MiB WAL 时发出告警。事件中点「查看逻辑复制槽」可回到触发采样。恢复沿用原事件 ID，可以在区间内查看触发采样、保留峰值和最新采样。应用原因由订阅侧进程、同步状态和应用位置进一步核对。
 
 ## 回放根因规则版本

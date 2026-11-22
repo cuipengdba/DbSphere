@@ -35,7 +35,7 @@ const logicalSubscriptionsSQL = `WITH current_subscriptions AS (
 	FROM selected s LEFT JOIN LATERAL (
 		SELECT x.pid,x.received_lsn,x.latest_end_lsn,x.last_msg_send_time,x.last_msg_receipt_time,x.latest_end_time
 		FROM pg_catalog.pg_stat_subscription x WHERE x.subid=s.oid AND x.relid IS NULL AND x.pid IS NOT NULL
-			AND (to_jsonb(x)->>'leader_pid') IS NULL
+			AND (to_jsonb(x)->>'leader_pid') IS NULL AND coalesce(to_jsonb(x)->>'worker_type','apply')='apply'
 		ORDER BY x.pid LIMIT 1
 	) w ON true
 )
@@ -51,7 +51,9 @@ const logicalApplyProgressSQL = `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY 
 ) q`
 
 const logicalSubscriptionErrorsSQL = `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q.oid),'[]'::jsonb) FROM (
-	SELECT s.oid::text AS oid,d.apply_error_count AS "applyErrors",d.sync_error_count AS "syncErrors",
+	SELECT s.oid::text AS oid,d.apply_error_count AS "applyErrors",
+		coalesce(to_jsonb(d)->>'sync_table_error_count',to_jsonb(d)->>'sync_error_count')::bigint AS "syncErrors",
+		(to_jsonb(d)->>'sync_seq_error_count')::bigint AS "sequenceSyncErrors",
 		d.stats_reset AS "statsReset"
 	FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_stat_subscription_stats d ON d.subid=s.oid
 	WHERE s.subdbid=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database())
