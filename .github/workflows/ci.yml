@@ -965,7 +965,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Build isolated two-node Patroni and Go images
+      - name: Build isolated three-node Patroni and Go images
         run: |
           bash -n test/patroni-drill/entrypoint.sh
           node --check scripts/patroni-drill-acceptance.mjs

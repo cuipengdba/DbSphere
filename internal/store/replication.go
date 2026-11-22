@@ -48,8 +48,9 @@ const replicationTopologySQL = `WITH metadata AS (
 		'poolWaiting',EXISTS(SELECT FROM jsonb_array_elements(coalesce(metrics_json#>'{pgbouncer,pools}','[]')) p
 			WHERE jsonb_typeof(p->'clientWaiting')='number' AND (p->>'clientWaiting')::numeric>0),
 		'poolStatus',metrics_json#>'{pgbouncer,status}','patroniStatus',metrics_json#>'{patroni,status}',
-		'writeStatus',metrics_json#>'{routing,status}','writeBackend',metrics_json#>'{routing,probe,backend}',
-		'readStatus',metrics_json#>'{routing,readStatus}','readBackend',metrics_json#>'{routing,readProbe,backend}',
+		'writeEntry',metrics_json#>'{routing,entry}','writeStatus',metrics_json#>'{routing,status}',
+		'writeBackend',metrics_json#>'{routing,probe,backend}','readEntry',metrics_json#>'{routing,readEntry}',
+		'readStatus',metrics_json#>'{routing,readStatus}','readRole',metrics_json#>'{routing,readProbe,role}',
 		'patroniRoles',(SELECT jsonb_object_agg(m->>'name',m->'role')
 			FROM jsonb_array_elements(coalesce(metrics_json#>'{patroni,members}','[]')) m WHERE m->>'name' IS NOT NULL),
 		'services',metrics_json#>'{k8s,services}',

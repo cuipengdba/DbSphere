@@ -1376,18 +1376,29 @@
       const observed = [...new Map(points.map(row => [row.id, row])).values()].sort((a, b) => Date.parse(a.collectedAt) - Date.parse(b.collectedAt));
       const leader = row => row.patroni?.leaderCount === 1
         ? row.patroni.members.find(member => ['leader', 'primary', 'standby_leader'].includes(member.role)) : null;
-      let prior, changeFrom, changeTo;
+      const segments = [];
       for (const row of observed) {
-        if (!leader(row)) continue;
-        if (prior && leader(prior).name !== leader(row).name) {
-          changeFrom = prior; changeTo = row;
-        }
-        prior = row;
+        const member = leader(row);
+        if (!member) continue;
+        if (segments.at(-1)?.leader !== member.name) segments.push({leader: member.name, rows: []});
+        segments.at(-1).rows.push(row);
       }
-      if (!changeTo) {
+      const confirmedRoutes = row => row.routes?.status === 'ok' && row.routes.probe?.role === 'primary' &&
+        (!row.routes.readEntry || (row.routes.readStatus === 'ok' && row.routes.readProbe?.role === 'standby'));
+      const switches = segments.slice(1).map((next, index) => {
+        const prior = segments[index].rows;
+        const after = next.rows;
+        return {from: prior.findLast(confirmedRoutes) || prior.at(-1), to: after.find(confirmedRoutes) || after[0]};
+      });
+      const overlaps = (event, change) => Date.parse(event.startedAt) <= Date.parse(change.to.collectedAt) &&
+        (!event.endedAt || Date.parse(event.endedAt) >= Date.parse(change.from.collectedAt));
+      const origin = events.find(item => item.id === eventAnchor);
+      const change = origin ? switches.findLast(item => overlaps(origin, item)) : switches.at(-1);
+      if (!change) {
         card.append(el('p', '此时段尚无来自两个主库的切换观测。', 'monitor-note'));
         return card;
       }
+      const {from: changeFrom, to: changeTo} = change;
       const routeText = (status, probe) => probe ? [status === 'ok' ? '可用' : status, probe.backend, roleLabels[probe.role]].filter(Boolean).join(' · ') : '未采集';
       card.append(table(['阶段', '观测时间', '主库与时间线', '主入口', '备库入口', '最大回放差距', '采样'],
         [['切换前', changeFrom], ['切换后', changeTo]].map(([stage, row]) => {
@@ -1399,7 +1410,7 @@
         }), '切换前后证据'));
       const first = Date.parse(changeFrom.collectedAt), after = Date.parse(changeTo.collectedAt);
       card.append(el('p', `切换观测间隔 ${number((after - first) / 1000, 2)} 秒 · 两条主库采样之间`, 'monitor-note'));
-      for (const event of events.filter(item => Date.parse(item.startedAt) <= after && (!item.endedAt || Date.parse(item.endedAt) >= first))) {
+      for (const event of events.filter(item => overlaps(item, change))) {
         card.append(button(`同窗事件 · ${event.title}`, () => openEvent(event.id), 'monitor-link'));
       }
       return card;
