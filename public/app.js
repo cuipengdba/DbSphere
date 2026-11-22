@@ -929,9 +929,9 @@ function renderEvents(events, hasMore, summary) {
   }
 }
 
-async function openEvent(id, updateHash = true) {
+async function openEvent(id, updateHash = true, monitoringReturn = '') {
   try {
-    await showEvent(id, updateHash);
+    await showEvent(id, updateHash, monitoringReturn);
     if (selectedEvent === id && matchMedia('(max-width: 1080px)').matches)
       $('event-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
@@ -1451,7 +1451,7 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   for (const field of Object.values(filters)) field.addEventListener('change', () => {
     const params = new URLSearchParams({ event: event.id });
     for (const [key, input] of Object.entries(filters)) if (input.value) params.set(key, input.value);
-    history.replaceState(null, '', `#incidents?${params}`);
+    history.replaceState(history.state, '', `#incidents?${params}`);
     share.textContent = '复制当前证据链接'; shareURL.hidden = true;
     offset = 0; show();
   });
@@ -1459,9 +1459,10 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   return panel;
 }
 
-async function showEvent(id, updateHash = true) {
+async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   if (updateHash) setView(`incidents?event=${encodeURIComponent(id)}`);
+  if (monitoringReturn) history.replaceState({ monitoringReturn }, '', location.href);
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, replay, relatedEvents = [] } = await api(`/api/events/${id}`);
@@ -1484,6 +1485,12 @@ async function showEvent(id, updateHash = true) {
   header.append(status, cell('span', event.assetName || allAssets.find(asset => asset.id === event.assetId)?.name || event.assetId));
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ' · 恢复 ' + formatTime(event.endedAt) : ''}`),
     cell('small', `事件 ID ${event.id}`));
+  const back = history.state?.monitoringReturn;
+  if (typeof back === 'string' && /^monitoring(?:\?|$)/.test(back)) {
+    const link = cell('a', '返回集群同窗', 'monitor-link incident-monitor-return');
+    link.href = `#${back}`;
+    summary.append(link);
+  }
   target.replaceChildren(summary);
   const sections = ['evidence', 'response', 'timeline'];
   const content = new Map(sections.map(key => [key, cell('section', '', 'incident-content')]));

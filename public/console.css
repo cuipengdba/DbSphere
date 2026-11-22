@@ -170,15 +170,16 @@ body[data-active-view="monitoring"] .workspace-heading h1 { font-size: 20px; }
 body[data-active-view="monitoring"] #view-description { display: none; }
 .cluster-grid {
   display: grid;
-  grid-template-columns: minmax(146px, 0.76fr) minmax(0, 2.85fr) minmax(170px, 1fr);
+  grid-template-columns: minmax(240px, .95fr) minmax(0, 2fr);
   gap: 10px;
   min-width: 0;
 }
 .cluster-grid .monitor-panel { padding: 12px; }
-.cluster-identity { background: var(--selected); border-color: var(--accent-line); }
+.cluster-identity { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(150px, 1.3fr) minmax(0, 2fr); gap: 16px; align-items: center; }
 .cluster-identity h3 { font-size: 20px; margin-bottom: 0; }
-.cluster-identity .monitor-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 6px 0 0; }
-.cluster-identity .monitor-stat { border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; padding: 7px 0; }
+.cluster-identity-title .monitor-note { margin-bottom: 0; }
+.cluster-identity .monitor-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.cluster-identity .monitor-stat { border: 0; border-inline-start: 1px solid var(--border); border-radius: 0; background: transparent; padding: 4px 8px; }
 .cluster-identity .monitor-stat strong { font-size: 17px; margin-top: 3px; }
 .cluster-identity .monitor-stat:is(button):hover { color: var(--accent); background: var(--soft); }
 .cluster-members { position: relative; }
@@ -201,7 +202,7 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .monitor-share-url { flex: 1 0 100%; min-width: 0; }
 .cluster-tools { position: absolute; top: 8px; right: 10px; }
 .cluster-tools button { font-size: 12px; min-height: 26px; padding: 3px 7px; }
-.cluster-issues { max-height: 230px; overflow: auto; }
+.cluster-issues { max-height: 216px; overflow: auto; }
 .cluster-issues .monitor-event { padding: 6px 8px; font-size: 13px; }
 .cluster-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cluster-state::before { content: ''; width: 7px; height: 7px; border-radius: 2px; background: var(--plot-gray); }
@@ -211,6 +212,12 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .cluster-state-gap::before { background: var(--border); }
 .cluster-timeline { padding: 10px 12px; }
 .cluster-timeline h3 { margin-bottom: 3px; }
+.cluster-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.cluster-heading .cluster-picker { flex: 0 1 auto; max-width: 60%; }
+.cluster-picker summary { padding-block: 5px; font-size: 12px; }
+.cluster-bucket { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding-block: 5px; color: var(--muted); }
+.cluster-bucket a, .incident-monitor-return { color: var(--accent); }
+.incident-monitor-return { width: fit-content; }
 .cluster-legend { display: flex; flex-wrap: wrap; gap: 3px 13px; font-size: 11px; color: var(--muted); margin-top: 5px; }
 .cluster-tracks { display: grid; gap: 2px; margin-top: 5px; }
 .cluster-track-row { display: grid; grid-template-columns: minmax(85px, 136px) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; }
@@ -226,10 +233,10 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .cluster-track .cluster-marker { position: absolute; width: 11px; height: 14px; top: 0; border: 1px solid var(--surface); background: var(--issue-line); color: transparent; padding: 0; font-size: 0; border-radius: 2px; transform: translateX(-50%); }
 .cluster-track .cluster-marker.recovered { background: var(--ok); }
 .monitor-recovery-marker { stroke: var(--ok-line); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-.cluster-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cluster-charts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .cluster-charts .monitor-panel { padding: 11px; }
 .cluster-charts h3 { margin-bottom: 5px; }
-.cluster-charts .monitor-plot svg { height: 123px; }
+.cluster-charts .monitor-plot svg { height: 108px; }
 .cluster-trend-number { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 4px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .cluster-trend-number strong { color: var(--accent); font-size: 18px; }
 .activity-stats { margin-bottom: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -238,15 +245,14 @@ body[data-active-view="monitoring"] #view-description { display: none; }
 .monitor-content .monitor-panel > .monitor-panel { margin-top: 12px; background: var(--soft); }
 .monitor-content [aria-label="SQL 区间排行"] { min-width: 610px; }
 @media (max-width: 940px) {
-  .cluster-grid { grid-template-columns: minmax(150px, .8fr) minmax(0, 2fr); }
-  .cluster-issues { grid-column: 1 / -1; }
+  .cluster-grid { grid-template-columns: minmax(210px, 1fr) minmax(0, 1.65fr); }
+  .cluster-charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
   .overview-grid { grid-template-columns: minmax(0, 1fr); }
   .member-spark { display: none; }
   .cluster-grid, .cluster-charts { grid-template-columns: minmax(0, 1fr); }
-  .cluster-issues { grid-area: 2 / 1; }
-  .cluster-identity .monitor-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .cluster-identity { grid-template-columns: minmax(0, 1fr); gap: 7px; }
   .cluster-identity .monitor-stat { padding-inline: 3px; }
   .cluster-track-row { grid-template-columns: minmax(0, 87px) minmax(0, 1fr); }
 }

@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v1.20.0](https://img.shields.io/badge/当前版本-v1.20.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.20.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v1.21.0](https://img.shields.io/badge/当前版本-v1.21.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v1.21.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。监控目标支持 PostgreSQL 14–19，长期监控存储使用独立 PostgreSQL 18。
 
@@ -10,7 +10,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 | 领域 | 功能 |
 |---|---|
-| 监控工作台 | 集群总览显示纳管实例、观测到的主备角色、复制回放差距及开放事件。共享时间范围贯穿实例指标、等待、SQL、锁与运行环境。等待分析按类型、事件和 Query ID 下钻，并可查看区间锁链、SQL 增量排名、慢日志及计划证据。事件详情可跳回故障时段。支持 Linux CPU/内存趋势及 Kubernetes Pod、Node、PVC 快照。 |
+| 监控工作台 | 集群首屏显示故障成员、主备角色、异常起点及可用性时间带。连接压力、锁等待、WAL 和复制曲线共用游标，可查看当时的原始采样。分享地址保留成员和时间窗。实例等待分析按类型、事件和 Query ID 下钻，并可核对锁链、SQL 增量排名、慢日志及计划证据。 |
 | 资产纳管 | 浏览器登记与管理 Linux、Kubernetes 及托管 PostgreSQL。支持 YAML、CSV 和集群清单批量预览、导入、使用凭据引用导出及分批连接权限检查。重试和重复导入保留资产 ID。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni、备份信息和应用 Trace。 |
 | 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。管理员可查看当前 Go 进程的自动采集批次、耗时和错误。 |
 | 图形可观测性 | 依据集群、实例、数据库及统一时间轴查看趋势。最多五实例同窗比较，支持最近 30 天的持久化小时汇总、有效采样、峰值、原始样本和下钻。系统状态页可查询汇总进度。事件内的关系图及时间轴可追到应用 Trace、数据库、复制、连接池和环境证据。控制台默认浅色，可切换深色。 |
@@ -34,7 +34,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V1.20.0** 提供 Go 静态服务端和一键离线容器安装包。Web 控制台默认浅色，可在顶部切换深色。监控工作台并排呈现集群身份、成员、事件与时序，可用性时间条可打开同一故障或恢复事件。实例时序、等待和 SQL 排名共用选定时间范围。打开同一个事件即可回放首次发现、直接证据、时间相关信号、根因候选和恢复记录。支持对照 PostgreSQL、SQL、复制、Linux/Kubernetes 和可选应用 Trace，并从原始采样定位同窗趋势。可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.20.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
+当前正式版 **V1.21.0** 提供 Go 静态服务端和一键离线容器安装包。Web 控制台默认浅色，可在顶部切换深色。监控工作台并排呈现集群身份、成员、事件与时序，可用性时间条可打开同一故障或恢复事件。实例时序、等待和 SQL 排名共用选定时间范围。打开同一个事件即可回放首次发现、直接证据、时间相关信号、根因候选和恢复记录。支持对照 PostgreSQL、SQL、复制、Linux/Kubernetes 和可选应用 Trace，并从原始采样定位同窗趋势。可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v1.21.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
 
 ## 部署与接入
 

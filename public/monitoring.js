@@ -125,7 +125,7 @@
   function graph(title, window, buckets, events, format, stacked = false) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
-    const width = 600, height = 154, left = 92, right = 19, top = 13, bottom = 126;
+    const width = 600, height = 154, left = window.compactPlot ? 150 : 92, right = 19, top = 13, bottom = 126;
     const area = width - left - right;
     const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
     const detail = el('p', null, 'monitor-cursor-value');
@@ -269,7 +269,7 @@
     const [, duration, bin] = periods.find(([name]) => name === range) || periods[1];
     const to = fixed?.to ?? Date.now();
     const from = fixed?.from ?? to - duration * minute;
-    const minutes = fixed ? ([1, 5, 15].find(size => to - from <= size * minute * 380) || 60) : bin;
+    const minutes = fixed ? fixed.minutes || ([1, 5, 15].find(size => to - from <= size * minute * 380) || 60) : bin;
     const bucketMs = minutes * minute;
     const first = Math.floor(from / bucketMs) * bucketMs;
     const params = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucketMinutes: String(minutes) });
@@ -405,7 +405,7 @@
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
     let focusAt = null, focusSample = '';
     let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
-    let compare = null, abnormalOnly = false, fleetTime = null, chooseCluster = true;
+    let compare = null, abnormalOnly = false, fleetTime = null, fleetAt = null, chooseCluster = true;
     let rangeEvents = [];
     let memberSeries = new Map();
     const header = el('div', null, 'monitor-controls');
@@ -442,6 +442,7 @@
       period = value;
       fixed = null;
       activeWindow = null;
+      fleetAt = null;
       eventAnchor = '';
       focusAt = null; focusSample = '';
       rangeForm.hidden = true;
@@ -472,7 +473,7 @@
     shareField.setAttribute('aria-label', '监控分享地址');
     const share = button('复制链接', async () => {
       const url = new URL(location.href);
-      url.hash = route();
+      url.hash = route(activeWindow || fixed);
       try {
         await navigator.clipboard.writeText(url.href);
         share.textContent = '链接已复制';
@@ -495,7 +496,7 @@
       return Number.isFinite(from) && Number.isFinite(to) && to <= Date.now() && to - from >= minute && to - from <= 43200 * minute;
     }
 
-    function route() {
+    function route(window = fixed) {
       const params = new URLSearchParams();
       for (const [key, value, fallback] of [
         ['cluster', cluster || (!chooseCluster && ready ? 'all' : ''), ''], ['instance', instance, ''], ['database', database, ''],
@@ -505,9 +506,16 @@
         ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''],
         ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
         ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''],
-        ['deviceType', deviceType, ''], ['device', deviceName, '']
+        ['deviceType', deviceType, ''], ['device', deviceName, ''],
+        ['compare', compare ? [...compare].join(',') || 'none' : '', ''],
+        ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), '']
       ]) if (value && value !== fallback) params.set(key, value);
-      if (fixed) { params.set('from', new Date(fixed.from).toISOString()); params.set('to', new Date(fixed.to).toISOString()); }
+      if (window) {
+        params.set('from', new Date(window.from).toISOString());
+        params.set('to', new Date(window.to).toISOString());
+        const minutes = window.minutes || window.bucketMs / minute;
+        if (minutes) params.set('bucket', String(minutes));
+      }
       return params.size ? `monitoring?${params}` : 'monitoring';
     }
 
@@ -542,9 +550,16 @@
       const from = Date.parse(params.get('from'));
       const to = Date.parse(params.get('to'));
       fixed = validRange(from, to) ? { from, to } : null;
+      const minutes = Number(params.get('bucket'));
+      if (fixed && [1, 5, 15, 60].includes(minutes) && (minutes === 60 || to - from <= minutes * minute * 400))
+        fixed.minutes = minutes;
       activeWindow = null;
       rangeForm.hidden = true;
       resetFleet();
+      const compared = params.get('compare');
+      if (compared) compare = new Set(compared.split(',').slice(0, 5).filter(id => /^[0-9a-f-]{36}$/.test(id)));
+      const cursor = Date.parse(params.get('fleetAt'));
+      if (Number.isFinite(cursor)) fleetAt = cursor;
       if (visible) update();
     }
 
@@ -583,7 +598,7 @@
       return assets.filter(asset => (!cluster || clusterKey(asset) === cluster) && (!database || database === asset.database));
     }
 
-    function resetFleet() { compare = null; abnormalOnly = false; rangeEvents = []; memberSeries = new Map(); }
+    function resetFleet() { compare = null; abnormalOnly = false; fleetAt = null; rangeEvents = []; memberSeries = new Map(); }
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; }
 
@@ -602,7 +617,7 @@
       if (!asset) return;
       if (id !== instance) {
         deviceType = ''; deviceName = '';
-        if (clusterKey(asset) !== cluster) replicaAt = null;
+        if (clusterKey(asset) !== cluster) { replicaAt = null; resetFleet(); }
         resetWaitFilters();
         resetCatalog();
         mode = 'metrics';
@@ -628,14 +643,14 @@
       return finite(values?.connections) && values.maxConnections > 0 ? values.connections * 100 / values.maxConnections : null;
     }
 
-    function eventList(events, title) {
+    function eventList(events, title, navigate = openEvent) {
       const card = panel(title);
       if (eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
       if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
       for (const event of events) {
-        const item = button(event.title, () => openEvent(event.id), 'monitor-event');
+        const item = button(event.title, () => navigate(event.id), 'monitor-event');
         item.append(el('small', [event.status === 'open' ? '处理中' : '已恢复', event.assetName,
-          formatTime(event.startedAt), event.id.slice(0, 8)].filter(Boolean).join(' · ')));
+          `开始 ${formatTime(event.startedAt)}`].filter(Boolean).join(' · ')));
         if (event.id === eventAnchor) item.setAttribute('aria-current', 'true');
         card.append(item);
       }
@@ -665,8 +680,10 @@
     }
 
     function rankedMembers() {
+      const openAssets = new Set(recent.filter(event => event.status === 'open').map(event => event.assetId));
+      const openCount = asset => summaries.get(asset.id)?.openEvents ?? Number(openAssets.has(asset.id));
       return members().sort((a, b) => Number(state(b) === 'unavailable') - Number(state(a) === 'unavailable') ||
-        (summaries.get(b.id)?.openEvents ?? 0) - (summaries.get(a.id)?.openEvents ?? 0) ||
+        openCount(b) - openCount(a) ||
         healthRank[assetHealth(a).kind] - healthRank[assetHealth(b).kind] ||
         Number(b.role === 'primary') - Number(a.role === 'primary') || a.name.localeCompare(b.name, 'zh-CN'));
     }
@@ -682,7 +699,7 @@
       const active = matching.filter(event => event.status === 'open');
       const resolved = matching.filter(event => event.status !== 'open' &&
         Date.parse(event.startedAt) < time.to && Date.parse(event.endedAt) >= time.from);
-      const issues = eventList([...active, ...resolved].slice(0, 3), '开始与恢复事件');
+      const issues = eventList([...active, ...resolved].slice(0, 3), '开始与恢复事件', time.openEvent);
       issues.classList.add('monitor-latest', 'cluster-issues');
       const card = panel('成员 · 最新观测');
       card.classList.add('monitor-members', 'cluster-members');
@@ -693,7 +710,9 @@
       identity.classList.add('cluster-identity', 'monitor-identity');
       const versions = [...new Set(items.map(asset => Math.floor(asset.versionNum / 10000)).filter(value => value > 0))].sort((a, b) => a - b);
       const memberCount = identitiesLoaded(items) ? `${selected.length} / ${items.length}` : '—';
-      identity.append(el('p', versions.length ? `PostgreSQL ${versions.join(' / ')}` : 'PostgreSQL', 'monitor-note'),
+      const title = el('div', null, 'cluster-identity-title');
+      title.append(identity.firstElementChild, el('p', versions.length ? `PostgreSQL ${versions.join(' / ')}` : 'PostgreSQL', 'monitor-note'));
+      identity.append(title,
         stats([
           ['已观测可用', memberCount],
           ['观测主库', cluster ? leaderName : String(leaders.length), cluster && leaders.length > 1 ? 'monitor-alert' : '',
@@ -735,7 +754,7 @@
       if (rows.length) card.append(table(['实例', '角色', 'PG 状态', '采集状态', '连接', '回放'], rows, '集群成员'));
       else if (!items.length) card.append(el('p', '没有匹配的纳管实例。', 'monitor-empty'), button('查看资产', openAssets));
       else card.append(el('p', '当前没有异常成员。', 'monitor-empty'));
-      row.append(identity, card, issues);
+      row.append(identity, issues, card);
       overview.replaceChildren(row);
     }
 
@@ -756,15 +775,22 @@
       }
     }
 
-    function fleetTimeline(time, selected, records, events) {
+    function fleetTimeline(time, selected, records, events, picker) {
       const card = panel('可用性与事件时间条');
       card.classList.add('cluster-timeline');
-      card.append(fleetLabel);
+      const heading = el('div', null, 'cluster-heading');
+      heading.append(card.firstElementChild, picker);
+      card.append(heading, fleetLabel);
       const legend = el('div', null, 'cluster-legend');
       const states = { available: '可用', unavailable: '不可用', mixed: '时段内变化', unknown: '证据不足', gap: '无采样' };
       for (const [value, label] of Object.entries(states)) legend.append(el('span', label, `cluster-state cluster-state-${value}`));
+      legend.append(el('span', '上排 PG · 下排采集'));
       const tracks = el('div', null, 'cluster-tracks');
-      const footer = el('p', null, 'monitor-note');
+      const footer = el('div', null, 'cluster-bucket');
+      const observation = el('small');
+      const evidence = el('span');
+      footer.append(observation, evidence);
+      let inspected = events[0]?.assetId || selected[0].id;
       for (const asset of selected) {
         const row = el('div', null, 'cluster-track-row');
         const track = el('div', null, 'cluster-track');
@@ -791,31 +817,41 @@
         track.append(plot);
         const eventsForAsset = events.filter(event => event.assetId === asset.id);
         for (const { event, at, end } of eventPoints(eventsForAsset, time)) {
-          const mark = button(end ? '恢复' : '故障', () => openEvent(event.id), `cluster-marker ${end ? 'recovered' : ''}`);
+          const mark = button(end ? '恢复' : '故障', () => time.openEvent(event.id), `cluster-marker ${end ? 'recovered' : ''}`);
           mark.setAttribute('aria-label', `${event.title} · ${end ? '恢复' : '开始'} · ${formatTime(at)}`);
           mark.title = mark.getAttribute('aria-label');
           mark.style.left = `${(at - time.first) * 100 / (time.count * time.bucketMs)}%`;
           track.append(mark);
         }
-        time.cursors.add(index => {
+        let index = 0;
+        time.cursors.add(next => {
+          index = next;
           cursor.setAttribute('x1', index + 0.5);
           cursor.setAttribute('x2', index + 0.5);
-        });
-        track.tabIndex = 0;
-        track.setAttribute('aria-label', `${asset.name} PostgreSQL 状态时间条`);
-        let index = 0;
-        const show = value => {
-          index = Math.min(time.count - 1, Math.max(0, value));
-          for (const displayCursor of time.cursors) displayCursor(index);
+          if (inspected !== asset.id) return;
           const role = roleLabels[bins[index]?.observedRole];
           const observed = bins[index];
           const coverage = observed ? `${observed.samples - observed.errors}/${observed.samples} 次采集成功` : '采集缺失';
-          footer.textContent = `${asset.name} · ${formatTime(Math.max(time.from,time.first + index * time.bucketMs))} · PG ${states[statesAt[index]]} · ${coverage}${role ? ` · ${role}` : ''}`;
+          observation.textContent = [asset.name, formatTime(Math.max(time.from, time.first + index * time.bucketMs)),
+            `PG ${states[statesAt[index]]}`, coverage, role].filter(Boolean).join(' · ');
+          evidence.replaceChildren();
+          const id = observed?.blockedPeakSampleId && observed.peakBlockedSessions > 0
+            ? observed.blockedPeakSampleId : observed?.latestSampleId;
+          if (id) evidence.append(sampleLink(asset.id, id, '打开游标采样'));
+        });
+        track.tabIndex = 0;
+        track.setAttribute('aria-label', `${asset.name} PostgreSQL 状态时间条`);
+        const show = value => {
+          inspected = asset.id;
+          const bucket = Math.min(time.count - 1, Math.max(0, value));
+          for (const displayCursor of time.cursors) displayCursor(bucket);
         };
-        track.addEventListener('pointermove', event => {
+        const inspectAt = event => {
           const rect = track.getBoundingClientRect();
           show(Math.floor((event.clientX - rect.left) * time.count / rect.width));
-        });
+        };
+        track.addEventListener('pointermove', inspectAt);
+        track.addEventListener('click', event => { if (event.target === track) inspectAt(event); });
         track.addEventListener('focus', () => show(index));
         track.addEventListener('keydown', event => {
           if (event.target !== track || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
@@ -825,8 +861,8 @@
         row.append(button(asset.name, () => openInstance(asset.id), 'monitor-link'), track);
         tracks.append(row);
       }
-      footer.setAttribute('aria-live', 'polite');
-      card.append(tracks, legend, el('p', '每个成员上方为 PostgreSQL 状态，下方为采集状态。', 'monitor-note'), footer);
+      observation.setAttribute('aria-live', 'polite');
+      card.append(tracks, legend, footer);
       return card;
     }
 
@@ -836,6 +872,8 @@
       const primary = items.filter(asset => asset.role === 'primary' && !['stale', 'pending'].includes(assetHealth(asset).kind));
       const lead = cluster && primary.length === 1 ? primary[0] : null;
       compare ??= new Set([lead, ...items].filter(Boolean).map(asset => asset.id).filter((id, i, ids) => ids.indexOf(id) === i).slice(0, 3));
+      const groupIds = new Set(items.map(asset => asset.id));
+      compare = new Set([...compare].filter(id => groupIds.has(id)));
       const selected = items.filter(asset => compare.has(asset.id));
       const colors = new Map(selected.map((asset, i) => [asset.id, palette[i]]));
       if (!items.length) { charts.replaceChildren(); return; }
@@ -850,6 +888,7 @@
         checkbox.disabled = compare.size >= 5 && !checkbox.checked;
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) compare.add(asset.id); else compare.delete(asset.id);
+          history.replaceState(null, '', `#${route()}`);
           void compareTrends(time);
           const replacement = charts.querySelector('details');
           replacement.open = true;
@@ -867,7 +906,7 @@
       }
       const seriesPanels = el('div', null, 'cluster-charts');
       const loading = el('p', selected.length ? '正在读取所选成员的时间序列…' : '选中成员以比较趋势。', 'monitor-note');
-      charts.replaceChildren(loading, picker);
+      charts.replaceChildren(picker, loading);
       if (!selected.length) return;
       const params = new URLSearchParams(time.params);
       for (const asset of selected) params.append('asset', asset.id);
@@ -876,17 +915,21 @@
         if (key !== request || !visible || instance) return;
         rangeEvents = events;
         time.cursors.clear();
+        time.cursors.add(index => { fleetAt = Math.max(time.from, time.first + index * time.bucketMs); });
         const records = new Map(selected.map(asset => [asset.id, []]));
         for (const row of series) records.get(row.assetId)?.push(row);
         memberSeries = records;
         if (!overview.contains(document.activeElement)) renderFleet(time);
-        const flow = fleetTimeline(time, selected, records, events);
+        const focused = picker.contains(document.activeElement) ? document.activeElement : null;
+        const flow = fleetTimeline(time, selected, records, events, picker);
+        const chartWindow = { ...time, compactPlot: true };
         for (const [metric, title, format, trendAssets] of [
-          ['transactionsPerSecond', lead && compare.has(lead.id) ? '当前主库 TPS' : '事务吞吐 · TPS', rate,
-            lead && compare.has(lead.id) ? [lead] : selected],
-          ['averageBlockedSessions', '阻塞会话', number, selected],
           ['averageConnectionUsagePercent', '连接压力', percent, selected],
-          ['averageReplicationLagBytes', '复制回放差距', bytes, selected]
+          ['averageBlockedSessions', '锁等待 · 阻塞会话', number, selected],
+          ['walBytesPerSecond', 'WAL 产生速率', value => `${bytes(value)}/s`, selected],
+          ['averageReplicationLagBytes', '复制回放差距', bytes, selected],
+          ['transactionsPerSecond', lead && compare.has(lead.id) ? '当前主库 TPS' : '事务吞吐 · TPS', rate,
+            lead && compare.has(lead.id) ? [lead] : selected]
         ]) {
           const points = Array.from({ length: time.count }, () => ({ values: [] }));
           for (const { id, name: label } of trendAssets) {
@@ -894,7 +937,7 @@
               if (finite(point)) points[i].values.push({ key: id, value: point, label, color: colors.get(id) });
             }
           }
-          const trend = graph(title, time, points.map(point => point.values.length ? point : null), events, format);
+          const trend = graph(title, chartWindow, points.map(point => point.values.length ? point : null), events, format);
           const latest = points.findLast(point => point.values.length);
           if (latest) {
             const top = latest.values.reduce((a, b) => a.value >= b.value ? a : b);
@@ -905,7 +948,13 @@
           seriesPanels.append(trend);
         }
         loading.replaceWith(flow, seriesPanels);
+        focused?.focus({ preventScroll: true });
         if (time.bucketMs === 60 * minute) charts.append(hourlyDetails(time, selected, records));
+        const at = fleetAt != null && fleetAt >= time.from && fleetAt < time.to ? fleetAt : null;
+        const started = eventPoints(events, time).find(point => !point.end)?.at;
+        const observed = series.reduce((last, row) => Math.max(last, Date.parse(row.bucket)), time.from);
+        const index = Math.max(0, Math.min(time.count - 1, Math.floor(((at ?? started ?? observed) - time.first) / time.bucketMs)));
+        for (const show of time.cursors) show(index);
       } catch (error) {
         if (key === request && visible && !instance) {
           loading.textContent = `趋势读取失败 · ${error.message}`;
@@ -1954,6 +2003,7 @@
         void load(asset, time);
       } else {
         fleetTime = time;
+        time.openEvent = id => openEvent(id, true, route(time));
         fleetLabel.textContent = caption;
         renderFleet(time);
         void compareTrends(time);
