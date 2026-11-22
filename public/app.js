@@ -1117,13 +1117,17 @@ function renderSignalCoverage(target, asset, sample, performance) {
   const compatibility = metrics.pgCompatibility;
   if (compatibility?.signals?.length) {
     const labels = { activeWaits: '活动等待', instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL',
-      replicationLinks: '复制链路', walReceiver: 'WAL 接收', sqlPerformance: 'Top SQL 指纹' };
+      replicationLinks: '复制链路', walReceiver: 'WAL 接收', sqlPerformance: 'Top SQL 指纹',
+      logicalPublications: '逻辑发布', logicalSubscriptions: '逻辑订阅', logicalApplyProgress: '逻辑应用进度',
+      logicalSubscriptionErrors: '逻辑订阅错误' };
     const statuses = { ok: '已采集', unavailable: '采集失败', not_configured: '当前数据库未安装扩展',
       not_supported: '此版本无对应视图', limited_permissions: '权限受限', inactive: '当前无活动接收器' };
     const signals = cell('div', '', 'diagnostic-list');
     for (const signal of compatibility.signals) {
       const status = statuses[signal.status] || '未知';
-      const reason = signal.status === 'limited_permissions' ? ' · 需可用的 pg_read_all_stats 权限'
+      const permissionReason = signal.reason?.endsWith('SQLSTATE 42501')
+        ? ' · 读取视图被拒绝（SQLSTATE 42501）' : ' · 需可用的 pg_read_all_stats 权限';
+      const reason = signal.status === 'limited_permissions' ? permissionReason
         : signal.status === 'unavailable' && signal.reason ? ` · ${signal.reason}` : '';
       const row = cell('div', '');
       row.append(cell('strong', labels[signal.key] || signal.key), cell('span', `${signal.source} · ${status}${reason}`));

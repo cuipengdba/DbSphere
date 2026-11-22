@@ -40,6 +40,17 @@ func TestPostgresAdapterProfilesAndTLS(t *testing.T) {
 	}
 }
 
+func TestPostgresAdapterReportsDeniedViews(t *testing.T) {
+	diagnostics := map[string]any{"logicalApplyProgress": map[string]any{"status": "unavailable", "reason": "SQLSTATE 42501"}}
+	compatibility := postgresCompatibility(18, false, true, diagnostics, nil)
+	for _, signal := range compatibility["signals"].([]postgresSignal) {
+		if signal.Key == "logicalApplyProgress" && signal.Status == "limited_permissions" && signal.Reason == "SQLSTATE 42501" {
+			return
+		}
+	}
+	t.Fatal("a denied logical replication view must report limited permissions even with pg_read_all_stats")
+}
+
 // TestLiveManagedPostgresAdapter exercises the same read-only collector as an
 // enrolled asset. Set the four URLs described in docs/MANAGED_POSTGRESQL.md to
 // run the acceptance test against a dedicated test service.

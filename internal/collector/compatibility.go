@@ -1,12 +1,19 @@
 package collector
 
-import "github.com/cuipengdba/dbsphere/pkg/collectoradapter"
+import (
+	"strings"
+
+	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
+)
 
 type postgresSignal = collectoradapter.Signal
 
 func sampledSignal(key, source string, result map[string]any) postgresSignal {
 	status, _ := result["status"].(string)
 	reason, _ := result["reason"].(string)
+	if status == "unavailable" && strings.HasSuffix(reason, "SQLSTATE 42501") {
+		status = "limited_permissions"
+	}
 	return postgresSignal{Key: key, Source: source, Status: status, Reason: reason}
 }
 
