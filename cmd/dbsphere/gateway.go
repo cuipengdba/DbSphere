@@ -149,6 +149,10 @@ func runGateway() error {
 	if err != nil {
 		return err
 	}
+	reviewTimeout, err := readEvidenceReviewTimeout()
+	if err != nil {
+		return err
+	}
 	host := os.Getenv("DBSPHERE_HOST")
 	if host == "" {
 		host = "127.0.0.1"
@@ -173,7 +177,7 @@ func runGateway() error {
 		}
 	}()
 	server := &http.Server{Addr: net.JoinHostPort(host, port), Handler: gateway, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
+		ReadTimeout: 15 * time.Second, WriteTimeout: max(45*time.Second, reviewTimeout+10*time.Second), IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 8*time.Second)

@@ -70,7 +70,7 @@ func New(cfg Config) (*Client, error) {
 	if timeout == 0 {
 		timeout = 28 * time.Second
 	}
-	if timeout < 0 || timeout > 35*time.Second {
+	if timeout < 0 || timeout > 120*time.Second {
 		return nil, ErrInvalidConfiguration
 	}
 	base := http.Client{Timeout: 12 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {

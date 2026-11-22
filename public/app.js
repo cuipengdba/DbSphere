@@ -2180,7 +2180,7 @@ function evidenceReviewPanel(event, showSource) {
       if (review.canRequest && review.status !== 'budget_exhausted') {
         const analyze = cell('button', '请求模型审核', 'ghost small-button');
         analyze.type = 'button';
-        analyze.addEventListener('click', () => { analyze.disabled = true; void load('POST'); });
+        analyze.addEventListener('click', () => { analyze.disabled = true; analyze.textContent = '审核中'; void load('POST'); });
         output.append(analyze);
       }
     } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); }

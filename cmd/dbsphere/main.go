@@ -119,6 +119,18 @@ func probeReady(ctx context.Context) error {
 	return nil
 }
 
+func readEvidenceReviewTimeout() (time.Duration, error) {
+	raw := os.Getenv("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS")
+	if raw == "" {
+		return 28 * time.Second, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds < 1 || seconds > 120 {
+		return 0, fmt.Errorf("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS must be between 1 and 120")
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
 func run(log *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -172,16 +184,13 @@ func run(log *slog.Logger) error {
 	if reviewSchema != "" && reviewSchema != "true" && reviewSchema != "false" {
 		return fmt.Errorf("DBSPHERE_AI_EVIDENCE_SCHEMA must be true or false")
 	}
-	reviewTimeout := 28
-	if raw := os.Getenv("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS"); raw != "" {
-		reviewTimeout, err = strconv.Atoi(raw)
-		if err != nil || reviewTimeout < 1 || reviewTimeout > 35 {
-			return fmt.Errorf("DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS must be between 1 and 35")
-		}
+	reviewTimeout, err := readEvidenceReviewTimeout()
+	if err != nil {
+		return err
 	}
 	aiClient, err := ai.New(ai.Config{URL: os.Getenv("DBSPHERE_AI_CHAT_URL"),
 		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"),
-		AllowRemote: remoteAI == "true", ReviewSchema: reviewSchema == "true", ReviewTimeout: time.Duration(reviewTimeout) * time.Second})
+		AllowRemote: remoteAI == "true", ReviewSchema: reviewSchema == "true", ReviewTimeout: reviewTimeout})
 	if err != nil {
 		return err
 	}
@@ -203,6 +212,10 @@ func run(log *slog.Logger) error {
 		cfg.CollectWorkers, time.Now())
 	replica := newPlatformReplica(cfg.AutoCollect)
 	pg.SetPlatformReplica(replica.ID)
+	writeTimeout := 45 * time.Second
+	if aiClient != nil {
+		writeTimeout = max(writeTimeout, reviewTimeout+10*time.Second)
+	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
 			ViewerPasswordHash:   viewerHash,
@@ -218,7 +231,7 @@ func run(log *slog.Logger) error {
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second}
+		WriteTimeout: writeTimeout, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return err

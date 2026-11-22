@@ -6,6 +6,6 @@
 
 未接模型、模型不可用、引用验证失败或预算用完时，可查看同一事件的规则核查。证据不足在调用模型前反馈。证据助手沿用现有只读诊断权限，受控作业继续使用申请、审批和执行流程。
 
-使用已有 `DBSPHERE_AI_CHAT_URL`、`DBSPHERE_AI_MODEL` 和可选 `DBSPHERE_AI_API_KEY`。模型服务支持 JSON Schema 时可设 `DBSPHERE_AI_EVIDENCE_SCHEMA=true`。审核超时默认 28 秒，可用 `DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS` 设置为 1–35 秒。LLM 可运行在原生部署的回环地址，或在容器中与 DbSphere 共享网络命名空间。可在离线环境提前准备推理镜像和模型权重。
+使用已有 `DBSPHERE_AI_CHAT_URL`、`DBSPHERE_AI_MODEL` 和可选 `DBSPHERE_AI_API_KEY`。模型服务支持 JSON Schema 时可设 `DBSPHERE_AI_EVIDENCE_SCHEMA=true`。审核超时默认 28 秒，可用 `DBSPHERE_AI_EVIDENCE_TIMEOUT_SECONDS` 设置为 1–120 秒。LLM 可运行在原生部署的回环地址，或在容器中与 DbSphere 共享网络命名空间。可在离线环境提前准备推理镜像和模型权重。
 
 [llama.cpp Chat Completions 接口](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#post-v1chatcompletions-openai-compatible-chat-completions-api)
