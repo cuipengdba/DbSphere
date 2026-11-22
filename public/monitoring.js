@@ -427,7 +427,7 @@
       cluster = value; instance = ''; database = ''; chooseCluster = false;
       replicaAt = null;
       resetCatalog();
-      focusAt = null; focusSample = '';
+      focusAt = null; focusSample = ''; waitCapturePick = '';
       if (cluster) {
         try { localStorage.setItem('dbsphere.lastCluster', cluster); } catch {}
       }
@@ -2200,7 +2200,9 @@
         }
         fixed = validRange(from, to) ? { from, to } : null;
         activeWindow = null;
+        if (cluster !== clusterKey(asset)) resetFleet();
         cluster = clusterKey(asset);
+        chooseCluster = false;
         database = asset.database;
         instance = asset.id;
         mode = tabs.some(([name]) => name === topic) ? topic : 'waits';
