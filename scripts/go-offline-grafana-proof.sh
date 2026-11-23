@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'printf "Grafana acceptance failed at line %s.\n" "$LINENO" >&2' ERR
 
 if [[ $# -ne 6 ]]; then
   echo 'Usage: go-offline-grafana-proof.sh project origin cookie csrf asset viewer-password' >&2
@@ -29,12 +30,14 @@ jq -nc --arg password "$viewer" '{username:"viewer",password:$password}' |
 test "$(curl -sS -b "$scratch/viewer.cookie" -o /dev/null -w '%{http_code}' "$base/grafana/api/user")" = 403
 api -H 'X-WEBAUTH-USER: admin' "$base/grafana/api/user" |
   jq -e '.login=="dbsphere-local-admin" and (.isGrafanaAdmin|not)' >/dev/null
+echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql; do
   api "$base/grafana/api/dashboards/uid/dbsphere-$topic" |
     jq -e --arg uid "dbsphere-$topic" '.dashboard.uid==$uid and (.dashboard.panels|length)==8 and
       (.dashboard.links|any(.url? // ""|startswith("/#incidents?event=")))' >/dev/null
 done
+echo 'Grafana dashboard provisioning passed for all six topics.'
 query="$(
   jq -nc --arg asset "$asset" '{from:"now-5m",to:"now",queries:[{refId:"A",intervalMs:15000,maxDataPoints:100,
     datasource:{type:"prometheus",uid:"dbsphere-prometheus"},expr:("dbsphere_asset_connections{asset_id=\""+$asset+"\"}")}]}'
@@ -42,6 +45,7 @@ query="$(
 printf '%s' "$query" |
   api -H 'Content-Type: application/json' --data-binary @- "$base/grafana/api/ds/query" |
   jq -e '.results.A.frames|any(.data.values|length>0)' >/dev/null
+echo 'Grafana queried a real asset sample through Prometheus.'
 
 psql() {
   docker exec "$store" psql -X -U dbsphere -d dbsphere -At -v ON_ERROR_STOP=1 "$@"

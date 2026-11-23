@@ -616,6 +616,7 @@ jobs:
           test -f "$standard"
           bash scripts/build-go-observability-bundle.sh "$standard" "$RUNNER_TEMP/enhanced"
       - name: Verify local metrics, target changes and native monitoring on component outage
+        shell: bash
         env:
           ARCH: ${{ matrix.arch }}
         run: |
