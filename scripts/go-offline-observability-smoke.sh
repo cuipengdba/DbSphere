@@ -15,6 +15,7 @@ base="http://127.0.0.1:$app_port"
 admin="$(openssl rand -hex 24)"
 store="$(openssl rand -hex 24)"
 metrics="$(openssl rand -hex 24)"
+viewer="$(openssl rand -hex 24)"
 image=dbsphere/offline-prometheus:3.13.5
 fixture=busybox:1.37.0
 cleanup() {
@@ -29,8 +30,8 @@ cleanup() {
 trap cleanup EXIT
 
 umask 077
-printf 'DBSPHERE_ADMIN_PASSWORD=%s\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_KEY=%s\nDBSPHERE_WEB_PORT=%s\nDBSPHERE_METRICS_TOKEN=%s\n' \
-  "$admin" "$store" "$(openssl rand -base64 32)" "$app_port" "$metrics" > "$root/config/dbsphere-go.env"
+printf 'DBSPHERE_ADMIN_PASSWORD=%s\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_KEY=%s\nDBSPHERE_WEB_PORT=%s\nDBSPHERE_METRICS_TOKEN=%s\nDBSPHERE_VIEWER_PASSWORD=%s\n' \
+  "$admin" "$store" "$(openssl rand -base64 32)" "$app_port" "$metrics" "$viewer" > "$root/config/dbsphere-go.env"
 docker build -q -t dbsphere/observability-airgap-harness:ci - <<'DOCKERFILE'
 FROM docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
 RUN apk add --no-cache bash coreutils
@@ -93,6 +94,10 @@ done
 test "$seen" = true
 metric_url 'api/v1/rules' | jq -e '.data.groups[]|select(.name=="dbsphere.observation")|.rules|length>=5' >/dev/null
 
+if [[ "$(jq -er .version package.json)" == 1.50.* ]]; then
+  bash scripts/go-offline-grafana-proof.sh "$project" "$base" "$root/session.cookie" "$csrf" "$asset" "$viewer"
+fi
+
 jq '.name="Renamed offline observability"|del(.password)' <<< "$asset_config" |
   api -X PATCH -H 'Content-Type: application/json' --data-binary @- "$base/api/assets/$asset" >/dev/null
 seen=false
@@ -124,5 +129,8 @@ api -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId!=null' >/d
 api "$base/api/live/overview" | jq -e --arg id "$asset" '.assets|any(.id==$id)' >/dev/null
 install --disable-observability
 api "$base/api/live/integrations" | jq -e '.prometheus=="disabled"' >/dev/null
+if [[ "$(jq -er .version package.json)" == 1.50.* ]]; then
+  test "$(curl -sS -b "$root/session.cookie" -o /dev/null -w '%{http_code}' "$base/grafana/api/health")" = 404
+fi
 api "$base/api/live/overview" | jq -e --arg id "$asset" '.assets|any(.id==$id)' >/dev/null
 echo 'Enhanced offline installation verified private Prometheus, current database data, dynamic exporter labels, and native degradation.'

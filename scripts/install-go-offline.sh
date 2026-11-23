@@ -31,7 +31,7 @@ fi
   echo 'Go offline bundle checksum verification failed.' >&2
   exit 1
 }
-unset DBSPHERE_OFFLINE_PROM_IMAGE
+unset DBSPHERE_OFFLINE_PROM_IMAGE DBSPHERE_OFFLINE_GRAFANA_IMAGE
 source "$bundle_dir/bundle.env"
 if [[ "${DBSPHERE_GO_OFFLINE_ARCH:-amd64}" != "$arch" ]]; then
   echo "Offline bundle targets ${DBSPHERE_GO_OFFLINE_ARCH:-amd64}; this Linux host is $arch." >&2
@@ -140,8 +140,27 @@ if [[ -n "${DBSPHERE_OFFLINE_PROM_IMAGE:-}" ]]; then
   install -m 0644 -- "$bundle_dir/observability/COMPONENTS.txt" "$DBSPHERE_OBSERVABILITY_DIR/"
   cp -R -- "$bundle_dir/licenses/prometheus" "$DBSPHERE_OBSERVABILITY_DIR/"
   observability_args=("${compose_args[@]}" -f "$bundle_dir/deploy/compose/compose.go.observability.yaml")
+  observability_services=(prometheus)
+  if [[ -n "${DBSPHERE_OFFLINE_GRAFANA_IMAGE:-}" ]]; then
+    if [[ ! "$DBSPHERE_OFFLINE_GRAFANA_IMAGE" =~ ^dbsphere/offline-grafana:[0-9]+\.[0-9]+\.[0-9]+$ ||
+          ! -f "$bundle_dir/deploy/compose/compose.go.grafana.yaml" ]]; then
+      echo 'Grafana offline bundle manifest is invalid.' >&2
+      exit 1
+    fi
+    export DBSPHERE_OFFLINE_GRAFANA_IMAGE
+    install -d -m 0755 -- "$DBSPHERE_OBSERVABILITY_DIR/grafana"
+    cp -R -- "$bundle_dir/observability/grafana/"{provisioning,panels} "$DBSPHERE_OBSERVABILITY_DIR/grafana/"
+    cp -R -- "$bundle_dir/licenses/grafana/" "$DBSPHERE_OBSERVABILITY_DIR/"
+    grafana_password="$DBSPHERE_OBSERVABILITY_DIR/grafana/admin-password"
+    if [[ ! -s "$grafana_password" ]]; then
+      head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$grafana_password"
+      chmod 0644 "$grafana_password"
+    fi
+    observability_args+=(-f "$bundle_dir/deploy/compose/compose.go.grafana.yaml")
+    observability_services+=(grafana)
+  fi
   if [[ "$disable_observability" == true ]]; then
-    docker compose --env-file "$env_file" "${observability_args[@]}" stop prometheus
+    docker compose --env-file "$env_file" "${observability_args[@]}" stop "${observability_services[@]}"
   else
     metrics_token="${DBSPHERE_METRICS_TOKEN:-$(sed -n 's/^DBSPHERE_METRICS_TOKEN=//p' "$env_file" | tail -n 1)}"
     if [[ -z "$metrics_token" && -s "$DBSPHERE_OBSERVABILITY_DIR/metrics-token" ]]; then
@@ -159,6 +178,11 @@ if [[ -n "${DBSPHERE_OFFLINE_PROM_IMAGE:-}" ]]; then
       echo 'The verified observability archive did not load its expected Prometheus image.' >&2
       exit 1
     }
+    if [[ -n "${DBSPHERE_OFFLINE_GRAFANA_IMAGE:-}" ]] &&
+       ! grep -Fqx "Loaded image: $DBSPHERE_OFFLINE_GRAFANA_IMAGE" <<< "$loaded_observability"; then
+      echo 'The verified observability archive did not load its expected Grafana image.' >&2
+      exit 1
+    fi
     compose_args=("${observability_args[@]}")
   fi
 fi

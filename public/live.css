@@ -94,6 +94,8 @@ body[data-active-view="live"] .workspace-heading { display: none; }
 .live-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .live-integration { align-self: center; color: var(--live-accent); font-size: .75rem; font-weight: 650; }
 .live-integration[data-state="unavailable"] { color: var(--live-hot); }
+.live-specialty { display: inline-flex; align-items: center; padding: 6px 11px; border: 1px solid var(--live-accent); border-radius: 8px; color: var(--live-accent); text-decoration: none; background: var(--live-hover); font-weight: 650; }
+.live-specialty[hidden] { display: none; }
 .live-board button, .live-board select {
   font: inherit;
   color: var(--live-text);

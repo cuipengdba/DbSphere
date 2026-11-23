@@ -237,6 +237,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	}
 	if credentials != nil {
 		registerOperations(mux, store, credentials)
+		registerGrafana(mux, store, credentials)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -596,7 +597,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == liveIntegrationsPath {
-			readLiveIntegrations(w, r, credentials.Observability)
+			readLiveIntegrations(w, r, credentials.Observability, role == "admin" && principal.OrganizationID == "")
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/audit" {
@@ -1740,9 +1741,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'")
 		path := r.URL.Path
-		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces") {
+		isGrafana := credentials != nil && credentials.Observability.GrafanaURL != nil &&
+			(path == grafanaPrefix || strings.HasPrefix(path, grafanaPrefix+"/"))
+		if !isGrafana {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'")
+		}
+		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces" || isGrafana) {
 			hash, err := administrator.CurrentAdminPasswordHash(r.Context())
 			if err != nil {
 				w.Header().Set("X-DbSphere-Storage", "unavailable")

@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.48.0'
-          previous_sha='0d89e1aaa198668db3bcbf29738da8080c9c08227dcdc498ed2d734d280cde6c'
+          previous_version='1.49.0'
+          previous_sha='2e3c00a6e18dcbe6550a5dc6493c09badd0f140998cac04965f114a22de7c396'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.48.0'
-          previous_arm_sha='102aef0c70239a7bfc45e07740382acbccdf84ed7867a962c7a649a21961ab17'
+          previous_version='1.49.0'
+          previous_arm_sha='854c9e7f79df3bc42fd4807f6cfb0f2728e9f1f526e07c5d39904e9b2e8f5d08'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -629,6 +629,7 @@ jobs:
           path: |
             ${{ runner.temp }}/enhanced/*.run
             ${{ runner.temp }}/enhanced/*.sha256
+            ${{ runner.temp }}/enhanced/*.tar.gz
           compression-level: 0
           if-no-files-found: error
 

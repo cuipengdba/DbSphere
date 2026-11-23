@@ -18,18 +18,31 @@ const liveIntegrationsPath = "/api/live/integrations"
 
 type ObservabilityConfig struct {
 	PrometheusURL *url.URL
+	GrafanaURL    *url.URL
 }
 
-func LoadObservabilityConfig(origin string) (ObservabilityConfig, error) {
+func LoadObservabilityConfig(prometheus, grafana string) (ObservabilityConfig, error) {
+	promURL, err := observabilityOrigin(prometheus)
+	if err != nil {
+		return ObservabilityConfig{}, fmt.Errorf("DBSPHERE_OBSERVABILITY_URL: %w", err)
+	}
+	grafanaURL, err := observabilityOrigin(grafana)
+	if err != nil {
+		return ObservabilityConfig{}, fmt.Errorf("DBSPHERE_GRAFANA_URL: %w", err)
+	}
+	return ObservabilityConfig{PrometheusURL: promURL, GrafanaURL: grafanaURL}, nil
+}
+
+func observabilityOrigin(origin string) (*url.URL, error) {
 	if origin == "" {
-		return ObservabilityConfig{}, nil
+		return nil, nil
 	}
 	u, err := url.Parse(origin)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") ||
 		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return ObservabilityConfig{}, errors.New("DBSPHERE_OBSERVABILITY_URL must be an absolute HTTP origin")
+		return nil, errors.New("must be an absolute HTTP origin")
 	}
-	return ObservabilityConfig{PrometheusURL: u}, nil
+	return u, nil
 }
 
 var prometheusReadinessClient = &http.Client{
@@ -37,7 +50,7 @@ var prometheusReadinessClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-func readLiveIntegrations(w http.ResponseWriter, r *http.Request, cfg ObservabilityConfig) {
+func readLiveIntegrations(w http.ResponseWriter, r *http.Request, cfg ObservabilityConfig, platformAdmin bool) {
 	state := "disabled"
 	if cfg.PrometheusURL != nil {
 		state = "unavailable"
@@ -53,7 +66,7 @@ func readLiveIntegrations(w http.ResponseWriter, r *http.Request, cfg Observabil
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, http.StatusOK, map[string]string{"prometheus": state})
+	respond(w, http.StatusOK, map[string]any{"prometheus": state, "grafana": platformAdmin && cfg.GrafanaURL != nil})
 }
 
 type prometheusAssetReader interface {
@@ -81,11 +94,15 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_connections", "Database connections on the sampled instance.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.Connections }},
 		{"asset_max_connections", "Connection limit from the sampled database.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MaxConnections }},
 		{"asset_pg_blocked_sessions", "PostgreSQL sessions with known blockers.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.Blocked }},
+		{"asset_pg_waiting_sessions", "PostgreSQL active client sessions with a wait event.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PGWaiting }},
+		{"asset_pg_sql_fingerprints_observed", "Fingerprints available in the bounded pg_stat_statements sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PGSQLFingerprints }},
 		{"asset_pg_replication_lag_bytes", "Observed PostgreSQL WAL replication lag.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.ReplicationLag }},
 		{"asset_pg_transactions_total", "PostgreSQL database commits and rollbacks.", "counter", func(a storepkg.PrometheusAsset) *float64 { return a.Transactions }},
 		{"asset_linux_cpu_percent", "Linux CPU use observed by the collector.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxCPU }},
 		{"asset_linux_memory_percent", "Linux memory use observed by the collector.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxRAM }},
 		{"asset_k8s_pod_ready", "Pod readiness reported by Kubernetes.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PodReady }},
+		{"asset_mysql_threads_running", "MySQL running threads from Performance Schema.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLRunning }},
+		{"asset_mysql_lock_waits_observed", "MySQL InnoDB lock waits in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLLockWaits }},
 	} {
 		name := "dbsphere_" + metric.name
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, metric.help, name, metric.kind)

@@ -10,7 +10,8 @@ type PrometheusAsset struct {
 	SampleAt, Fresh, OpenEvents                      *float64
 	Connections, MaxConnections, Blocked             *float64
 	ReplicationLag, Transactions, LinuxCPU, LinuxRAM *float64
-	PodReady                                         *float64
+	PodReady, PGWaiting, PGSQLFingerprints           *float64
+	MySQLRunning, MySQLLockWaits                     *float64
 }
 
 func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]PrometheusAsset, error) {
@@ -24,7 +25,8 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 		var a PrometheusAsset
 		if err := rows.Scan(&a.ID, &a.Name, &a.Organization, &a.Cluster, &a.Engine, &a.Runtime,
 			&a.SampleAt, &a.Fresh, &a.OpenEvents, &a.Connections, &a.MaxConnections, &a.Blocked,
-			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady); err != nil {
+			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
+			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits); err != nil {
 			return nil, err
 		}
 		samples = append(samples, a)
@@ -48,13 +50,24 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 		FROM jsonb_array_elements(CASE WHEN jsonb_typeof(raw.metrics_json#>'{k8s,pod,conditions}')='array'
 			THEN raw.metrics_json#>'{k8s,pod,conditions}' ELSE '[]'::jsonb END) condition
 		WHERE condition->>'type'='Ready' LIMIT 1
-	) END
+	) END,
+	CASE WHEN raw.metrics_json#>>'{diagnostics,instanceSessions,status}'='ok'
+		AND jsonb_typeof(raw.metrics_json#>'{diagnostics,instanceSessions,data,waiting}')='number'
+		THEN (raw.metrics_json#>>'{diagnostics,instanceSessions,data,waiting}')::float8 END,
+	CASE WHEN raw.metrics_json#>>'{sqlPerformance,status}'='ok'
+		AND jsonb_typeof(raw.metrics_json#>'{sqlPerformance,statements}')='array'
+		THEN jsonb_array_length(raw.metrics_json#>'{sqlPerformance,statements}')::float8 END,
+	CASE WHEN jsonb_typeof(raw.metrics_json#>'{mysql,running}')='number'
+		THEN (raw.metrics_json#>>'{mysql,running}')::float8 END,
+	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(raw.metrics_json#>'{mysql,lockWaits}')='array'
+		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END
 FROM selected a
 LEFT JOIN LATERAL (SELECT count(*) AS total FROM open_event_groups WHERE asset_id=a.id) e ON true
 LEFT JOIN LATERAL (SELECT connections,max_connections,blocked_sessions,replication_lag_bytes,commits,rollbacks,linux_cpu,linux_memory
 	FROM monitoring_trend_points WHERE asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) t ON a.recent
 LEFT JOIN LATERAL (SELECT metrics_json FROM samples WHERE asset_id=a.id AND collected_at=a.last_sample_at
-	ORDER BY id DESC LIMIT 1) raw ON a.recent AND a.runtime='k8s'
+	ORDER BY id DESC LIMIT 1) raw ON a.recent
 ORDER BY a.id`
 
 // NodeExporterDiscovery publishes only targets explicitly configured on a Linux asset.

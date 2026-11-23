@@ -1,26 +1,28 @@
 # Linux 一键离线部署
 
-从 [V1.49.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.49.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
+从 [V1.50.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.50.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
 
 ```bash
-sha256sum --check DbSphere-go-offline-1.49.0-linux-amd64.run.sha256
-bash DbSphere-go-offline-1.49.0-linux-amd64.run
+sha256sum --check DbSphere-go-offline-1.50.0-linux-amd64.run.sha256
+bash DbSphere-go-offline-1.50.0-linux-amd64.run
 ```
 
 一键脚本导入随包镜像并启动内嵌静态页面的 Go 服务及 PostgreSQL 18 长期监控库。默认本机入口为 `http://127.0.0.1:8081`。
 
 全新安装可在部署机上使用账号 `admin`、初始密码 `123456` 进入首次改密页。输入 12 至 256 字节的新密码后进入控制台。需要从远程地址开始使用时，可以在安装前通过 `DBSPHERE_ADMIN_PASSWORD` 预置至少 12 字节的管理员密码。已有环境升级沿用监控库中的账号、密码和资产。
 
-## Prometheus 增强离线包
+## Prometheus 与 Grafana 增强离线包
 
-增强包同时带有 Go 服务、PostgreSQL 18 和 Prometheus 3.13 LTS 镜像。目标机只需 Docker Engine 和 Compose v2，安装器从本地导入全部镜像。标准包继续支持原生监控和事件根因分析。
+增强包带有 Go 服务、PostgreSQL 18、Prometheus 3.13 LTS 和 Grafana OSS 13.3.1 镜像。目标机只需 Docker Engine 和 Compose v2，安装器从本地导入全部镜像、数据源和专题配置。标准包继续支持原生监控和事件根因分析。
 
 ```bash
-sha256sum --check DbSphere-go-observability-1.49.0-linux-amd64.run.sha256
-bash DbSphere-go-observability-1.49.0-linux-amd64.run
+sha256sum --check DbSphere-go-observability-1.50.0-linux-amd64.run.sha256
+bash DbSphere-go-observability-1.50.0-linux-amd64.run
 ```
 
-增强实例使用已有配置目录和 PG18 数据卷。Prometheus 只在 Compose 网络中监听，DbSphere 大盘显示该组件的就绪状态。PG18 保存既有采样、事件和根因证据。Prometheus 的高频数据初始保留 7 天并设置 2 GB 上限，可在部署配置中通过 `DBSPHERE_PROMETHEUS_RETENTION_SIZE` 调整大小。已明确登记 Linux Exporter 地址和端口的资产会自动生成抓取目标。随包提供镜像版本、摘要和随附许可。
+增强实例使用已有配置目录和 PG18 数据卷。Prometheus 和 Grafana 只在 Compose 私有网络中监听。平台管理员从实时大盘的「打开专题面板」或事件详情的「打开 Grafana 专题」进入。Grafana 使用当前 DbSphere 会话，预设面板以只读身份打开，事件链接可返回原事件。
+
+PG18 保存既有采样、事件和根因证据。Prometheus 的高频数据初始保留 7 天并设置 2 GB 上限，可在部署配置中通过 `DBSPHERE_PROMETHEUS_RETENTION_SIZE` 调整大小。已明确登记 Linux Exporter 地址和端口的资产会自动生成抓取目标。随包提供镜像摘要、组件清单和许可。发布页同时提供对应的 Grafana OSS 源码归档和 SHA-256 文件。
 
 需要停用增强组件时，运行同一个增强包并传入 `--disable-observability`，之后可运行对应版本标准包。此流程保留数据卷、管理员账号和事件记录。
 
@@ -29,11 +31,11 @@ bash DbSphere-go-observability-1.49.0-linux-amd64.run
 原生服务需要 Linux systemd 和已可访问的独立 PostgreSQL 18。下载对应架构 `DbSphere-go-systemd-<版本>-linux-<架构>.run` 及同名 `.sha256`，使用安装包的 `--sample-config` 写出环境文件。把 `DBSPHERE_DATABASE_URL` 改为独立监控库的连接地址。连接账号需能在该数据库的 `public` schema 创建和更新 DbSphere 对象。已有环境应继续使用原 `DBSPHERE_MASTER_KEY`、管理员引导配置和数据库，原资产密码依赖这把主密钥。容器的 `DBSPHERE_WEB_PORT` 对应原生的 `DBSPHERE_PORT`，DSN 应使用 Linux 主机可解析的 PostgreSQL 地址。
 
 ```bash
-sha256sum --check DbSphere-go-systemd-1.49.0-linux-amd64.run.sha256
-(umask 077 && bash DbSphere-go-systemd-1.49.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
+sha256sum --check DbSphere-go-systemd-1.50.0-linux-amd64.run.sha256
+(umask 077 && bash DbSphere-go-systemd-1.50.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.49.0-linux-amd64.run --check /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.49.0-linux-amd64.run /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.50.0-linux-amd64.run --check /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.50.0-linux-amd64.run /absolute/dbsphere.env
 systemctl status dbsphere-native.service
 ```
 

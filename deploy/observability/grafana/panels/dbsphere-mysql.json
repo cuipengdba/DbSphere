@@ -1,0 +1,738 @@
+{
+  "uid": "dbsphere-mysql",
+  "title": "DbSphere · MySQL 8.4 预览",
+  "description": "DbSphere 观测专题",
+  "tags": [
+    "dbsphere"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "30s",
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "返回 DbSphere 实时观测",
+      "type": "link",
+      "url": "/#live?asset=${asset}&from=${__from:date:iso}&end=${__to:date:iso}",
+      "icon": "external link",
+      "targetBlank": false
+    },
+    {
+      "title": "回到原事件",
+      "type": "link",
+      "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "icon": "bolt",
+      "targetBlank": false
+    },
+    {
+      "title": "DbSphere 专题",
+      "type": "dashboards",
+      "asDropdown": true,
+      "tags": [
+        "dbsphere"
+      ],
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "organization",
+        "label": "组织 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cluster",
+        "label": "集群",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "asset",
+        "label": "资产 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "engine",
+        "label": "引擎",
+        "type": "textbox",
+        "query": "mysql",
+        "current": {
+          "text": "mysql",
+          "value": "mysql"
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "event",
+        "label": "事件 ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "MySQL 实例",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(dbsphere_asset_info{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "活动线程",
+      "description": "",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_mysql_threads_running{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "观测到的 InnoDB 锁等待",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_mysql_lock_waits_observed{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 1
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "最高连接使用率",
+      "description": "",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(dbsphere:asset_connection_utilization:ratio{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 0.85
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "连接使用率",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere:asset_connection_utilization:ratio{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "活动线程",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_mysql_threads_running{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "InnoDB 锁等待",
+      "description": "只读采集的样本计数。可在原事件中验证阻塞线程和恢复。",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_mysql_lock_waits_observed{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "处理中事件",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_open_events{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=~\"mysql\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

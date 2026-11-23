@@ -148,7 +148,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	observability, err := httpapi.LoadObservabilityConfig(os.Getenv("DBSPHERE_OBSERVABILITY_URL"))
+	observability, err := httpapi.LoadObservabilityConfig(os.Getenv("DBSPHERE_OBSERVABILITY_URL"), os.Getenv("DBSPHERE_GRAFANA_URL"))
 	if err != nil {
 		return err
 	}

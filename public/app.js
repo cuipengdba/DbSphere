@@ -104,7 +104,15 @@ function setView(route, updateHash = true) {
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
     const id = params.get('event');
-    if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id || '')) void openEvent(id, false);
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    if (uuid.test(id || '')) {
+      const asset = params.get('asset');
+      const from = Date.parse(params.get('from'));
+      const to = Date.parse(params.get('to'));
+      const back = uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from
+        ? 'live?' + new URLSearchParams({ asset, from: new Date(from).toISOString(), end: new Date(to).toISOString() }) : '';
+      void openEvent(id, false, back);
+    }
   }
 }
 
@@ -2598,12 +2606,13 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const { event, analysis, replay, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
   const canRespond = ['admin', 'operator'].includes(currentRole);
   const canReviewOrders = canRespond || currentRole === 'approver';
-  const [eventAudit, workOrders, aiStatus, impact, handoff] = await Promise.all([
+  const [eventAudit, workOrders, aiStatus, impact, handoff, integrations] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
     canReviewOrders ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
     api('/api/ai/status').catch(() => ({ enabled: false })),
     replay ? api(`/api/events/${id}/impact`).catch(() => null) : null,
-    canRespond ? api(`/api/events/${id}/handoff`).catch(() => null) : null
+    canRespond ? api(`/api/events/${id}/handoff`).catch(() => null) : null,
+    currentRole === 'admin' && !currentOrganization ? api('/api/live/integrations').catch(() => null) : null
   ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
@@ -2623,6 +2632,22 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (typeof back === 'string' && /^(monitoring|live)(?:\?|$)/.test(back)) {
     const link = cell('a', back.startsWith('live') ? '返回实时观测' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
+    summary.append(link);
+  }
+  if (integrations?.grafana) {
+    const asset = allAssets.find(item => item.id === event.assetId);
+    const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
+    const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
+    const start = Date.parse(event.startedAt);
+    const anchor = typeof back === 'string' && back.startsWith('live') ? new URLSearchParams(back.split('?')[1]) : null;
+    const anchorStart = Date.parse(anchor?.get('from'));
+    const end = Date.parse(anchor?.get('end'));
+    const windowMinutes = Number(anchor?.get('window'));
+    link.href = window.DbSphereLive.grafanaPath({ asset: event.assetId, organization: asset?.organizationId,
+      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id,
+      from: Number.isFinite(anchorStart) ? anchorStart : Number.isFinite(end) && windowMinutes > 0 ? end - windowMinutes * 60000 : start - 5 * 60000,
+      to: Number.isFinite(end) ? end : Math.min(Date.now(), (Date.parse(event.endedAt) || Date.now()) + 5 * 60000),
+      section: mysql ? 'mysql' : 'waits' });
     summary.append(link);
   }
   target.replaceChildren(summary);

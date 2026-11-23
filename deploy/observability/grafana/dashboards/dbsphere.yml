@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: DbSphere
+    orgId: 1
+    folder: DbSphere
+    folderUid: dbsphere
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dbsphere-dashboards

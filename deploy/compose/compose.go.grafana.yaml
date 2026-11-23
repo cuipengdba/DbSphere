@@ -1,0 +1,61 @@
+services:
+  app:
+    environment:
+      DBSPHERE_GRAFANA_URL: http://grafana:3000
+    networks: [default, grafana-private]
+  replica:
+    environment:
+      DBSPHERE_GRAFANA_URL: http://grafana:3000
+    networks: [default, grafana-private]
+  prometheus:
+    networks: [default, grafana-private]
+  grafana:
+    image: ${DBSPHERE_OFFLINE_GRAFANA_IMAGE:?Use the Grafana offline bundle}
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks: [grafana-private]
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: 'true'
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /etc/grafana/dbsphere-admin-password
+      GF_SECURITY_CONTENT_SECURITY_POLICY: 'true'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+      GF_AUTH_DISABLE_SIGNOUT_MENU: 'true'
+      GF_AUTH_BASIC_ENABLED: 'false'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_AUTH_PROXY_ENABLED: 'true'
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_AUTO_SIGN_UP: 'true'
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: 'false'
+      GF_ANALYTICS_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: 'false'
+      GF_PLUGINS_PREINSTALL_DISABLED: 'true'
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: 'false'
+      GF_LIVE_MAX_CONNECTIONS: '0'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ${DBSPHERE_OBSERVABILITY_DIR}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${DBSPHERE_OBSERVABILITY_DIR}/grafana/panels:/etc/grafana/dbsphere-dashboards:ro
+      - ${DBSPHERE_OBSERVABILITY_DIR}/grafana/admin-password:/etc/grafana/dbsphere-admin-password:ro
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:3000/grafana/api/health']
+      interval: 7s
+      timeout: 5s
+      retries: 18
+
+networks:
+  grafana-private:
+    internal: true
+
+volumes:
+  grafana-data: {}

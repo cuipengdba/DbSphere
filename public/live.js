@@ -16,6 +16,20 @@
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
 
+  function grafanaPath({ asset, organization, cluster, engine, event, from, to, section, night }) {
+    const pages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
+      replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql' };
+    const page = pages[section] || pages.overview;
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries({ asset, organization, cluster, engine, event })) {
+      if (value) params.set('var-' + key, key === 'cluster' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value);
+    }
+    if (finite(from) && from > 0) params.set('from', String(Math.trunc(from)));
+    if (finite(to) && to > 0) params.set('to', String(Math.trunc(to)));
+    if (night || document.documentElement.dataset.theme === 'dark') params.set('theme', 'dark');
+    return '/grafana/d/' + page + '?' + params;
+  }
+
   function element(tag, text, className) {
     const node = document.createElement(tag);
     if (text) node.textContent = text;
@@ -40,7 +54,7 @@
     const canvas = get('chart');
     let active = false;
     let source, fallback, retryTimer, integrationTimer, session = 0, request = 0;
-    let selection = { organization: '', cluster: '', engine: '', minutes: 60, asset: '', end: null };
+    let selection = { organization: '', cluster: '', engine: '', minutes: 60, asset: '', start: null, end: null };
     let snapshot, sampleKey = '', filterKey = '', trendKey = '', feedKey = '', points = [], timelineEvents = [];
     let selectedMetric = metrics[0], from = 0, to = 0, focused = -1, chartGeometry, chartStatus = '';
 
@@ -51,13 +65,18 @@
       }
       if (assetId) params.set('asset', assetId);
       params.set('window', String(selection.minutes));
+      if (selection.start) params.set('from', new Date(selection.start).toISOString());
       if (selection.end || (anchor && to)) params.set('end', new Date(selection.end || to).toISOString());
       return 'live?' + params;
     }
 
     function restore(params) {
-      const minutes = Number(params.get('window'));
+      const start = Date.parse(params.get('from'));
       const end = Date.parse(params.get('end'));
+      const now = Date.now();
+      const validEnd = Number.isFinite(end) && end <= now + minute && end >= now - 7 * 86400000;
+      const validRange = validEnd && Number.isFinite(start) && end > start && end - start <= 360 * minute;
+      const minutes = Number(params.get('window')) || (validRange ? Math.round((end - start) / minute) : 60);
       const engine = params.get('engine');
       selection = {
         organization: validId(params.get('organization')) ? params.get('organization') : '',
@@ -65,7 +84,8 @@
         engine: ['postgres', 'mysql'].includes(engine) ? engine : '',
         minutes: [5, 15, 60, 360].includes(minutes) ? minutes : 60,
         asset: validId(params.get('asset')) ? params.get('asset') : '',
-        end: Number.isFinite(end) && end <= Date.now() + minute && end >= Date.now() - 7 * 86400000 ? end : null
+        start: validRange ? start : null,
+        end: validEnd ? end : null
       };
       if (active && snapshot) render();
     }
@@ -109,12 +129,13 @@
     async function loadIntegrations() {
       const generation = session;
       try {
-        const { prometheus } = await api('/api/live/integrations');
+        const { prometheus, grafana } = await api('/api/live/integrations');
         if (!active || generation !== session) return;
         const label = get('prometheus');
         label.hidden = prometheus === 'disabled';
         label.dataset.state = prometheus;
         label.textContent = prometheus === 'ready' ? 'Prometheus 就绪' : 'Prometheus 暂不可用';
+        get('grafana').hidden = !grafana;
       } catch {
         // Live samples and event details continue to use the native store.
       }
@@ -123,6 +144,14 @@
     function accept(value) {
       snapshot = value;
       render();
+    }
+
+    function syncGrafanaLink() {
+      const asset = snapshot?.assets.find(item => item.id === selection.asset);
+      const incident = snapshot?.events.find(item => item.assetId === asset?.id && item.status === 'open');
+      get('grafana').href = grafanaPath({ asset: asset?.id, organization: asset?.organizationId || selection.organization,
+        cluster: asset?.cluster, engine: asset?.engine, event: incident?.id, from, to, night: root.dataset.night === 'true',
+        section: asset?.engine === 'mysql' ? 'mysql' : asset ? 'postgres' : 'overview' });
     }
 
     function connect() {
@@ -225,18 +254,19 @@
       get('sample-age').textContent = selected ? freshnessLabels[selected.freshness] + ' · ' + age(selected.collectedAt, now) : '';
       renderKPIs(visible, selected, isFiltered);
 
-      const nextKey = [selected?.id, selected?.sampleId, selected?.freshness, selection.minutes, selection.end,
+      const nextKey = [selected?.id, selected?.sampleId, selected?.freshness, selection.minutes, selection.start, selection.end,
         ...visibleEvents.filter(event => event.assetId === selected?.id).map(event => event.id + event.status)].join(':');
       if (nextKey !== trendKey) {
         trendKey = nextKey;
         void loadTrend(selected, now);
       }
-      const nextSample = [selected?.id, selected?.sampleId, selected?.freshness, selection.end].join(':');
+      const nextSample = [selected?.id, selected?.sampleId, selected?.freshness, selection.start, selection.end].join(':');
       if (nextSample !== sampleKey) {
         sampleKey = nextSample;
         renderCoverage(selected);
         void loadSQL(selected);
       }
+      syncGrafanaLink();
     }
 
     function renderKPIs(assets, selected, isFiltered) {
@@ -357,7 +387,7 @@
       parent.append(element('p', '正在读取 SQL 指纹…', 'live-empty'));
       try {
         const end = selection.end;
-        const params = end ? '?' + new URLSearchParams({ from: new Date(end - selection.minutes * minute).toISOString(), to: new Date(end).toISOString() }) : '';
+        const params = end ? '?' + new URLSearchParams({ from: new Date(selection.start || end - selection.minutes * minute).toISOString(), to: new Date(end).toISOString() }) : '';
         const { performance } = await api('/api/assets/' + asset.id + '/sql' + params);
         if (!active || key !== sampleKey) return;
         parent.replaceChildren();
@@ -384,7 +414,7 @@
       const bucketMinutes = selectedTimescale === 360 ? 5 : 1;
       const bucketMs = bucketMinutes * minute;
       to = selection.end || now;
-      from = to - selectedTimescale * minute;
+      from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
       const enabled = asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
@@ -547,13 +577,13 @@
       select.addEventListener('change', () => {
         selection[key] = key === 'minutes' ? Number(select.value) : select.value;
         if (key === 'organization' || key === 'engine') selection.cluster = '';
-        if (key === 'minutes') selection.end = null;
+        if (key === 'minutes') selection.start = selection.end = null;
         if (snapshot) render();
         updateRoute();
       });
     }
     get('follow').onclick = () => {
-      selection.end = null;
+      selection.start = selection.end = null;
       if (snapshot) render();
       updateRoute();
     };
@@ -562,6 +592,7 @@
       root.dataset.night = String(enabled);
       get('night').setAttribute('aria-pressed', String(enabled));
       draw();
+      syncGrafanaLink();
     };
     const fullscreen = get('fullscreen');
     fullscreen.hidden = !document.fullscreenEnabled;
@@ -593,5 +624,5 @@
     return { route, restore, setVisible };
   }
 
-  window.DbSphereLive = { create };
+  window.DbSphereLive = { create, grafanaPath };
 })();
