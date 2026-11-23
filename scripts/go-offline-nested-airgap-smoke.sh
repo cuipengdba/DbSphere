@@ -74,9 +74,10 @@ if docker exec "$container" wget -q -T 3 -O /dev/null https://registry-1.docker.
   exit 1
 fi
 
+admin_password="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 install() {
   local installer="$1"
-  if ! docker exec "$container" bash "$installer" >"$log" 2>&1; then
+  if ! docker exec -e "DBSPHERE_ADMIN_PASSWORD=$admin_password" "$container" bash "$installer" >"$log" 2>&1; then
     cat "$log" >&2
     return 1
   fi
@@ -91,6 +92,16 @@ check_health() {
     exit 1
   fi
 }
+check_administrator() {
+  local payload result
+  printf -v payload '{"username":"admin","password":"%s"}' "$admin_password"
+  result="$(docker exec "$container" wget -qO- --header='Content-Type: application/json' \
+    --post-data "$payload" http://127.0.0.1:8081/api/login)"
+  if [[ "$result" != *'"authenticated":true'* || "$result" != *'"role":"admin"'* ]]; then
+    echo 'Nested installation did not preserve the preconfigured administrator login.' >&2
+    exit 1
+  fi
+}
 if [[ -n "$previous_archive" ]]; then
   install "/previous/$previous_name"
   check_health "$previous_version"
@@ -98,6 +109,7 @@ else
   install "/bundle/$archive_name"
   check_health "$version"
 fi
+check_administrator
 pg_version="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
   psql -U dbsphere -d dbsphere -Atqc "SELECT current_setting('server_version_num')")"
 if [[ "$pg_version" != 18* ]]; then
@@ -109,6 +121,7 @@ docker exec "$container" docker exec dbsphere-go-dev-store-1 \
   "CREATE TABLE dbsphere_airgap_probe (value text PRIMARY KEY); INSERT INTO dbsphere_airgap_probe VALUES ('persisted-before-reinstall');" >/dev/null
 install "/bundle/$archive_name"
 check_health "$version"
+check_administrator
 marker="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
   psql -U dbsphere -d dbsphere -Atqc 'SELECT value FROM dbsphere_airgap_probe')"
 if [[ "$marker" != persisted-before-reinstall ]]; then
@@ -122,6 +135,7 @@ fi
 if [[ -n "$previous_archive" ]]; then
   install "/previous/$previous_name"
   check_health "$previous_version"
+  check_administrator
   marker="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
     psql -U dbsphere -d dbsphere -Atqc 'SELECT value FROM dbsphere_airgap_probe')"
   if [[ "$marker" != persisted-before-reinstall ]]; then
