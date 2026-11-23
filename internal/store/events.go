@@ -284,7 +284,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	sampling := traceSamplingSummary{}
 	clock := traceClockSummary{}
 	traceRows, err := s.pool.Query(ctx, `SELECT trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,
-		app_pod_reported,app_pod_verified,received_at,sampling_probability FROM trace_spans
+		app_pod_reported,app_pod_verified,received_at,sampling_probability,coalesce(endpoint_name,'') FROM trace_spans
 		WHERE asset_id=$1 AND started_at >= $2::timestamptz-interval '10 minutes'
 		AND started_at <= coalesce($3::timestamptz,now())+interval '5 minutes'
 		ORDER BY started_at DESC LIMIT 100`, event.AssetID, event.StartedAt, event.EndedAt)
@@ -296,7 +296,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	spanServices := map[string]string{}
 	parentEdges := []map[string]string{}
 	for traceRows.Next() {
-		var traceID, spanID, service, kind, spanStatus, route string
+		var traceID, spanID, service, kind, spanStatus, route, endpoint string
 		var parentID *string
 		var backendPID *int32
 		var queryID *string
@@ -306,7 +306,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		var declaredProbability *float64
 		if err := traceRows.Scan(&traceID, &spanID, &parentID, &service, &kind, &at, &endedAt,
 			&spanStatus, &backendPID, &queryID, &route, &reportedPodJSON, &verifiedPodJSON,
-			&receivedAt, &declaredProbability); err != nil {
+			&receivedAt, &declaredProbability, &endpoint); err != nil {
 			traceRows.Close()
 			return nil, err
 		}
@@ -344,7 +344,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		if queryID != nil {
 			observed.QueryID = *queryID
 		}
-		requestSpans = append(requestSpans, requestSpanObservation{observedTraceSpan: observed, Route: route,
+		requestSpans = append(requestSpans, requestSpanObservation{observedTraceSpan: observed, Route: route, Endpoint: endpoint,
 			Sampling: declaredProbability, ReceivedAt: receivedAt, TimingAnomaly: timingAnomaly})
 		if !timingAnomaly {
 			observedSpans = append(observedSpans, observed)
@@ -578,7 +578,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		return nil, err
 	}
 	investigation := map[string]any{"database": sqlDatabase,
-		"locks": investigationLockEvidence(replay["points"].([]replayPoint), samples)}
+		"locks":            investigationLockEvidence(replay["points"].([]replayPoint), samples),
+		"connectionStages": connectionStages(requestSpans, samples, traceCount == 100)}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay,
 		"waitCaptures": waitCaptures, "investigation": investigation}, nil
 }
@@ -673,7 +674,7 @@ func (s *Postgres) RawTrace(ctx context.Context, assetID, traceID string) (any, 
 	spans, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 		'assetId',asset_id,'traceId',trace_id,'spanId',span_id,'parentSpanId',parent_span_id,
 		'service',service,'kind',kind,'start',started_at,'end',ended_at,'status',status,'backendPid',backend_pid,'queryId',query_id,'route',route,
-		'appPodReported',app_pod_reported,'appPodVerified',app_pod_verified,
+		'appPodReported',app_pod_reported,'appPodVerified',app_pod_verified,'endpoint',endpoint_name,
 		'receivedAt',received_at,'declaredSamplingProbability',sampling_probability)
 		FROM trace_spans WHERE asset_id=$1 AND trace_id=$2 ORDER BY started_at LIMIT 256`, assetID, traceID)
 	if err != nil {

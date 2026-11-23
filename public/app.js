@@ -2726,6 +2726,68 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   return panel;
 }
 
+function connectionStagePanel(report, assetId) {
+  const panel = cell('section', '', 'evidence');
+  const labels = { pool_acquire: '应用池获取', connect: '数据库建连', pgbouncer_queue: 'PgBouncer 排队',
+    execute: '数据库执行', database_wait: 'PostgreSQL 锁等待' };
+  const sources = { application: '应用 Trace', pool_sample: '目标数据库连接池采样', database_sample: '数据库锁链采样', pid_match: '调用窗内 PID 匹配' };
+  const outcomes = { ok: '完成', error: '失败', timeout: '超时', waiting: '排队或等待' };
+  const rows = report.rows || [];
+  const filters = cell('div', '', 'actions');
+  function select(title, empty, options) {
+    const label = cell('label', title);
+    const input = cell('select');
+    for (const [value, text] of [['', empty], ...options]) {
+      const option = cell('option', text); option.value = value; input.append(option);
+    }
+    label.append(input); filters.append(label);
+    return input;
+  }
+  const services = [...new Set(rows.flatMap(row => [row.service, ...(row.nearbyServices || [])]).filter(Boolean))].sort();
+  const service = select('服务', '全部服务', services.map(name => [name, name]));
+  const stage = select('阶段', '全部阶段', Object.entries(labels));
+  const result = select('状态', '全部状态', Object.entries(outcomes));
+  const list = cell('div', '', 'monitor-table');
+  const count = cell('p', '', 'hint'); count.setAttribute('role', 'status');
+  const more = cell('button', '显示更多', 'ghost small-button'); more.type = 'button';
+  let size = 12;
+  function draw() {
+    const match = rows.filter(row => (!service.value || row.service === service.value || row.nearbyServices?.includes(service.value))
+      && (!stage.value || stage.value === row.stage) && (!result.value || result.value === row.outcome));
+    count.textContent = match.length ? `显示 ${Math.min(size, match.length)} / ${match.length} 条证据` : '当前筛选下无阶段证据';
+    const table = importTable(['时间', '服务 / 端点', '阶段', '状态', '当前观测值', '证据'], match.slice(0, size).map(row => {
+      const metric = row.waitingClients ? `${row.waitingClients} 个等待客户端`
+        : row.durationMs == null ? '锁链快照' : `${row.durationMs} ms 调用时长`;
+      const pids = row.blockerPid ? ` · PID ${row.backendPid} 被 ${row.blockerPid} 阻塞` : '';
+      return [formatTime(row.at), [row.service, row.endpoint].filter(Boolean).join(' / ') || '目标数据库',
+        labels[row.stage], outcomes[row.outcome] || '未知', metric + pids, sources[row.source]];
+    }));
+    table.setAttribute('aria-label', '连接阶段证据');
+    for (const [i, row] of match.slice(0, size).entries()) {
+      const refs = table.tBodies[0].rows[i].lastElementChild;
+      for (const [name, group, id] of [['Trace', 'traces', row.traceId], ['采样', 'samples', row.sampleId]]) {
+        if (!id) continue;
+        const link = cell('a', name, 'monitor-link');
+        link.href = `/api/assets/${encodeURIComponent(assetId)}/${group}/${encodeURIComponent(id)}`;
+        refs.append(document.createTextNode(' · '), link);
+      }
+      if (row.clock === 'unreliable') refs.append(cell('small', ' · 时间异常'));
+      if (row.clock === 'unavailable') refs.append(cell('small', ' · 缺少接收时间'));
+      if (row.nearbyServices?.length) refs.append(cell('small', ` · 同窗服务 ${row.nearbyServices.join('、')}`));
+    }
+    list.replaceChildren(table);
+    more.hidden = size >= match.length;
+  }
+  for (const filter of [service, stage, result]) filter.addEventListener('change', () => { size = 12; draw(); });
+  more.addEventListener('click', () => { size += 12; draw(); });
+  panel.append(cell('h4', '连接阶段与等待'),
+    cell('p', '应用耗时取自单次调用。PgBouncer 等待人数来自采样时刻的数据库级汇总。', 'hint'));
+  if (!report.hasAppSpans) panel.append(cell('p', '当前事件窗口未取得应用客户端 Span，以下使用连接池和数据库采样。', 'hint'));
+  if (report.traceAtLimit) panel.append(cell('small', '事件窗口已达到 100 条 Span 的读取上限。'));
+  if (rows.length) { panel.append(filters, count, list, more); draw(); }
+  return panel;
+}
+
 function traceRequestEvidence(paths, assetId, limited) {
   const section = cell('details', '', 'evidence');
   section.append(cell('summary', `查看数据库请求路径（${paths.length}）`));
@@ -2983,8 +3045,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   sectionBar.append(...sectionButtons);
   activate(eventSection);
   target.append(sectionBar, ...content.values());
-  if (replay) evidencePanel.append(investigationPanel(event, replay, analysis, investigation, grafanaLink),
-    incidentReplayPanel(event, replay, analysis, aiStatus.enabled));
+  if (replay) evidencePanel.append(investigationPanel(event, replay, analysis, investigation, grafanaLink));
+  if (investigation?.connectionStages && (investigation.connectionStages.rows.length || event.kind?.includes('pgbouncer'))) {
+    evidencePanel.append(connectionStagePanel(investigation.connectionStages, event.assetId));
+  }
+  if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis, aiStatus.enabled));
   if (waitCaptures.length) {
     const captures = cell('div', '', 'evidence');
     captures.append(cell('h4', '同一事件的短时等待采样'));

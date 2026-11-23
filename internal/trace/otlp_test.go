@@ -3,10 +3,58 @@ package trace
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDecodeConnectionStagesRequireUniqueDatabaseAndDropSessionIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	payload := fmt.Sprintf(`{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},
+		"scopeSpans":[{"spans":[{"traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spanId":"1111111111111111","kind":3,
+		"startTimeUnixNano":%d,"endTimeUnixNano":%d,"status":{"code":2},"attributes":[
+		{"key":"db.system.name","value":{"stringValue":"postgresql"}},
+		{"key":"server.address","value":{"stringValue":"pooler"}},
+		{"key":"server.port","value":{"intValue":"6432"}},
+		{"key":"db.namespace","value":{"stringValue":"orders"}},
+		{"key":"dbsphere.endpoint","value":{"stringValue":"checkout"}},
+		{"key":"dbsphere.connection.phase","value":{"stringValue":"connect"}},
+		{"key":"dbsphere.connection.outcome","value":{"stringValue":"timeout"}},
+		{"key":"dbsphere.pg.backend_pid","value":{"intValue":"271"}},
+		{"key":"dbsphere.pg.query_id","value":{"intValue":"42"}}]}]}]}]}`,
+		now.Add(-time.Second).UnixNano(), now.UnixNano())
+	asset := Asset{ID: "a", Host: "pg", Port: 5432, Database: "orders", PoolerHost: "pooler", PoolerPort: 6432}
+	result, err := Decode([]byte(payload), []Asset{asset}, now)
+	if err != nil || len(result.Spans) != 1 {
+		t.Fatalf("valid timeout dropped: %+v %v", result, err)
+	}
+	span := result.Spans[0]
+	if span.Kind != "pg_connect_timeout" || span.Endpoint != "checkout" || span.Route != "pgbouncer" || span.BackendPID != 0 || span.QueryID != "" {
+		t.Fatalf("wrong pre-session evidence: %+v", span)
+	}
+	missingDB := strings.Replace(payload, `"stringValue":"orders"`, `"stringValue":""`, 1)
+	duplicate := asset
+	duplicate.ID = "b"
+	for _, tc := range []struct {
+		payload string
+		assets  []Asset
+	}{
+		{missingDB, []Asset{asset}},
+		{payload, []Asset{asset, duplicate}},
+	} {
+		result, err := Decode([]byte(tc.payload), tc.assets, now)
+		if err != nil || len(result.Spans) != 0 || len(result.Candidates) != 0 || result.Rejected != 1 {
+			t.Fatalf("unverified target accepted: %+v %v", result, err)
+		}
+	}
+	unsafeEndpoint := strings.Replace(payload, `"key":"dbsphere.endpoint","value":{"stringValue":"checkout"`,
+		`"key":"dbsphere.endpoint","value":{"stringValue":"/checkout?token=private"`, 1)
+	result, err = Decode([]byte(unsafeEndpoint), []Asset{asset}, now)
+	if err != nil || len(result.Spans) != 1 || result.Spans[0].Endpoint != "" {
+		t.Fatalf("raw endpoint was accepted: %+v %v", result, err)
+	}
+}
 
 func TestDecodeMapsDatabaseSpansWithoutCrossAssetLeak(t *testing.T) {
 	now := time.Now().UTC()

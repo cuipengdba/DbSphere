@@ -100,12 +100,12 @@ func insertTraceSpan(ctx context.Context, tx pgx.Tx, span trace.Span) (int, erro
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO trace_spans
 		(asset_id,trace_id,span_id,parent_span_id,service,kind,started_at,ended_at,status,backend_pid,query_id,route,app_pod_reported,
-		 received_at,sampling_probability)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		 received_at,sampling_probability,endpoint_name)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,nullif($16,''))
 		ON CONFLICT(asset_id,trace_id,span_id) DO NOTHING`, span.AssetID,
 		span.TraceID, span.SpanID, parent, span.Service, span.Kind,
 		span.Start, span.End, span.Status, optionalBackendPID(span.BackendPID), queryID, route, appPod,
-		traceReceivedAt(span), probability)
+		traceReceivedAt(span), probability, span.Endpoint)
 	if err != nil {
 		return 0, fmt.Errorf("save OTLP span: %w", err)
 	}

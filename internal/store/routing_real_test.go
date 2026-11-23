@@ -3,14 +3,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/collector"
+	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -203,12 +208,33 @@ func TestRealPgBouncerPoolExhaustionKeepsOneEvent(t *testing.T) {
 	if _, err := tx.Exec(ctx, "SELECT 1"); err != nil {
 		t.Fatal(err)
 	}
+	queueStarted := make(chan time.Time, 1)
+	queueFinished := make(chan time.Time, 1)
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := pgx.Connect(r.Context(), business.String())
+		if err == nil {
+			queueStarted <- time.Now().UTC()
+			_, err = conn.Exec(r.Context(), "SELECT 1")
+			queueFinished <- time.Now().UTC()
+			conn.Close(context.Background())
+		}
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}))
+	defer app.Close()
 	queued := make(chan error, 1)
 	go func() {
-		conn, err := pgx.Connect(ctx, business.String())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, app.URL, nil)
 		if err == nil {
-			_, err = conn.Exec(ctx, "SELECT 1")
-			conn.Close(ctx)
+			var resp *http.Response
+			resp, err = http.DefaultClient.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					err = fmt.Errorf("queued HTTP request returned %d", resp.StatusCode)
+				}
+			}
 		}
 		queued <- err
 	}()
@@ -232,11 +258,43 @@ func TestRealPgBouncerPoolExhaustionKeepsOneEvent(t *testing.T) {
 		t.Fatal("raw source missing")
 	}
 	eventID := checkRouteIncident(t, ctx, pg, id, "pooler_exhausted", sample)
+	detail, err := pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stages := detail.(map[string]any)["investigation"].(map[string]any)["connectionStages"].(connectionStageReport)
+	verified := false
+	for _, stage := range stages.Rows {
+		verified = verified || stage.Stage == "pgbouncer_queue" && stage.WaitingClients > 0 &&
+			stage.SampleID == sample && stage.DurationMs == nil && stage.TraceID == ""
+	}
+	if stages.HasAppSpans || !verified {
+		t.Fatalf("PgBouncer should expose the same incident queue sample without Trace intake: %+v", stages)
+	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-queued; err != nil {
 		t.Fatal(err)
+	}
+	span := trace.Span{AssetID: id, Kind: "postgresql_client", Service: "queue-example", Endpoint: "checkout",
+		TraceID: strings.Repeat("c", 32), SpanID: strings.Repeat("d", 16), Route: "pgbouncer", Status: "ok",
+		Start: <-queueStarted, End: <-queueFinished}
+	if inserted, err := pg.SaveTraceSpans(ctx, []trace.Span{span}); err != nil || inserted != 1 {
+		t.Fatalf("import completed HTTP request: %d %v", inserted, err)
+	}
+	detail, err = pg.EventByID(ctx, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stages = detail.(map[string]any)["investigation"].(map[string]any)["connectionStages"].(connectionStageReport)
+	verified = false
+	for _, stage := range stages.Rows {
+		verified = verified || stage.Stage == "pgbouncer_queue" && stage.SampleID == sample &&
+			slices.Contains(stage.NearbyServices, span.Service) && stage.DurationMs == nil
+	}
+	if !verified {
+		t.Fatalf("late HTTP trace missing from the original pooler event window: %+v", stages)
 	}
 	recovered, _ := checkTestRoute(t, ctx, pg, id, key, "ok")
 	checkRouteRecovery(t, ctx, pg, eventID, recovered)

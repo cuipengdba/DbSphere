@@ -19,14 +19,24 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type config struct {
-	pgURL    string
-	endpoint string
-	token    string
-	listen   string
-	lockKey  int64
+	pgURL             string
+	endpoint          string
+	token             string
+	listen            string
+	lockKey           int64
+	measureConnection bool
+	pool              *pgxpool.Pool
+	acquireTimeout    time.Duration
+}
+
+type phaseTiming struct {
+	kind, spanID string
+	start, end   time.Time
+	err          error
 }
 
 type demoTraceContext struct {
@@ -51,7 +61,8 @@ func readConfig() (config, error) {
 	cfg := config{pgURL: os.Getenv("DBSPHERE_DEMO_PG_URL"),
 		endpoint: os.Getenv("DBSPHERE_DEMO_OTLP_ENDPOINT"),
 		token:    os.Getenv("DBSPHERE_DEMO_OTLP_TOKEN"), listen: os.Getenv("DBSPHERE_DEMO_LISTEN"),
-		lockKey: 1742026}
+		lockKey: 1742026, measureConnection: os.Getenv("DBSPHERE_DEMO_CONNECTION_STAGES") == "true",
+		acquireTimeout: 500 * time.Millisecond}
 	if cfg.listen == "" {
 		cfg.listen = "127.0.0.1:18092"
 	}
@@ -83,7 +94,7 @@ func attr(key, value string) map[string]any {
 }
 
 func traceBody(parentContext demoTraceContext, serverID, dbID, host, database string, port, pid int,
-	serverStart, dbStart, dbEnd, serverEnd time.Time, queryErr error) ([]byte, error) {
+	serverStart, dbStart, dbEnd, serverEnd time.Time, queryErr error, phases ...phaseTiming) ([]byte, error) {
 	status := 1
 	if queryErr != nil {
 		status = 2
@@ -95,16 +106,33 @@ func traceBody(parentContext demoTraceContext, serverID, dbID, host, database st
 	if parentContext.parentSpanID != "" {
 		parent["parentSpanId"] = parentContext.parentSpanID
 	}
-	dbSpan := map[string]any{"traceId": parentContext.traceID, "spanId": dbID, "parentSpanId": serverID,
-		"kind": 3, "startTimeUnixNano": strconv.FormatInt(dbStart.UnixNano(), 10),
-		"endTimeUnixNano": strconv.FormatInt(dbEnd.UnixNano(), 10),
-		"status":          map[string]any{"code": status},
-		"attributes": []any{attr("db.system.name", "postgresql"), attr("server.address", host),
-			attr("server.port", strconv.Itoa(port)), attr("db.namespace", database),
-			attr("dbsphere.pg.backend_pid", strconv.Itoa(pid))}}
+	clientSpan := func(id string, start, end time.Time, code int, phaseAttrs ...any) map[string]any {
+		identity := []any{attr("db.system.name", "postgresql"), attr("server.address", host),
+			attr("server.port", strconv.Itoa(port)), attr("db.namespace", database), attr("dbsphere.endpoint", "checkout")}
+		return map[string]any{"traceId": parentContext.traceID, "spanId": id, "parentSpanId": serverID,
+			"kind": 3, "startTimeUnixNano": strconv.FormatInt(start.UnixNano(), 10),
+			"endTimeUnixNano": strconv.FormatInt(end.UnixNano(), 10),
+			"status":          map[string]any{"code": code}, "attributes": append(identity, phaseAttrs...)}
+	}
+	spans := []any{parent}
+	if !dbStart.IsZero() {
+		spans = append(spans, clientSpan(dbID, dbStart, dbEnd, status, attr("dbsphere.pg.backend_pid", strconv.Itoa(pid))))
+	}
+	for _, phase := range phases {
+		code := 1
+		attrs := []any{attr("dbsphere.connection.phase", phase.kind)}
+		if phase.err != nil {
+			code = 2
+			var timeout interface{ Timeout() bool }
+			if errors.Is(phase.err, context.DeadlineExceeded) || (errors.As(phase.err, &timeout) && timeout.Timeout()) {
+				attrs = append(attrs, attr("dbsphere.connection.outcome", "timeout"))
+			}
+		}
+		spans = append(spans, clientSpan(phase.spanID, phase.start, phase.end, code, attrs...))
+	}
 	return json.Marshal(map[string]any{"resourceSpans": []any{map[string]any{
 		"resource":   map[string]any{"attributes": []any{attr("service.name", "dbsphere-lock-demo")}},
-		"scopeSpans": []any{map[string]any{"spans": []any{parent, dbSpan}}}}}})
+		"scopeSpans": []any{map[string]any{"spans": spans}}}}})
 }
 
 func runCheckout(ctx context.Context, cfg config, client *http.Client, traceparent string) (string, int, error) {
@@ -125,11 +153,44 @@ func runCheckout(ctx context.Context, cfg config, client *http.Client, tracepare
 	if err != nil {
 		return "", 0, err
 	}
-	dbStart := time.Now().UTC()
-	conn, err := pgx.Connect(ctx, cfg.pgURL)
+	connectionStart := time.Now().UTC()
+	var conn *pgx.Conn
+	var release func()
+	connectionKind := "connect"
+	if cfg.pool != nil {
+		connectionKind = "pool_acquire"
+		acquireCtx, cancel := context.WithTimeout(ctx, cfg.acquireTimeout)
+		var pooled *pgxpool.Conn
+		pooled, err = cfg.pool.Acquire(acquireCtx)
+		cancel()
+		if err == nil {
+			conn, release = pooled.Conn(), pooled.Release
+		}
+	} else {
+		conn, err = pgx.Connect(ctx, cfg.pgURL)
+		if err == nil {
+			release = func() { _ = conn.Close(context.Background()) }
+		}
+	}
+	if release != nil {
+		defer release()
+	}
+	dbStart := connectionStart
+	var phases []phaseTiming
+	if cfg.measureConnection {
+		acquiredAt := time.Now().UTC()
+		phaseID, randomErr := randomHex(8)
+		if randomErr != nil {
+			return parent.traceID, 0, randomErr
+		}
+		phases = append(phases, phaseTiming{kind: connectionKind, spanID: phaseID, start: connectionStart, end: acquiredAt, err: err})
+		dbStart = time.Time{}
+		if err == nil {
+			dbStart = acquiredAt
+		}
+	}
 	pid := 0
 	if err == nil {
-		defer conn.Close(context.Background())
 		var tx pgx.Tx
 		tx, err = conn.Begin(ctx)
 		if err == nil {
@@ -146,7 +207,7 @@ func runCheckout(ctx context.Context, cfg config, client *http.Client, tracepare
 	dbEnd := time.Now().UTC()
 	serverEnd := dbEnd
 	body, marshalErr := traceBody(parent, serverID, dbID, parsed.Host, parsed.Database,
-		int(parsed.Port), pid, serverStart, dbStart, dbEnd, serverEnd, err)
+		int(parsed.Port), pid, serverStart, dbStart, dbEnd, serverEnd, err, phases...)
 	if marshalErr != nil {
 		return parent.traceID, pid, marshalErr
 	}
@@ -208,6 +269,28 @@ func main() {
 	cfg, err := readConfig()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if value := os.Getenv("DBSPHERE_DEMO_POOL_SIZE"); value != "" {
+		size, err := strconv.ParseInt(value, 10, 32)
+		if err != nil || size < 1 || size > 32 {
+			log.Fatal("DBSPHERE_DEMO_POOL_SIZE must be between 1 and 32")
+		}
+		poolConfig, err := pgxpool.ParseConfig(cfg.pgURL)
+		if err != nil {
+			log.Fatal("invalid PostgreSQL pool URL")
+		}
+		poolConfig.MaxConns = int32(size)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cfg.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		if err == nil {
+			err = cfg.pool.Ping(ctx)
+		}
+		cancel()
+		if err != nil {
+			log.Fatal("unable to warm example PostgreSQL pool")
+		}
+		defer cfg.pool.Close()
+		cfg.measureConnection = true
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	log.Printf("DbSphere lock demo listening on %s", cfg.listen)

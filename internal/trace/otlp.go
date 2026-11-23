@@ -17,6 +17,7 @@ var traceID = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 var spanID = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
 var k8sName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 var k8sUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+var endpointName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 
 type Asset struct {
 	ID         string
@@ -39,6 +40,7 @@ type Span struct {
 	AppPodName      string
 	AppPodUID       string
 	Service         string
+	Endpoint        string
 	Kind            string
 	Start           time.Time
 	End             time.Time
@@ -46,6 +48,23 @@ type Span struct {
 	// SamplingProbability is an application declaration, not measured coverage.
 	SamplingProbability *float64
 	ReceivedAt          time.Time
+}
+
+// Pre-session stages are separate from SQL client spans. They must never
+// carry a backend PID or be considered a database query.
+func ConnectionStage(kind string) (phase string, timeout bool) {
+	switch kind {
+	case "pg_pool_acquire", "pg_pool_acquire_timeout":
+		return "pool_acquire", kind == "pg_pool_acquire_timeout"
+	case "pg_connect", "pg_connect_timeout":
+		return "connect", kind == "pg_connect_timeout"
+	}
+	return "", false
+}
+
+func IsDatabaseTargetSpan(kind string) bool {
+	phase, _ := ConnectionStage(kind)
+	return kind == "postgresql_client" || phase != ""
 }
 
 type Result struct {
@@ -185,12 +204,29 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 				}
 				if isDB {
 					item.Kind = "postgresql_client"
-					item.AppPodNamespace, item.AppPodName, item.AppPodUID = appNamespace, appPod, appUID
-					if value, err := strconv.ParseInt(attrs["dbsphere.pg.backend_pid"], 10, 32); err == nil && value > 0 {
-						item.BackendPID = int(value)
+					switch attrs["dbsphere.connection.phase"] {
+					case "", "execute":
+					case "pool_acquire":
+						item.Kind = "pg_pool_acquire"
+					case "connect":
+						item.Kind = "pg_connect"
+					default:
+						continue
 					}
-					if value, err := strconv.ParseInt(attrs["dbsphere.pg.query_id"], 10, 64); err == nil && value != 0 {
-						item.QueryID = strconv.FormatInt(value, 10)
+					if endpoint := attrs["dbsphere.endpoint"]; endpointName.MatchString(endpoint) {
+						item.Endpoint = endpoint
+					}
+					if item.Kind != "postgresql_client" && item.Status == "error" && attrs["dbsphere.connection.outcome"] == "timeout" {
+						item.Kind += "_timeout"
+					}
+					item.AppPodNamespace, item.AppPodName, item.AppPodUID = appNamespace, appPod, appUID
+					if item.Kind == "postgresql_client" {
+						if value, err := strconv.ParseInt(attrs["dbsphere.pg.backend_pid"], 10, 32); err == nil && value > 0 {
+							item.BackendPID = int(value)
+						}
+						if value, err := strconv.ParseInt(attrs["dbsphere.pg.query_id"], 10, 64); err == nil && value != 0 {
+							item.QueryID = strconv.FormatInt(value, 10)
+						}
 					}
 					item.address = attrs["server.address"]
 					item.port = 5432
@@ -217,8 +253,11 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 		dbAsset := map[string]string{}
 		dbRoute := map[string]string{}
 		for _, item := range group {
-			if item.Kind != "postgresql_client" || ambiguous[item.SpanID] ||
+			if !IsDatabaseTargetSpan(item.Kind) || ambiguous[item.SpanID] ||
 				item.address == "" || item.port < 1 || item.port > 65535 {
+				continue
+			}
+			if phase, _ := ConnectionStage(item.Kind); phase != "" && item.namespace == "" {
 				continue
 			}
 			match, route := "", ""
@@ -255,7 +294,7 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					visited[current] = true
 					item, exists := byID[current]
 					if !exists || ambiguous[current] ||
-						(item.Kind == "postgresql_client" && dbAsset[current] != assetID) {
+						(IsDatabaseTargetSpan(item.Kind) && dbAsset[current] != assetID) {
 						break
 					}
 					include[current] = true
@@ -267,7 +306,7 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					continue
 				}
 				item.AssetID = assetID
-				if item.Kind == "postgresql_client" {
+				if IsDatabaseTargetSpan(item.Kind) {
 					item.Route = dbRoute[item.SpanID]
 				}
 				result.Spans = append(result.Spans, item.Span)

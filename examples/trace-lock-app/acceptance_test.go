@@ -18,6 +18,7 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/httpapi"
 	"github.com/cuipengdba/dbsphere/internal/store"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // This drill starts a real Go HTTP application, a real Go DbSphere OTLP intake,
@@ -215,7 +216,23 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	if _, err := blocker.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := config{pgURL: appURL, endpoint: receiver.URL + "/v1/traces", token: token, lockKey: lockKey}
+	appConfig := config{pgURL: appURL, endpoint: receiver.URL + "/v1/traces", token: token, lockKey: lockKey,
+		measureConnection: true, acquireTimeout: 250 * time.Millisecond}
+	if !viaPooler {
+		poolConfig, err := pgxpool.ParseConfig(appURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolConfig.MaxConns = 1
+		appConfig.pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer appConfig.pool.Close()
+		if err := appConfig.pool.Ping(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 	app := httptest.NewServer(newHandler(appConfig,
 		&http.Client{Timeout: 5 * time.Second}))
 	defer app.Close()
@@ -258,6 +275,23 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 	checked, err := pg.CheckAsset(ctx, asset.ID, key)
 	if err != nil || checked.Status != "ok" {
 		t.Fatalf("DbSphere did not collect the blocked target: %+v %v", checked, err)
+	}
+	timedOutTrace := ""
+	if !viaPooler {
+		timeoutResponse, err := http.Get(entryPoint + "/checkout")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			TraceID    string
+			BackendPID int
+		}
+		decodeErr := json.NewDecoder(timeoutResponse.Body).Decode(&result)
+		timeoutResponse.Body.Close()
+		if decodeErr != nil || timeoutResponse.StatusCode != http.StatusBadGateway || result.BackendPID != 0 || result.TraceID == "" {
+			t.Fatalf("the second request should time out in the real one-slot application pool: %+v, %v", result, decodeErr)
+		}
+		timedOutTrace = result.TraceID
 	}
 	if separatePoolerEndpoint {
 		rawSample, err := pg.RawSample(ctx, asset.ID, checked.SampleID)
@@ -336,6 +370,36 @@ func runApplicationLockTraceUsesOneDbSphereEventID(t *testing.T, viaPooler, sepa
 				t.Fatalf("real PgBouncer lock chain is missing %s: %s", marker, encoded)
 			}
 		}
+	}
+	var stageView struct {
+		Investigation struct {
+			ConnectionStages struct {
+				Rows []struct {
+					Stage, Source, Outcome, TraceID, SampleID, Endpoint string
+					BackendPID, BlockerPID                              int
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(encoded, &stageView); err != nil {
+		t.Fatal(err)
+	}
+	sawDBWait, sawConnect, sawPoolTimeout := false, false, false
+	for _, stage := range stageView.Investigation.ConnectionStages.Rows {
+		if stage.TraceID == timedOutTrace && timedOutTrace != "" {
+			if stage.Stage != "pool_acquire" || stage.Outcome != "timeout" || stage.BackendPID != 0 || stage.SampleID != "" {
+				t.Fatalf("pool timeout was attributed outside the application: %+v", stage)
+			}
+			sawPoolTimeout = true
+		}
+		if stage.TraceID == traceID && stage.Endpoint == "checkout" {
+			sawDBWait = sawDBWait || (stage.Stage == "database_wait" && stage.Source == "pid_match" &&
+				stage.SampleID == checked.SampleID && stage.BackendPID == waitingPID && stage.BlockerPID == blockerPID)
+			sawConnect = sawConnect || stage.Stage == "connect"
+		}
+	}
+	if !sawDBWait || (viaPooler && !sawConnect) || (!viaPooler && !sawPoolTimeout) {
+		t.Fatalf("missing measured connection stages: %+v", stageView.Investigation.ConnectionStages.Rows)
 	}
 	rawTrace, err := pg.RawTrace(ctx, asset.ID, traceID)
 	if err != nil || rawTrace == nil {

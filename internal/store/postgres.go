@@ -474,6 +474,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateRiskBaseline(ctx, tx); err != nil {
 		return fmt.Errorf("migrate rule-based risk forecasting: %w", err)
 	}
+	if err := migrateConnectionStages(ctx, tx); err != nil {
+		return fmt.Errorf("migrate application connection stages: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

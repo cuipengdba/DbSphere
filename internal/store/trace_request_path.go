@@ -11,6 +11,7 @@ const traceRequestPathLimit = 12
 type requestSpanObservation struct {
 	observedTraceSpan
 	Route         string
+	Endpoint      string
 	Sampling      *float64
 	ReceivedAt    *time.Time
 	TimingAnomaly bool
