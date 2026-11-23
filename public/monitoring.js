@@ -2517,6 +2517,10 @@
         const selectedAt = Date.parse(point?.sampleAt || point?.at);
         let to = Math.min(Date.now(), event.endedAt ? Date.parse(event.endedAt) + 15 * minute : Date.now());
         let from = Math.min(to - minute, Math.max(to - 10080 * minute, start - 15 * minute));
+        if (validRange(point?.from, point?.to) && (!Number.isFinite(selectedAt) || (selectedAt >= point.from && selectedAt <= point.to))) {
+          from = point.from;
+          to = point.to;
+        }
         if (Number.isFinite(selectedAt) && (selectedAt < from || selectedAt >= to)) {
           to = Math.min(Date.now(), selectedAt + 15 * minute);
           from = selectedAt - 15 * minute;

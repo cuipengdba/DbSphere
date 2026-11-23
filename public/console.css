@@ -100,6 +100,18 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .incident-content > .evidence { padding: 12px; margin-top: 10px; }
 .incident-content > .evidence > h4 { margin: 0 0 6px; }
 #event-detail, #detail { scroll-margin-top: 72px; }
+.investigation { margin-block: 12px; }
+.investigation-grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1.55fr) minmax(195px, 1fr); }
+.investigation-pane { display: grid; gap: 8px; align-content: start; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.investigation-pane > :is(h4, p, ul) { margin: 0; }
+.investigation-controls { margin-bottom: 0; }
+.investigation-anchor { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.investigation-signals { display: grid; gap: 6px; }
+.investigation-signal { padding: 7px 0; border-bottom: 1px solid var(--border); display: grid; gap: 3px; overflow-wrap: anywhere; }
+.investigation-locks { display: grid; gap: 6px; padding-inline-start: 20px; }
+.investigation-locks small { display: block; overflow-wrap: anywhere; }
+.investigation-pane > button { justify-self: start; }
+@media (max-width: 880px) { .investigation-grid { grid-template-columns: minmax(0, 1fr); } }
 #notice:not(:empty) { margin: 0 0 14px; }
 
 /* Monitoring uses the same surfaces as the other workflows. */

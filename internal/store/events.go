@@ -30,6 +30,7 @@ type eventRecord struct {
 	ID             string          `json:"id"`
 	AssetID        string          `json:"assetId"`
 	AssetName      string          `json:"assetName"`
+	ClusterName    string          `json:"clusterName,omitempty"`
 	Kind           string          `json:"kind"`
 	EventGroup     *string         `json:"eventGroup"`
 	Title          string          `json:"title"`
@@ -117,10 +118,10 @@ type traceClockSummary struct {
 
 func (s *Postgres) loadEvent(ctx context.Context, id string) (*eventRecord, error) {
 	var event eventRecord
-	err := s.pool.QueryRow(ctx, `SELECT e.id::text,e.asset_id::text,a.name,e.kind,e.event_group,
+	err := s.pool.QueryRow(ctx, `SELECT e.id::text,e.asset_id::text,a.name,coalesce(a.cluster_name,''),e.kind,e.event_group,
 		e.title,e.status,e.started_at,e.ended_at,e.acknowledged_at
 		FROM events e JOIN assets a ON a.id=e.asset_id WHERE e.id=$1`, id).Scan(
-		&event.ID, &event.AssetID, &event.AssetName, &event.Kind, &event.EventGroup,
+		&event.ID, &event.AssetID, &event.AssetName, &event.ClusterName, &event.Kind, &event.EventGroup,
 		&event.Title, &event.Status, &event.StartedAt, &event.EndedAt, &event.AcknowledgedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -576,7 +577,10 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	if err := s.enrichIncidentReplay(ctx, event, replay, samples, traceReplay, edges); err != nil {
 		return nil, err
 	}
-	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay, "waitCaptures": waitCaptures}, nil
+	investigation := map[string]any{"database": sqlDatabase,
+		"locks": investigationLockEvidence(replay["points"].([]replayPoint), samples)}
+	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay,
+		"waitCaptures": waitCaptures, "investigation": investigation}, nil
 }
 
 func (s *Postgres) AcknowledgeEvent(ctx context.Context, id string) (any, error) {

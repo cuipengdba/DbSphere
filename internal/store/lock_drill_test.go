@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -119,6 +120,19 @@ func TestRealLockWaitOpensAndRecoversOneIncident(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(detail)
+	var investigation struct {
+		Investigation struct{ Locks *investigationLocks }
+	}
+	if err := json.Unmarshal(encoded, &investigation); err != nil {
+		t.Fatal(err)
+	}
+	lock := investigation.Investigation.Locks
+	if lock == nil || lock.SampleID != second.SampleID || lock.EvidenceID == "" ||
+		!slices.ContainsFunc(lock.Pairs, func(pair investigationBlocker) bool {
+			return pair.WaitingPID == int(waitingPID) && pair.BlockerPID == int(blockerPID)
+		}) {
+		t.Fatalf("the investigation shortcut did not cite the real lock sample: %+v", lock)
+	}
 	for _, expected := range []string{eventID, second.SampleID, `"code":"lock_chain"`,
 		`"relation":"blocked_by"`, fmt.Sprint(waitingPID), fmt.Sprint(blockerPID)} {
 		if !strings.Contains(string(encoded), expected) {
