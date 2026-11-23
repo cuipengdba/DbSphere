@@ -132,7 +132,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "读 {{container}}",
           "range": true,
           "datasource": {
@@ -142,7 +142,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "写 {{container}}",
           "range": true,
           "datasource": {
@@ -205,7 +205,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_read_operations_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_read_operations_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "读 {{container}}",
           "range": true,
           "datasource": {
@@ -215,7 +215,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_write_operations_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_write_operations_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "写 {{container}}",
           "range": true,
           "datasource": {
@@ -278,7 +278,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device!=\"\"}",
+          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\"}",
           "legendFormat": "读 {{container}} · {{device}}",
           "range": true,
           "datasource": {
@@ -288,7 +288,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device!=\"\"}",
+          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\"}",
           "legendFormat": "写 {{container}} · {{device}}",
           "range": true,
           "datasource": {
@@ -351,7 +351,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_io_pressure_percent{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_io_pressure_percent{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Some {{container}}",
           "range": true,
           "datasource": {
@@ -361,7 +361,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_io_full_pressure_percent{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_io_full_pressure_percent{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Full {{container}}",
           "range": true,
           "datasource": {

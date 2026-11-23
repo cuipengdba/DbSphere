@@ -132,7 +132,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_pg_io_wait_sessions{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_pg_io_wait_sessions{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "I/O 等待 {{pod}}",
           "range": true,
           "datasource": {
@@ -142,7 +142,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_refault_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_refault_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "页面重读 {{container}}",
           "range": true,
           "datasource": {
@@ -205,7 +205,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(dbsphere_container_pg_wal_bytes_total{asset_id=~\"${asset:regex}\"}[$__rate_interval])",
+          "expr": "rate(dbsphere_container_pg_wal_bytes_total{asset_id=~\"${asset:raw}\"}[$__rate_interval])",
           "legendFormat": "WAL {{pod}}",
           "range": true,
           "datasource": {
@@ -215,7 +215,7 @@
         },
         {
           "refId": "B",
-          "expr": "rate(dbsphere_container_pg_temp_bytes_total{asset_id=~\"${asset:regex}\"}[$__rate_interval])",
+          "expr": "rate(dbsphere_container_pg_temp_bytes_total{asset_id=~\"${asset:raw}\"}[$__rate_interval])",
           "legendFormat": "临时文件 {{pod}}",
           "range": true,
           "datasource": {
@@ -278,7 +278,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(dbsphere_container_pg_read_time_seconds_total{asset_id=~\"${asset:regex}\"}[$__rate_interval])",
+          "expr": "rate(dbsphere_container_pg_read_time_seconds_total{asset_id=~\"${asset:raw}\"}[$__rate_interval])",
           "legendFormat": "PG 读计时",
           "range": true,
           "datasource": {
@@ -288,7 +288,7 @@
         },
         {
           "refId": "B",
-          "expr": "rate(dbsphere_container_pg_write_time_seconds_total{asset_id=~\"${asset:regex}\"}[$__rate_interval])",
+          "expr": "rate(dbsphere_container_pg_write_time_seconds_total{asset_id=~\"${asset:raw}\"}[$__rate_interval])",
           "legendFormat": "PG 写计时",
           "range": true,
           "datasource": {
@@ -298,7 +298,7 @@
         },
         {
           "refId": "C",
-          "expr": "rate(dbsphere_container_pg_checkpoint_sync_seconds_total{asset_id=~\"${asset:regex}\"}[$__rate_interval])",
+          "expr": "rate(dbsphere_container_pg_checkpoint_sync_seconds_total{asset_id=~\"${asset:raw}\"}[$__rate_interval])",
           "legendFormat": "检查点同步",
           "range": true,
           "datasource": {
@@ -361,7 +361,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "容器读 {{container}}",
           "range": true,
           "datasource": {
@@ -371,7 +371,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "容器写 {{container}}",
           "range": true,
           "datasource": {
@@ -381,7 +381,7 @@
         },
         {
           "refId": "C",
-          "expr": "dbsphere_container_node_read_bytes_per_second{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_node_read_bytes_per_second{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "节点读 {{device}}",
           "range": true,
           "datasource": {

@@ -479,7 +479,7 @@ jobs:
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
           previous_version='1.50.0'
-          previous_sha='2e3c00a6e18dcbe6550a5dc6493c09badd0f140998cac04965f114a22de7c396'
+          previous_sha='6e00255a968baa7a8c76927a96cd32bd5fa8c28b8724e386e5128c0526001c09'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -549,7 +549,7 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
           previous_version='1.50.0'
-          previous_arm_sha='854c9e7f79df3bc42fd4807f6cfb0f2728e9f1f526e07c5d39904e9b2e8f5d08'
+          previous_arm_sha='facb32b9b7b35916451ddac14ab3d7269545a07ac834b60575c6f79d94d49c0d'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1370,6 +1370,41 @@ jobs:
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" kind-dbsphere-ci
           node scripts/kind-service-route-acceptance.mjs http://127.0.0.1:18091 \
             "$RUNNER_TEMP/dbsphere-kind-credentials.json" "$KUBECONFIG" kind-dbsphere-ci
+      - name: Verify PostgreSQL cgroup metrics and PVC identity through the container history API
+        run: |
+          token="$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          kubectl create namespace dbsphere-monitoring
+          kubectl -n dbsphere-monitoring create secret generic dbsphere-container-agent --from-literal=token="$token"
+          sed 's@dbsphere/offline-go-app:2.0.0@dbsphere/kind-matrix:local@g' deploy/k8s/dbsphere-container-agent.yaml | kubectl apply -f -
+          kubectl -n dbsphere-monitoring rollout status daemonset/dbsphere-container-agent --timeout=120s
+          asset="$(jq -er '.matrix[]|select(.major==18)|.assetId' "$RUNNER_TEMP/dbsphere-kind-after.json")"
+          kubectl -n dbsphere-matrix patch deployment pg18 --type=strategic \
+            -p '{"spec":{"template":{"spec":{"containers":[{"name":"storage-test-sidecar","image":"postgres:18-bookworm","command":["sleep","infinity"]}]}}}}'
+          kubectl -n dbsphere-matrix rollout status deployment/pg18 --timeout=180s
+          sources="$(kubectl -n dbsphere-monitoring get pods -l app=dbsphere-container-agent -o json |
+            jq -ec '[.items[]|select(.status.podIP)|{key:("kind-dbsphere-ci/"+.spec.nodeName),value:{url:("http://"+.status.podIP+":9918")}}]|from_entries')"
+          bindings="$(jq -nc --argjson nodes "$sources" --arg asset "$asset" '{nodes:$nodes,primary:{($asset):"postgres"}}')"
+          kubectl -n dbsphere-matrix set env deployment/dbsphere-go \
+            DBSPHERE_CONTAINER_STORAGE_BINDINGS="$bindings" DBSPHERE_CONTAINER_AGENT_TOKEN="$token"
+          kubectl -n dbsphere-matrix rollout status deployment/dbsphere-go --timeout=180s
+          kubectl -n dbsphere-matrix port-forward svc/dbsphere-go 18091:8080 > "$RUNNER_TEMP/dbsphere-container-forward.log" 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          base=http://127.0.0.1:18091
+          for attempt in {1..60}; do
+            if curl -fsS "$base/readyz" >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          cookie="$RUNNER_TEMP/dbsphere-container.cookie"
+          csrf="$(jq -c '{username:"admin",password:.adminPassword}' "$RUNNER_TEMP/dbsphere-kind-credentials.json" |
+            curl -fsS -c "$cookie" -H 'Content-Type: application/json' --data-binary @- "$base/api/login" | jq -er .csrf)"
+          curl -fsS -b "$cookie" -H "X-CSRF-Token: $csrf" -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId' >/dev/null
+          curl -fsS -b "$cookie" "$base/api/assets/$asset/container-storage" |
+            jq -e '.latest.storage | .status=="ok" and .primary=="postgres" and (.podUID|length>0) and
+              (.pvcs|any(.name=="pg18-data" and .phase=="Bound")) and
+              (.containers.postgres.memory.active_file|type=="number") and
+              (.containers.postgres.memory.inactive_file|type=="number") and .containers["storage-test-sidecar"].status=="ok"'
       - name: Verify one real application incident across PostgreSQL Pod OOM and recovery
         if: github.event_name == 'workflow_dispatch'
         run: |

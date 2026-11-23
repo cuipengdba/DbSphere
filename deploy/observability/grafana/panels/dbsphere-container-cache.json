@@ -132,7 +132,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_active_file_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_active_file_bytes{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Active {{container}}",
           "range": true,
           "datasource": {
@@ -142,7 +142,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_inactive_file_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_inactive_file_bytes{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Inactive {{container}}",
           "range": true,
           "datasource": {
@@ -152,7 +152,7 @@
         },
         {
           "refId": "C",
-          "expr": "dbsphere_container_file_cache_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_file_cache_bytes{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "File cache {{container}}",
           "range": true,
           "datasource": {
@@ -215,7 +215,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_file_dirty_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_file_dirty_bytes{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Dirty {{container}}",
           "range": true,
           "datasource": {
@@ -225,7 +225,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_file_writeback_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_file_writeback_bytes{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "Writeback {{container}}",
           "range": true,
           "datasource": {
@@ -288,7 +288,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_refault_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_refault_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "Refault {{container}}",
           "range": true,
           "datasource": {
@@ -298,7 +298,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_reclaims_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "expr": "dbsphere_container_reclaims_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device=\"\"}",
           "legendFormat": "回收 {{container}}",
           "range": true,
           "datasource": {
@@ -361,7 +361,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_memory_pressure_percent{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_memory_pressure_percent{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "PSI {{container}}",
           "range": true,
           "datasource": {

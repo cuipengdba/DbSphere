@@ -132,7 +132,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "{{node}} · {{device}}",
           "range": true,
           "datasource": {
@@ -195,7 +195,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_node_device_busy_ratio{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_node_device_busy_ratio{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "忙碌 {{device}}",
           "range": true,
           "datasource": {
@@ -205,7 +205,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "队列 {{device}}",
           "range": true,
           "datasource": {
@@ -268,7 +268,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "已用 {{pvc}}",
           "range": true,
           "datasource": {
@@ -278,7 +278,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "容量 {{pvc}}",
           "range": true,
           "datasource": {
@@ -341,7 +341,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_pvc_bound{asset_id=~\"${asset:regex}\"}",
+          "expr": "dbsphere_container_pvc_bound{asset_id=~\"${asset:raw}\"}",
           "legendFormat": "Bound {{pvc}}",
           "range": true,
           "datasource": {
@@ -351,7 +351,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_sample_available{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "expr": "dbsphere_container_sample_available{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "采集正常 {{container}}",
           "range": true,
           "datasource": {
