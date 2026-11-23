@@ -19,16 +19,16 @@
     {
       "title": "返回 DbSphere 实时观测",
       "type": "link",
-      "url": "/#live?asset=${asset}&from=${__from:date:iso}&end=${__to:date:iso}",
+      "url": "/grafana/dbsphere-return?view=live&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
       "icon": "external link",
-      "targetBlank": false
+      "targetBlank": true
     },
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
       "icon": "bolt",
-      "targetBlank": false
+      "targetBlank": true
     },
     {
       "title": "DbSphere 专题",
@@ -153,8 +153,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本"
@@ -224,8 +224,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本"
@@ -299,8 +299,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本"
@@ -374,8 +374,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本"
@@ -445,8 +445,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本",
@@ -529,8 +529,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本",
@@ -613,8 +613,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本",
@@ -697,8 +697,8 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/#incidents?event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
-              "targetBlank": false
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": true
             }
           ],
           "noValue": "暂无样本",

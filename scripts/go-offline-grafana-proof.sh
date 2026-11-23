@@ -35,7 +35,7 @@ echo 'Grafana private network and DbSphere access roles passed.'
 for topic in overview postgres waits replication infrastructure mysql; do
   api "$base/grafana/api/dashboards/uid/dbsphere-$topic" |
     jq -e --arg uid "dbsphere-$topic" '.dashboard.uid==$uid and (.dashboard.panels|length)==8 and
-      (.dashboard.links|any(.url? // ""|startswith("/#incidents?event=")))' >/dev/null
+      (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=event")))' >/dev/null
 done
 echo 'Grafana dashboard provisioning passed for all six topics.'
 query="$(
@@ -86,6 +86,9 @@ api "$base/api/events/$event" |
     '.event.id==$id and (.analysis|tostring|(contains($root) and contains($waiting)))' >/dev/null
 api "$base/grafana/d/dbsphere-waits?var-event=$event&var-asset=$asset&from=now-15m&to=now" > "$scratch/grafana-waits.html"
 grep -Eq 'grafanaBootData|Grafana' "$scratch/grafana-waits.html"
+redirect="$(api -D - -o /dev/null "$base/grafana/dbsphere-return?view=event&event=$event&asset=$asset&from=2026-01-01T00:00:00Z&to=2026-01-01T00:15:00Z" |
+  tr -d '\r' | sed -n 's/^Location: //p')"
+test "$redirect" = "/#incidents?asset=$asset&event=$event&from=2026-01-01T00%3A00%3A00Z&to=2026-01-01T00%3A15%3A00Z"
 release_lock
 wait "$holder" || true
 wait "$waiter"

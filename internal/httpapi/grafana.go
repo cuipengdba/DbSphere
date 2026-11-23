@@ -11,7 +11,7 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/security"
 )
 
-const grafanaPrefix = "/grafana"
+const grafanaPrefix, grafanaReturnPath = "/grafana", "/grafana/dbsphere-return"
 
 func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string, int) {
 	cookie, err := r.Cookie("dbsphere_session")
@@ -95,8 +95,43 @@ func registerGrafana(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 			http.Redirect(w, r, grafanaPrefix+"/", http.StatusTemporaryRedirect)
 			return
 		}
+		if r.URL.Path == grafanaReturnPath && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			returnFromGrafana(w, r)
+			return
+		}
 		proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), accountKey{}, username)))
 	}
 	mux.HandleFunc(grafanaPrefix, handler)
 	mux.HandleFunc(grafanaPrefix+"/", handler)
+}
+
+func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
+	input := r.URL.Query()
+	output := url.Values{}
+	view := "live"
+	if input.Get("view") == "event" {
+		view = "incidents"
+		if id := input.Get("event"); opsUUID.MatchString(id) {
+			output.Set("event", id)
+		}
+	}
+	if asset := input.Get("asset"); opsUUID.MatchString(asset) {
+		output.Set("asset", asset)
+	}
+	start, startErr := time.Parse(time.RFC3339Nano, input.Get("from"))
+	end, endErr := time.Parse(time.RFC3339Nano, input.Get("to"))
+	if startErr == nil && endErr == nil && start.Before(end) {
+		output.Set("from", start.UTC().Format(time.RFC3339Nano))
+		endKey := "end"
+		if view == "incidents" {
+			endKey = "to"
+		}
+		output.Set(endKey, end.UTC().Format(time.RFC3339Nano))
+	}
+	location := "/#" + view
+	if encoded := output.Encode(); encoded != "" {
+		location += "?" + encoded
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
