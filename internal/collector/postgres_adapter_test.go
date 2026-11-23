@@ -9,6 +9,20 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func TestPostgresProductFromServerBanner(t *testing.T) {
+	for _, test := range []struct{ banner, product string }{
+		{"HighGo Database Version 6.0 on x86_64", "highgo"},
+		{"HighGo Security Enterprise Edition Database System 4.5.8", "highgo"},
+		{"PostgreSQL 14.7 (HGDB-SEE)", "highgo"},
+		{"PostgreSQL 18.7 on x86_64-pc-linux-gnu", ""},
+		{"PostgreSQL 18.7 compiled by highgo-dev", ""},
+	} {
+		if got := postgresProduct(test.banner); got != test.product {
+			t.Errorf("product for %q = %q, want %q", test.banner, got, test.product)
+		}
+	}
+}
+
 func TestPostgresAdapterProfilesAndTLS(t *testing.T) {
 	for _, name := range []string{"DBSPHERE_POSTGRES_CA_FILE", "DBSPHERE_POSTGRES_CA_PEM_BASE64", "DBSPHERE_RDS_CA_FILE", "DBSPHERE_RDS_CA_PEM_BASE64"} {
 		t.Setenv(name, "")

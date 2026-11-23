@@ -836,17 +836,19 @@ async function showAsset(id, layer) {
     api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`), api(`/api/assets/${id}/sql-plans`)]);
   if (selectedAsset !== id) return;
   const detail = $('detail'); detail.replaceChildren();
+  const sample = samples[0];
+  const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
+  const highGo = currentSample?.metrics?.adapter?.product === 'highgo';
   detail.append(cell('h3', asset.name));
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
     : asset.runtime === 'managed' ? '托管 PostgreSQL · 主机与 K8S 资源信号不可用'
       : asset.linuxHost || 'Linux 主机未关联';
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${location}`));
+  if (highGo) detail.append(cell('p', '数据库产品 · 瀚高数据库', 'evidence'));
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置统计连接'}${asset.poolerEndpoint ? ` · 应用端点 ${asset.poolerEndpoint}` : ''}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
   detail.append(cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
-  const sample = samples[0];
-  const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   renderSignalCoverage(detail, asset, currentSample, performance);
   if (pg18Store) {
     const trendHead = document.createElement('div'); trendHead.className = 'obs-trend-head';
@@ -1160,7 +1162,8 @@ function renderSignalCoverage(target, asset, sample, performance) {
       row.append(cell('strong', labels[signal.key] || signal.key), cell('span', `${signal.source} · ${status}${reason}`));
       signals.append(row);
     }
-    panel.append(cell('h4', `PostgreSQL ${compatibility.major} 版本能力${compatibility.lifecycle === 'upstream_eol' ? ' · 上游已停止支持' : ''}`), signals);
+    const kernel = metrics.adapter?.product === 'highgo' ? '瀚高数据库 · PostgreSQL 兼容内核' : 'PostgreSQL';
+    panel.append(cell('h4', `${kernel} ${compatibility.major} 版本能力${compatibility.lifecycle === 'upstream_eol' ? ' · 上游已停止支持' : ''}`), signals);
   }
   target.append(panel);
 }

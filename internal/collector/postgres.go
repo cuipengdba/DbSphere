@@ -106,7 +106,7 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 	var version, connections, maxConnections int
 	var recovery, monitor, readStats, super, createDB, createRole, replicationRole, readOnly bool
 	var commits, rollbacks, databaseBytes int64
-	var serverAddress, databaseName string
+	var serverAddress, databaseName, serverVersion string
 	var serverPort int
 	var startedAt time.Time
 	err = conn.QueryRow(connectCtx, `SELECT current_setting('server_version_num')::int,
@@ -116,10 +116,10 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 		coalesce(s.numbackends,0)::int,coalesce(s.xact_commit,0)::bigint,
 		coalesce(s.xact_rollback,0)::bigint,pg_database_size(current_database())::bigint,
 		current_setting('max_connections')::int,coalesce(host(inet_server_addr()),''),coalesce(inet_server_port(),0),
-		current_database(),pg_postmaster_start_time(),current_setting('transaction_read_only')='on'
+		current_database(),pg_postmaster_start_time(),current_setting('transaction_read_only')='on',pg_catalog.version()
 		FROM pg_roles r LEFT JOIN pg_stat_database s ON s.datname=current_database()
 		WHERE r.rolname=current_user`).Scan(&version, &recovery, &monitor, &readStats, &super, &createDB, &createRole,
-		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName, &startedAt, &readOnly)
+		&replicationRole, &connections, &commits, &rollbacks, &databaseBytes, &maxConnections, &serverAddress, &serverPort, &databaseName, &startedAt, &readOnly, &serverVersion)
 	if err != nil {
 		return collectoradapter.Snapshot{}, err
 	}
@@ -181,5 +181,6 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 	compatibility := postgresCompatibility(major, recovery, readStats, diagnostics, performance)
 	metrics["pgCompatibility"] = compatibility
 	report := postgresAdapterReport(ctx, target, conn, version, role, readOnly, compatibility)
+	report.Product = postgresProduct(serverVersion)
 	return collectoradapter.Snapshot{Metrics: metrics, Report: report}, nil
 }

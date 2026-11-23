@@ -3,12 +3,23 @@ package collector
 import (
 	"context"
 	"crypto/tls"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/jackc/pgx/v5"
 )
+
+var highGoProductBanner = regexp.MustCompile(`(?i)\b(?:highgo[ \t]+(?:(?:security|enterprise|standard|edition)[ \t]+)*database|hgdb(?:-[a-z]+)?)\b`)
+
+// Product identity is independent of the deployment profile and kernel number.
+func postgresProduct(banner string) string {
+	if highGoProductBanner.MatchString(banner) {
+		return "highgo"
+	}
+	return ""
+}
 
 func postgresAdapterProfile(target Target) string {
 	if target.Runtime != "managed" {

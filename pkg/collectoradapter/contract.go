@@ -33,6 +33,7 @@ type Transport struct {
 type Report struct {
 	Contract       int       `json:"contract"`
 	Engine         string    `json:"engine"`
+	Product        string    `json:"product,omitempty"`
 	Profile        string    `json:"profile"`
 	ProviderStatus string    `json:"providerStatus,omitempty"`
 	Version        int       `json:"version"`
