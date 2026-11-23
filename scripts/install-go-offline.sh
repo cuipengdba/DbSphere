@@ -150,6 +150,8 @@ if [[ -n "${DBSPHERE_OFFLINE_PROM_IMAGE:-}" ]]; then
     export DBSPHERE_OFFLINE_GRAFANA_IMAGE
     install -d -m 0755 -- "$DBSPHERE_OBSERVABILITY_DIR/grafana"
     cp -R -- "$bundle_dir/observability/grafana/"{provisioning,panels} "$DBSPHERE_OBSERVABILITY_DIR/grafana/"
+    find "$DBSPHERE_OBSERVABILITY_DIR/grafana/"{provisioning,panels} -type d -exec chmod 0755 {} +
+    find "$DBSPHERE_OBSERVABILITY_DIR/grafana/"{provisioning,panels} -type f -exec chmod 0644 {} +
     cp -R -- "$bundle_dir/licenses/grafana/" "$DBSPHERE_OBSERVABILITY_DIR/"
     grafana_password="$DBSPHERE_OBSERVABILITY_DIR/grafana/admin-password"
     if [[ ! -s "$grafana_password" ]]; then

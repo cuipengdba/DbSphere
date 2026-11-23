@@ -43,7 +43,7 @@ install() {
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$(dirname -- "$bundle"):$(dirname -- "$bundle"):ro" -v "$root:$root" \
     -e "TMPDIR=$root/stage" -e "DBSPHERE_GO_CONFIG_DIR=$root/config" -e "COMPOSE_PROJECT_NAME=$project" \
-    dbsphere/observability-airgap-harness:ci "$bundle" "$@"
+    dbsphere/observability-airgap-harness:ci -c 'umask 077; exec bash "$@"' _ "$bundle" "$@"
 }
 install
 prom="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=prometheus)"
