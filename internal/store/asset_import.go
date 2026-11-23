@@ -354,6 +354,9 @@ func (s *Postgres) ProbeImportedAssets(ctx context.Context, ids []string, key []
 			if err != nil {
 				row["status"] = "unavailable"
 			} else {
+				if report, err := s.assetReadiness(timeout, id, &result.CollectedAt); err == nil && report.SampleID == result.SampleID {
+					row["readiness"] = report
+				}
 				var check json.RawMessage
 				if err := s.pool.QueryRow(timeout, `SELECT jsonb_build_object('pgStatus',metrics_json#>'{collector,pgStatus}',
 					'versionNum',metrics_json->'version_num','monitorRole',metrics_json->'monitor_role',

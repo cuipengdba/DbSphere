@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.0.0'
-          previous_sha='e10e0b819491651391149ed9cfa0828bd18dfb9feabfa10816351bd883c91552'
+          previous_version='2.1.0'
+          previous_sha='761508e348d9a39249739642678322603bd91f5559278efe96e3aa59a6a2fc30'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.0.0'
-          previous_arm_sha='e665f2a40a24074dc7f58ac5e4d59d665629b7f4b4a44ef077c7e2cb900f45e5'
+          previous_version='2.1.0'
+          previous_arm_sha='fa48c4d63fa9b85d195e3c9ba72c8a34dac83aa32706ca736fedae9770e9a2b0'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1333,6 +1333,28 @@ jobs:
           DBSPHERE_TEST_K8S_APP_PVC=pg18-data \
           DBSPHERE_TEST_K8S_APP_PVC_PHASE=Bound \
             go test ./internal/collector -run '^TestRealKubernetesApplicationPodIdentity$' -count=1 -v
+      - name: Check real Pod readiness with restricted PVC permissions
+        run: |
+          kubectl -n dbsphere-matrix create serviceaccount dbsphere-readiness-pods
+          kubectl -n dbsphere-matrix create role dbsphere-readiness-pods --verb=get --resource=pods
+          kubectl -n dbsphere-matrix create rolebinding dbsphere-readiness-pods \
+            --role=dbsphere-readiness-pods --serviceaccount=dbsphere-matrix:dbsphere-readiness-pods
+          reader_config="$RUNNER_TEMP/dbsphere-readiness.kubeconfig"
+          server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          token="$(kubectl -n dbsphere-matrix create token dbsphere-readiness-pods --duration=10m)"
+          kubectl config set-cluster dbsphere-ci --server="$server" \
+            --certificate-authority="$RUNNER_TEMP/dbsphere-kind-ca.crt" --embed-certs=true --kubeconfig="$reader_config"
+          kubectl config set-credentials reader --token="$token" --kubeconfig="$reader_config"
+          unset token
+          kubectl config set-context reader --cluster=dbsphere-ci --user=reader --kubeconfig="$reader_config"
+          kubectl config use-context reader --kubeconfig="$reader_config"
+          chmod 600 "$reader_config"
+          test "$(kubectl --kubeconfig "$reader_config" -n dbsphere-matrix auth can-i get pods)" = yes
+          test "$(kubectl --kubeconfig "$reader_config" -n dbsphere-matrix auth can-i get persistentvolumeclaims)" = no
+          DBSPHERE_KUBECONFIG="$reader_config" \
+          DBSPHERE_TEST_READINESS_NAMESPACE=dbsphere-matrix \
+          DBSPHERE_TEST_READINESS_POD="$(kubectl -n dbsphere-matrix get pods -l app=pg18 -o jsonpath='{.items[0].metadata.name}')" \
+            go test ./internal/store -run '^TestKindReadinessReportsDeniedPVC$' -count=1 -v
       - name: Verify PG14-19 and cross-node Kubernetes evidence after Pod replacement
         run: |
           node --check scripts/kind-matrix-verify-persistence.mjs

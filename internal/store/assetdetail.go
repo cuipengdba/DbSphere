@@ -16,6 +16,8 @@ var ErrInvalidRange = errors.New("invalid monitoring time range")
 
 func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, params url.Values) (any, error) {
 	switch section {
+	case "readiness":
+		return s.assetReadiness(ctx, id, nil)
 	case "samples":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',id,'assetId',asset_id,'collectedAt',collected_at,'status',status,

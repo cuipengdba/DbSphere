@@ -30,6 +30,7 @@ type alertRule struct {
 var goDefaultRules = []alertRule{
 	{"pg_unavailable", "PostgreSQL 无法连接", "pg.unavailable", "PostgreSQL", "availability", "critical", ">=", 1, 0, 1, true, 0},
 	{"pg_collection_failed", "PostgreSQL 采集失败", "collector.pg_failed", "collector", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
+	{"pg_stats_limited", "PostgreSQL 跨会话统计权限受限", "collector.pg_stats_limited", "collector", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
 	{"collector_stale", "采样数据陈旧", "collector.missed_intervals", "collector", "telemetry", "warning", ">=", 2, 0, 1, true, 0},
 	{"k8s_collection_failed", "Kubernetes 采集失败", "collector.k8s_failed", "Kubernetes API", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
 	{"linux_collection_failed", "Linux 主机采集失败", "collector.linux_failed", "node_exporter", "telemetry", "warning", ">=", 1, 0, 1, true, 0},
@@ -123,7 +124,7 @@ func supportedAlertMetric(metric string) bool {
 		return true
 	}
 	switch metric {
-	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
+	case "pg.unavailable", "collector.pg_failed", "collector.pg_stats_limited", "collector.missed_intervals",
 		"collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed",
 		"pg.connection_utilization", "pg.database_growth_bytes_per_day", "pg.blocked_sessions", "pg.sql_regression_ratio", "pg.long_transactions",
 		"pg.replication_lag_bytes", "pg.logical_slot_retained_bytes", "pg.wal_receiver_down", "patroni.leader_count_invalid", "pg.archive_fail_delta", "pg.autovacuum_disabled",
@@ -146,6 +147,14 @@ func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, n
 		return containerStorageAlert(metrics, key)
 	}
 	switch metric {
+	case "collector.pg_stats_limited":
+		if visible, observed := metrics["stats_visible"].(bool); observed && object(metrics["collector"])["pgStatus"] == "ok" {
+			value := 0.0
+			if !visible {
+				value = 1
+			}
+			return alertSignal{Available: true, Value: value, Source: "pg_read_all_stats"}
+		}
 	case "pg.unavailable", "collector.pg_failed":
 		status := stringValue(object(metrics["collector"])["pgStatus"])
 		if metric == "collector.pg_failed" {

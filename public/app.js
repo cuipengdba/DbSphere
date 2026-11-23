@@ -796,6 +796,14 @@ function renderAssets(assets, summary = '') {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
     info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${assetRuntimeLabel(asset)}`));
+    if (currentRole === 'admin' && !currentOrganization && $('asset-readiness-batch').open) {
+      const label = cell('label', '', 'hint');
+      const pick = document.createElement('input');
+      pick.type = 'checkbox'; pick.value = asset.id; pick.dataset.readinessAsset = asset.name;
+      pick.setAttribute('aria-label', `体检 ${asset.name}`);
+      label.append(pick, ' 选择体检');
+      info.append(label);
+    }
     const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
       : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
     info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
@@ -822,14 +830,125 @@ function renderAssets(assets, summary = '') {
   }
 }
 
+$('asset-readiness-batch').addEventListener('toggle', () => {
+  if (assetServerPaging) void loadAssetPage().catch(error => notice(error.message, true));
+  else renderLegacyAssets();
+});
+
+const readinessLabels = {
+  connection: '数据库连接', tls: '会话 TLS', readOnly: '采集会话只读', connections: '连接状态',
+  activeWaits: '活动等待', activityQueryID: '会话 Query ID', lockWaits: '锁等待',
+  instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL', replicationLinks: '复制链路',
+  walReceiver: 'WAL 接收', replication: '复制状态', sqlPerformance: 'Top SQL 指纹',
+  logicalPublications: '逻辑发布', logicalSubscriptions: '逻辑订阅', logicalApplyProgress: '逻辑应用进度',
+  logicalSubscriptionErrors: '逻辑订阅错误', linux: 'Linux 主机', k8s: 'K8S Pod',
+  k8sNode: 'K8S Node', k8sPVC: 'K8S PVC', containerStorage: '容器存储', pgbouncer: 'PgBouncer', patroni: 'Patroni'
+};
+const readinessStates = {
+  ready: '本次体检通过', waiting: '等待首次采样', ok: '已验证', limited: '覆盖受限', failed: '检查失败',
+  not_applicable: '此版本不适用', not_configured: '未配置', inactive: '本次未启用或无对象',
+  encrypted: '已加密，身份未校验', unknown: '待核验'
+};
+const readinessActions = {
+  check_credentials: '核对目标库账号、凭据和访问规则', check_tls: '核对证书链、CA 配置与连接主机名',
+  check_database_access: '请数据库管理员核对登录角色权限', check_endpoint: '核对端点、端口和网络可达性',
+  check_sample: '查看原始采样或复检', check_tls_identity: '按部署要求核对 TLS 校验模式',
+  check_read_only: '核对采集账号及只读会话配置', check_stats_permission: '请数据库管理员核对统计视图读取权限',
+  check_extension: '核对目标库扩展是否可用', check_resource_source: '核对采集源配置、权限和数据新鲜度',
+  check_k8s_node: '核对 Pod 调度及 Node 读取权限', check_k8s_pvc: '核对命名空间的 PVC 读取权限与卷映射'
+};
+
+function readinessPanel(report, expanded = false) {
+  const panel = cell('details', '', 'settings-details');
+  panel.open = expanded;
+  panel.append(cell('summary', `纳管体检 · ${readinessStates[report.status] || '待核验'}`));
+  if (!report.sampleId) {
+    panel.append(cell('p', '完成首次采集后可查看覆盖情况。', 'hint'));
+    return panel;
+  }
+  panel.append(cell('p', `${formatTime(report.sampledAt)} · 配置的 TLS 模式 ${report.sslMode}`, 'hint'));
+  const table = cell('div', '', 'monitor-table');
+  table.append(importTable(['检查项', '本次观测', '处理入口'], report.checks.map(check => [
+    readinessLabels[check.key],
+    (readinessStates[check.status] || check.status) + (check.previousStatus ? ` · 上次 ${readinessStates[check.previousStatus]}` : ''),
+    readinessActions[check.action] || '—'
+  ])));
+  const actions = cell('div', '', 'actions');
+  actions.append(replaySampleLink(report.assetId, report.sampleId));
+  if (report.previousSampleId) {
+    const prior = replaySampleLink(report.assetId, report.previousSampleId);
+    prior.textContent = '上一次采样'; actions.append(prior);
+  }
+  const exportReport = cell('button', '导出体检 JSON', 'ghost small-button');
+  exportReport.type = 'button';
+  exportReport.addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type: 'application/json'}));
+    const download = document.createElement('a'); download.href = url; download.download = `dbsphere-readiness-${report.assetId}.json`;
+    download.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  actions.append(exportReport);
+  panel.append(table, actions);
+  return panel;
+}
+
+let readinessRetry = [];
+async function runAssetReadiness(selection) {
+  if (selection.length < 1 || selection.length > 5) {
+    notice('请选择 1 到 5 个资产。', true);
+    return;
+  }
+  const results = $('asset-readiness-results');
+  const run = $('asset-run-readiness'), retry = $('asset-retry-readiness');
+  const requestSession = csrf;
+  run.disabled = true; retry.disabled = true;
+  results.replaceChildren(cell('p', '正在体检已选资产…', 'hint'));
+  try {
+    const data = await api('/api/assets/import/probe', 'POST', {ids: selection.map(asset => asset.id)});
+    if (requestSession !== csrf) return;
+    const groups = new Map();
+    readinessRetry = [];
+    for (const row of data.results) {
+      const asset = selection.find(item => item.id === row.id);
+      if (!asset) continue;
+      const status = row.readiness?.status || 'unknown';
+      if (status !== 'ready') readinessRetry.push(asset);
+      const reason = row.readiness?.checks.find(check => ['failed', 'limited', 'unknown'].includes(check.status) && check.action);
+      const key = readinessActions[reason?.action] || readinessStates[status];
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({asset, report: row.readiness});
+    }
+    results.replaceChildren();
+    for (const [title, entries] of groups) {
+      const group = cell('section', '', 'list');
+      group.append(cell('h4', `${title} · ${entries.length}`));
+      for (const {asset, report} of entries) {
+        group.append(cell('strong', asset.name));
+        if (report) group.append(readinessPanel(report));
+        else group.append(cell('p', '复检未返回有效样本。', 'hint'));
+      }
+      results.append(group);
+    }
+    retry.hidden = !readinessRetry.length;
+  } catch (error) { if (requestSession === csrf) results.replaceChildren(cell('p', error.message, 'warning')); }
+  finally { run.disabled = false; retry.disabled = false; }
+}
+$('asset-run-readiness').addEventListener('click', () => {
+  const selection = Array.from(document.querySelectorAll('[data-readiness-asset]:checked'),
+    pick => ({id: pick.value, name: pick.dataset.readinessAsset}));
+  void runAssetReadiness(selection);
+});
+$('asset-retry-readiness').addEventListener('click', () => void runAssetReadiness(readinessRetry));
+
 async function showAsset(id, layer) {
   const preferredLayer = layer ?? (selectedAsset === id ? selectedAssetLayer : null);
   const restoreLayerFocus = selectedAsset === id && document.activeElement?.getAttribute('role') === 'tab';
   selectedAsset = id;
-  const [{ asset }, { samples }] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`)]);
+  const [{ asset }, { samples }, readiness] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
+    api(`/api/assets/${id}/readiness`).catch(() => null)]);
   if (selectedAsset !== id) return;
   if (asset.runtime === 'mysql') {
     renderMySQLAsset($('detail'), asset, samples);
+    if (readiness) $('detail').append(readinessPanel(readiness));
     return;
   }
   const [{ performance }, { entries: slowLogs }, { plans }] = await Promise.all([
@@ -851,7 +970,8 @@ async function showAsset(id, layer) {
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置统计连接'}${asset.poolerEndpoint ? ` · 应用端点 ${asset.poolerEndpoint}` : ''}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
   detail.append(cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
-  renderSignalCoverage(detail, asset, currentSample, performance);
+  if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'failed' || readiness.status === 'limited'));
+  else renderSignalCoverage(detail, asset, currentSample, performance);
   if (pg18Store) {
     const trendHead = document.createElement('div'); trendHead.className = 'obs-trend-head';
     trendHead.append(cell('h3', '采样与连接趋势'));
@@ -3293,6 +3413,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
 
 async function boot() {
   const session = await api('/api/session');
+  if (session.csrf !== csrf) {
+    readinessRetry = [];
+    $('asset-readiness-results').replaceChildren();
+    $('asset-retry-readiness').hidden = true;
+  }
   csrf = session.csrf;
   currentRole = session.authenticated ? (session.role || 'admin') : null;
   currentUsername = session.username || '';
