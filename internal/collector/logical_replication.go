@@ -1,8 +1,8 @@
 package collector
 
 const logicalPublicationsSQL = `WITH selected AS (
-	SELECT oid,pubname,puballtables,pubinsert,pubupdate,pubdelete,pubtruncate,pubviaroot
-	FROM pg_catalog.pg_publication ORDER BY pubname,oid LIMIT 40
+	SELECT oid,pubname,puballtables,pubinsert,pubupdate,pubdelete,pubtruncate,(to_jsonb(p)->>'pubviaroot')::boolean AS pubviaroot
+	FROM pg_catalog.pg_publication p ORDER BY pubname,oid LIMIT 40
 ), entries AS (
 	SELECT p.oid::text AS oid,p.pubname AS name,p.puballtables AS "allTables",p.pubviaroot AS "viaRoot",
 		p.pubinsert AS insert,p.pubupdate AS update,p.pubdelete AS delete,p.pubtruncate AS truncate,
@@ -61,10 +61,10 @@ const logicalSubscriptionErrorsSQL = `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDE
 ) q`
 
 const logicalSlotPressureSQL = `SELECT coalesce((SELECT to_jsonb(q) FROM (
-	SELECT slot_name AS name,plugin,active,wal_status AS "walStatus",restart_lsn::text AS "restartLsn",
+	SELECT slot_name AS name,plugin,active,to_jsonb(s)->>'wal_status' AS "walStatus",restart_lsn::text AS "restartLsn",
 		confirmed_flush_lsn::text AS "confirmedFlushLsn",
 		greatest(0,pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn))::text AS "retainedBytes"
-	FROM pg_catalog.pg_replication_slots
+	FROM pg_catalog.pg_replication_slots s
 	WHERE database=current_database() AND slot_type='logical' AND restart_lsn IS NOT NULL AND NOT temporary
 	ORDER BY restart_lsn,slot_name LIMIT 1
 ) q),jsonb_build_object('retainedBytes','0'))`

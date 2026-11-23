@@ -22,7 +22,7 @@ func sqlUnavailable(err error) map[string]any {
 }
 
 // SQL text and bind parameters are never selected from pg_stat_statements.
-func collectSQLPerformance(ctx context.Context, conn *pgx.Conn) map[string]any {
+func collectSQLPerformance(ctx context.Context, conn *pgx.Conn, highGo459 bool) map[string]any {
 	var schema string
 	err := conn.QueryRow(ctx, `SELECT n.nspname FROM pg_extension e
 		JOIN pg_namespace n ON n.oid=e.extnamespace
@@ -55,9 +55,23 @@ func collectSQLPerformance(ctx context.Context, conn *pgx.Conn) map[string]any {
 		return sqlUnavailable(err)
 	}
 	rows.Close()
-	for _, name := range []string{"dbid", "userid", "queryid", "toplevel", "calls", "total_exec_time",
+	elapsed, topLevel, walBytes := "total_exec_time", "toplevel", "wal_bytes"
+	if highGo459 {
+		if !columns[elapsed] {
+			elapsed = "total_time"
+		}
+		if !columns[topLevel] {
+			topLevel = "NULL::boolean"
+		}
+		if !columns[walBytes] {
+			walBytes = "NULL::numeric"
+		}
+	} else if !columns[topLevel] || !columns[walBytes] {
+		return map[string]any{"status": "unavailable", "reason": "pg_stat_statements view is missing required columns"}
+	}
+	for _, name := range []string{"dbid", "userid", "queryid", "calls", elapsed,
 		"rows", "shared_blks_hit", "shared_blks_read", "shared_blks_written",
-		"temp_blks_read", "temp_blks_written", "wal_bytes"} {
+		"temp_blks_read", "temp_blks_written"} {
 		if !columns[name] {
 			return map[string]any{"status": "unavailable",
 				"reason": "pg_stat_statements view is missing required columns"}
@@ -67,12 +81,12 @@ func collectSQLPerformance(ctx context.Context, conn *pgx.Conn) map[string]any {
 	info := `"` + strings.ReplaceAll(schema, `"`, `""`) + `".pg_stat_statements_info`
 	query := fmt.Sprintf(`SELECT to_jsonb(q) FROM (
 		SELECT dbid::text AS "databaseOid",userid::text AS "userOid",queryid::text AS "queryId",
-		toplevel AS "topLevel",calls AS calls,total_exec_time AS "totalExecMs",
+		%s AS "topLevel",calls AS calls,%s AS "totalExecMs",
 		rows,shared_blks_hit AS "sharedBlocksHit",shared_blks_read AS "sharedBlocksRead",
 		shared_blks_written AS "sharedBlocksWritten",temp_blks_read AS "tempBlocksRead",
-		temp_blks_written AS "tempBlocksWritten",wal_bytes AS "walBytes"
+		temp_blks_written AS "tempBlocksWritten",%s AS "walBytes"
 		FROM %s WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-		ORDER BY total_exec_time DESC LIMIT 50) q`, view)
+		ORDER BY %s DESC LIMIT 50) q`, topLevel, elapsed, walBytes, view, elapsed)
 	resultRows, err := conn.Query(ctx, query)
 	if err != nil {
 		return sqlUnavailable(err)
@@ -109,8 +123,10 @@ func collectSQLPerformance(ctx context.Context, conn *pgx.Conn) map[string]any {
 	}
 	resultRows.Close()
 	var resetAt *time.Time
-	if err := conn.QueryRow(ctx, "SELECT stats_reset FROM "+info).Scan(&resetAt); err != nil {
-		resetAt = nil
+	if elapsed == "total_exec_time" {
+		if err := conn.QueryRow(ctx, "SELECT stats_reset FROM "+info).Scan(&resetAt); err != nil {
+			resetAt = nil
+		}
 	}
 	return map[string]any{"status": "ok", "source": "pg_stat_statements",
 		"resetAt": resetAt, "limit": 50, "truncated": count == 50,

@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.50.0'
-          previous_sha='6e00255a968baa7a8c76927a96cd32bd5fa8c28b8724e386e5128c0526001c09'
+          previous_version='2.0.0'
+          previous_sha='e10e0b819491651391149ed9cfa0828bd18dfb9feabfa10816351bd883c91552'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.50.0'
-          previous_arm_sha='facb32b9b7b35916451ddac14ab3d7269545a07ac834b60575c6f79d94d49c0d'
+          previous_version='2.0.0'
+          previous_arm_sha='e665f2a40a24074dc7f58ac5e4d59d665629b7f4b4a44ef077c7e2cb900f45e5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1376,7 +1376,7 @@ jobs:
           echo "::add-mask::$token"
           kubectl create namespace dbsphere-monitoring
           kubectl -n dbsphere-monitoring create secret generic dbsphere-container-agent --from-literal=token="$token"
-          sed 's@dbsphere/offline-go-app:2.0.0@dbsphere/kind-matrix:local@g' deploy/k8s/dbsphere-container-agent.yaml | kubectl apply -f -
+          sed -E 's@image: dbsphere/offline-go-app:[0-9.]+@image: dbsphere/kind-matrix:local@' deploy/k8s/dbsphere-container-agent.yaml | kubectl apply -f -
           kubectl -n dbsphere-monitoring rollout status daemonset/dbsphere-container-agent --timeout=120s
           asset="$(jq -er '.matrix[]|select(.major==18)|.assetId' "$RUNNER_TEMP/dbsphere-kind-after.json")"
           kubectl -n dbsphere-matrix patch deployment pg18 --type=strategic \

@@ -56,12 +56,14 @@ func postgresCompatibility(major int, recovery, readStats bool, diagnostics, per
 	if major < 15 {
 		logicalErrors.Status, logicalErrors.Reason = "not_supported", "pg_stat_subscription_stats is available from PostgreSQL 15"
 	}
-	return map[string]any{
-		"major": major, "lifecycle": lifecycle,
-		"signals": []postgresSignal{waits, io, fromDiagnostic("checkpoints", checkpointSource),
-			fromDiagnostic("wal", "pg_stat_wal"), replication, topSQL,
-			fromDiagnostic("logicalPublications", "pg_publication"),
-			fromDiagnostic("logicalSubscriptions", "pg_subscription / pg_stat_subscription"),
-			fromDiagnostic("logicalApplyProgress", "pg_replication_origin_status"), logicalErrors},
+	signals := []postgresSignal{waits, io, fromDiagnostic("checkpoints", checkpointSource),
+		fromDiagnostic("wal", "pg_stat_wal"), replication, topSQL,
+		fromDiagnostic("logicalPublications", "pg_publication"),
+		fromDiagnostic("logicalSubscriptions", "pg_subscription / pg_stat_subscription"),
+		fromDiagnostic("logicalApplyProgress", "pg_replication_origin_status"), logicalErrors}
+	if major < 14 {
+		signals = append(signals, postgresSignal{Key: "activityQueryID", Source: "pg_stat_activity", Status: "not_supported",
+			Reason: "this kernel does not expose a query ID in pg_stat_activity"})
 	}
+	return map[string]any{"major": major, "lifecycle": lifecycle, "signals": signals}
 }

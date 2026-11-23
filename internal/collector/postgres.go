@@ -124,7 +124,8 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 		return collectoradapter.Snapshot{}, err
 	}
 	major := version / 10000
-	if !PostgresMajorSupported(major) {
+	highGo459 := verifiedHighGo459(version, serverVersion)
+	if !PostgresMajorSupported(major) && !highGo459 {
 		return collectoradapter.Snapshot{}, fmt.Errorf("PostgreSQL %d is outside the supported %d–%d range", major, minPostgresMajor, maxPostgresMajor)
 	}
 	role := "primary"
@@ -176,11 +177,14 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 	metrics["diagnostics"] = diagnostics
 	sqlCtx, stopSQL := context.WithTimeout(ctx, 5*time.Second)
 	defer stopSQL()
-	performance := collectSQLPerformance(sqlCtx, conn)
+	performance := collectSQLPerformance(sqlCtx, conn, highGo459)
 	metrics["sqlPerformance"] = performance
 	compatibility := postgresCompatibility(major, recovery, readStats, diagnostics, performance)
 	metrics["pgCompatibility"] = compatibility
 	report := postgresAdapterReport(ctx, target, conn, version, role, readOnly, compatibility)
 	report.Product = postgresProduct(serverVersion)
+	if highGo459 {
+		report.Profile = "highgo-see-4.5.9"
+	}
 	return collectoradapter.Snapshot{Metrics: metrics, Report: report}, nil
 }

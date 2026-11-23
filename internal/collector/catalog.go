@@ -54,7 +54,7 @@ const tableInventorySQL = `WITH stats AS MATERIALIZED (
 		greatest(s.last_vacuum,s.last_autovacuum) AS "lastVacuumAt",greatest(s.last_analyze,s.last_autoanalyze) AS "lastAnalyzeAt"
 	FROM candidates c JOIN stats s USING(relid)
 	CROSS JOIN LATERAL (SELECT pg_relation_size(s.relid) bytes) heap
-	CROSS JOIN LATERAL (SELECT jsonb_object_agg(option_name,option_value) data FROM pg_options_to_table(s.reloptions)) opt
+	CROSS JOIN LATERAL (SELECT jsonb_object_agg(option_name,option_value) AS "data" FROM pg_options_to_table(s.reloptions)) opt
 	CROSS JOIN LATERAL (SELECT
 		coalesce((opt.data->>'autovacuum_vacuum_threshold')::double precision,current_setting('autovacuum_vacuum_threshold')::double precision)
 		+greatest(s.reltuples,0)*coalesce((opt.data->>'autovacuum_vacuum_scale_factor')::double precision,current_setting('autovacuum_vacuum_scale_factor')::double precision) AS vacuum,

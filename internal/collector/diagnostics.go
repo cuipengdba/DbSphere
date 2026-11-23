@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,6 +15,11 @@ type diagnosticQuery struct {
 	name string
 	sql  string
 }
+
+var legacyActivityColumns = strings.NewReplacer(
+	"a.leader_pid", "NULL::int",
+	"a.query_id::text", "NULL::text", "blocker.query_id::text", "NULL::text", "query_id::text", "NULL::text",
+)
 
 // Every diagnostic is independent. A missing privilege or extension never hides
 // PostgreSQL health; the unavailable status is retained in the raw sample.
@@ -42,6 +48,9 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			SELECT status, sender_host AS "senderHost", sender_port AS "senderPort", slot_name AS slot,
 			written_lsn::text AS "writtenLsn",flushed_lsn::text AS "flushedLsn",latest_end_lsn::text AS "senderLsn",
 			last_msg_receipt_time AS "lastMessageAt" FROM pg_stat_wal_receiver) q`}
+		if major < 13 {
+			replication.sql = strings.NewReplacer("written_lsn::text", "NULL::text", "flushed_lsn::text", "received_lsn::text").Replace(replication.sql)
+		}
 		walPosition.sql = `SELECT jsonb_build_object('position',pg_last_wal_replay_lsn()::text,
 			'received',pg_last_wal_receive_lsn()::text,'replayPaused',pg_is_wal_replay_paused(),
 			'localReplayGapBytes',pg_wal_lsn_diff(pg_last_wal_receive_lsn(),pg_last_wal_replay_lsn()),
@@ -116,9 +125,9 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			current_setting('autovacuum_freeze_max_age')::numeric*100,1) AS "usedPercent"
 			FROM pg_database WHERE datname=current_database()) q`},
 		{"slotDetails", fmt.Sprintf(`SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]'::jsonb) FROM (
-			SELECT s.slot_name AS name,s.active,s.wal_status AS "walStatus",s.slot_type AS type,s.database,s.plugin,
+			SELECT s.slot_name AS name,s.active,to_jsonb(s)->>'wal_status' AS "walStatus",s.slot_type AS type,s.database,s.plugin,
 			s.restart_lsn::text AS "restartLsn",s.confirmed_flush_lsn::text AS "confirmedFlushLsn",
-			s.safe_wal_size::text AS "safeWalBytes",%s AS "retainedBytes",%s AS "unconfirmedBytes",
+			to_jsonb(s)->>'safe_wal_size' AS "safeWalBytes",%s AS "retainedBytes",%s AS "unconfirmedBytes",
 			extract(epoch FROM r.replay_lag) AS "replayLagSeconds",r.reply_time AS "lastReplyAt",
 			to_jsonb(s)->>'invalidation_reason' AS "invalidationReason",to_jsonb(s)->>'inactive_since' AS "inactiveSince"
 			FROM pg_catalog.pg_replication_slots s LEFT JOIN pg_catalog.pg_stat_replication r ON r.pid=s.active_pid
@@ -145,6 +154,17 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 	}
 	result := make(map[string]any, len(queries))
 	for _, query := range queries {
+		if major < 14 {
+			switch query.name {
+			case "activeWaits", "lockChain":
+				query.sql = legacyActivityColumns.Replace(query.sql)
+			case "tableInventory":
+				query.sql = strings.Replace(query.sql, "s.n_ins_since_vacuum", "NULL::bigint", 1)
+			case "wal":
+				result[query.name] = map[string]any{"status": "not_supported", "reason": "WAL counters require pg_stat_wal"}
+				continue
+			}
+		}
 		var raw []byte
 		err := conn.QueryRow(ctx, query.sql).Scan(&raw)
 		if err != nil || raw == nil || string(raw) == "null" {

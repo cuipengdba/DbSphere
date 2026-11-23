@@ -53,7 +53,7 @@ const views = {
   live: ['实时观测', ''],
   storage: ['容器磁盘 I/O 与文件缓存', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
-  assets: ['资产与实例', '纳管 PostgreSQL 14–19，并试用 MySQL 8.4 只读监控。'],
+  assets: ['资产与实例', '纳管 PostgreSQL 14–19、瀚高安全版 4.5.9，并试用 MySQL 8.4 只读监控。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
   inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
   settings: ['系统状态', '检查监控数据存储与部署状态。']
@@ -838,13 +838,15 @@ async function showAsset(id, layer) {
   const detail = $('detail'); detail.replaceChildren();
   const sample = samples[0];
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
-  const highGo = currentSample?.metrics?.adapter?.product === 'highgo';
+  const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
     : asset.runtime === 'managed' ? '托管 PostgreSQL · 主机与 K8S 资源信号不可用'
       : asset.linuxHost || 'Linux 主机未关联';
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${location}`));
-  if (highGo) detail.append(cell('p', '数据库产品 · 瀚高数据库', 'evidence'));
+  if (adapter?.product === 'highgo') {
+    detail.append(cell('p', adapter.profile === 'highgo-see-4.5.9' ? '数据库产品 · 瀚高安全版 4.5.9' : '数据库产品 · 瀚高数据库', 'evidence'));
+  }
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置统计连接'}${asset.poolerEndpoint ? ` · 应用端点 ${asset.poolerEndpoint}` : ''}`));
   detail.append(cell('p', `Patroni：${asset.patroniConfigured ? '已配置只读集群状态' : '未配置'}`));
@@ -1145,7 +1147,7 @@ function renderSignalCoverage(target, asset, sample, performance) {
   panel.append(list);
   const compatibility = metrics.pgCompatibility;
   if (compatibility?.signals?.length) {
-    const labels = { activeWaits: '活动等待', instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL',
+    const labels = { activeWaits: '活动等待', activityQueryID: '等待会话 SQL 指纹', instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL',
       replicationLinks: '复制链路', walReceiver: 'WAL 接收', sqlPerformance: 'Top SQL 指纹',
       logicalPublications: '逻辑发布', logicalSubscriptions: '逻辑订阅', logicalApplyProgress: '逻辑应用进度',
       logicalSubscriptionErrors: '逻辑订阅错误' };

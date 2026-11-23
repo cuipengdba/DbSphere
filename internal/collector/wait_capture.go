@@ -52,8 +52,14 @@ func CaptureWaits(ctx context.Context, target Target, password, profile string) 
 	}
 	defer conn.Close(context.Background())
 	var version int
-	if err := conn.QueryRow(connect, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil || !PostgresMajorSupported(version/10000) {
+	var banner string
+	if err := conn.QueryRow(connect, `SELECT current_setting('server_version_num')::int,pg_catalog.version()`).Scan(&version, &banner); err != nil ||
+		(!PostgresMajorSupported(version/10000) && !verifiedHighGo459(version, banner)) {
 		return WaitCapture{}, errors.New("PostgreSQL wait capture requires a reachable supported PostgreSQL version")
+	}
+	query := waitCaptureSQL
+	if version/10000 < 14 {
+		query = legacyActivityColumns.Replace(query)
 	}
 	start := time.Now()
 	capture := WaitCapture{Profile: profile, StartedAt: start.UTC(), IntervalMS: period.Milliseconds(), Expected: int(waitCaptureDuration / period), Frames: []WaitFrame{}}
@@ -73,7 +79,7 @@ func CaptureWaits(ctx context.Context, target Target, password, profile string) 
 		}
 		frame := WaitFrame{Slot: slot, At: begin.UTC(), Status: "unavailable"}
 		var raw []byte
-		if err := conn.QueryRow(ctx, waitCaptureSQL, graph).Scan(&raw); err == nil {
+		if err := conn.QueryRow(ctx, query, graph).Scan(&raw); err == nil {
 			frame.Status = "observed"
 			frame.Snapshot = raw
 			capture.Observed++

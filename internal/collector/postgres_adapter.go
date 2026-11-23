@@ -12,13 +12,19 @@ import (
 )
 
 var highGoProductBanner = regexp.MustCompile(`(?i)\b(?:highgo[ \t]+(?:(?:security|enterprise|standard|edition)[ \t]+)*database|hgdb(?:-[a-z]+)?)\b`)
+var highGo459Banner = regexp.MustCompile(`(?i)(?:\b(?:highgo|hgdb)\b|瀚高安全版数据库系统)[^\r\n]{0,80}\bv?4\.5\.9\b`)
 
 // Product identity is independent of the deployment profile and kernel number.
 func postgresProduct(banner string) string {
-	if highGoProductBanner.MatchString(banner) {
+	if highGoProductBanner.MatchString(banner) || strings.Contains(banner, "瀚高安全版数据库系统") {
 		return "highgo"
 	}
 	return ""
+}
+
+// The read-only HighGo 4.5.9 profile is scoped to the verified 12.7 kernel.
+func verifiedHighGo459(version int, banner string) bool {
+	return version == 120007 && postgresProduct(banner) == "highgo" && highGo459Banner.MatchString(banner)
 }
 
 func postgresAdapterProfile(target Target) string {

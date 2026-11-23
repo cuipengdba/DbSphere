@@ -14,12 +14,72 @@ func TestPostgresProductFromServerBanner(t *testing.T) {
 		{"HighGo Database Version 6.0 on x86_64", "highgo"},
 		{"HighGo Security Enterprise Edition Database System 4.5.8", "highgo"},
 		{"PostgreSQL 14.7 (HGDB-SEE)", "highgo"},
+		{"瀚高安全版数据库系统V4.5.9, x86_64平台, 创建日期:20250427", "highgo"},
 		{"PostgreSQL 18.7 on x86_64-pc-linux-gnu", ""},
 		{"PostgreSQL 18.7 compiled by highgo-dev", ""},
 	} {
 		if got := postgresProduct(test.banner); got != test.product {
 			t.Errorf("product for %q = %q, want %q", test.banner, got, test.product)
 		}
+	}
+}
+
+func TestHighGo459AdmissionKeepsThePostgresMinimum(t *testing.T) {
+	banner := "HighGo Security Enterprise Edition Database System 4.5.9 on x86_64"
+	if !verifiedHighGo459(120007, banner) {
+		t.Fatal("the verified HighGo 4.5.9 profile was rejected")
+	}
+	if !verifiedHighGo459(120007, "瀚高安全版数据库系统V4.5.9, x86_64平台, 创建日期:20250427") {
+		t.Fatal("the localized HighGo server identity was rejected")
+	}
+	if verifiedHighGo459(120007, "PostgreSQL 12.7 on x86_64") || verifiedHighGo459(120008, banner) ||
+		verifiedHighGo459(120007, "HighGo Security Enterprise Edition Database System 4.5.8") || PostgresMajorSupported(12) {
+		t.Fatal("the HighGo exception admitted an unverified product or PostgreSQL kernel")
+	}
+}
+
+// This fixture uses the actual HighGo media and a standard monitoring role.
+// Keep its address and credentials in the local acceptance environment.
+func TestLiveHighGo459ReadOnly(t *testing.T) {
+	dsn := os.Getenv("DBSPHERE_TEST_HIGHGO_URL")
+	if dsn == "" {
+		t.Skip("HighGo 4.5.9 acceptance fixture is not configured")
+	}
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("invalid HighGo fixture URL")
+	}
+	mode := "disable"
+	if config.TLSConfig != nil {
+		mode = "require"
+	}
+	target := Target{Host: config.Host, Port: int(config.Port), Database: config.Database,
+		Username: config.User, SSLMode: mode, Runtime: "linux"}
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Second)
+	defer cancel()
+	sample, err := (PostgreSQLAdapter{}).Collect(ctx, target, config.Password)
+	if err != nil {
+		t.Fatal("HighGo read-only collection failed:", err)
+	}
+	report := sample.Report
+	if report.Product != "highgo" || report.Profile != "highgo-see-4.5.9" || report.Version != 120007 ||
+		!report.Transport.ReadOnly || sample.Metrics["privileged_role"] != false {
+		t.Fatalf("unexpected HighGo identity or monitoring permissions: %+v", report)
+	}
+	diagnostics := sample.Metrics["diagnostics"].(map[string]any)
+	for _, key := range []string{"activity", "activeWaits", "locks", "lockChain", "database", "walPosition", "checkpoints", "databaseInventory", "tableInventory"} {
+		result, _ := diagnostics[key].(map[string]any)
+		if result["status"] != "ok" {
+			t.Errorf("HighGo diagnostic %s unavailable: %v", key, result["reason"])
+		}
+	}
+	performance := sample.Metrics["sqlPerformance"].(map[string]any)
+	if performance["status"] != "ok" {
+		t.Fatal("HighGo statement statistics unavailable:", performance["reason"])
+	}
+	capture, err := CaptureWaits(ctx, target, config.Password, "standard")
+	if err != nil || capture.Observed == 0 {
+		t.Fatalf("HighGo wait capture failed: observed=%d error=%v", capture.Observed, err)
 	}
 }
 
