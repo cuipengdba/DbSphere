@@ -631,6 +631,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		resourceSpecs[name] = values
 	}
 	result["containerPorts"] = ports
+	result["containerClaims"] = podContainerClaims(spec)
 	result["resourceSpecs"] = resourceSpecs
 	for _, raw := range kubeList(metadata["ownerReferences"]) {
 		owner := kubeObject(raw)
@@ -830,6 +831,41 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		} else {
 			result["nodeMetricsError"] = err.Error()
 		}
+	}
+	return result
+}
+
+// Only record claim and container names from the verified Pod specification.
+// Mount paths offer no block-device identity and are unnecessary for this join.
+func podContainerClaims(spec map[string]any) map[string][]string {
+	claims := map[string]string{}
+	for _, raw := range kubeList(spec["volumes"]) {
+		volume := kubeObject(raw)
+		name := kubeString(volume["name"])
+		claim := kubeString(kubeObject(volume["persistentVolumeClaim"])["claimName"])
+		if kubeName.MatchString(name) && kubeName.MatchString(claim) {
+			claims[name] = claim
+		}
+	}
+	result := map[string][]string{}
+	for _, raw := range kubeList(spec["containers"]) {
+		c := kubeObject(raw)
+		name := kubeString(c["name"])
+		if !kubeName.MatchString(name) || len(result) >= 32 {
+			continue
+		}
+		names := []string{}
+		seen := map[string]bool{}
+		for _, key := range []string{"volumeMounts", "volumeDevices"} {
+			for _, rawMount := range kubeList(c[key]) {
+				claim := claims[kubeString(kubeObject(rawMount)["name"])]
+				if claim != "" && !seen[claim] && len(names) < 10 {
+					names = append(names, claim)
+					seen[claim] = true
+				}
+			}
+		}
+		result[name] = names
 	}
 	return result
 }

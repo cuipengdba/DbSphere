@@ -42,6 +42,7 @@ func writeContainerMetrics(w io.Writer, assetLabels string, raw json.RawMessage)
 			}
 		}
 		Node                    map[string]map[string]float64
+		NodeNumbers             map[string]struct{ Number string }
 		PGDatabase, Checkpoints map[string]any
 		WAL                     map[string]any
 	}
@@ -105,7 +106,7 @@ func writeContainerMetrics(w io.Writer, assetLabels string, raw json.RawMessage)
 		}
 	}
 	for device, values := range data.Node {
-		labels := base + ",device=" + quote(device)
+		labels := base + ",device=" + quote(device) + ",device_number=" + quote(data.NodeNumbers[device].Number)
 		fields(values, map[string]string{"ioSeconds": "node_device_busy_ratio", "weightedIOSeconds": "node_device_average_queue", "readBytes": "node_read_bytes_per_second", "writtenBytes": "node_write_bytes_per_second"}, labels)
 		read, readOK := values["readSeconds"]
 		written, writeOK := values["writeSeconds"]

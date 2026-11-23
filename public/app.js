@@ -112,8 +112,14 @@ function setView(route, updateHash = true) {
       const asset = params.get('asset');
       const from = Date.parse(params.get('from'));
       const to = Date.parse(params.get('to'));
-      const back = uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from
-        ? 'live?' + new URLSearchParams({ asset, from: new Date(from).toISOString(), end: new Date(to).toISOString() }) : '';
+      let back = '';
+      if (uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from) {
+        if (params.get('origin') === 'storage') {
+          const query = new URLSearchParams({asset, event: id, mode: 'history', from: new Date(from).toISOString(), to: new Date(to).toISOString()});
+          for (const key of ['container', 'device', 'pvc']) if (params.get(key)) query.set(key, params.get(key));
+          back = 'storage?' + query;
+        } else back = 'live?' + new URLSearchParams({asset, from: new Date(from).toISOString(), end: new Date(to).toISOString()});
+      }
       void openEvent(id, false, back);
     }
   }

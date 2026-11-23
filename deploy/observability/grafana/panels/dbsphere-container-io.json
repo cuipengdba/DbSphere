@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 40,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "editable": false,
   "graphTooltip": 1,
@@ -18,14 +18,14 @@
   "links": [
     {
       "title": "在 DbSphere 查看相同事件和时段",
-      "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
       "targetBlank": false,
       "type": "link"
     },
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/grafana/dbsphere-return?view=event&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
+      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}"
     },
     {
       "title": "DbSphere 专题",
@@ -55,6 +55,18 @@
       {
         "name": "container",
         "label": "容器",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "device",
+        "label": "设备号",
         "type": "textbox",
         "query": ".*",
         "current": {
@@ -102,7 +114,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
               "targetBlank": false
             }
           ],
@@ -175,7 +187,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
               "targetBlank": false
             }
           ],
@@ -248,7 +260,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
               "targetBlank": false
             }
           ],
@@ -278,7 +290,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\"}",
+          "expr": "dbsphere_container_read_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\",device=~\"${device:raw}\"}",
           "legendFormat": "读 {{container}} · {{device}}",
           "range": true,
           "datasource": {
@@ -288,7 +300,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\"}",
+          "expr": "dbsphere_container_write_bytes_per_second{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\",device!=\"\",device=~\"${device:raw}\"}",
           "legendFormat": "写 {{container}} · {{device}}",
           "range": true,
           "datasource": {
@@ -321,7 +333,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
               "targetBlank": false
             }
           ],

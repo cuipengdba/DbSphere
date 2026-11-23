@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 40,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "editable": false,
   "graphTooltip": 1,
@@ -25,7 +25,7 @@
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/grafana/dbsphere-return?view=event&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
+      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
     },
     {
       "title": "DbSphere 专题",

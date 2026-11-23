@@ -15,7 +15,7 @@ type storageTarget struct{ name, id string }
 
 func (s *Postgres) collectContainerStorage(ctx context.Context, asset, runtime string, port int, kube map[string]any) (map[string]any, map[string]any) {
 	cfg := s.containerStorage
-	meta := map[string]any{"status": "unbound"}
+	meta := map[string]any{"status": "unbound", "attributionVersion": 1}
 	var targets []storageTarget
 	var nodeKey, primary string
 	if runtime == "k8s" {
@@ -23,6 +23,7 @@ func (s *Postgres) collectContainerStorage(ctx context.Context, asset, runtime s
 		node, cluster := stringValue(pod["node"]), stringValue(kube["cluster"])
 		meta["runtime"], meta["podUID"], meta["node"] = "k8s", pod["uid"], node
 		meta["cluster"], meta["namespace"], meta["pod"] = cluster, kube["namespace"], pod["name"]
+		meta["nodeUID"] = object(kube["node"])["uid"]
 		meta["workload"], meta["pvcs"] = kube["workload"], kube["pvcs"]
 		meta["volumeMapping"] = "claim_attachment_only"
 		if pod["uid"] == nil || kube["status"] != "ok" {
@@ -49,6 +50,7 @@ func (s *Postgres) collectContainerStorage(ctx context.Context, asset, runtime s
 			primary = targets[0].name
 		}
 		nodeKey = cluster + "/" + node
+		meta["volumeLinks"] = containerClaimLinks(kube, targets)
 	} else {
 		binding, exists := cfg.Docker[asset]
 		if runtime != "linux" || !exists {
@@ -60,6 +62,7 @@ func (s *Postgres) collectContainerStorage(ctx context.Context, asset, runtime s
 	}
 	meta["primary"] = primary
 	source := cfg.Nodes[nodeKey]
+	meta["nodeMetricsEndpoint"] = source.NodeExporter
 	if source.URL == "" || len(targets) == 0 {
 		return meta, nil
 	}
@@ -141,6 +144,7 @@ func recordContainerStorage(current, previous map[string]any, cadence time.Durat
 		if elapsed < time.Second || elapsed > maxGap {
 			continue
 		}
+		cur["intervalStart"] = prev["observedAt"]
 		seconds := elapsed.Seconds()
 		deviceRates, rates := map[string]any{}, map[string]any{}
 		for id, raw := range object(cur["devices"]) {
@@ -180,6 +184,10 @@ func recordContainerStorage(current, previous map[string]any, cadence time.Durat
 			}
 		}
 	}
+	for _, entry := range object(data["containers"]) {
+		row := object(entry)
+		row["deviceLinks"] = containerDeviceLinks(data, object(current["linux"]), row)
+	}
 	data["finding"] = containerStorageFinding(data, current, previous)
 }
 
@@ -206,7 +214,7 @@ var storageFindings = map[string]string{
 
 func containerStorageFinding(data, current, previous map[string]any) map[string]any {
 	row := object(object(data["containers"])[stringValue(data["primary"])])
-	if row["status"] != "ok" || row["rates"] == nil {
+	if row["status"] != "ok" || row["rates"] == nil || row["counterReset"] == true {
 		return nil
 	}
 	rates, memory, pressure := object(row["rates"]), object(row["memory"]), object(row["pressure"])
@@ -216,9 +224,12 @@ func containerStorageFinding(data, current, previous map[string]any) map[string]
 		return nil
 	}
 	matched := []string{}
+	busyDevices := storageBusyDevices(current, row)
 	if psi >= 1 && waits > 0 {
+		active, activeKnown := numeric(rates["active_fileDelta"])
+		inactive, inactiveKnown := numeric(rates["inactive_fileDelta"])
 		if number(rates["refaultPerSecond"]) > 0 && number(rates["readBps"]) > 0 &&
-			(number(rates["reclaimsPerSecond"]) > 0 || number(rates["active_fileDelta"])+number(rates["inactive_fileDelta"]) < 0) {
+			(number(rates["reclaimsPerSecond"]) > 0 || (activeKnown && inactiveKnown && active+inactive < 0)) {
 			matched = append(matched, "cache_reread")
 		}
 		oldStorage := object(previous["containerStorage"])
@@ -238,17 +249,28 @@ func containerStorageFinding(data, current, previous map[string]any) map[string]
 		if limitMatched {
 			matched = append(matched, "io_limit")
 		}
-		if len(storageBusyDevices(current, row)) > 0 {
+		if len(busyDevices) > 0 {
 			matched = append(matched, "node_congestion")
 		}
 	}
 	return map[string]any{"codes": matched, "pgIOWait": waits, "ioPressure": psi, "rates": rates,
+		"intervalStart": row["intervalStart"], "counterReset": row["counterReset"],
 		"observedAt": row["observedAt"], "source": row["source"], "containerId": row["id"], "node": data["node"],
-		"volumeMapping": data["volumeMapping"], "nodeDevices": storageBusyDevices(current, row)}
+		"volumeMapping": data["volumeMapping"], "nodeDevices": busyDevices}
 }
 
 func storageBusyDevices(metrics, container map[string]any) []string {
 	linux := object(metrics["linux"])
+	storage := object(metrics["containerStorage"])
+	if storage["attributionVersion"] != nil {
+		matched := []string{}
+		for _, link := range containerDeviceLinks(storage, linux, container) {
+			if number(link["busyRatio"]) >= .8 && object(container["deviceRates"])[stringValue(link["device"])] != nil {
+				matched = append(matched, stringValue(link["nodeDevice"]))
+			}
+		}
+		return matched
+	}
 	matched := []string{}
 	for device := range object(container["deviceRates"]) {
 		for name, raw := range object(object(linux["deviceRates"])["disk"]) {

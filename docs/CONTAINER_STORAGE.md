@@ -46,6 +46,10 @@ docker run -d --name container-agent --network dbsphere-monitoring --pull never 
 
 ## 读图与诊断
 
+在设备热点选择块设备，可沿采集源匹配的 `major:minor` 核对节点设备名称、队列深度和采样时间。PVC 侧分别列出选定 Pod 中声明该卷的容器，以及经只读 API 核对的 PVC 和 PV 标识。同 Pod 有多个挂载者时标明共享范围，卷级 I/O 归属仍需可验证的卷到设备证据。
+
+点击 PVC 查看当前容量余量和可比趋势。估算基于至少四个按小时保留的样本，覆盖至少 24 小时，且 PVC UID、PV UID、采集序列和容量一致。当前样本与基线记录保存在 PG18。Grafana 的设备号或 PVC 筛选会保留资产、事件及时间窗，并可返回原专题。
+
 - 读写吞吐和 IOPS 是相邻有效样本的累计量差值除以间隔。重启、迁移、计数器重置及采集中断会形成断点。历史点显示桶内峰值，响应同时保留均值、最小值和有效覆盖信息。需要更快刷新时可将 `DBSPHERE_COLLECT_INTERVAL_SECONDS` 设置为 `10`，也可沿用已有采集频率。
 - Active 与 Inactive file 分别表示 Linux 文件页所在的回收列表。`file` 单独采集。结合 refault、回收速率、内存和 I/O 压力，可以区分正常波动和伴随磁盘重读的回收压力。cgroup v1 展示可用的 `memory.stat` 和 `blkio` 指标。
 - Kubernetes PVC 显示对象归属和可用的容量数据。节点延迟根据已采到的设备时间和完成操作数计算平均值。节点或容器设备指标保持各自归属，PVC I/O 缺少可验证来源时显示卷映射信息。

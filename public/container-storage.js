@@ -46,7 +46,8 @@
   function create(root, { api, openEvent, formatTime }) {
     const get = name => root.querySelector(`[data-storage="${name}"]`);
     let assets = [], result, comparison, poll, active = false, pending = false, generation = 0, focus = null, grafana = false;
-    let route = { mode: 'live', hours: 1, asset: '', container: '', device: '', event: '', from: '', to: '' };
+    let capacityAt = 0, capacity = [];
+    let route = { mode: 'live', hours: 1, asset: '', container: '', device: '', pvc: '', event: '', from: '', to: '' };
     const views = charts.map(([title, unit, fields]) => {
       const card = node('section', null, 'storage-chart');
       const hdr = node('header');
@@ -110,9 +111,11 @@
         hours: [1, 6, 24, 168].includes(Number(params.get('hours'))) ? Number(params.get('hours')) : 1,
         asset: uuid.test(params.get('asset') || '') ? params.get('asset') : '',
         container: (params.get('container') || '').slice(0, 63), device: (params.get('device') || '').slice(0, 128),
+        pvc: (params.get('pvc') || '').slice(0, 253),
         event: uuid.test(params.get('event') || '') ? params.get('event') : '',
         from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '' };
       result = comparison = undefined;
+      capacityAt = 0; capacity = [];
       refreshOptions();
       settings();
       render();
@@ -139,11 +142,21 @@
       const from = route.from ? Date.parse(route.from) : to - route.hours * hour;
       const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(), container: route.container, device: route.device });
       try {
-        const tasks = [api(`${endpoint}?${params(from, to)}`)];
+        const current = params(from, to);
+        const forecast = route.pvc && Date.now() - capacityAt >= 60000;
+        if (forecast) {
+          current.set('forecast', '1');
+          current.set('pvc', route.pvc);
+        }
+        const tasks = [api(`${endpoint}?${current}`)];
         if (route.mode === 'history' && get('compare').checked) tasks.push(api(`${endpoint}?${params(from - (to - from), from)}`));
         const values = await Promise.all(tasks);
         if (request !== generation || !active) return;
         [result, comparison] = values;
+        if (forecast) {
+          capacity = result.pvcCapacity || [];
+          capacityAt = Date.now();
+        }
         render();
       } catch (error) {
         if (request === generation && active) setStatus('unavailable', error.message);
@@ -156,6 +169,7 @@
       if (!active) return;
       generation++;
       pending = false;
+      capacityAt = 0; capacity = [];
       if (clear) { result = comparison = undefined; render(); }
       settings();
       history.replaceState(null, '', '#' + routeHash());
@@ -176,6 +190,7 @@
       nav.replaceChildren(node('strong', 'Grafana 专项'), ...sections.map(([section, title]) => {
         const link = node('a', title);
         link.href = window.DbSphereLive.grafanaPath({ section, asset: route.asset, container: route.container,
+          device: route.device, pvc: route.pvc,
           event: route.event || result?.events?.[0]?.id, from: Date.parse(result?.from), to: Date.parse(result?.to) });
         return link;
       }));
@@ -213,15 +228,53 @@
         button.addEventListener('click', () => { route.device = route.device === device ? '' : device; restart(); });
         return button;
       }) : [node('p', '等待相邻样本计算设备速率。', 'storage-empty')]));
-      const volumeNodes = (storage?.pvcs || []).map(pvc => node('p', `${pvc.name} · ${pvc.phase || pvc.status || '未知'} · ${fmt(pvc.usage?.usedPercent, 'percent')}`));
+      const claims = (storage?.pvcs || []).filter(pvc => !route.pvc || pvc.name === route.pvc);
+      const forecast = new Map(capacity.map(item => [item.pvcUID, item]));
+      const source = node('p', 'PVC 挂载与节点设备分开核对，卷级 I/O 归属待核验。', 'storage-empty');
+      const volumeNodes = [source];
+      if (route.pvc) {
+        const clear = node('button', '查看全部 PVC', 'ghost small-button');
+        clear.type = 'button';
+        clear.addEventListener('click', () => { route.pvc = ''; restart(); });
+        volumeNodes.push(clear);
+      }
+      for (const pvc of claims) {
+        const select = node('button', `${pvc.name} · ${pvc.phase || pvc.status || '未知'} · ${fmt(pvc.usage?.usedPercent, 'percent')}`, 'storage-device');
+        select.type = 'button';
+        select.setAttribute('aria-pressed', String(route.pvc === pvc.name));
+        select.addEventListener('click', () => { route.pvc = route.pvc === pvc.name ? '' : pvc.name; restart(); });
+        const links = (storage.volumeLinks || []).filter(link => link.pvc === pvc.name);
+        const identity = links.map(link => `${link.container} · ${link.status === 'claim_verified' ? '已核对 PVC UID' : '仅挂载声明'}${link.sharedInPod ? ' · 同 Pod 共享' : ''}`).join(' / ');
+        const capacity = forecast.get(pvc.uid);
+        if (identity) select.append(node('small', identity));
+        if (capacity) {
+          const estimate = capacity.status === 'estimated' ? ` · 预计 ${number.format(capacity.hoursToFull)} 小时耗尽`
+            : capacity.status === 'no_growth' ? ' · 观测窗无净增长' : ' · 可比历史不足';
+          select.append(node('small', `可用余量 ${fmt(capacity.remainingBytes, 'bytes')}${estimate}`));
+        } else if (Number.isFinite(pvc.usage?.capacityBytes) && Number.isFinite(pvc.usage?.usedBytes)) {
+          select.append(node('small', `可用余量 ${fmt(Math.max(0, pvc.usage.capacityBytes - pvc.usage.usedBytes), 'bytes')}`));
+        }
+        volumeNodes.push(select);
+      }
+      for (const link of sample?.deviceLinks || []) {
+        if (route.device && route.device !== link.device) continue;
+        volumeNodes.push(node('p', `${link.device} → 节点设备 ${link.nodeDevice} · 队列深度 ${fmt(link.queueDepth, 'count')} · ${formatTime(link.to)}`));
+      }
       for (const [dev, rates] of Object.entries(latest?.nodeRates || {}).slice(0, 6)) {
         const io = (rates.reads || 0) + (rates.writes || 0);
         const ms = io && Number.isFinite(rates.readSeconds) && Number.isFinite(rates.writeSeconds) ? (rates.readSeconds + rates.writeSeconds) * 1000 / io : null;
         volumeNodes.push(node('p', `${dev} · 平均 ${fmt(ms, '')} ms · 忙碌 ${fmt(rates.ioSeconds * 100, 'percent')}`));
       }
       get('volumes').replaceChildren(...(volumeNodes.length ? volumeNodes : [node('p', '暂无节点设备或 PVC 样本。', 'storage-empty')]));
+      const finding = storage?.finding;
+      const selectedPrimary = containerName && containerName === storage?.primary;
       const evidence = [node('p', `I/O 等待会话 ${fmt(storage?.pgIOWait, 'count')}`)];
-      for (const code of storage?.finding?.codes || []) evidence.push(node('p', findings[code] || code, 'storage-finding'));
+      if (selectedPrimary && finding?.intervalStart) {
+        evidence.push(node('p', `${formatTime(finding.intervalStart)} 至 ${formatTime(finding.observedAt)} · 重读 ${fmt(finding.rates?.refaultPerSecond, 'ops')} · I/O 压力 ${fmt(finding.ioPressure, 'percent')}`, 'storage-empty'));
+      }
+      const codes = selectedPrimary ? finding?.codes || [] : [];
+      for (const code of codes) evidence.push(node('p', findings[code] || code, 'storage-finding'));
+      if (!codes.length) evidence.push(node('p', '当前证据尚未支持存储根因，缓存下降需与重读和等待同时核对。', 'storage-empty'));
       for (const item of (latest?.pgSQL || []).slice(0, 3)) {
         if (item.queryId) evidence.push(node('p', 'SQL ' + item.queryId, 'storage-fingerprint'));
       }
@@ -234,7 +287,8 @@
       const timeline = [];
       for (const event of result?.events || []) {
         const link = node('a', `${formatTime(event.at)}  ${event.title}`);
-        link.href = '#incidents?' + new URLSearchParams({ event: event.id, asset: route.asset, from: result.from, to: result.to });
+        link.href = '#incidents?' + new URLSearchParams({ event: event.id, asset: route.asset, origin: 'storage',
+          from: result.from, to: result.to, container: route.container, device: route.device, pvc: route.pvc });
         link.addEventListener('click', click => {
           click.preventDefault(); route.event = event.id;
           if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {});
@@ -308,7 +362,7 @@
     };
     for (const key of ['asset', 'container', 'device']) get(key).onchange = () => {
       route[key] = get(key).value;
-      if (key === 'asset') { route.event = route.container = route.device = ''; }
+      if (key === 'asset') { route.event = route.container = route.device = route.pvc = ''; }
       if (key === 'container') route.device = '';
       restart(true);
     };

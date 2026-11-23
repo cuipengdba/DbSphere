@@ -65,6 +65,7 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END,
 	CASE WHEN raw.metrics_json ? 'containerStorage' THEN jsonb_build_object(
 		'storage',raw.metrics_json->'containerStorage','node',raw.metrics_json#>'{linux,deviceRates,disk}',
+		'nodeNumbers',raw.metrics_json#>'{linux,deviceNumbers}',
 		'pgDatabase',raw.metrics_json#>'{diagnostics,database,data}',
 		'checkpoints',raw.metrics_json#>'{diagnostics,checkpoints,data}', 'wal',raw.metrics_json#>'{diagnostics,wal,data}') END
 FROM selected a

@@ -35,12 +35,68 @@ func (s *Postgres) containerStorageHistory(ctx context.Context, id string, param
 		return nil, err
 	}
 	var recent json.RawMessage
+	forecasts := []map[string]any{}
 	if len(latest) > 0 {
 		recent = latest[0]
 	}
+	if recent != nil && params.Get("forecast") == "1" {
+		var latestSample struct {
+			At      time.Time
+			Storage struct {
+				PVCs []struct {
+					UID   string
+					Name  string
+					Usage struct{ Status, SeriesKey string }
+				}
+			}
+		}
+		if err := json.Unmarshal(recent, &latestSample); err != nil {
+			return nil, err
+		}
+		uids := []string{}
+		for _, pvc := range latestSample.Storage.PVCs {
+			if pvc.UID != "" && pvc.Name == params.Get("pvc") && pvc.Usage.Status == "ok" && pvc.Usage.SeriesKey != "" {
+				uids = append(uids, pvc.UID)
+			}
+		}
+		if len(uids) > 0 {
+			points, err := s.queryJSON(ctx, pvcCapacityHistorySQL, id, latestSample.At.Add(-7*24*time.Hour), latestSample.At, uids)
+			if err != nil {
+				return nil, err
+			}
+			observed := make([]pvcCapacityPoint, 0, len(points))
+			for _, point := range points {
+				var row pvcCapacityPoint
+				if err := json.Unmarshal(point, &row); err != nil {
+					return nil, err
+				}
+				observed = append(observed, row)
+			}
+			forecasts = pvcCapacityEstimates(observed)
+		}
+	}
 	return map[string]any{"assetId": id, "from": from, "to": to, "stepSeconds": step,
-		"buckets": rows, "latest": recent, "events": events}, nil
+		"buckets": rows, "latest": recent, "events": events, "pvcCapacity": forecasts}, nil
 }
+
+const pvcCapacityHistorySQL = `WITH recent AS (
+	SELECT id,collected_at,metrics_json#>'{containerStorage,pvcs}' AS claims FROM samples
+	WHERE asset_id=$1 AND collected_at >= $2 AND collected_at <= $3 ORDER BY collected_at DESC,id DESC LIMIT 16000
+), points AS (
+	SELECT id,collected_at,pvc->>'uid' AS uid,pvc->>'name' AS name,pvc#>>'{volume,uid}' AS volume_uid,
+		pvc#>>'{usage,seriesKey}' AS source,pvc#>>'{usage,observedAt}' AS at,
+		pvc#>'{usage,usedBytes}' AS used,pvc#>'{usage,capacityBytes}' AS capacity
+	FROM recent CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(claims)='array'
+		THEN claims ELSE '[]'::jsonb END) AS pvc
+	WHERE pvc->>'uid'=ANY($4::text[]) AND pvc#>>'{usage,status}'='ok' AND pvc#>>'{usage,seriesKey}' IS NOT NULL
+		AND pvc#>>'{usage,observedAt}' IS NOT NULL
+		AND jsonb_typeof(pvc#>'{usage,usedBytes}')='number' AND jsonb_typeof(pvc#>'{usage,capacityBytes}')='number'
+), observed AS (
+	SELECT DISTINCT ON (uid,date_trunc('hour',at::timestamptz)) * FROM points
+	ORDER BY uid,date_trunc('hour',at::timestamptz),at::timestamptz DESC,collected_at DESC,id DESC
+)
+SELECT jsonb_build_object('at',at,'sampleId',id,'uid',uid,'name',name,'volumeUid',volume_uid,'source',source,
+	'used',used,'capacity',capacity) FROM observed ORDER BY at::timestamptz DESC,id DESC`
 
 const containerHistorySQL = `WITH observations AS (
 	SELECT date_bin(make_interval(secs=>$6::integer),collected_at,$2::timestamptz) AS bucket,

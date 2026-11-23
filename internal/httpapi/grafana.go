@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 )
 
 const grafanaPrefix, grafanaReturnPath = "/grafana", "/grafana/dbsphere-return"
+
+var storageDeviceID = regexp.MustCompile(`^\d{1,10}:\d{1,10}$`)
+var storageClaimName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
 
 func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string, int) {
 	cookie, err := r.Cookie("dbsphere_session")
@@ -112,9 +116,6 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	if input.Get("view") == "storage" {
 		view = "storage"
 		output.Set("mode", "history")
-		if container := input.Get("container"); len(container) > 0 && len(container) <= 63 {
-			output.Set("container", container)
-		}
 		if id := input.Get("event"); opsUUID.MatchString(id) {
 			output.Set("event", id)
 		}
@@ -123,6 +124,20 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 		view = "incidents"
 		if id := input.Get("event"); opsUUID.MatchString(id) {
 			output.Set("event", id)
+		}
+	}
+	if view == "storage" || view == "incidents" && input.Get("source") == "storage" {
+		if view == "incidents" {
+			output.Set("origin", "storage")
+		}
+		if container := input.Get("container"); len(container) > 0 && len(container) <= 63 {
+			output.Set("container", container)
+		}
+		if device := input.Get("device"); storageDeviceID.MatchString(device) {
+			output.Set("device", device)
+		}
+		if pvc := strings.ReplaceAll(input.Get("pvc"), `\.`, "."); storageClaimName.MatchString(pvc) {
+			output.Set("pvc", pvc)
 		}
 	}
 	if asset := input.Get("asset"); opsUUID.MatchString(asset) {

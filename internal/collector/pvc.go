@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -126,6 +127,7 @@ func pvcUsageSince(ctx context.Context, namespace, name string, since time.Time)
 		return problem
 	}
 	best := -1.0
+	bestSeries := ""
 	result := map[string]any{}
 	for labels, usage := range used {
 		size, exists := capacity[labels]
@@ -133,11 +135,13 @@ func pvcUsageSince(ctx context.Context, namespace, name string, since time.Time)
 			continue
 		}
 		percent := usage.Value / size.Value * 100
-		if percent > best {
+		series := fmt.Sprintf("%x", sha256.Sum256([]byte(labels)))
+		if percent > best || (percent == best && series < bestSeries) {
 			best = percent
+			bestSeries = series
 			result = map[string]any{"status": "ok", "source": "Prometheus kubelet volume stats",
 				"usedBytes": usage.Value, "capacityBytes": size.Value,
-				"usedPercent": percent, "observedAt": usage.At}
+				"usedPercent": percent, "observedAt": usage.At, "seriesKey": series}
 		}
 	}
 	if best < 0 {
