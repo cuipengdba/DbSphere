@@ -218,6 +218,8 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
+			Administrator:        pg,
+			DockerLocalSetup:     cfg.DockerLocalSetup,
 			ViewerPasswordHash:   viewerHash,
 			ApproverPasswordHash: approverHash,
 			ViewerAssetIDs:       cfg.ViewerAssetIDs,

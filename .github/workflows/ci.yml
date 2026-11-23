@@ -425,6 +425,12 @@ jobs:
           test "${#archive[@]}" -eq 1
           env_file="$DBSPHERE_GO_CONFIG_DIR/dbsphere-go.env"
           old_password="$(sed -n 's/^DBSPHERE_ADMIN_PASSWORD=//p' "$env_file" | head -n 1)"
+          if [[ -z "$old_password" ]]; then
+            old_password="$(openssl rand -hex 24)"
+            jq -nc --arg password "$old_password" '{username:"admin",password:"123456",newPassword:$password}' |
+              curl --fail --silent --show-error -H 'Content-Type: application/json' --data-binary @- \
+                http://127.0.0.1:8081/api/login | jq -e '.authenticated and .role=="admin"' >/dev/null
+          fi
           jq -nc --arg password "$old_password" '{password:$password}' |
             curl --fail --silent --show-error -c "$RUNNER_TEMP/dbsphere-old-admin-cookie" \
               -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:8081/api/login >/dev/null
@@ -472,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.45.0'
-          previous_sha='440a223d1a596b81a75d932488bffc0c6897f8bdc5442b9282ff5f3f2e49e915'
+          previous_version='1.46.0'
+          previous_sha='1d752e3a536e47be86112c5a4606186747e5e1251e054b66b590b50bfa08c0c7'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -542,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.45.0'
-          previous_arm_sha='c9deb9d721ac7961a6b153a3fda3a8d5d1ef6ed9a90baa32ad7d6c0a10d483a7'
+          previous_version='1.46.0'
+          previous_arm_sha='a71cfba6d55388669ee23c0b8122de6d933cfdeeaf8ac304f0a47b3b198387a5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

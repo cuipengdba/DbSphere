@@ -1,24 +1,26 @@
 # Linux 一键离线部署
 
-从 [V1.46.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.46.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
+从 [V1.47.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.47.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
 
 ```bash
-sha256sum --check DbSphere-go-offline-1.46.0-linux-amd64.run.sha256
-bash DbSphere-go-offline-1.46.0-linux-amd64.run
+sha256sum --check DbSphere-go-offline-1.47.0-linux-amd64.run.sha256
+bash DbSphere-go-offline-1.47.0-linux-amd64.run
 ```
 
 一键脚本导入随包镜像并启动内嵌静态页面的 Go 服务及 PostgreSQL 18 长期监控库。默认本机入口为 `http://127.0.0.1:8081`。
+
+全新安装可在部署机上使用账号 `admin`、初始密码 `123456` 进入首次改密页。输入 12 至 256 字节的新密码后进入控制台。需要从远程地址开始使用时，可以在安装前通过 `DBSPHERE_ADMIN_PASSWORD` 预置至少 12 字节的管理员密码。已有环境升级沿用监控库中的账号、密码和资产。
 
 ## 原生 systemd 离线安装
 
 原生服务需要 Linux systemd 和已可访问的独立 PostgreSQL 18。下载对应架构 `DbSphere-go-systemd-<版本>-linux-<架构>.run` 及同名 `.sha256`，使用安装包的 `--sample-config` 写出环境文件。把 `DBSPHERE_DATABASE_URL` 改为独立监控库的连接地址。连接账号需能在该数据库的 `public` schema 创建和更新 DbSphere 对象。已有环境应继续使用原 `DBSPHERE_MASTER_KEY`、管理员引导配置和数据库，原资产密码依赖这把主密钥。容器的 `DBSPHERE_WEB_PORT` 对应原生的 `DBSPHERE_PORT`，DSN 应使用 Linux 主机可解析的 PostgreSQL 地址。
 
 ```bash
-sha256sum --check DbSphere-go-systemd-1.46.0-linux-amd64.run.sha256
-(umask 077 && bash DbSphere-go-systemd-1.46.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
+sha256sum --check DbSphere-go-systemd-1.47.0-linux-amd64.run.sha256
+(umask 077 && bash DbSphere-go-systemd-1.47.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.46.0-linux-amd64.run --check /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.46.0-linux-amd64.run /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.47.0-linux-amd64.run --check /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.47.0-linux-amd64.run /absolute/dbsphere.env
 systemctl status dbsphere-native.service
 ```
 
@@ -38,7 +40,7 @@ bash DbSphere-go-offline-1.0.0-linux-amd64.run
 
 无 Docker 环境可下载同页的 `DbSphere-go-1.0.0-linux-amd64` 静态服务端，但需自行提供独立的 PostgreSQL 18。运行前设置 `DBSPHERE_DATABASE_URL`、不少于 12 字符的 `DBSPHERE_ADMIN_PASSWORD` 和随机生成的 32 字节 base64 `DBSPHERE_MASTER_KEY`，并将主密钥安全持久化以供重启使用；`DBSPHERE_HOST` 和 `DBSPHERE_PORT` 默认分别为 `127.0.0.1` 与 `8080`。校验同名 `.sha256` 后执行 `chmod +x DbSphere-go-1.0.0-linux-amd64 && ./DbSphere-go-1.0.0-linux-amd64`。三个发布产物及对应 SHA-256 文件均来自同一发布提交的验收构建。
 
-源码仓库现有 `Dockerfile-go`：`CGO_ENABLED=0` 构建后端，嵌入静态前端，最终镜像只含 Go 程序和 CA 证书。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)；连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机可运行 `bash scripts/one-click-go.sh`，首次创建独立的 `deploy/compose/.env.go` 随机凭据，默认绑定 `127.0.0.1:8081`；该开发环境使用单独的 Compose 项目和数据卷。更换 `DBSPHERE_PG18_IMAGE` 会改变在线部署的存储镜像，须独立验证 PG18 数据卷的升级与回滚。
+当前 `Dockerfile-go` 以 `CGO_ENABLED=0` 构建后端并嵌入静态前端。默认 Compose 配套独立 PostgreSQL 18.7 Bookworm，使用[固定的官方镜像摘要](GO_DEPENDENCY_AUDIT.md)。连接已有 PG18 可改用 `deploy/compose/compose.go.external.yaml`。联网 Linux 构建机运行 `bash scripts/one-click-go.sh` 会创建独立的 `deploy/compose/.env.go`、监控库密码和主密钥。默认绑定 `127.0.0.1:8081`，通过首次改密初始化管理员。该开发环境使用单独的 Compose 项目和数据卷。
 
 Go 一键离线包由联网 Linux amd64 或 arm64 构建机执行 `bash scripts/build-go-offline-bundle.sh /absolute/output/directory` 制作，输出与构建机相同架构的包。目标机预装 Docker Engine/Compose v2 后，将生成的 `DbSphere-go-offline-*.run` 和同名 `.run.sha256` 放在同一目录，再运行 `.run`。安装器先核对校验文件和包内架构，再加载静态 Go 应用镜像与固定摘要的 PG18 镜像。Compose 以 `--no-build --pull never` 启动。首次安装在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env` 生成随机凭据，默认端口 8081；`DBSPHERE_GO_CONFIG_DIR` 可指定独立配置目录。两种架构都经无外网 Docker 守护进程验收，覆盖升级、回退和历史存储保留。管理员密码轮换及 PG18 备份恢复在 Linux amd64 发布 CI 中验收。通过发布页取得校验文件，以 SHA-256 核对传输完整性。[安全审查](V1_SECURITY_REVIEW.md)
 
@@ -85,7 +87,7 @@ Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版�
 - `verify_restore` 连接已恢复的独立端点和数据库，额外配置 `markerColumn`、`requiredMarker` 与 `excludedMarker`。核验读取恢复点前后各一个标记，执行账号需要标记列的 SELECT 权限。
 - `analyze_relation` 限制为事件资产数据库中的一张普通持久表。PostgreSQL 17 起可为执行账号授权该表的 MAINTAIN，更早的版本要求执行账号具备表所有者权限。部署配置完成后，作业仍经过预演和独立审批。[PostgreSQL ANALYZE 文档](https://www.postgresql.org/docs/18/sql-analyze.html)
 
-管理员密码只在空库首次启动时初始化；仅修改 `DBSPHERE_ADMIN_PASSWORD` 并重启不会轮换。要轮换现有安装，先在权限为 `0600` 的 `dbsphere-go.env` 中更改该值，再运行同一离线包的 `--rotate-admin-password` 参数。安装器在已运行的 PG18 存储中更新密码哈希，随后重建 Go 应用容器；旧管理员会话随密码哈希变化失效。源码 Compose 部署可在修改 `deploy/compose/.env.go` 后执行 `docker compose --env-file deploy/compose/.env.go -f deploy/compose/compose.go.yaml run --rm --no-deps app rotate-admin-password`，再重建应用容器。不要轮换 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
+管理员密码由首次改密或首次配置写入监控库。仅修改 `DBSPHERE_ADMIN_PASSWORD` 并重启时仍使用监控库中的密码。要轮换现有安装，先在权限为 `0600` 的 `dbsphere-go.env` 中更改该值，再运行同一离线包的 `--rotate-admin-password` 参数。安装器在已运行的 PG18 存储中更新密码哈希，随后重建 Go 应用容器。旧管理员会话随密码哈希变化失效。源码 Compose 部署可在修改 `deploy/compose/.env.go` 后执行 `docker compose --env-file deploy/compose/.env.go -f deploy/compose/compose.go.yaml run --rm --no-deps app rotate-admin-password`，再重建应用容器。保留 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 Go 版需要访问 K8S API 时，可在 `deploy/compose/.env.go`（联网开发部署）或 `${DBSPHERE_GO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go}/dbsphere-go.env`（离线包）追加 `DBSPHERE_KUBECONFIG_HOST_PATH=/absolute/path/to/read-only-kubeconfig` 后重新执行一键脚本。脚本校验文件存在并只读挂载；配置需使用静态 ServiceAccount token 和受信 CA，不执行 kubeconfig 中的 `exec` 凭据插件。Go K8S 适配器支持已映射 Pod 的状态、Node、Service、PVC/PV、Pod 事件与可用的 metrics.k8s.io；本机 kind 已完成只读采集与故障闭环，[验收边界见记录](KIND_ACCEPTANCE.md)，生产集群仍待验证。
 

@@ -554,14 +554,21 @@ func (s *Postgres) Health(ctx context.Context) error {
 	return nil
 }
 
-func (s *Postgres) AdminPasswordHash(ctx context.Context, bootstrapPassword string) (string, error) {
+// CurrentAdminPasswordHash returns an empty hash before the first administrator
+// credential is committed. The initial password is never stored as a normal login.
+func (s *Postgres) CurrentAdminPasswordHash(ctx context.Context) (string, error) {
 	var stored string
 	err := s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='admin_password_hash'").Scan(&stored)
-	if err == nil {
-		return stored, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("read administrator password hash: %w", err)
+	}
+	return stored, nil
+}
+
+func (s *Postgres) AdminPasswordHash(ctx context.Context, bootstrapPassword string) (string, error) {
+	stored, err := s.CurrentAdminPasswordHash(ctx)
+	if err != nil || stored != "" || security.NeedsInitialAdministratorPassword(bootstrapPassword) {
+		return stored, err
 	}
 	if len(bootstrapPassword) < 12 {
 		return "", errors.New("DBSPHERE_ADMIN_PASSWORD is required for first start")
@@ -573,10 +580,37 @@ func (s *Postgres) AdminPasswordHash(ctx context.Context, bootstrapPassword stri
 	if _, err := s.pool.Exec(ctx, "INSERT INTO settings(key,value) VALUES('admin_password_hash',$1) ON CONFLICT(key) DO NOTHING", hash); err != nil {
 		return "", fmt.Errorf("initialize administrator password: %w", err)
 	}
-	if err := s.pool.QueryRow(ctx, "SELECT value FROM settings WHERE key='admin_password_hash'").Scan(&stored); err != nil {
-		return "", fmt.Errorf("read initialized administrator password hash: %w", err)
+	return s.CurrentAdminPasswordHash(ctx)
+}
+
+// CompleteAdministratorSetup commits the first real password and its audit row
+// together. Concurrent setup requests can only commit one password.
+func (s *Postgres) CompleteAdministratorSetup(ctx context.Context, password string) (string, error) {
+	if !security.ValidNewAdministratorPassword(password) {
+		return "", errors.New("administrator password must contain 12 to 256 characters")
 	}
-	return stored, nil
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		return "", err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	inserted, err := tx.Exec(ctx, "INSERT INTO settings(key,value) VALUES('admin_password_hash',$1) ON CONFLICT(key) DO NOTHING", hash)
+	if err != nil || inserted.RowsAffected() == 0 {
+		return "", err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO admin_audit(id,actor,method,path,outcome,status_code,organization_id)
+		VALUES(gen_random_uuid(),'admin','POST','/api/login','accepted',200,$1)`, DefaultOrganizationID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return hash, nil
 }
 
 // RotateAdminPassword is an explicit operation. Ordinary startup only uses

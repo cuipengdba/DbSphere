@@ -8,25 +8,28 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/cuipengdba/dbsphere/internal/security"
 )
 
 var assetIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type Config struct {
-	ListenAddr     string
-	DatabaseURL    string
-	MasterKey      []byte
-	AdminPass      string
-	ViewerPass     string
-	ApproverPass   string
-	ViewerAssetIDs []string
-	AutoCollect    bool
-	CollectEvery   int
-	CollectWorkers int
-	OTLPToken      string
-	TraceDays      int
-	SampleDays     int
-	EventDays      int
+	ListenAddr       string
+	DatabaseURL      string
+	MasterKey        []byte
+	AdminPass        string
+	DockerLocalSetup bool
+	ViewerPass       string
+	ApproverPass     string
+	ViewerAssetIDs   []string
+	AutoCollect      bool
+	CollectEvery     int
+	CollectWorkers   int
+	OTLPToken        string
+	TraceDays        int
+	SampleDays       int
+	EventDays        int
 }
 
 func Load() (Config, error) {
@@ -35,8 +38,12 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DBSPHERE_DATABASE_URL must point to an independent PostgreSQL 18 database")
 	}
 	password := os.Getenv("DBSPHERE_ADMIN_PASSWORD")
-	if len(password) < 12 {
+	if !security.NeedsInitialAdministratorPassword(password) && len(password) < 12 {
 		return Config{}, errors.New("DBSPHERE_ADMIN_PASSWORD must contain at least 12 characters")
+	}
+	dockerSetup := os.Getenv("DBSPHERE_DOCKER_LOCAL_SETUP")
+	if dockerSetup != "" && dockerSetup != "true" && dockerSetup != "false" {
+		return Config{}, errors.New("DBSPHERE_DOCKER_LOCAL_SETUP must be true or false")
 	}
 	viewer := os.Getenv("DBSPHERE_VIEWER_PASSWORD")
 	if viewer != "" && (len(viewer) < 12 || viewer == password) {
@@ -133,7 +140,7 @@ func Load() (Config, error) {
 		}
 	}
 	return Config{ListenAddr: net.JoinHostPort(host, strconv.Itoa(port)),
-		DatabaseURL: url, MasterKey: key, AdminPass: password, ViewerPass: viewer, ApproverPass: approver,
+		DatabaseURL: url, MasterKey: key, AdminPass: password, DockerLocalSetup: dockerSetup == "true", ViewerPass: viewer, ApproverPass: approver,
 		ViewerAssetIDs: viewerAssetIDs,
 		AutoCollect:    autoCollect, CollectEvery: interval, CollectWorkers: workers,
 		OTLPToken: otlpToken, TraceDays: traceDays,

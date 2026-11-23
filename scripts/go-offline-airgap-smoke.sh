@@ -17,8 +17,8 @@ done
 docker compose version >/dev/null
 mkdir -p -- "$root/config" "$root/stage"
 umask 077
-printf 'DBSPHERE_ADMIN_PASSWORD=%s\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_KEY=%s\nDBSPHERE_WEB_PORT=18081\nDBSPHERE_COOKIE_SECURE=false\n' \
-  "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" "$(openssl rand -base64 32 | tr -d '\n')" \
+printf 'DBSPHERE_ADMIN_PASSWORD=\nDBSPHERE_STORE_PASSWORD=%s\nDBSPHERE_MASTER_KEY=%s\nDBSPHERE_WEB_PORT=18081\nDBSPHERE_COOKIE_SECURE=false\n' \
+  "$(openssl rand -hex 24)" "$(openssl rand -base64 32 | tr -d '\n')" \
   > "$root/config/dbsphere-go.env"
 
 # The harness is prepared while online; only the installer runs with no network.
@@ -47,6 +47,31 @@ docker run --rm --network none --name dbsphere-go-airgap-installer \
 
 curl --fail --silent --show-error http://127.0.0.1:18081/readyz |
   jq -e '.storage == "postgresql18"' >/dev/null
+base='http://127.0.0.1:18081'
+initial='{"username":"admin","password":"123456"}'
+curl --fail --silent "$base/api/session" | jq -e '.setupRequired and .setupLocal and (.authenticated | not)' >/dev/null
+test "$(curl --silent -o /dev/null -w '%{http_code}' "$base/api/assets")" = 401
+test "$(curl --silent -o /dev/null -w '%{http_code}' -H 'Host: ops.example.invalid' \
+  -H 'Content-Type: application/json' --data "$initial" "$base/api/login")" = 403
+curl --fail --silent --show-error -c "$root/setup-cookie" -H 'Content-Type: application/json' --data "$initial" "$base/api/login" |
+  jq -e '.setupRequired and (.authenticated | not)' >/dev/null
+test "$(curl --silent -b "$root/setup-cookie" -o /dev/null -w '%{http_code}' "$base/api/assets")" = 401
+new_password="$(openssl rand -hex 24)"
+jq -nc --arg password "$new_password" '{username:"admin",password:"123456",newPassword:$password}' |
+  curl --fail --silent --show-error -c "$root/admin-cookie" -H 'Content-Type: application/json' --data-binary @- "$base/api/login" |
+  jq -e '.authenticated and .role=="admin"' >/dev/null
+test "$(curl --silent -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data "$initial" "$base/api/login")" = 401
+app_id="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=app)"
+test -n "$app_id"
+docker restart "$app_id" >/dev/null
+for attempt in {1..30}; do
+  if curl --fail --silent "$base/readyz" >/dev/null; then break; fi
+  sleep 1
+done
+jq -nc --arg password "$new_password" '{username:"admin",password:$password}' |
+  curl --fail --silent --show-error -H 'Content-Type: application/json' --data-binary @- "$base/api/login" |
+  jq -e '.authenticated and .role=="admin"' >/dev/null
+echo 'Local first-use password change, session restriction, and restart persistence passed.'
 docker image inspect "dbsphere/offline-go-app:$version" postgres:18-bookworm >/dev/null
 mapfile -t containers < <(docker ps -aq --filter "label=com.docker.compose.project=$project")
 if (( ${#containers[@]} > 0 )); then docker rm -f "${containers[@]}" >/dev/null; fi

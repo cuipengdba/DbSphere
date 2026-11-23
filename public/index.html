@@ -24,11 +24,18 @@
       <p class="eyebrow" id="release-label">DbSphere 控制台</p>
       <h1>登录运维控制台</h1>
       <p>输入账号密码进入数据库运维工作台。</p>
+      <p id="initial-admin-note" class="hint" hidden></p>
       <p id="login-error" class="notice error" role="alert"></p>
       <form id="login-form">
-        <label>账号<input name="username" autocomplete="username" maxlength="48" placeholder="初始账号可留空"></label>
+        <label>账号<input name="username" autocomplete="username" maxlength="48" placeholder="admin"></label>
         <label>登录密码<input name="password" type="password" required autocomplete="current-password"></label>
         <button type="submit">登录</button>
+      </form>
+      <form id="initial-admin-form" hidden>
+        <h2>设置管理员密码</h2>
+        <label>新密码<input name="newPassword" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
+        <label>确认新密码<input name="confirmPassword" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
+        <div class="section-actions"><button type="submit">保存新密码</button><button id="initial-admin-back" type="button" class="ghost">返回登录</button></div>
       </form>
       <a id="oidc-login" class="single-sign-on" href="/api/oidc/start" hidden>使用企业单点登录</a>
     </section>

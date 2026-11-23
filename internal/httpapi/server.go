@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -179,6 +180,8 @@ type TraceBatchStore interface {
 type AuthConfig struct {
 	MasterKey            []byte
 	PasswordHash         string
+	Administrator        AdministratorStore
+	DockerLocalSetup     bool
 	ViewerPasswordHash   string
 	ApproverPasswordHash string
 	ViewerAssetIDs       []string
@@ -209,6 +212,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 	}
 	var attemptsMu sync.Mutex
+	var administrator AdministratorStore
+	var setupBridge netip.Addr
+	if credentials != nil {
+		administrator = credentials.Administrator
+		if credentials.DockerLocalSetup {
+			setupBridge = dockerSetupBridge()
+		}
+	}
 	var storeUnavailableUntil atomic.Int64
 	attempts := map[string]loginAttempt{}
 	var aiAttemptsMu sync.Mutex
@@ -319,6 +330,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusNotImplemented, map[string]string{"error": "Go API migration in progress"})
 			return
 		}
+		credentials := credentials
+		initialSetup := false
+		if hash, ok := r.Context().Value(administratorHashKey{}).(string); ok {
+			copy := *credentials
+			copy.PasswordHash = hash
+			credentials = &copy
+			initialSetup = hash == ""
+		}
 		if storeUnavailableUntil.Load() > time.Now().UnixNano() {
 			w.Header().Set("X-DbSphere-Storage", "unavailable")
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "长期存储暂不可用，恢复后请重试"})
@@ -362,6 +381,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			loggedIn = loggedIn && role == "approver"
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/login" {
+			if initialSetup && !localSetupAllowed(r, setupBridge) {
+				respond(w, http.StatusForbidden, map[string]string{"error": "请从部署主机的本机地址完成管理员初始化"})
+				return
+			}
 			ip := r.RemoteAddr
 			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 				ip = host
@@ -375,14 +398,43 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			attemptsMu.Unlock()
 			var input struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Username    string `json:"username"`
+				Password    string `json:"password"`
+				NewPassword string `json:"newPassword"`
 			}
 			if err := readJSON(w, r, &input); err != nil {
 				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid login request"})
 				return
 			}
-			loginRole, loginAccount, err := authenticateAccessLogin(r.Context(), namedDB, credentials, input.Username, input.Password)
+			var loginRole string
+			var loginAccount storepkg.AccessAccount
+			var err error
+			if initialSetup {
+				if strings.EqualFold(strings.TrimSpace(input.Username), security.InitialAdministrator) &&
+					subtle.ConstantTimeCompare([]byte(input.Password), []byte(security.InitialAdministratorPassword)) == 1 {
+					if input.NewPassword == "" {
+						respond(w, http.StatusOK, map[string]bool{"authenticated": false, "setupRequired": true})
+						return
+					}
+					if !security.ValidNewAdministratorPassword(input.NewPassword) {
+						respond(w, http.StatusBadRequest, map[string]string{"error": "管理员新密码需为 12 至 256 字节"})
+						return
+					}
+					var hash string
+					hash, err = administrator.CompleteAdministratorSetup(r.Context(), input.NewPassword)
+					if err == nil && hash == "" {
+						respond(w, http.StatusConflict, map[string]string{"error": "管理员初始化已完成，请返回登录"})
+						return
+					}
+					loginRole = "admin"
+					adminKey = security.AdminSessionKey(credentials.MasterKey, hash)
+				}
+			} else if input.NewPassword != "" {
+				respond(w, http.StatusConflict, map[string]string{"error": "管理员初始化已完成，请返回登录"})
+				return
+			} else {
+				loginRole, loginAccount, err = authenticateAccessLogin(r.Context(), namedDB, credentials, input.Username, input.Password)
+			}
 			if err != nil {
 				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
 				return
@@ -397,6 +449,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				attempts[ip] = attempt
 				attemptsMu.Unlock()
+				if initialSetup {
+					if audit, ok := store.(AdminAuditStore); ok {
+						if id, err := audit.StartAdminAudit(r.Context(), r.Method, r.URL.Path); err == nil {
+							_ = audit.FinishAdminAudit(r.Context(), id, http.StatusUnauthorized)
+						}
+					}
+				}
 				respond(w, http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
 				return
 			}
@@ -437,6 +496,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/session" {
+			if initialSetup {
+				respond(w, http.StatusOK, map[string]bool{"authenticated": false, "setupRequired": true, "setupLocal": localSetupAllowed(r, setupBridge)})
+				return
+			}
 			var csrf any
 			if loggedIn {
 				csrf = security.CSRFToken(credentials.MasterKey, token)
@@ -1668,6 +1731,21 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'")
+		path := r.URL.Path
+		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces") {
+			hash, err := administrator.CurrentAdminPasswordHash(r.Context())
+			if err != nil {
+				w.Header().Set("X-DbSphere-Storage", "unavailable")
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "长期存储暂不可用，恢复后请重试"})
+				return
+			}
+			setupRequest := (path == "/api/session" && r.Method == http.MethodGet) || (path == "/api/login" && r.Method == http.MethodPost)
+			if hash == "" && !setupRequest {
+				respond(w, http.StatusUnauthorized, map[string]string{"error": "请先完成管理员初始化"})
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), administratorHashKey{}, hash))
+		}
 		mux.ServeHTTP(w, r)
 	})
 }

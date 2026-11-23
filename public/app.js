@@ -1,5 +1,6 @@
 let csrf = null;
 let currentRole = null;
+let initialAdminLogin = null;
 let currentUsername = '';
 let currentOrganization = '';
 let oidcEnabled = false;
@@ -3267,6 +3268,13 @@ async function boot() {
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
   $('logout').hidden = !session.authenticated;
+  const initialization = $('initial-admin-note');
+  initialization.hidden = !session.setupRequired;
+  if (session.setupRequired) {
+    initialization.textContent = session.setupLocal ? '使用初始管理员 admin 登录，并设置新的管理员密码。'
+      : '请从部署主机的本机地址完成管理员初始化。';
+    if (session.setupLocal && !$('login-form').elements.username.value) $('login-form').elements.username.value = 'admin';
+  }
   const ssoError = new URLSearchParams(location.search).get('sso');
   if (ssoError && !session.authenticated) {
     $('login-error').textContent = ssoError === 'unlinked' ? '该身份尚未绑定 DbSphere 账号。' :
@@ -3331,8 +3339,56 @@ window.addEventListener('hashchange', () => setView(location.hash.slice(1), fals
 $('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('login-error').textContent = '';
-  try { const data = await api('/api/login', 'POST', Object.fromEntries(new FormData(event.target))); event.target.reset(); csrf = data.csrf; await boot(); }
+  const login = Object.fromEntries(new FormData(event.target));
+  try {
+    const data = await api('/api/login', 'POST', login);
+    event.target.reset();
+    if (data.setupRequired) {
+      initialAdminLogin = login;
+      event.target.hidden = true;
+      const setup = $('initial-admin-form');
+      setup.hidden = false;
+      setup.elements.newPassword.focus();
+      return;
+    }
+    csrf = data.csrf;
+    await boot();
+  }
   catch (e) { $('login-error').textContent = e.message; }
+});
+
+function resetInitialAdminForm() {
+  initialAdminLogin = null;
+  $('initial-admin-form').reset();
+  $('initial-admin-form').hidden = true;
+  $('login-form').hidden = false;
+}
+
+$('initial-admin-back').addEventListener('click', async () => {
+  resetInitialAdminForm();
+  $('login-error').textContent = '';
+  try { await boot(); }
+  catch (e) { $('login-error').textContent = e.message; }
+});
+
+$('initial-admin-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const newPassword = form.elements.newPassword.value;
+  $('login-error').textContent = '';
+  if (!initialAdminLogin || newPassword !== form.elements.confirmPassword.value) {
+    $('login-error').textContent = '请确认两次输入的密码一致。';
+    return;
+  }
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const data = await api('/api/login', 'POST', { ...initialAdminLogin, newPassword });
+    csrf = data.csrf;
+    resetInitialAdminForm();
+    await boot();
+  } catch (e) { $('login-error').textContent = e.message; }
+  finally { button.disabled = false; }
 });
 
 $('logout').addEventListener('click', async () => {

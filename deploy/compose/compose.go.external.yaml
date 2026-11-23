@@ -10,7 +10,8 @@ services:
       - 'host.docker.internal:host-gateway'
     environment: &go-environment
       DBSPHERE_DATABASE_URL: ${DBSPHERE_DATABASE_URL:?Set an independent PostgreSQL 18 URL in .env.go}
-      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:?Run scripts/one-click-go.sh first}
+      DBSPHERE_ADMIN_PASSWORD: ${DBSPHERE_ADMIN_PASSWORD:-}
+      DBSPHERE_DOCKER_LOCAL_SETUP: 'true'
       DBSPHERE_VIEWER_PASSWORD: ${DBSPHERE_VIEWER_PASSWORD:-}
       DBSPHERE_APPROVER_PASSWORD: ${DBSPHERE_APPROVER_PASSWORD:-}
       DBSPHERE_WORK_ORDER_TARGETS: ${DBSPHERE_WORK_ORDER_TARGETS:-}
