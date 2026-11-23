@@ -2083,12 +2083,18 @@ async function loadPlatformStatus() {
 }
 
 function renderCollectorStatus(status) {
-  const target = $('collector-status-detail'); target.replaceChildren();
-  if (!status) { target.append(cell('p', '当前进程的采集状态暂时不可用。', 'warning')); return; }
+  const target = $('collector-status-detail');
+  if (!status) { target.replaceChildren(cell('p', '当前进程的采集状态暂时不可用。', 'warning')); return; }
+  let summary = target.querySelector('.collector-summary');
+  if (!summary) {
+    summary = cell('div', '', 'collector-summary');
+    target.replaceChildren(summary);
+  }
+  summary.replaceChildren();
   const labels = { disabled: '自动采集已关闭', starting: '等待首轮采集', running: '正在采集',
     overdue: '本轮已超过两个采集周期', healthy: '采集循环正常',
     degraded: '最近一轮有采集器错误', stalled: '采集循环未按周期推进' };
-  target.append(cell('p', labels[status.state] ?? '状态未知',
+  summary.append(cell('p', labels[status.state] ?? '状态未知',
     ['overdue', 'degraded', 'stalled'].includes(status.state) ? 'warning' : 'hint'));
   const grid = document.createElement('div'); grid.className = 'metric-grid';
   for (const [label, value] of [
@@ -2105,10 +2111,11 @@ function renderCollectorStatus(status) {
   ]) {
     const box = document.createElement('div'); box.append(cell('span', label), cell('strong', String(value))); grid.append(box);
   }
-  target.append(grid);
-  if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
-  if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
-  target.append(cell('p', '轮次统计来自当前进程的常规采集队列。所有副本的任务、租约和重试记录保存在 PostgreSQL 18。', 'hint'));
+  summary.append(grid);
+  if (status.cycle?.dueScanFailed) summary.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
+  if (status.cycle?.atBatchLimit) summary.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
+  summary.append(cell('p', '轮次统计来自当前进程的常规采集队列。所有副本的任务、租约和重试记录保存在 PostgreSQL 18。', 'hint'));
+  if (summary.nextElementSibling) return;
   const queue = cell('div', '', 'monitor-table');
   queue.setAttribute('aria-live', 'polite');
   const loadQueue = cell('button', '查看采集队列', 'ghost small-button');
