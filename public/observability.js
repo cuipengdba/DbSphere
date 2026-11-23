@@ -26,14 +26,14 @@
   const nodeStage = {
     service: 0, service_span: 0, app_pod: 0,
     db_client_span: 1, pgbouncer: 1,
-    postgres: 2, sample: 2, session: 2, wait: 2, sql_fingerprint: 2,
+    postgres: 2, mysql: 2, sample: 2, session: 2, wait: 2, sql_fingerprint: 2,
     slow_log: 2, plan: 2,
     linux: 3, pod: 3, k8s_node: 3, pvc: 3, pvc_status: 3,
     event: 4, evidence: 4, candidate: 4
   };
   const typeLabel = {
     service: '服务', service_span: '服务 Span', app_pod: '应用 Pod',
-    db_client_span: '数据库 Span', pgbouncer: '连接池', postgres: '数据库',
+    db_client_span: '数据库 Span', pgbouncer: '连接池', postgres: '数据库', mysql: 'MySQL',
     sample: '采样', session: '会话', wait: '等待', sql_fingerprint: 'SQL 指纹',
     slow_log: '慢日志', plan: '执行计划', linux: 'Linux', pod: '数据库 Pod',
     k8s_node: 'K8S Node', pvc: 'PVC', pvc_status: 'PVC 状态',
@@ -43,7 +43,7 @@
     alert_firing: '告警触发', alert_recovered: '告警恢复',
     alert_signal_missing: '告警信号缺失', alert_disabled: '规则停用',
     alert_suppressed: '告警静默', alert_unsuppressed: '静默结束',
-    collection_error: '采集失败', collection_recovered: '采集恢复',
+    collection_error: '采集失败', collection_recovered: '采集恢复', mysql_lock_wait: 'InnoDB 锁等待',
     linux_state: 'Linux 状态', k8s_state: 'Kubernetes 状态',
     pgbouncer_state: 'PgBouncer 状态', patroni_state: 'Patroni 状态',
     root_cause_candidate: '根因候选', rca_decision: '人工根因决定',
@@ -57,9 +57,9 @@
   const scopes = {
     all: null,
     trace: new Set(['service', 'service_span', 'app_pod', 'db_client_span', 'pgbouncer', 'postgres', 'sample']),
-    database: new Set(['postgres', 'sample', 'session', 'wait', 'sql_fingerprint', 'slow_log', 'plan', 'pgbouncer']),
+    database: new Set(['postgres', 'mysql', 'sample', 'session', 'wait', 'sql_fingerprint', 'slow_log', 'plan', 'pgbouncer']),
     infra: new Set(['postgres', 'sample', 'linux', 'pod', 'app_pod', 'k8s_node', 'pvc', 'pvc_status']),
-    cause: new Set(['event', 'evidence', 'candidate', 'sample', 'postgres'])
+    cause: new Set(['event', 'evidence', 'candidate', 'sample', 'postgres', 'mysql'])
   };
   const accent = ['var(--plot-blue)', 'var(--plot-violet)', 'var(--plot-teal)', 'var(--plot-orange)', 'var(--plot-orange)'];
   const important = new Set(['parent_of', 'calls', 'calls_service', 'via_pooler', 'routes_to',
@@ -81,6 +81,8 @@
 
   function eventGraph(graph, event) {
     const allNodes = Array.isArray(graph?.nodes) ? graph.nodes.filter(node => node?.id) : [];
+    const databaseLabel = allNodes.some(node => node.type === 'mysql') ? 'MySQL' : 'PostgreSQL';
+    const stageLabels = stages.map((stage, index) => index === 2 ? databaseLabel : stage);
     const allEdges = Array.isArray(graph?.edges) ? graph.edges.filter(edge => edge?.from && edge?.to) : [];
     const byID = new Map(allNodes.map(node => [node.id, node]));
     const section = make('section', 'obs-panel obs-evidence-graph');
@@ -98,7 +100,7 @@
     search.setAttribute('aria-label', '查找证据节点');
     controls.append(scope, search);
     section.append(controls);
-    const legend = make('p', 'obs-legend', '应用与请求 → 数据库调用 → PostgreSQL → 基础设施 → 事件与判断');
+    const legend = make('p', 'obs-legend', stageLabels.join(' → '));
     section.append(legend);
     const viewport = make('div', 'obs-graph-viewport');
     viewport.tabIndex = 0;
@@ -158,7 +160,7 @@
         degree.set(edge.to, (degree.get(edge.to) || 0) + 1);
       }
       const priority = node => (node.id === selected ? 1000 : 0) +
-        ({ candidate: 110, service_span: 90, db_client_span: 90, postgres: 88,
+        ({ candidate: 110, service_span: 90, db_client_span: 90, postgres: 88, mysql: 88,
           pod: 85, app_pod: 82, sql_fingerprint: 80, session: 78, pgbouncer: 76,
           sample: 72, event: 70, evidence: 32 }[node.type] || 55) +
         Math.min(degree.get(node.id) || 0, 20);
@@ -171,7 +173,7 @@
       for (const node of selectedNodes) buckets[nodeStage[node.type] ?? 4].push(node);
       const activeLanes = buckets.map((bucket, index) => ({ bucket, index }))
         .filter(lane => lane.bucket.length);
-      legend.textContent = activeLanes.map(lane => stages[lane.index]).join(' → ') || '当前筛选下没有节点';
+      legend.textContent = activeLanes.map(lane => stageLabels[lane.index]).join(' → ') || '当前筛选下没有节点';
       const laneWidth = 238; const rowHeight = 78;
       const width = Math.max(300, activeLanes.length * laneWidth);
       const height = Math.max(245, 78 + Math.max(0, ...activeLanes.map(lane => lane.bucket.length)) * rowHeight);
@@ -189,7 +191,7 @@
         canvas.append(svg('rect', { x: lane * laneWidth + 3, y: 4, width: laneWidth - 6,
           height: height - 8, rx: 12, fill: lane % 2 ? 'var(--soft)' : 'var(--bg)' }));
         const title = svg('text', { x: lane * laneWidth + 17, y: 30, class: 'obs-lane-title' });
-        title.textContent = stages[stageIndex]; canvas.append(title);
+        title.textContent = stageLabels[stageIndex]; canvas.append(title);
         bucket.forEach((node, row) => positions.set(node.id,
           { x: lane * laneWidth + 15, y: 49 + row * rowHeight, stageIndex }));
       }

@@ -234,7 +234,11 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 				if holder, waiter := number(wait["blockingThread"]), number(wait["waitingThread"]); holder > 0 && waiter > 0 {
 					title = fmt.Sprintf("InnoDB 线程 %.0f 持锁，阻塞线程 %.0f", holder, waiter)
 				}
-				addCandidate("mysql_innodb_lock_wait", title, "high", []string{item.ID},
+				supports := []string{item.ID}
+				if sampleID := stringValue(payload["sampleId"]); sampleID != "" {
+					supports = append(supports, "sample:"+sampleID)
+				}
+				addCandidate("mysql_innodb_lock_wait", title, "high", supports,
 					[]string{"核对持锁事务的开始时间和提交路径"}, "证据确认采样时的直接阻塞关系。", nil, item.ObservedAt, nil)
 			}
 			continue

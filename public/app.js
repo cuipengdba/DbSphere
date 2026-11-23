@@ -1173,7 +1173,12 @@ function renderMySQLAsset(detail, asset, samples) {
   coverage.append(cell('summary', '采集能力与缺口'));
   const labels = { connections: '连接状态', lockWaits: 'InnoDB 锁等待', sqlPerformance: 'Top SQL 指纹', replication: '复制状态' };
   const status = { ok: '已采集', limited_permissions: '权限受限', not_configured: '未启用', unavailable: '采集失败' };
-  coverage.append(importTable(['指标', '数据源', '采集状态'], report.signals.map(signal => [
+  const table = (headings, rows) => {
+    const block = cell('div', '', 'monitor-table');
+    block.append(importTable(headings, rows));
+    return block;
+  };
+  coverage.append(table(['指标', '数据源', '采集状态'], report.signals.map(signal => [
     labels[signal.key] || signal.key, signal.source, `${status[signal.status] || '未知'}${signal.reason ? ' · ' + signal.reason : ''}`
   ])));
   detail.append(coverage);
@@ -1181,7 +1186,7 @@ function renderMySQLAsset(detail, asset, samples) {
   const connectionHistory = samples.slice(0, 12).filter(point => point.metrics?.mysql?.connections != null);
   if (connectionHistory.length) {
     const history = cell('details', '', 'settings-details');
-    history.append(cell('summary', '最近连接采样'), importTable(['时间', '当前连接', '运行线程', '最大连接'],
+    history.append(cell('summary', '最近连接采样'), table(['时间', '当前连接', '运行线程', '最大连接'],
       connectionHistory.map(point => [formatTime(point.collectedAt), String(point.metrics.mysql.connections),
         String(point.metrics.mysql.running ?? '未采集'), String(point.metrics.mysql.maxConnections)])));
     detail.append(history);
@@ -1195,20 +1200,20 @@ function renderMySQLAsset(detail, asset, samples) {
     detail.append(link);
   }
   if (available('lockWaits') && data.lockWaits?.length) {
-    detail.append(importTable(['等待线程', '阻塞线程', '对象', '请求锁模式'], data.lockWaits.map(wait => [
+    detail.append(table(['等待线程', '阻塞线程', '对象', '请求锁模式'], data.lockWaits.map(wait => [
       String(wait.waitingThread || '未知'), String(wait.blockingThread || '未知'), [wait.schema, wait.table].filter(Boolean).join('.') || '未采集', wait.mode || '未采集'
     ])));
     if (data.locksTruncated) detail.append(cell('p', '显示当前样本中的 20 条等待关系。', 'hint'));
   } else detail.append(cell('p', available('lockWaits') ? '本次采样未发现 InnoDB 锁等待。' : '本次锁等待信号不可用。', 'empty'));
   detail.append(cell('h3', 'Top SQL 指纹'));
   if (available('sqlPerformance') && data.topSql?.length) {
-    detail.append(importTable(['指纹', '执行次数', '累计耗时 ms', '平均耗时 ms', '扫描行数'], data.topSql.map(row => [
+    detail.append(table(['指纹', '执行次数', '累计耗时 ms', '平均耗时 ms', '扫描行数'], data.topSql.map(row => [
       cell('code', row.digest), String(row.calls), row.totalMs.toFixed(2), row.meanMs.toFixed(2), String(row.rowsExamined)
     ])));
   } else detail.append(cell('p', available('sqlPerformance') ? '指定数据库暂无指纹数据。' : '本次 SQL 指纹信号不可用。', 'empty'));
   detail.append(cell('h3', '复制通道'));
   if (available('replication') && data.replication?.length) {
-    detail.append(importTable(['通道', '源实例 UUID', '接收线程', '应用线程', '最近 I/O 错误码'], data.replication.map(row => [
+    detail.append(table(['通道', '源实例 UUID', '接收线程', '应用线程', '最近 I/O 错误码'], data.replication.map(row => [
       row.name || '默认', row.sourceUuid || '未知', row.receiver, row.applier, String(row.lastIoError)
     ])));
   } else detail.append(cell('p', available('replication') ? '本次采样未发现入站复制通道。' : '本次复制信号不可用。', 'empty'));

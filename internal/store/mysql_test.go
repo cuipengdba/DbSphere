@@ -28,15 +28,20 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 		t.Fatal("invalid MySQL fixture DSN")
 	}
 	defer admin.Close()
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	schema := "dbsphere_mysql84_" + suffix
+	monitor := "dbsphere_ci_" + suffix
+	account := "'" + monitor + "'@'%'"
+	const grantLocks = `GRANT SELECT ON performance_schema.data_lock_waits TO `
 	for _, statement := range []string{
-		`CREATE DATABASE dbsphere_mysql84_drill`,
-		`CREATE TABLE dbsphere_mysql84_drill.orders (id int PRIMARY KEY, n int) ENGINE=InnoDB`,
-		`INSERT INTO dbsphere_mysql84_drill.orders VALUES(1,0)`,
-		`CREATE USER 'dbsphere_ci_monitor'@'%' IDENTIFIED BY 'dbsphere-ci-monitor'`,
-		`GRANT SELECT ON performance_schema.global_status TO 'dbsphere_ci_monitor'@'%'`,
-		`GRANT SELECT ON performance_schema.data_locks TO 'dbsphere_ci_monitor'@'%'`,
-		`GRANT SELECT ON performance_schema.data_lock_waits TO 'dbsphere_ci_monitor'@'%'`,
-		`GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO 'dbsphere_ci_monitor'@'%'`,
+		`CREATE DATABASE ` + schema,
+		`CREATE TABLE ` + schema + `.orders (id int PRIMARY KEY, n int) ENGINE=InnoDB`,
+		`INSERT INTO ` + schema + `.orders VALUES(1,0)`,
+		`CREATE USER ` + account + ` IDENTIFIED BY 'dbsphere-ci-monitor'`,
+		`GRANT SELECT ON performance_schema.global_status TO ` + account,
+		`GRANT SELECT ON performance_schema.data_locks TO ` + account,
+		grantLocks + account,
+		`GRANT SELECT ON performance_schema.events_statements_summary_by_digest TO ` + account,
 	} {
 		if _, err := admin.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("prepare MySQL fixture: %v", err)
@@ -57,8 +62,8 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 	}
 	port, _ := strconv.Atoi(rawPort)
 	key := []byte("01234567890123456789012345678901")
-	input := assets.Input{Name: "MySQL 8.4 CI", Host: host, Port: port, Database: "dbsphere_mysql84_drill",
-		Username: "dbsphere_ci_monitor", Password: "dbsphere-ci-monitor", SSLMode: "disable", Runtime: assets.RuntimeMySQL}
+	input := assets.Input{Name: "MySQL 8.4 CI", Host: host, Port: port, Database: schema,
+		Username: monitor, Password: "dbsphere-ci-monitor", SSLMode: "disable", Runtime: assets.RuntimeMySQL}
 	if err := input.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +84,7 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer holder.Rollback()
-	const update = `UPDATE dbsphere_mysql84_drill.orders SET n=n+1 WHERE id=1`
+	update := `UPDATE ` + schema + `.orders SET n=n+1 WHERE id=1`
 	if _, err := holder.ExecContext(ctx, update); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +114,7 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT event_id::text FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`, access.ID, mysqlLockGroup).Scan(&eventID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.ExecContext(ctx, `REVOKE SELECT ON performance_schema.data_lock_waits FROM 'dbsphere_ci_monitor'@'%'`); err != nil {
+	if _, err := admin.ExecContext(ctx, `REVOKE SELECT ON performance_schema.data_lock_waits FROM `+account); err != nil {
 		t.Fatal(err)
 	}
 	check()
@@ -117,7 +122,7 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT status='open' FROM events WHERE id=$1`, eventID).Scan(&opened); err != nil || !opened {
 		t.Fatal("missing lock permission must preserve the original open incident", err)
 	}
-	if _, err := admin.ExecContext(ctx, `GRANT SELECT ON performance_schema.data_lock_waits TO 'dbsphere_ci_monitor'@'%'`); err != nil {
+	if _, err := admin.ExecContext(ctx, grantLocks+account); err != nil {
 		t.Fatal(err)
 	}
 	if err := holder.Rollback(); err != nil {
@@ -134,6 +139,7 @@ func TestLiveMySQL84PreviewLockReplay(t *testing.T) {
 	encoded, err := json.Marshal(event)
 	if err != nil || !strings.Contains(string(encoded), `"status":"resolved"`) ||
 		!strings.Contains(string(encoded), `"code":"mysql_innodb_lock_wait"`) ||
+		!strings.Contains(string(encoded), `"evidenceStrength":"direct"`) ||
 		!strings.Contains(string(encoded), blocked.SampleID) || !strings.Contains(string(encoded), recovered.SampleID) {
 		t.Fatal("MySQL event must preserve detection, blocker analysis and recovery samples", err)
 	}

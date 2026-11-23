@@ -193,7 +193,7 @@ func candidateEvidenceStrength(candidate map[string]any, samples map[string]samp
 	}
 	if hasRawSample {
 		switch stringValue(candidate["code"]) {
-		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down":
+		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down", "mysql_innodb_lock_wait":
 			return "direct"
 		}
 		return "correlated"
