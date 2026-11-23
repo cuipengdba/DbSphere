@@ -167,7 +167,11 @@ func run(log *slog.Logger) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	pg, err := store.Open(ctx, cfg.DatabaseURL)
+	workers := 0
+	if cfg.AutoCollect {
+		workers = cfg.CollectWorkers
+	}
+	pg, err := store.OpenWithCollectorWorkers(ctx, cfg.DatabaseURL, workers)
 	if err != nil {
 		return err
 	}

@@ -43,11 +43,17 @@ func (s *Postgres) ConfigureRetention(sampleDays, eventDays int) {
 var schemaSQL string
 
 func Open(ctx context.Context, url string) (*Postgres, error) {
+	return OpenWithCollectorWorkers(ctx, url, 0)
+}
+
+func OpenWithCollectorWorkers(ctx context.Context, url string, workers int) (*Postgres, error) {
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("parse PostgreSQL 18 URL: %w", err)
 	}
-	config.MaxConns = 5
+	// Keep capacity available for the console and maintenance when every
+	// collection worker is persisting a result or waiting on a lease.
+	config.MaxConns = int32(5 + max(0, min(workers, 16)))
 	config.ConnConfig.ConnectTimeout = 5 * time.Second
 	config.ConnConfig.RuntimeParams["application_name"] = "dbsphere-go"
 	pool, err := pgxpool.NewWithConfig(ctx, config)
