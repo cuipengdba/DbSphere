@@ -610,23 +610,40 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 }
 
 type collectorStore interface {
-	ClaimCollectionJobs(context.Context, time.Duration, int) ([]store.CollectionLease, error)
+	ClaimCollectionJobs(context.Context, time.Duration, int, store.CollectionLane) ([]store.CollectionLease, error)
 	CheckCollectionLease(context.Context, store.CollectionLease, time.Duration, []byte) (store.CheckResult, error)
 	RetryCollectionLease(context.Context, store.CollectionLease) error
 }
 
 func runCollector(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
 	tracker *collectorstate.Tracker, log *slog.Logger) {
+	if workers < 2 {
+		runCollectorLane(ctx, pg, key, interval, workers, store.CollectionAny, tracker, log)
+		return
+	}
+	isolatedDone := make(chan struct{})
+	go func() {
+		defer close(isolatedDone)
+		runCollectorLane(ctx, pg, key, interval, 1, store.CollectionIsolated, nil, log)
+	}()
+	runCollectorLane(ctx, pg, key, interval, workers-1, store.CollectionRegular, tracker, log)
+	<-isolatedDone
+}
+
+func runCollectorLane(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
+	lane store.CollectionLane, tracker *collectorstate.Tracker, log *slog.Logger) {
 	ticker := time.NewTicker(min(interval, 3*time.Second))
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		tracker.Begin(time.Now())
+		if tracker != nil {
+			tracker.Begin(time.Now())
+		}
 		cycle := collectorstate.Cycle{}
 		claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
-		jobs, err := pg.ClaimCollectionJobs(claimCtx, interval, workers)
+		jobs, err := pg.ClaimCollectionJobs(claimCtx, interval, workers, lane)
 		stopClaim()
 		if err != nil {
 			cycle.DueScanFailed = true
@@ -657,7 +674,12 @@ func runCollector(ctx context.Context, pg collectorStore, key []byte, interval t
 			cycle.TargetFailures = int(targetFailures.Load())
 			cycle.CollectorErrors = int(collectorErrors.Load())
 		}
-		tracker.Finish(time.Now(), cycle)
+		if tracker != nil {
+			tracker.Finish(time.Now(), cycle)
+		}
+		if cycle.AtBatchLimit {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return

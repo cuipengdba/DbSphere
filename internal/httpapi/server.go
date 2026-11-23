@@ -694,6 +694,28 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusOK, result)
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector/health" {
+			if role != "admin" {
+				respond(w, http.StatusForbidden, map[string]string{"error": "需要管理员权限"})
+				return
+			}
+			health, ok := store.(interface {
+				CollectionHealth(context.Context, int) (any, error)
+			})
+			if !ok || credentials.CollectorState == nil {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "采集时延暂不可用"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			result, err := health.CollectionHealth(ctx, credentials.CollectEvery)
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "采集时延暂不可用"})
+				return
+			}
+			respond(w, http.StatusOK, result)
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/collector/coverage" {
 			if role != "admin" {
 				respond(w, http.StatusForbidden, map[string]string{"error": "需要管理员权限"})

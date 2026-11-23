@@ -198,7 +198,9 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	groupWait.Add(1)
 	go func() {
 		defer groupWait.Done()
+		queryStarted := time.Now()
 		metrics, collectErr = collector.PostgreSQL(ctx, target, password)
+		lease.recordQueryDuration(queryStarted)
 	}()
 	if runtime == "k8s" {
 		groupWait.Add(1)
@@ -358,6 +360,7 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 }
 
 func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
+	writeStarted := time.Now()
 	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
 		return CheckResult{}, err
 	}
@@ -382,8 +385,16 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
 			return CheckResult{}, err
 		}
-		layer := object(metrics["collector"])
+		layer := ensureCollectorLayer(metrics)
 		layer["scheduledFor"] = lease.DueAt
+		layer["intervalSeconds"] = int(interval.Seconds())
+		layer["isolated"] = lease.Isolated
+		if delay := collectionQueueDelay(*lease); delay != nil {
+			layer["queueMs"] = *delay
+		}
+		if lease.queryMs != nil {
+			layer["queryMs"] = *lease.queryMs
+		}
 		if s.platformReplicaID != "" {
 			layer["replicaId"] = s.platformReplicaID
 		}
@@ -397,6 +408,11 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		_ = json.Unmarshal(previousJSON, &previous)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return CheckResult{}, fmt.Errorf("read previous monitoring sample: %w", err)
+	}
+	if lease != nil && previousID != "" && interval > 0 && now.Sub(previousAt) >= 2*interval {
+		layer := ensureCollectorLayer(metrics)
+		layer["gapSince"] = previousAt
+		layer["gapSeconds"] = int64(now.Sub(previousAt).Seconds())
 	}
 	recordLinuxInterval(object(metrics["linux"]), object(previous["linux"]), now.Sub(previousAt))
 	recordContainerStorage(metrics, previous, interval)
@@ -577,8 +593,14 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		if status == "error" {
 			outcome = "target_error"
 		}
+		var workMs *int64
+		if !lease.startedAt.IsZero() {
+			elapsed := writeStarted.Sub(lease.startedAt).Milliseconds()
+			workMs = &elapsed
+		}
 		if _, err := tx.Exec(ctx, finishCollectionSQL,
-			lease.AssetID, lease.Token, outcome, sampleID, int(interval.Seconds())); err != nil {
+			lease.AssetID, lease.Token, outcome, sampleID, int(interval.Seconds()), collectionQueueDelay(*lease),
+			lease.queryMs, time.Since(writeStarted).Milliseconds(), s.platformReplicaID, now, workMs); err != nil {
 			return CheckResult{}, fmt.Errorf("advance collection schedule: %w", err)
 		}
 	}

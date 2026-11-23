@@ -81,7 +81,7 @@ func TestCollectorBatchRunsInParallelWithinConfiguredLimit(t *testing.T) {
 
 type collectorCycleStub struct{ scanErr error }
 
-func (stub collectorCycleStub) ClaimCollectionJobs(context.Context, time.Duration, int) ([]store.CollectionLease, error) {
+func (stub collectorCycleStub) ClaimCollectionJobs(context.Context, time.Duration, int, store.CollectionLane) ([]store.CollectionLease, error) {
 	if stub.scanErr != nil {
 		return nil, stub.scanErr
 	}
@@ -117,7 +117,7 @@ func TestCollectorCycleSeparatesTargetAndStoreFailures(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				runCollector(ctx, collectorCycleStub{scanErr: test.scanErr}, nil, 15*time.Second, 2,
+				runCollectorLane(ctx, collectorCycleStub{scanErr: test.scanErr}, nil, 15*time.Second, 3, store.CollectionRegular,
 					tracker, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			}()
 			deadline := time.After(3 * time.Second)

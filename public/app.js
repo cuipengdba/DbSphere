@@ -2108,7 +2108,7 @@ function renderCollectorStatus(status) {
   target.append(grid);
   if (status.cycle?.dueScanFailed) target.append(cell('p', '最近一轮未能读取待采集资产。', 'warning'));
   if (status.cycle?.atBatchLimit) target.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
-  target.append(cell('p', '运行轮次按当前进程统计。下方队列保存任务、租约与重试状态。', 'hint'));
+  target.append(cell('p', '轮次统计来自当前进程的常规采集队列。所有副本的任务、租约和重试记录保存在 PostgreSQL 18。', 'hint'));
   const queue = cell('div', '', 'monitor-table');
   queue.setAttribute('aria-live', 'polite');
   const loadQueue = cell('button', '查看采集队列', 'ghost small-button');
@@ -2120,7 +2120,8 @@ function renderCollectorStatus(status) {
       const outcomes = { ok: '采样成功', target_error: '目标采集失败', execution_error: '采集器执行失败' };
       queue.replaceChildren(cell('p', Object.entries(labels).map(([key, label]) => `${label} ${counts[key]}`).join(' · '), 'hint'));
       if (jobs.length) queue.append(importTable(['实例', '调度状态', '最近结果', '下次到期', '租约截止', '连续失败', '采样'], jobs.map(job => [
-        job.name, labels[job.state], outcomes[job.outcome] ?? '待执行', formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures,
+        job.name, [labels[job.state], job.isolated ? '隔离队列' : ''].filter(Boolean).join(' · '), outcomes[job.outcome] ?? '待执行',
+        formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures,
         job.lastSampleId ? replaySampleLink(job.assetId, job.lastSampleId) : '—'
       ])));
       if (counts.total > jobs.length) queue.append(cell('p', `显示优先级最高的 ${jobs.length} 个任务，共 ${counts.total} 个。`, 'hint'));
@@ -2141,21 +2142,39 @@ function renderCollectorStatus(status) {
     finally { loadTrend.disabled = false; }
   });
   target.append(loadTrend, trendReport);
-  const loadCoverage = cell('button', '查看近 7 天采集覆盖', 'ghost small-button');
-  const report = document.createElement('div');
+  const loadCoverage = cell('button', '查看采集覆盖与耗时', 'ghost small-button');
+  const report = cell('div', '', 'monitor-table');
+  report.setAttribute('aria-live', 'polite');
   loadCoverage.addEventListener('click', async () => {
     loadCoverage.disabled = true;
     try {
-      const coverage = await api('/api/admin/collector/coverage');
-      report.replaceChildren(cell('p', `当前资产 ${coverage.targets} · 已到采集时间 ${coverage.due} · 近两周期有效 ${coverage.fresh}`, 'hint'));
-      const rows = coverage.days.map(day => [day.day.slice(0, 10), day.observed, day.samples, day.postgresOK,
-        day.samples ? `${(100 * day.failed / day.samples).toFixed(1)}%` : '无样本', `${(day.sampleBytes / 1048576).toFixed(2)} MiB`]);
-      report.append(importTable(['日期 UTC', '覆盖资产', '采样数', 'PG 有效采样', '失败占比', '指标载荷'], rows));
+      const coverage = await api('/api/admin/collector/health');
+      report.replaceChildren(cell('p', `每个资产采用最近一次调度结果。距最近成功样本 ${coverage.freshnessSeconds} 秒内计为有效。`, 'hint'));
+      const source = { linux: 'Linux', k8s: 'Kubernetes', managed: '托管 PostgreSQL', mysql: 'MySQL' };
+      const ms = (value, count) => value == null ? '待采样' : `${value} ms / ${count} 个`;
+      const rows = coverage.groups.map(group => [group.organization, source[group.source] ?? group.source,
+        `${group.fresh} / ${group.targets}`, group.isolated, ms(group.queueP95Ms, group.timedTargets),
+        ms(group.queryP95Ms, group.queryTargets), ms(group.storeP95Ms, group.storeTargets), formatTime(group.latestSampleAt)]);
+      if (rows.length) report.append(importTable(['组织', '采集来源', '新鲜 / 纳管', '隔离', '排队 P95', '目标查询 P95', 'PG18 写入 P95', '最新样本'], rows));
+      else report.append(cell('p', '当前组织没有待采集数据库。', 'hint'));
     } catch (error) { report.replaceChildren(cell('p', error.message, 'warning')); }
     finally { loadCoverage.disabled = false; }
   });
-  report.className = 'monitor-table';
   target.append(loadCoverage, report);
+  const daily = cell('button', '查看近 7 天采集覆盖', 'ghost small-button');
+  const dailyReport = cell('div', '', 'monitor-table');
+  dailyReport.setAttribute('aria-live', 'polite');
+  daily.addEventListener('click', async () => {
+    daily.disabled = true;
+    try {
+      const coverage = await api('/api/admin/collector/coverage');
+      const rows = coverage.days.map(day => [day.day.slice(0, 10), day.observed, day.samples, day.postgresOK,
+        day.samples ? `${(100 * day.failed / day.samples).toFixed(1)}%` : '无样本', `${(day.sampleBytes / 1048576).toFixed(2)} MiB`]);
+      dailyReport.replaceChildren(importTable(['日期 UTC', '覆盖资产', '采样数', 'PG 有效采样', '失败占比', '指标载荷'], rows));
+    } catch (error) { dailyReport.replaceChildren(cell('p', error.message, 'warning')); }
+    finally { daily.disabled = false; }
+  });
+  target.append(daily, dailyReport);
 }
 
 function renderRules(rules) {
@@ -3048,6 +3067,16 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (replay) evidencePanel.append(investigationPanel(event, replay, analysis, investigation, grafanaLink));
   if (investigation?.connectionStages && (investigation.connectionStages.rows.length || event.kind?.includes('pgbouncer'))) {
     evidencePanel.append(connectionStagePanel(investigation.connectionStages, event.assetId));
+  }
+  if (investigation?.collectionGaps?.length) {
+    const gaps = cell('section', '', 'evidence');
+    gaps.append(cell('h4', '采集时间缺口'));
+    for (const gap of investigation.collectionGaps) {
+      const row = cell('p', `${formatTime(gap.since)} 至 ${formatTime(gap.until)} · 相邻样本间隔 ${gap.seconds} 秒 · `);
+      row.append(replaySampleLink(event.assetId, gap.sampleId));
+      gaps.append(row);
+    }
+    evidencePanel.append(gaps);
   }
   if (replay) evidencePanel.append(incidentReplayPanel(event, replay, analysis, aiStatus.enabled));
   if (waitCaptures.length) {

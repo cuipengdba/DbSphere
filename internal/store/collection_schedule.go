@@ -17,10 +17,23 @@ const collectionLeaseSeconds = 60
 var ErrCollectionLeaseLost = errors.New("collection lease expired or was replaced")
 
 type CollectionLease struct {
-	AssetID string
-	Token   string
-	DueAt   time.Time
+	AssetID   string
+	Token     string
+	DueAt     time.Time
+	ClaimedAt time.Time
+	Isolated  bool
+
+	startedAt time.Time
+	queryMs   *int64
 }
+
+type CollectionLane int
+
+const (
+	CollectionAny CollectionLane = iota
+	CollectionRegular
+	CollectionIsolated
+)
 
 func migrateCollectionSchedule(ctx context.Context, tx pgx.Tx) error {
 	var applied bool
@@ -49,8 +62,9 @@ func migrateCollectionSchedule(ctx context.Context, tx pgx.Tx) error {
 }
 
 // Seed only missing jobs. A restart preserves pending work and the retry clock.
-func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Duration, limit int) ([]CollectionLease, error) {
-	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
+func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Duration, limit int, lane CollectionLane) ([]CollectionLease, error) {
+	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour || limit < 1 || limit > 100 ||
+		lane < CollectionAny || lane > CollectionIsolated {
 		return nil, errors.New("invalid collection schedule")
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -70,11 +84,12 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 		SELECT j.asset_id FROM collection_jobs j JOIN assets a ON a.id=j.asset_id
 		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
 		AND a.runtime IN ('linux','k8s','managed','mysql')
+		AND ($4::int=0 OR j.isolated=($4=2))
 		ORDER BY j.due_at,j.asset_id LIMIT $1 FOR UPDATE OF j SKIP LOCKED
 	) UPDATE collection_jobs j SET lease_token=gen_random_uuid(),
-		lease_until=clock_timestamp()+make_interval(secs=>$2),lease_replica_id=nullif($3,'')
-	FROM ready WHERE j.asset_id=ready.asset_id RETURNING j.asset_id::text,j.lease_token::text,j.due_at`,
-		limit, collectionLeaseSeconds, s.platformReplicaID)
+		lease_until=statement_timestamp()+make_interval(secs=>$2),lease_replica_id=nullif($3,'')
+	FROM ready WHERE j.asset_id=ready.asset_id RETURNING j.asset_id::text,j.lease_token::text,j.due_at,statement_timestamp(),j.isolated`,
+		limit, collectionLeaseSeconds, s.platformReplicaID, lane)
 	if err != nil {
 		return nil, err
 	}
@@ -99,20 +114,34 @@ func lockCollectionLease(ctx context.Context, tx pgx.Tx, lease CollectionLease) 
 const finishCollectionSQL = `UPDATE collection_jobs SET
 	lease_token=NULL,lease_until=NULL,lease_replica_id=NULL,
 	failures=CASE WHEN $3='ok' THEN 0 ELSE least(failures+1,7) END,
-	last_outcome=$3,last_finished_at=now(),last_sample_id=coalesce($4,last_sample_id),
-	due_at=now()+make_interval(secs=>CASE WHEN $3='ok' THEN $5
-		ELSE least(greatest($5,300),$5*(1 << least(failures,5))) END)
+	last_outcome=$3,last_finished_at=statement_timestamp(),last_sample_id=coalesce($4,last_sample_id),
+	last_success_at=CASE WHEN $3='ok' THEN $10 ELSE last_success_at END,
+	last_queue_ms=$6,last_query_ms=$7,last_store_ms=$8,last_replica_id=nullif($9,''),
+	isolated=CASE WHEN $3='ok' THEN coalesce($11::bigint>=5000,false)
+		ELSE isolated OR failures>=1 OR coalesce($11::bigint>=5000,false) END,
+	due_at=CASE WHEN $3='ok'
+		THEN date_bin(make_interval(secs=>$5::int),statement_timestamp(),due_at)+make_interval(secs=>$5::int)
+		ELSE statement_timestamp()+make_interval(secs=>least(greatest($5::int,300),$5::int*(1 << least(failures,5)))) END
 	WHERE asset_id=$1 AND lease_token=$2`
 
 // Retry only a lease still owned by this worker. If commit already succeeded,
 // the cleared token makes a retry harmless.
 func (s *Postgres) RetryCollectionLease(ctx context.Context, lease CollectionLease) error {
 	_, err := s.pool.Exec(ctx, finishCollectionSQL+" AND lease_until>clock_timestamp()",
-		lease.AssetID, lease.Token, "execution_error", nil, 5)
+		lease.AssetID, lease.Token, "execution_error", nil, 5, collectionQueueDelay(lease), nil, nil,
+		s.platformReplicaID, nil, nil)
 	return err
 }
 
+func (lease *CollectionLease) recordQueryDuration(start time.Time) {
+	if lease != nil {
+		duration := time.Since(start).Milliseconds()
+		lease.queryMs = &duration
+	}
+}
+
 func (s *Postgres) CheckCollectionLease(ctx context.Context, lease CollectionLease, interval time.Duration, key []byte) (CheckResult, error) {
+	lease.startedAt = time.Now()
 	if now := time.Now().UTC(); now.Sub(lease.DueAt) >= interval {
 		if err := s.checkStaleAsset(ctx, lease.AssetID, interval, now, &lease); err != nil {
 			return CheckResult{}, err
@@ -121,9 +150,18 @@ func (s *Postgres) CheckCollectionLease(ctx context.Context, lease CollectionLea
 	return s.checkAsset(ctx, lease.AssetID, key, &lease, interval)
 }
 
+func collectionQueueDelay(lease CollectionLease) *int64 {
+	if lease.ClaimedAt.IsZero() || lease.DueAt.IsZero() {
+		return nil
+	}
+	delay := max(int64(0), lease.ClaimedAt.Sub(lease.DueAt).Milliseconds())
+	return &delay
+}
+
 const collectionQueueSQL = `WITH queue AS (
 	SELECT a.id AS "assetId",a.name,a.last_sample_at AS "lastSampleAt",j.last_sample_id AS "lastSampleId",
 		j.lease_until AS "leaseUntil",j.lease_replica_id AS "leaseReplicaId",j.last_finished_at AS "lastFinishedAt",j.due_at AS "dueAt",
+		coalesce(j.isolated,false) AS isolated,j.last_queue_ms AS "queueMs",j.last_query_ms AS "queryMs",j.last_store_ms AS "storeMs",
 		coalesce(j.failures,0) AS failures,coalesce(j.last_outcome,'') AS outcome,
 		CASE WHEN j.lease_until>now() THEN 'running'
 		WHEN j.due_at<=now() AND (j.lease_until IS NOT NULL OR j.due_at<=now()-make_interval(secs=>$1)) THEN 'delayed'
@@ -132,6 +170,7 @@ const collectionQueueSQL = `WITH queue AS (
 		WHEN coalesce(j.due_at,a.last_sample_at+make_interval(secs=>$1))<=now() THEN 'due'
 		ELSE 'scheduled' END AS state
 	FROM assets a LEFT JOIN collection_jobs j ON j.asset_id=a.id WHERE a.runtime IN ('linux','k8s','managed','mysql')
+		AND ($2::uuid IS NULL OR a.organization_id=$2)
 ), ranked AS (
 	SELECT *, array_position(ARRAY['delayed','backoff','missing','running','due','scheduled'],state) AS priority
 	FROM queue ORDER BY priority,"dueAt" NULLS FIRST,"assetId" LIMIT 30
@@ -144,6 +183,6 @@ SELECT jsonb_build_object('counts',(SELECT jsonb_build_object(
 
 func (s *Postgres) CollectionQueue(ctx context.Context, interval int) (any, error) {
 	var result json.RawMessage
-	err := s.pool.QueryRow(ctx, collectionQueueSQL, interval).Scan(&result)
+	err := s.pool.QueryRow(ctx, collectionQueueSQL, interval, nullable(OrganizationFromContext(ctx))).Scan(&result)
 	return result, err
 }

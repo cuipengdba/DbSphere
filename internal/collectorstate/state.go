@@ -76,7 +76,7 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	result := Snapshot{Enabled: t.enabled, IntervalSeconds: int(t.interval.Seconds()),
-		WorkerLimit: t.workers, BatchLimit: t.workers, ProcessStarted: t.started.UTC(),
+		WorkerLimit: t.workers, BatchLimit: max(1, t.workers-1), ProcessStarted: t.started.UTC(),
 		Cycle: t.last, CompletedCycles: t.cycles}
 	if t.running {
 		at := t.activeAt.UTC()

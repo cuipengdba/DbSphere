@@ -201,6 +201,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	missing := []string{}
 	references := make(map[string][]sampleReference, len(event.Evidence))
 	seenSamples := map[string]bool{}
+	observationAt := map[string]time.Time{}
 	var sampleIDs []string
 	for _, item := range event.Evidence {
 		references[item.ID] = evidenceSampleReferences(item)
@@ -209,9 +210,12 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 				seenSamples[reference.id] = true
 				sampleIDs = append(sampleIDs, reference.id)
 			}
+			if reference.relation == "observed_in" && !item.ObservedAt.IsZero() {
+				observationAt[reference.id] = item.ObservedAt
+			}
 		}
 	}
-	samples, err := s.loadIncidentSamples(ctx, event.AssetID, sampleIDs)
+	samples, err := s.loadIncidentSamples(ctx, event.AssetID, sampleIDs, observationAt)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +583,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	}
 	investigation := map[string]any{"database": sqlDatabase,
 		"locks":            investigationLockEvidence(replay["points"].([]replayPoint), samples),
-		"connectionStages": connectionStages(requestSpans, samples, traceCount == 100)}
+		"connectionStages": connectionStages(requestSpans, samples, traceCount == 100),
+		"collectionGaps":   incidentCollectionGaps(samples)}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay,
 		"waitCaptures": waitCaptures, "investigation": investigation}, nil
 }

@@ -19,6 +19,10 @@ func (s *Postgres) PruneSamples(ctx context.Context, cutoff time.Time, limit int
 			WHERE refs.sample_id=candidate.id::text)
 		AND NOT EXISTS (SELECT 1 FROM inspection_runs run
 			WHERE run.sample_id=candidate.id)
+		AND NOT EXISTS (SELECT 1 FROM monitoring_hourly_buckets h
+			WHERE h.asset_id=candidate.asset_id AND h.bucket=date_trunc('hour',candidate.collected_at,'UTC')
+			AND h.bucket>=date_trunc('hour',now(),'UTC')-interval '30 days'
+			AND candidate.id::text IN (h.value->>'latestSampleId',h.value->>'blockedPeakSampleId'))
 		AND (NOT EXISTS (SELECT 1 FROM history_tier_policy) OR NOT EXISTS (
 			SELECT 1 FROM assets a JOIN history_tier_policy p ON p.organization_id=a.organization_id
 			WHERE a.id=candidate.asset_id AND candidate.collected_at>=date_trunc('hour',now(),'UTC')-make_interval(days=>p.hourly_days)

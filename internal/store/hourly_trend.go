@@ -168,12 +168,18 @@ func (s *Postgres) readHourlyTrend(ctx context.Context, ids []string, from, to t
 	if !end.After(start) {
 		return readMonitoringBucketRows(ctx, tx, monitoringBucketsSQL, ids, from, to, 60)
 	}
-	var dirty bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM monitoring_hourly_dirty
-		WHERE bucket >= $1 AND bucket < $2 AND asset_id=ANY($3::uuid[]))`, start, end, ids).Scan(&dirty); err != nil {
+	const maxInlineDirtyHours = 16
+	rows, err := tx.Query(ctx, `SELECT DISTINCT bucket FROM monitoring_hourly_dirty
+		WHERE bucket >= $1 AND bucket < $2 AND asset_id=ANY($3::uuid[]) ORDER BY bucket LIMIT $4`,
+		start, end, ids, maxInlineDirtyHours+1)
+	if err != nil {
 		return nil, err
 	}
-	if dirty {
+	dirty, err := pgx.CollectRows(rows, pgx.RowTo[time.Time])
+	if err != nil {
+		return nil, err
+	}
+	if len(dirty) > maxInlineDirtyHours {
 		return readMonitoringBucketRows(ctx, tx, monitoringBucketsSQL, ids, from, to, 60)
 	}
 	head, err := readMonitoringBucketRows(ctx, tx, monitoringBucketsSQL, ids, from, start, 60)
@@ -181,9 +187,27 @@ func (s *Postgres) readHourlyTrend(ctx context.Context, ids []string, from, to t
 		return nil, err
 	}
 	stored, err := readMonitoringBucketRows(ctx, tx, `SELECT value FROM monitoring_hourly_buckets
-		WHERE asset_id=ANY($1::uuid[]) AND bucket >= $2 AND bucket < $3`, ids, start, end)
+		WHERE asset_id=ANY($1::uuid[]) AND bucket >= $2 AND bucket < $3
+		AND NOT(bucket=ANY(coalesce($4::timestamptz[],'{}'::timestamptz[])))`, ids, start, end, dirty)
 	if err != nil {
 		return nil, err
+	}
+	for len(dirty) > 0 {
+		fromDirty, throughDirty := dirty[0], dirty[0].Add(time.Hour)
+		dirty = dirty[1:]
+		for len(dirty) > 0 && dirty[0].Equal(throughDirty) {
+			throughDirty = throughDirty.Add(time.Hour)
+			dirty = dirty[1:]
+		}
+		live, err := readMonitoringBucketRows(ctx, tx, monitoringBucketsSQL, ids, fromDirty.Add(-trendCounterLookback), throughDirty, 60)
+		if err != nil {
+			return nil, err
+		}
+		refreshed, err := mergeTrendBuckets(nil, nil, live, fromDirty)
+		if err != nil {
+			return nil, err
+		}
+		stored = append(stored, refreshed...)
 	}
 	var tail []json.RawMessage
 	if end.Before(to) {

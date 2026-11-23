@@ -37,7 +37,7 @@ func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
 	const interval = 15 * time.Second
 	claim := func() CollectionLease {
 		t.Helper()
-		jobs, err := pg.ClaimCollectionJobs(ctx, interval, 100)
+		jobs, err := pg.ClaimCollectionJobs(ctx, interval, 100, CollectionAny)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -98,5 +98,30 @@ func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
 	}
 	if outcome != "execution_error" || failures != 2 || delay != 10 || claim().Token != "" {
 		t.Fatalf("execution failure did not enter persistent backoff: %s failures=%d delay=%v", outcome, failures, delay)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE collection_jobs SET due_at=now()-interval '1 second' WHERE asset_id=$1`, asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	regular, err := pg.ClaimCollectionJobs(ctx, interval, 100, CollectionRegular)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range regular {
+		if job.AssetID == asset.ID {
+			t.Fatal("repeatedly failing asset was claimed by the regular lane")
+		}
+	}
+	isolated, err := pg.ClaimCollectionJobs(ctx, interval, 100, CollectionIsolated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, job := range isolated {
+		if job.AssetID == asset.ID {
+			found = job.Isolated && !job.ClaimedAt.Before(job.DueAt)
+		}
+	}
+	if !found {
+		t.Fatal("the isolated lane did not claim the delayed asset")
 	}
 }

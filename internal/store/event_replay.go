@@ -38,13 +38,33 @@ func evidenceSampleReferences(item eventEvidence) []sampleReference {
 	return references
 }
 
-func (s *Postgres) loadIncidentSamples(ctx context.Context, assetID string, ids []string) (map[string]sampleObservation, error) {
+func (s *Postgres) loadIncidentSamples(ctx context.Context, assetID string, ids []string, observedAt map[string]time.Time) (map[string]sampleObservation, error) {
 	result := make(map[string]sampleObservation)
 	if len(ids) == 0 {
 		return result, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (s.id) s.id::text,s.collected_at,s.status,s.metrics_json
-		FROM samples s WHERE s.asset_id=$1 AND s.id=ANY($2::uuid[]) ORDER BY s.id,s.collected_at DESC`, assetID, ids)
+	hintedIDs := []string{}
+	hintedTimes := []time.Time{}
+	for _, id := range ids {
+		if at, ok := observedAt[id]; ok {
+			hintedIDs, hintedTimes = append(hintedIDs, id), append(hintedTimes, at)
+		}
+	}
+	// Incident evidence commonly uses the exact sample timestamp. Resolve it
+	// within a single partition when possible and search historical partitions
+	// only for unmatched IDs, such as SQL baselines and older evidence formats.
+	rows, err := s.pool.Query(ctx, `WITH matched AS MATERIALIZED (
+		SELECT found.* FROM unnest($3::uuid[],$4::timestamptz[]) AS hint(id,at)
+		CROSS JOIN LATERAL (SELECT id,collected_at,status,metrics_json FROM samples
+			WHERE asset_id=$1 AND id=hint.id AND collected_at=hint.at LIMIT 1) found
+	), remaining AS (
+		SELECT id FROM unnest($2::uuid[]) requested(id) WHERE NOT EXISTS (SELECT 1 FROM matched m WHERE m.id=requested.id)
+	)
+	SELECT id::text,collected_at,status,metrics_json FROM matched
+	UNION ALL
+	SELECT found.id::text,found.collected_at,found.status,found.metrics_json FROM remaining r
+	CROSS JOIN LATERAL (SELECT id,collected_at,status,metrics_json FROM samples
+		WHERE asset_id=$1 AND id=r.id ORDER BY collected_at DESC LIMIT 1) found`, assetID, ids, hintedIDs, hintedTimes)
 	if err != nil {
 		return nil, err
 	}

@@ -105,4 +105,15 @@ func TestHourlySummaryMatchesRawAcrossSlicesAndLateSamples(t *testing.T) {
 	assertParity()
 	rebuild(base.Add(time.Hour), base.Add(3*time.Hour))
 	assertParity()
+	var latest string
+	if err := pg.pool.QueryRow(ctx, `SELECT value->>'latestSampleId' FROM monitoring_hourly_buckets
+		WHERE asset_id=$1 AND bucket=$2`, asset.ID, base.Add(time.Hour)).Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.PruneSamples(ctx, base.Add(3*time.Hour), 10000); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := pg.RawSample(ctx, asset.ID, latest); err != nil || value == nil {
+		t.Fatalf("retention removed an active hourly sample link: %s %v", latest, err)
+	}
 }
