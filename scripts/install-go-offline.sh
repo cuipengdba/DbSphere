@@ -2,10 +2,13 @@
 set -euo pipefail
 
 rotate_admin=false
+disable_observability=false
 if [[ $# -eq 1 && "$1" == --rotate-admin-password ]]; then
   rotate_admin=true
+elif [[ $# -eq 1 && "$1" == --disable-observability ]]; then
+  disable_observability=true
 elif [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
-  echo 'Usage: bash install.sh [--backup /absolute/output/directory | --rotate-admin-password]' >&2
+  echo 'Usage: bash install.sh [--backup /absolute/output/directory | --rotate-admin-password | --disable-observability]' >&2
   exit 1
 fi
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +31,7 @@ fi
   echo 'Go offline bundle checksum verification failed.' >&2
   exit 1
 }
+unset DBSPHERE_OFFLINE_PROM_IMAGE
 source "$bundle_dir/bundle.env"
 if [[ "${DBSPHERE_GO_OFFLINE_ARCH:-amd64}" != "$arch" ]]; then
   echo "Offline bundle targets ${DBSPHERE_GO_OFFLINE_ARCH:-amd64}; this Linux host is $arch." >&2
@@ -44,6 +48,10 @@ fi
 if [[ $# -eq 2 ]]; then
   bash "$bundle_dir/backup.sh" "$2"
   exit 0
+fi
+if [[ "$disable_observability" == true && -z "${DBSPHERE_OFFLINE_PROM_IMAGE:-}" ]]; then
+  echo 'Use the enhanced offline bundle to disable the installed monitoring components.' >&2
+  exit 1
 fi
 export DBSPHERE_GO_OFFLINE_APP_IMAGE
 export DBSPHERE_PG18_IMAGE=postgres:18-bookworm
@@ -118,6 +126,41 @@ if [[ "$(docker image inspect --format '{{.Id}}' "$DBSPHERE_GO_OFFLINE_APP_IMAGE
   # local image IDs. The verified archive and the two load results remain the
   # source of identity for this installation.
   echo 'Docker normalized image IDs; verified archive and loaded tags match the bundle.' >&2
+fi
+if [[ -n "${DBSPHERE_OFFLINE_PROM_IMAGE:-}" ]]; then
+  if [[ ! "$DBSPHERE_OFFLINE_PROM_IMAGE" =~ ^dbsphere/offline-prometheus:[0-9]+\.[0-9]+\.[0-9]+$ ||
+        ! -f "$bundle_dir/observability-images.tar.gz" ]]; then
+    echo 'Observability bundle manifest is invalid.' >&2
+    exit 1
+  fi
+  export DBSPHERE_OFFLINE_PROM_IMAGE
+  export DBSPHERE_OBSERVABILITY_DIR="$config_dir/observability"
+  install -d -m 0700 -- "$DBSPHERE_OBSERVABILITY_DIR"
+  install -m 0644 -- "$bundle_dir/observability/"prometheus*.yml "$DBSPHERE_OBSERVABILITY_DIR/"
+  install -m 0644 -- "$bundle_dir/observability/COMPONENTS.txt" "$DBSPHERE_OBSERVABILITY_DIR/"
+  cp -R -- "$bundle_dir/licenses/prometheus" "$DBSPHERE_OBSERVABILITY_DIR/"
+  observability_args=("${compose_args[@]}" -f "$bundle_dir/deploy/compose/compose.go.observability.yaml")
+  if [[ "$disable_observability" == true ]]; then
+    docker compose --env-file "$env_file" "${observability_args[@]}" stop prometheus
+  else
+    metrics_token="${DBSPHERE_METRICS_TOKEN:-$(sed -n 's/^DBSPHERE_METRICS_TOKEN=//p' "$env_file" | tail -n 1)}"
+    if [[ -z "$metrics_token" && -s "$DBSPHERE_OBSERVABILITY_DIR/metrics-token" ]]; then
+      metrics_token="$(cat -- "$DBSPHERE_OBSERVABILITY_DIR/metrics-token")"
+    fi
+    if [[ -z "$metrics_token" ]]; then
+      metrics_token="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    fi
+    printf '%s\n' "$metrics_token" > "$DBSPHERE_OBSERVABILITY_DIR/metrics-token"
+    chmod 0644 "$DBSPHERE_OBSERVABILITY_DIR/metrics-token"
+    export DBSPHERE_METRICS_TOKEN="$metrics_token"
+    unset metrics_token
+    loaded_observability="$(docker image load --input "$bundle_dir/observability-images.tar.gz")"
+    grep -Fqx "Loaded image: $DBSPHERE_OFFLINE_PROM_IMAGE" <<< "$loaded_observability" || {
+      echo 'The verified observability archive did not load its expected Prometheus image.' >&2
+      exit 1
+    }
+    compose_args=("${observability_args[@]}")
+  fi
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" config -q
 if [[ "$ha_mode" != true ]]; then

@@ -39,7 +39,7 @@
     const filters = { organization: get('organization'), cluster: get('cluster'), engine: get('engine'), minutes: get('window') };
     const canvas = get('chart');
     let active = false;
-    let source, fallback, retryTimer, session = 0, request = 0;
+    let source, fallback, retryTimer, integrationTimer, session = 0, request = 0;
     let selection = { organization: '', cluster: '', engine: '', minutes: 60, asset: '', end: null };
     let snapshot, sampleKey = '', filterKey = '', trendKey = '', feedKey = '', points = [], timelineEvents = [];
     let selectedMetric = metrics[0], from = 0, to = 0, focused = -1, chartGeometry, chartStatus = '';
@@ -92,14 +92,31 @@
         connection('pending', '正在连接');
         if (snapshot) render();
         connect();
+        void loadIntegrations();
+        integrationTimer = setInterval(loadIntegrations, 15000);
       } else {
         source?.close();
         source = null;
         clearInterval(fallback);
         clearTimeout(retryTimer);
+        clearInterval(integrationTimer);
         fallback = retryTimer = null;
         request++;
         trendKey = sampleKey = '';
+      }
+    }
+
+    async function loadIntegrations() {
+      const generation = session;
+      try {
+        const { prometheus } = await api('/api/live/integrations');
+        if (!active || generation !== session) return;
+        const label = get('prometheus');
+        label.hidden = prometheus === 'disabled';
+        label.dataset.state = prometheus;
+        label.textContent = prometheus === 'ready' ? 'Prometheus 就绪' : 'Prometheus 暂不可用';
+      } catch {
+        // Live samples and event details continue to use the native store.
       }
     }
 

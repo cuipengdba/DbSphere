@@ -92,6 +92,8 @@ body[data-active-view="live"] .workspace-heading { display: none; }
 @keyframes live-indicator { 50% { box-shadow: 0 0 16px currentColor, 0 0 0 5px var(--live-area-end); } }
 
 .live-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.live-integration { align-self: center; color: var(--live-accent); font-size: .75rem; font-weight: 650; }
+.live-integration[data-state="unavailable"] { color: var(--live-hot); }
 .live-board button, .live-board select {
   font: inherit;
   color: var(--live-text);

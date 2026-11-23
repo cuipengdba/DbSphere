@@ -197,4 +197,17 @@ func servePlatformMetrics(w http.ResponseWriter, r *http.Request, db HealthStore
 			metric("notification_failed", "Failed notification deliveries in shared storage.", "gauge", float64(queue.Failed))
 		}
 	}
+	if db, ok := db.(prometheusAssetReader); ok && storeUp && auth.Observability.PrometheusURL != nil {
+		staleAfter := 0
+		if auth.AutoCollect {
+			staleAfter = max(10, 2*auth.CollectEvery)
+		}
+		assets, err := db.PrometheusAssets(ctx, staleAfter)
+		if err == nil {
+			metric("asset_projection_up", "Whether asset metrics were read from PostgreSQL.", "gauge", 1)
+			writeAssetMetrics(w, assets)
+		} else {
+			metric("asset_projection_up", "Whether asset metrics were read from PostgreSQL.", "gauge", 0)
+		}
+	}
 }

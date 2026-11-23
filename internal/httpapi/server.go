@@ -196,6 +196,7 @@ type AuthConfig struct {
 	ReplicaID            string
 	OIDC                 *OIDCProvider
 	Operations           OperationsConfig
+	Observability        ObservabilityConfig
 }
 
 type loginAttempt struct {
@@ -592,6 +593,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if r.Method == http.MethodGet && (r.URL.Path == liveOverviewPath || r.URL.Path == liveStreamPath) {
 			readLiveObservation(w, r, store, credentials, scopeIDs, liveConnections)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == liveIntegrationsPath {
+			readLiveIntegrations(w, r, credentials.Observability)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/admin/audit" {

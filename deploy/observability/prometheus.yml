@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 8s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/dbsphere-rules.yml
+
+scrape_configs:
+  - job_name: dbsphere
+    authorization:
+      credentials_file: /etc/prometheus/dbsphere-token
+    static_configs:
+      - targets: ['app:8080']
+  - job_name: node-exporter
+    fallback_scrape_protocol: PrometheusText0.0.4
+    body_size_limit: 8MB
+    sample_limit: 2500
+    file_sd_configs:
+      - files: [/var/lib/dbsphere-discovery/targets.json]
+        refresh_interval: 15s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'node_(cpu_seconds_total|memory_MemAvailable_bytes|memory_MemTotal_bytes|filesystem_(avail_bytes|size_bytes|readonly)|disk_io_time_seconds_total|load1)'
+        action: keep

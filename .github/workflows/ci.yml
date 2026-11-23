@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.47.0'
-          previous_sha='76505f786bc0aef2fbdb1cacbceda7d353a392c9b0c4540b36f7b262038f2f70'
+          previous_version='1.48.0'
+          previous_sha='0d89e1aaa198668db3bcbf29738da8080c9c08227dcdc498ed2d734d280cde6c'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.47.0'
-          previous_arm_sha='0c00a261f1627e366580274b35ccd789581cca0beef585e5188bf2a6517773e1'
+          previous_version='1.48.0'
+          previous_arm_sha='102aef0c70239a7bfc45e07740382acbccdf84ed7867a962c7a649a21961ab17'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -584,6 +584,52 @@ jobs:
         with:
           name: dbsphere-go-arm64-tested-packages
           path: ${{ runner.temp }}/dbsphere-go-arm64/*
+          if-no-files-found: error
+
+  go-observability-offline:
+    needs: [go-offline-package, go-offline-package-arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            standard: dbsphere-go-tested-packages
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            standard: dbsphere-go-arm64-tested-packages
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.standard }}
+          path: ${{ runner.temp }}/standard
+      - name: Build the enhanced offline package from the tested standard package
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          bash -n scripts/build-go-observability-bundle.sh
+          bash -n scripts/go-offline-observability-smoke.sh
+          version="$(jq -er .version package.json)"
+          standard="$(find "$RUNNER_TEMP/standard" -type f -name "DbSphere-go-offline-$version-linux-$ARCH.run")"
+          test -f "$standard"
+          bash scripts/build-go-observability-bundle.sh "$standard" "$RUNNER_TEMP/enhanced"
+      - name: Verify local metrics, target changes and native monitoring on component outage
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version="$(jq -er .version package.json)"
+          bash scripts/go-offline-observability-smoke.sh \
+            "$RUNNER_TEMP/enhanced/DbSphere-go-observability-$version-linux-$ARCH.run" \
+            "$RUNNER_TEMP/observability-proof" | tee "$RUNNER_TEMP/observability-$ARCH.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-observability-${{ matrix.arch }}-tested-packages
+          path: |
+            ${{ runner.temp }}/enhanced/*.run
+            ${{ runner.temp }}/enhanced/*.sha256
+          compression-level: 0
           if-no-files-found: error
 
   go-external-store:

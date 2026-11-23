@@ -1,0 +1,71 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+)
+
+type PrometheusAsset struct {
+	ID, Name, Organization, Cluster, Engine, Runtime string
+	SampleAt, Fresh, OpenEvents                      *float64
+	Connections, MaxConnections, Blocked             *float64
+	ReplicationLag, Transactions, LinuxCPU, LinuxRAM *float64
+	PodReady                                         *float64
+}
+
+func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]PrometheusAsset, error) {
+	rows, err := s.pool.Query(ctx, prometheusAssetsSQL, staleAfter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	samples := make([]PrometheusAsset, 0, 64)
+	for rows.Next() {
+		var a PrometheusAsset
+		if err := rows.Scan(&a.ID, &a.Name, &a.Organization, &a.Cluster, &a.Engine, &a.Runtime,
+			&a.SampleAt, &a.Fresh, &a.OpenEvents, &a.Connections, &a.MaxConnections, &a.Blocked,
+			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady); err != nil {
+			return nil, err
+		}
+		samples = append(samples, a)
+	}
+	return samples, rows.Err()
+}
+
+const prometheusAssetsSQL = `WITH selected AS (
+	SELECT a.*,last_sample_at IS NOT NULL AND ($1=0 OR last_sample_at>now()-make_interval(secs=>$1)) AS recent
+	FROM assets a ORDER BY a.id LIMIT 5000
+)
+SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
+	CASE WHEN a.runtime='mysql' THEN 'mysql' ELSE 'postgres' END,a.runtime,
+	extract(epoch FROM a.last_sample_at)::float8,
+	CASE WHEN a.recent AND a.last_status='ok' THEN 1.0 ELSE 0.0 END::float8,
+	e.total::float8,
+	t.connections::float8,t.max_connections::float8,t.blocked_sessions::float8,
+	t.replication_lag_bytes::float8,(t.commits + t.rollbacks)::float8,t.linux_cpu::float8,t.linux_memory::float8,
+	CASE WHEN raw.metrics_json#>>'{k8s,status}'='ok' THEN (
+		SELECT CASE condition->>'status' WHEN 'True' THEN 1.0 WHEN 'False' THEN 0.0 END::float8
+		FROM jsonb_array_elements(CASE WHEN jsonb_typeof(raw.metrics_json#>'{k8s,pod,conditions}')='array'
+			THEN raw.metrics_json#>'{k8s,pod,conditions}' ELSE '[]'::jsonb END) condition
+		WHERE condition->>'type'='Ready' LIMIT 1
+	) END
+FROM selected a
+LEFT JOIN LATERAL (SELECT count(*) AS total FROM open_event_groups WHERE asset_id=a.id) e ON true
+LEFT JOIN LATERAL (SELECT connections,max_connections,blocked_sessions,replication_lag_bytes,commits,rollbacks,linux_cpu,linux_memory
+	FROM monitoring_trend_points WHERE asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) t ON a.recent
+LEFT JOIN LATERAL (SELECT metrics_json FROM samples WHERE asset_id=a.id AND collected_at=a.last_sample_at
+	ORDER BY id DESC LIMIT 1) raw ON a.recent AND a.runtime='k8s'
+ORDER BY a.id`
+
+// NodeExporterDiscovery publishes only targets explicitly configured on a Linux asset.
+func (s *Postgres) NodeExporterDiscovery(ctx context.Context) (json.RawMessage, error) {
+	var names json.RawMessage
+	err := s.pool.QueryRow(ctx, `SELECT coalesce(jsonb_agg(jsonb_build_object(
+		'targets',jsonb_build_array((CASE WHEN strpos(linux_host,':')>0 THEN '['||linux_host||']' ELSE linux_host END)||':'||linux_exporter_port::text),
+		'labels',jsonb_build_object('asset_id',id,'asset_name',name,'organization_id',organization_id,
+			'cluster',coalesce(cluster_name,''),'engine','postgres','runtime','linux')) ORDER BY id),'[]'::jsonb)
+		FROM (SELECT id,name,organization_id,cluster_name,linux_host,linux_exporter_port FROM assets
+			WHERE runtime='linux' AND nullif(linux_host,'') IS NOT NULL AND linux_exporter_port>0
+			ORDER BY id LIMIT 5000) targets`).Scan(&names)
+	return names, err
+}

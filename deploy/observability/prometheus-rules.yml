@@ -1,0 +1,17 @@
+groups:
+  - name: dbsphere.observation
+    rules:
+      - record: dbsphere:asset_connection_utilization:ratio
+        expr: dbsphere_asset_connections / (dbsphere_asset_max_connections > 0)
+      - record: dbsphere:cluster_connection_utilization:ratio
+        expr: |
+          sum by (organization_id, cluster, engine, runtime) (
+            dbsphere_asset_connections and (dbsphere_asset_max_connections > 0))
+          / sum by (organization_id, cluster, engine, runtime) (
+            (dbsphere_asset_max_connections > 0) and dbsphere_asset_connections)
+      - record: dbsphere:asset_pg_transactions:rate5m
+        expr: rate(dbsphere_asset_pg_transactions_total[5m])
+      - record: dbsphere:cluster_pg_transactions:rate5m
+        expr: sum by (organization_id, cluster, engine, runtime) (dbsphere:asset_pg_transactions:rate5m)
+      - record: dbsphere:cluster_open_events:count
+        expr: sum by (organization_id, cluster, engine, runtime) (dbsphere_asset_open_events)

@@ -148,6 +148,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	observability, err := httpapi.LoadObservabilityConfig(os.Getenv("DBSPHERE_OBSERVABILITY_URL"))
+	if err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	pg, err := store.Open(ctx, cfg.DatabaseURL)
@@ -212,6 +216,9 @@ func run(log *slog.Logger) error {
 		cfg.CollectWorkers, time.Now())
 	replica := newPlatformReplica(cfg.AutoCollect)
 	pg.SetPlatformReplica(replica.ID)
+	if targets := os.Getenv("DBSPHERE_PROMETHEUS_TARGETS_FILE"); targets != "" && observability.PrometheusURL != nil {
+		go runPrometheusDiscovery(ctx, pg, targets, log)
+	}
 	writeTimeout := 45 * time.Second
 	if aiClient != nil {
 		writeTimeout = max(writeTimeout, reviewTimeout+10*time.Second)
@@ -230,6 +237,7 @@ func run(log *slog.Logger) error {
 			WorkOrderProfiles:    workProfiles,
 			OIDC:                 oidcProvider,
 			Operations:           operations,
+			Observability:        observability,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
 			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,

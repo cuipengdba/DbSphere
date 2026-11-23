@@ -1,0 +1,48 @@
+services:
+  app:
+    environment:
+      DBSPHERE_OBSERVABILITY_URL: http://prometheus:9090
+      DBSPHERE_PROMETHEUS_TARGETS_FILE: /var/lib/dbsphere-discovery/targets.json
+    volumes:
+      - prometheus-discovery:/var/lib/dbsphere-discovery
+
+  replica:
+    environment:
+      DBSPHERE_OBSERVABILITY_URL: http://prometheus:9090
+
+  prometheus:
+    image: ${DBSPHERE_OFFLINE_PROM_IMAGE:?Use the DbSphere observability bundle}
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    command:
+      - --config.file=/etc/prometheus/dbsphere.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=${DBSPHERE_PROMETHEUS_RETENTION_SIZE:-2GB}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - prometheus-data:/prometheus
+      - type: volume
+        source: prometheus-discovery
+        target: /var/lib/dbsphere-discovery
+        read_only: true
+        volume:
+          nocopy: true
+      - ${DBSPHERE_OBSERVABILITY_DIR}/prometheus.yml:/etc/prometheus/dbsphere.yml:ro
+      - ${DBSPHERE_OBSERVABILITY_DIR}/prometheus-rules.yml:/etc/prometheus/dbsphere-rules.yml:ro
+      - ${DBSPHERE_OBSERVABILITY_DIR}/metrics-token:/etc/prometheus/dbsphere-token:ro
+    healthcheck:
+      test: [CMD, /bin/wget, -q, -O, /dev/null, 'http://127.0.0.1:9090/-/ready']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  prometheus-data: {}
+  prometheus-discovery: {}

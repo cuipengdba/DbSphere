@@ -11,10 +11,12 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' -o /out/dbsphere ./cmd/dbsphere
+RUN install -d -o 65532 -g 65532 -m 0755 /out/discovery && printf '[]\n' > /out/discovery/targets.json
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/dbsphere /dbsphere
+COPY --from=builder --chown=65532:65532 /out/discovery/ /var/lib/dbsphere-discovery/
 COPY LICENSE /licenses/DBSphere-LICENSE
 COPY third_party/licenses/go /licenses/go
 USER 65532:65532
