@@ -1,10 +1,10 @@
 # Linux 一键离线部署
 
-从 [V1.47.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.47.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
+从 [V1.48.0 发布页](https://github.com/cuipengdba/DbSphere/releases/tag/v1.48.0)下载离线包及同名校验文件。Linux `x86_64` 使用 `amd64` 包，`aarch64` 使用 `arm64` 包。传到已安装 Docker Engine 和 Compose v2 的目标机，在同一目录执行以下命令。以下以 amd64 为例。
 
 ```bash
-sha256sum --check DbSphere-go-offline-1.47.0-linux-amd64.run.sha256
-bash DbSphere-go-offline-1.47.0-linux-amd64.run
+sha256sum --check DbSphere-go-offline-1.48.0-linux-amd64.run.sha256
+bash DbSphere-go-offline-1.48.0-linux-amd64.run
 ```
 
 一键脚本导入随包镜像并启动内嵌静态页面的 Go 服务及 PostgreSQL 18 长期监控库。默认本机入口为 `http://127.0.0.1:8081`。
@@ -16,11 +16,11 @@ bash DbSphere-go-offline-1.47.0-linux-amd64.run
 原生服务需要 Linux systemd 和已可访问的独立 PostgreSQL 18。下载对应架构 `DbSphere-go-systemd-<版本>-linux-<架构>.run` 及同名 `.sha256`，使用安装包的 `--sample-config` 写出环境文件。把 `DBSPHERE_DATABASE_URL` 改为独立监控库的连接地址。连接账号需能在该数据库的 `public` schema 创建和更新 DbSphere 对象。已有环境应继续使用原 `DBSPHERE_MASTER_KEY`、管理员引导配置和数据库，原资产密码依赖这把主密钥。容器的 `DBSPHERE_WEB_PORT` 对应原生的 `DBSPHERE_PORT`，DSN 应使用 Linux 主机可解析的 PostgreSQL 地址。
 
 ```bash
-sha256sum --check DbSphere-go-systemd-1.47.0-linux-amd64.run.sha256
-(umask 077 && bash DbSphere-go-systemd-1.47.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
+sha256sum --check DbSphere-go-systemd-1.48.0-linux-amd64.run.sha256
+(umask 077 && bash DbSphere-go-systemd-1.48.0-linux-amd64.run --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.47.0-linux-amd64.run --check /absolute/dbsphere.env
-sudo bash DbSphere-go-systemd-1.47.0-linux-amd64.run /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.48.0-linux-amd64.run --check /absolute/dbsphere.env
+sudo bash DbSphere-go-systemd-1.48.0-linux-amd64.run /absolute/dbsphere.env
 systemctl status dbsphere-native.service
 ```
 

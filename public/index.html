@@ -9,8 +9,10 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/freshness.css">
   <link rel="stylesheet" href="/console.css">
+  <link rel="stylesheet" href="/live.css">
   <script src="/observability.js" defer></script>
   <script src="/monitoring.js" defer></script>
+  <script src="/live.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -46,6 +48,7 @@
         <nav class="workspace-nav">
           <button type="button" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span>总览</span></button>
           <button type="button" data-nav="monitoring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3v18h18 M5 14h4l3-7 3 10 3-5h4"/></svg><span>监控工作台</span></button>
+          <button type="button" data-nav="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 5h18v12H3z M8 21h8 M12 17v4 M6 11h3l2-3 3 5 2-2h2"/></svg><span>实时观测</span></button>
           <button type="button" data-nav="incidents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M12 3 2.8 19.5h18.4L12 3z M12 9v5 M12 16.5v1"/></svg><span>问题事件</span></button>
           <button type="button" data-nav="assets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6 M4 12c0 4 16 4 16 0"/></svg><span>资产与实例</span></button>
           <button type="button" data-nav="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3z M10 20h4"/></svg><span>告警与通知</span></button>
@@ -83,6 +86,32 @@
         </section>
       </div>
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
+      <section id="live-workspace" class="live-board" data-view="live" aria-label="实时观测大盘" hidden>
+        <header class="live-hero">
+          <div><div class="live-indicator"><span aria-hidden="true"></span><strong data-live="connection" role="status">正在连接</strong></div>
+            <h2>实时观测大盘</h2><p data-live="recency">等待读取采样</p></div>
+          <div class="live-actions"><button type="button" data-live="night" aria-pressed="false">夜览模式</button><button type="button" data-live="fullscreen" aria-pressed="false">全屏</button></div>
+        </header>
+        <div class="live-filters">
+          <label>组织<select data-live="organization"></select></label>
+          <label>集群<select data-live="cluster"></select></label>
+          <label>引擎<select data-live="engine"><option value="">全部引擎</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option></select></label>
+          <label>时间范围<select data-live="window"><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="60" selected>1 小时</option><option value="360">6 小时</option></select></label>
+          <button type="button" data-live="follow" hidden>跟随实时</button>
+        </div>
+        <div class="live-kpis" data-live="kpis" aria-label="监控状态"></div>
+        <div class="live-grid">
+          <section class="live-panel"><header><h3>集群与实例</h3><small data-live="asset-count"></small></header><div class="live-topology" data-live="topology"></div></section>
+          <section class="live-panel live-trends"><header><h3 data-live="asset-title">实例趋势</h3><small data-live="sample-age"></small></header>
+            <div class="live-metrics" data-live="metrics" aria-label="趋势指标"></div>
+            <div class="live-chart"><canvas data-live="chart" role="img" aria-label="选定实例的采样趋势"></canvas><div data-live="chart-empty" class="live-chart-empty" hidden></div></div>
+            <div class="live-chart-footer"><span data-live="chart-note"></span><div data-live="aligned-event"></div></div>
+          </section>
+          <section class="live-panel"><header><h3>事件与恢复</h3><small>最近 6 小时恢复</small></header><div class="live-feed" data-live="feed"></div></section>
+          <section class="live-panel live-sql"><header><h3>Top SQL</h3><small data-live="sql-source"></small></header><div data-live="sql"></div></section>
+          <section class="live-panel live-context"><header><h3>采集覆盖</h3><small>最近一次采样</small></header><div data-live="coverage"></div></section>
+        </div>
+      </section>
       <div data-view="assets">
         <section class="panel">
           <div class="section-head"><div><h2>数据库资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>

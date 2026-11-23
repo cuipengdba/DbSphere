@@ -225,6 +225,11 @@ func TestPG18OrganizationIsolationOIDCFallbackAndSignedAudit(t *testing.T) {
 		Auth       session
 		Own, Other eventFixture
 	}{{tenantA, a, b}, {tenantB, b, a}} {
+		live := call(scope.Auth, "GET", liveOverviewPath, nil, 200).Body.String()
+		if !strings.Contains(live, scope.Own.Event) || !strings.Contains(live, scope.Own.Sample) ||
+			strings.Contains(live, scope.Other.Asset) || strings.Contains(live, scope.Other.Event) {
+			t.Fatalf("Incorrect organization boundary in live observation: %s", live)
+		}
 		for _, path := range []string{"/api/assets", "/api/assets/page?limit=10", "/api/events/page?limit=10", "/api/alerts", "/api/access/assets/export"} {
 			body := call(scope.Auth, "GET", path, nil, 200).Body.String()
 			if !strings.Contains(body, scope.Own.Asset) || strings.Contains(body, scope.Other.Asset) {

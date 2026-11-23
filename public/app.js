@@ -50,6 +50,7 @@ const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
 const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
+  live: ['实时观测', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
   assets: ['资产与实例', '纳管 PostgreSQL 14–19，并试用 MySQL 8.4 只读监控。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
@@ -84,6 +85,7 @@ function setView(route, updateHash = true) {
   $('view-title').textContent = views[selected][0];
   $('view-description').textContent = views[selected][1];
   if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
+  if (selected === 'live' && !updateHash) live.restore(params);
   if (pageSections[selected]) {
     const section = params.get('section');
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
@@ -93,9 +95,10 @@ function setView(route, updateHash = true) {
     }
   }
   monitoring.setVisible(selected === 'monitoring');
+  live.setVisible(selected === 'live' && !!currentRole);
   if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
   if (updateHash) {
-    const next = selected === 'monitoring' ? monitoring.route() : query ? route : selected;
+    const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
   window.scrollTo({ top: 0, behavior: 'instant' });
@@ -574,6 +577,8 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
   },
   renderSqlPerformance, routingOverview
 });
+
+const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
@@ -2615,8 +2620,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ' · 恢复 ' + formatTime(event.endedAt) : ''}`),
     cell('small', `事件 ID ${event.id}`));
   const back = history.state?.monitoringReturn;
-  if (typeof back === 'string' && /^monitoring(?:\?|$)/.test(back)) {
-    const link = cell('a', '返回集群同窗', 'monitor-link incident-monitor-return');
+  if (typeof back === 'string' && /^(monitoring|live)(?:\?|$)/.test(back)) {
+    const link = cell('a', back.startsWith('live') ? '返回实时观测' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }

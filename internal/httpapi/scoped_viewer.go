@@ -46,7 +46,7 @@ func authorizeScopedViewerRead(w http.ResponseWriter, r *http.Request, db Health
 		return authorizeScopedResource(w, r, db, allowed, item.kind, item.match[1])
 	}
 	if path == "/api/ai/status" || path == "/api/alert-rules" || path == "/api/inspection-templates" ||
-		path == "/api/monitoring/series" ||
+		path == "/api/monitoring/series" || path == liveOverviewPath || path == liveStreamPath ||
 		path == "/api/events/page" || path == "/api/events/overview" || path == "/api/assets/page" {
 		return true
 	}
