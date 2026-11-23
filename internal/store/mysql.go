@@ -18,6 +18,9 @@ const mysqlLockGroup = "mysql_lock_wait"
 
 func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
 	queryStarted := time.Now()
+	if lease != nil {
+		lease.startedAt = queryStarted
+	}
 	snapshot, err := (collector.MySQLAdapter{}).Collect(ctx, target, password)
 	lease.recordQueryDuration(queryStarted)
 	group, reason := "", ""

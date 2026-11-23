@@ -141,7 +141,6 @@ func (lease *CollectionLease) recordQueryDuration(start time.Time) {
 }
 
 func (s *Postgres) CheckCollectionLease(ctx context.Context, lease CollectionLease, interval time.Duration, key []byte) (CheckResult, error) {
-	lease.startedAt = time.Now()
 	if now := time.Now().UTC(); now.Sub(lease.DueAt) >= interval {
 		if err := s.checkStaleAsset(ctx, lease.AssetID, interval, now, &lease); err != nil {
 			return CheckResult{}, err

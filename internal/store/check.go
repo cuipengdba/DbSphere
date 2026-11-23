@@ -190,6 +190,9 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 			return CheckResult{}, fmt.Errorf("decrypt Patroni credential: %w", err)
 		}
 	}
+	if lease != nil {
+		lease.startedAt = time.Now()
+	}
 	var metrics, kube, linux, pooler, patroni, haproxy map[string]any
 	var routeProbe, readProbe collector.RouteProbe
 	var collectErr, linuxErr, poolerErr, patroniErr error
