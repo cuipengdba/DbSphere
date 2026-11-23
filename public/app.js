@@ -22,6 +22,7 @@ let assetCursors = [''];
 let assetPageIndex = 0;
 let assetPageRequest = 0;
 let assetSearchTimer = null;
+let readinessSelection = new Set();
 let eventServerPaging = false;
 let eventCursors = [''];
 let eventPageIndex = 0;
@@ -790,6 +791,7 @@ function resetAssetPage() {
 function renderAssets(assets, summary = '') {
   const list = $('asset-list');
   list.replaceChildren();
+  readinessSelection = new Set(assets.filter(asset => readinessSelection.has(asset.id)).map(asset => asset.id));
   $('asset-filter-summary').textContent = summary;
   if (!assets.length) { list.append(cell('p', allAssets.length ? '当前筛选没有匹配资产。' : '尚无纳管资产。', 'empty')); return; }
   for (const asset of assets) {
@@ -800,7 +802,12 @@ function renderAssets(assets, summary = '') {
       const label = cell('label', '', 'hint');
       const pick = document.createElement('input');
       pick.type = 'checkbox'; pick.value = asset.id; pick.dataset.readinessAsset = asset.name;
+      pick.checked = readinessSelection.has(asset.id);
       pick.setAttribute('aria-label', `体检 ${asset.name}`);
+      pick.addEventListener('change', () => {
+        if (pick.checked) readinessSelection.add(asset.id);
+        else readinessSelection.delete(asset.id);
+      });
       label.append(pick, ' 选择体检');
       info.append(label);
     }
@@ -3415,6 +3422,7 @@ async function boot() {
   const session = await api('/api/session');
   if (session.csrf !== csrf) {
     readinessRetry = [];
+    readinessSelection.clear();
     $('asset-readiness-results').replaceChildren();
     $('asset-retry-readiness').hidden = true;
   }
