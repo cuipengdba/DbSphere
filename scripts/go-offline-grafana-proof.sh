@@ -45,12 +45,22 @@ for topic in io cache volumes rca; do
 done
 echo 'Grafana container storage specialties passed for all four topics.'
 query="$(
-  jq -nc --arg asset "$asset" '{from:"now-5m",to:"now",queries:[{refId:"A",intervalMs:15000,maxDataPoints:100,
+  jq -nc --arg asset "$asset" '{from:"now-5m",to:"now",queries:[{refId:"A",range:true,intervalMs:15000,maxDataPoints:100,
     datasource:{type:"prometheus",uid:"dbsphere-prometheus"},expr:("dbsphere_asset_connections{asset_id=\""+$asset+"\"}")}]}'
 )"
-printf '%s' "$query" |
-  api -H 'Content-Type: application/json' --data-binary @- "$base/grafana/api/ds/query" |
-  jq -e '.results.A.frames|any(.data.values|length>0)' >/dev/null
+found_grafana_samples=false
+for _ in {1..20}; do
+  # Grafana proxy authentication and the first Prometheus range step can settle
+  # after the readiness checks and the successful instant scrape query.
+  if printf '%s' "$query" |
+    api -H 'Content-Type: application/json' --data-binary @- "$base/grafana/api/ds/query" |
+    jq -e '(.results.A.frames // []) | any((.data.values[1] // []) | any(type=="number"))' >/dev/null; then
+    found_grafana_samples=true
+    break
+  fi
+  sleep 2
+done
+test "$found_grafana_samples" = true
 echo 'Grafana queried a real asset sample through Prometheus.'
 
 psql() {
@@ -101,4 +111,4 @@ wait "$waiter"
 api -X POST "$base/api/assets/$asset/check" >/dev/null
 api "$base/api/events/$event" | jq -e --arg id "$event" '.event.id==$id and .event.status=="resolved"' >/dev/null
 trap - EXIT
-printf 'Grafana with private Prometheus displayed six dashboards. Native lock sample %s and recovery shared event %s.\n' "$sample" "$event"
+printf 'Grafana with private Prometheus displayed ten dashboards. Native lock sample %s and recovery shared event %s.\n' "$sample" "$event"
