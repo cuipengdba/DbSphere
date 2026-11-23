@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,11 @@ type Postgres struct {
 	operationsWebhookOrganization string
 	tracePodMu                    sync.Mutex
 	tracePodCache                 map[string]tracePodCacheEntry
+	containerStorage              collector.ContainerStorageConfig
+}
+
+func (s *Postgres) ConfigureContainerStorage(cfg collector.ContainerStorageConfig) {
+	s.containerStorage = cfg
 }
 
 // SetPlatformReplica records the local collector identity before starting workers.

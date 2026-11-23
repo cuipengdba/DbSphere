@@ -478,7 +478,7 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.49.0'
+          previous_version='1.50.0'
           previous_sha='2e3c00a6e18dcbe6550a5dc6493c09badd0f140998cac04965f114a22de7c396'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
@@ -548,7 +548,7 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.49.0'
+          previous_version='1.50.0'
           previous_arm_sha='854c9e7f79df3bc42fd4807f6cfb0f2728e9f1f526e07c5d39904e9b2e8f5d08'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"

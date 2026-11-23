@@ -57,6 +57,24 @@ func addSampleLayers(assetID string, sample sampleObservation, add graphAdder, e
 		add(hostNode, "linux", "Linux 主机", source, sample.At)
 		*edges = append(*edges, map[string]string{"from": sampleNode, "to": hostNode, "relation": "collected_with"})
 	}
+	storage := object(metrics["containerStorage"])
+	for name, raw := range object(storage["containers"]) {
+		container := object(raw)
+		if container["status"] != "ok" {
+			continue
+		}
+		node := "container:" + stringValue(container["id"])
+		add(node, "container", name+" · "+stringValue(container["source"]), source, sample.At)
+		*edges = append(*edges, map[string]string{"from": sampleNode, "to": node, "relation": "collected_with"})
+		if uid := stringValue(storage["podUID"]); uid != "" {
+			*edges = append(*edges, map[string]string{"from": node, "to": "pod:" + uid, "relation": "collected_with"})
+		}
+		for device := range object(container["deviceRates"]) {
+			deviceNode := "container-disk:" + stringValue(storage["node"]) + ":" + device
+			add(deviceNode, "block_device", device, source, sample.At)
+			*edges = append(*edges, map[string]string{"from": node, "to": deviceNode, "relation": "collected_with"})
+		}
+	}
 	if pooler := object(metrics["pgbouncer"]); stringValue(pooler["status"]) == "ok" {
 		poolerNode := "pooler:" + assetID
 		add(poolerNode, "pgbouncer", "PgBouncer", source, sample.At)
@@ -184,7 +202,7 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		*edges = append(*edges, map[string]string{"from": "event:" + event.ID, "to": candidateNode, "relation": "hypothesizes"})
 		for _, support := range supports {
 			supportNode := support
-			if !strings.HasPrefix(support, "sample:") {
+			if !strings.HasPrefix(support, "sample:") && !strings.HasPrefix(support, "container:") {
 				supportNode = "evidence:" + support
 			}
 			*edges = append(*edges, map[string]string{"from": candidateNode, "to": supportNode, "relation": "supported_by"})
@@ -329,6 +347,18 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			"operator": payload["operator"], "threshold": payload["threshold"],
 			"at": item.ObservedAt, "evidenceId": item.ID}
 		supports := []string{item.ID, "sample:" + sampleID}
+		if code, containerMetric := strings.CutPrefix(metric, "container."); containerMetric {
+			if title, known := storageFindings[code]; known && number(payload["value"]) > 0 {
+				detail := object(payload["detail"])
+				if id := stringValue(detail["containerId"]); id != "" {
+					supports = append(supports, "container:"+id)
+				}
+				addCandidate(metric, title, "medium", supports,
+					[]string{"在历史分析复核 PostgreSQL 等待、容器缓存与设备 I/O 的先后顺序", "验证恢复后相同信号是否一并回落"},
+					"跨层候选来自同一采样窗口。PVC 挂载关联仅定位对象，卷级归因以实际指标为准。", detail, item.ObservedAt, condition)
+			}
+			continue
+		}
 		switch metric {
 		case "pg.database_growth_bytes_per_day":
 			growth := object(sample.Metrics["databaseGrowth"])

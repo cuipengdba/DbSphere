@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dbsphere-container-agent
+  namespace: dbsphere-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: dbsphere-container-agent
+  template:
+    metadata:
+      labels:
+        app: dbsphere-container-agent
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: agent
+          image: dbsphere/offline-go-app:2.0.0
+          imagePullPolicy: Never
+          args: [container-agent]
+          env:
+            - name: DBSPHERE_CGROUP_ROOT
+              value: /host-cgroups
+            - name: DBSPHERE_CONTAINER_AGENT_ADDRESS
+              value: 0.0.0.0:9918
+            - name: DBSPHERE_CONTAINER_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dbsphere-container-agent
+                  key: token
+          ports:
+            - name: observe
+              containerPort: 9918
+              hostPort: 9918
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: observe
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 96Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: cgroup
+              mountPath: /host-cgroups
+              readOnly: true
+      volumes:
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory

@@ -15,6 +15,7 @@ import (
 
 	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/collector"
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -32,7 +33,7 @@ type CheckResult struct {
 // DueAssetIDs schedules database assets, including
 // configured PgBouncer endpoints.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
-	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
+	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
@@ -61,7 +62,7 @@ func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time
 }
 
 func (s *Postgres) checkStaleAsset(ctx context.Context, id string, interval time.Duration, now time.Time, lease *CollectionLease) error {
-	if interval < 15*time.Second || interval > time.Hour {
+	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour {
 		return fmt.Errorf("invalid Go collection schedule")
 	}
 	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
@@ -293,6 +294,13 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		metrics["linux"] = map[string]any{"status": "not_configured",
 			"reason": "Linux node_exporter host and port are not configured"}
 	}
+	storage, nodeStorage := s.collectContainerStorage(ctx, id, runtime, target.Port, kube)
+	if storage != nil {
+		metrics["containerStorage"] = storage
+		if nodeStorage != nil && object(metrics["linux"])["status"] != "ok" {
+			metrics["linux"] = nodeStorage
+		}
+	}
 	if poolerURL != "" {
 		if poolerErr != nil {
 			metrics["pgbouncer"] = map[string]any{"status": "error",
@@ -391,6 +399,7 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		return CheckResult{}, fmt.Errorf("read previous monitoring sample: %w", err)
 	}
 	recordLinuxInterval(object(metrics["linux"]), object(previous["linux"]), now.Sub(previousAt))
+	recordContainerStorage(metrics, previous, interval)
 	status := "ok"
 	if reason != "" {
 		status = "error"

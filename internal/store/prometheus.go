@@ -12,6 +12,7 @@ type PrometheusAsset struct {
 	ReplicationLag, Transactions, LinuxCPU, LinuxRAM *float64
 	PodReady, PGWaiting, PGSQLFingerprints           *float64
 	MySQLRunning, MySQLLockWaits                     *float64
+	Container                                        json.RawMessage
 }
 
 func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]PrometheusAsset, error) {
@@ -26,7 +27,7 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 		if err := rows.Scan(&a.ID, &a.Name, &a.Organization, &a.Cluster, &a.Engine, &a.Runtime,
 			&a.SampleAt, &a.Fresh, &a.OpenEvents, &a.Connections, &a.MaxConnections, &a.Blocked,
 			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
-			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits); err != nil {
+			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits, &a.Container); err != nil {
 			return nil, err
 		}
 		samples = append(samples, a)
@@ -61,7 +62,11 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 		THEN (raw.metrics_json#>>'{mysql,running}')::float8 END,
 	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
 		AND jsonb_typeof(raw.metrics_json#>'{mysql,lockWaits}')='array'
-		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END
+		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END,
+	CASE WHEN raw.metrics_json ? 'containerStorage' THEN jsonb_build_object(
+		'storage',raw.metrics_json->'containerStorage','node',raw.metrics_json#>'{linux,deviceRates,disk}',
+		'pgDatabase',raw.metrics_json#>'{diagnostics,database,data}',
+		'checkpoints',raw.metrics_json#>'{diagnostics,checkpoints,data}', 'wal',raw.metrics_json#>'{diagnostics,wal,data}') END
 FROM selected a
 LEFT JOIN LATERAL (SELECT count(*) AS total FROM open_event_groups WHERE asset_id=a.id) e ON true
 LEFT JOIN LATERAL (SELECT connections,max_connections,blocked_sessions,replication_lag_bytes,commits,rollbacks,linux_cpu,linux_memory

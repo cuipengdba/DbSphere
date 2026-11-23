@@ -109,6 +109,16 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	input := r.URL.Query()
 	output := url.Values{}
 	view := "live"
+	if input.Get("view") == "storage" {
+		view = "storage"
+		output.Set("mode", "history")
+		if container := input.Get("container"); len(container) > 0 && len(container) <= 63 {
+			output.Set("container", container)
+		}
+		if id := input.Get("event"); opsUUID.MatchString(id) {
+			output.Set("event", id)
+		}
+	}
 	if input.Get("view") == "event" {
 		view = "incidents"
 		if id := input.Get("event"); opsUUID.MatchString(id) {
@@ -123,7 +133,7 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	if startErr == nil && endErr == nil && start.Before(end) {
 		output.Set("from", start.UTC().Format(time.RFC3339Nano))
 		endKey := "end"
-		if view == "incidents" {
+		if view == "incidents" || view == "storage" {
 			endKey = "to"
 		}
 		output.Set(endKey, end.UTC().Format(time.RFC3339Nano))

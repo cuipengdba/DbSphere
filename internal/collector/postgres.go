@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -135,7 +136,7 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 		"databaseName":      databaseName,
 		"postgresEndpoint":  map[string]any{"address": serverAddress, "port": serverPort, "source": "inet_server_addr/port"},
 		"postgresStartedAt": startedAt,
-		"monitor_role":      monitor, "privileged_role": super || createDB || createRole || replicationRole,
+		"monitor_role":      monitor, "stats_visible": readStats, "privileged_role": super || createDB || createRole || replicationRole,
 		"connections": connections, "max_connections": maxConnections,
 		"xact_commit": commits, "xact_rollback": rollbacks, "database_bytes": databaseBytes,
 		"replicas": nil, "wal_receiver": nil, "replication_lag_bytes": nil,
@@ -164,6 +165,14 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 	diagCtx, stopDiagnostics := context.WithTimeout(ctx, 15*time.Second)
 	defer stopDiagnostics()
 	diagnostics := collectDiagnostics(diagCtx, conn, major, recovery)
+	if major >= 16 {
+		var raw []byte
+		err := conn.QueryRow(diagCtx, `SELECT jsonb_build_object('timing',current_setting('track_io_timing')='on',
+			'rows',coalesce(jsonb_agg(to_jsonb(i)),'[]'::jsonb)) FROM pg_stat_io i`).Scan(&raw)
+		if err == nil {
+			metrics["pgStorageIO"] = json.RawMessage(raw)
+		}
+	}
 	metrics["diagnostics"] = diagnostics
 	sqlCtx, stopSQL := context.WithTimeout(ctx, 5*time.Second)
 	defer stopSQL()

@@ -45,6 +45,8 @@ docker build --platform "linux/$arch" --build-arg TARGETOS=linux --build-arg "TA
 docker pull --platform "linux/$arch" "$pg_source"
 docker image tag "$pg_source" postgres:18-bookworm
 mkdir -p -- "$stage/deploy/compose"
+mkdir -p -- "$stage/deploy/k8s"
+cp -- "$repo_dir/deploy/k8s/dbsphere-container-agent.yaml" "$stage/deploy/k8s/"
 mkdir -p -- "$stage/licenses"
 cp -- "$repo_dir/LICENSE" "$stage/licenses/DBSphere-LICENSE"
 cp -R -- "$repo_dir/third_party/licenses/go" "$stage/licenses/go"

@@ -200,6 +200,10 @@ if [[ "$rotate_admin" == true ]]; then
 fi
 docker compose --env-file "$env_file" "${compose_args[@]}" \
   up -d --no-build --pull never --wait --wait-timeout 180
+if [[ -f "$bundle_dir/deploy/k8s/dbsphere-container-agent.yaml" ]]; then
+  install -d -m 0755 -- "$config_dir/kubernetes"
+  install -m 0644 -- "$bundle_dir/deploy/k8s/dbsphere-container-agent.yaml" "$config_dir/kubernetes/"
+fi
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
 echo "DbSphere Go is ready at http://127.0.0.1:${web_port:-8081}"
 if [[ "$created_config" == true && -z "${DBSPHERE_ADMIN_PASSWORD:-}" ]]; then

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -49,7 +50,7 @@ func migrateCollectionSchedule(ctx context.Context, tx pgx.Tx) error {
 
 // Seed only missing jobs. A restart preserves pending work and the retry clock.
 func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Duration, limit int) ([]CollectionLease, error) {
-	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
+	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, errors.New("invalid collection schedule")
 	}
 	tx, err := s.pool.Begin(ctx)

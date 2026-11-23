@@ -38,6 +38,12 @@ for topic in overview postgres waits replication infrastructure mysql; do
       (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=event")))' >/dev/null
 done
 echo 'Grafana dashboard provisioning passed for all six topics.'
+for topic in io cache volumes rca; do
+  api "$base/grafana/api/dashboards/uid/dbsphere-container-$topic" |
+    jq -e --arg uid "dbsphere-container-$topic" '.dashboard.uid==$uid and (.dashboard.panels|length)==4 and
+      (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=storage")))' >/dev/null
+done
+echo 'Grafana container storage specialties passed for all four topics.'
 query="$(
   jq -nc --arg asset "$asset" '{from:"now-5m",to:"now",queries:[{refId:"A",intervalMs:15000,maxDataPoints:100,
     datasource:{type:"prometheus",uid:"dbsphere-prometheus"},expr:("dbsphere_asset_connections{asset_id=\""+$asset+"\"}")}]}'

@@ -15,3 +15,7 @@ groups:
         expr: sum by (organization_id, cluster, engine, runtime) (dbsphere:asset_pg_transactions:rate5m)
       - record: dbsphere:cluster_open_events:count
         expr: sum by (organization_id, cluster, engine, runtime) (dbsphere_asset_open_events)
+  - name: dbsphere.container.storage
+    rules:
+      - record: dbsphere:container_device_throughput:bytes_per_second
+        expr: dbsphere_container_read_bytes_per_second{device!=""} + dbsphere_container_write_bytes_per_second{device!=""}

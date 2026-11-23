@@ -21,6 +21,7 @@ var nodeDiskMetrics = map[string]string{
 	"node_disk_read_bytes_total": "readBytes", "node_disk_written_bytes_total": "writtenBytes",
 	"node_disk_io_time_seconds_total": "ioSeconds", "node_disk_reads_completed_total": "reads",
 	"node_disk_writes_completed_total": "writes", "node_disk_io_time_weighted_seconds_total": "weightedIOSeconds",
+	"node_disk_read_time_seconds_total": "readSeconds", "node_disk_write_time_seconds_total": "writeSeconds",
 }
 var nodeNetworkMetrics = map[string]string{
 	"node_network_receive_bytes_total": "receiveBytes", "node_network_transmit_bytes_total": "transmitBytes",
@@ -58,6 +59,7 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 	filesystems := map[string]*filesystemSample{}
 	collected := map[string]bool{}
 	disks, interfaces := map[string]map[string]float64{}, map[string]map[string]float64{}
+	deviceNumbers := map[string]any{}
 	var cpuTotal, cpuIdle, diskRead, diskWritten, netReceive, netTransmit float64
 	var cpuIOWait float64
 	for _, line := range strings.Split(raw, "\n") {
@@ -83,6 +85,10 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 			addNodeDeviceCounter(interfaces, device, key, value)
 		}
 		switch match[1] {
+		case "node_disk_info":
+			if number := labels["major"] + ":" + labels["minor"]; validDisk && blockDevice.MatchString(number) && len(deviceNumbers) < 128 {
+				deviceNumbers[device] = map[string]any{"number": number}
+			}
 		case "node_cpu_seconds_total":
 			cpuTotal += value
 			if labels["mode"] == "idle" {
@@ -174,6 +180,7 @@ func parseNodeExporter(raw string) (map[string]any, error) {
 	}
 	return map[string]any{"status": "ok", "source": "node_exporter", "observedAt": time.Now().UTC(),
 		"bootTimeSeconds": metric("node_boot_time_seconds"),
+		"deviceNumbers":   deviceNumbers,
 		"cpu": map[string]any{"totalSeconds": cpuTotal, "idleSeconds": cpuIdle,
 			"load1": metric("node_load1"), "ioWaitSeconds": counter("iowait", cpuIOWait)},
 		"memory": map[string]any{"totalBytes": scalar["node_memory_MemTotal_bytes"],

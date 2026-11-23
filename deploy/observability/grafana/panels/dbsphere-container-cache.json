@@ -1,0 +1,375 @@
+{
+  "uid": "dbsphere-container-cache",
+  "title": "DbSphere · 文件缓存与内存回收",
+  "tags": [
+    "dbsphere",
+    "dbsphere-storage"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "15s",
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "在 DbSphere 查看相同事件和时段",
+      "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "targetBlank": false,
+      "type": "link"
+    },
+    {
+      "title": "回到原事件",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=event&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
+    },
+    {
+      "title": "DbSphere 专题",
+      "type": "dashboards",
+      "asDropdown": true,
+      "tags": [
+        "dbsphere-storage"
+      ],
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "asset",
+        "label": "资产 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "container",
+        "label": "容器",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "event",
+        "label": "事件 ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "文件缓存双曲线",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_active_file_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "Active {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_inactive_file_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "Inactive {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "dbsphere_container_file_cache_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "File cache {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "脏页与写回",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_file_dirty_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "Dirty {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_file_writeback_bytes{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "Writeback {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "文件重读与页面回收",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_refault_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "legendFormat": "Refault {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_reclaims_per_second{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\",device=\"\"}",
+          "legendFormat": "回收 {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "内存压力",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_memory_pressure_percent{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "PSI {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    }
+  ]
+}

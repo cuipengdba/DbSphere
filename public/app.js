@@ -51,6 +51,7 @@ const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
+  storage: ['容器磁盘 I/O 与文件缓存', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
   assets: ['资产与实例', '纳管 PostgreSQL 14–19，并试用 MySQL 8.4 只读监控。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
@@ -96,6 +97,7 @@ function setView(route, updateHash = true) {
   }
   monitoring.setVisible(selected === 'monitoring');
   live.setVisible(selected === 'live' && !!currentRole);
+  containerStorage.show(selected === 'storage' && !!currentRole, params);
   if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
@@ -587,6 +589,7 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 });
 
 const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
+const containerStorage = window.DbSphereContainerStorage.create($('container-storage'), { api, openEvent, formatTime });
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
@@ -621,6 +624,7 @@ async function refresh() {
   $('event-count').textContent = eventOverview.openCount;
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
   allAssets = assets;
+  containerStorage.setAssets(assets);
   assetServerPaging = runtime?.backend === 'go';
   monitoring.sync(assets.filter(asset => asset.runtime !== 'mysql'), assetServerPaging,
     [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
@@ -2629,8 +2633,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ' · 恢复 ' + formatTime(event.endedAt) : ''}`),
     cell('small', `事件 ID ${event.id}`));
   const back = history.state?.monitoringReturn;
-  if (typeof back === 'string' && /^(monitoring|live)(?:\?|$)/.test(back)) {
-    const link = cell('a', back.startsWith('live') ? '返回实时观测' : '返回集群同窗', 'monitor-link incident-monitor-return');
+  const storageBack = typeof back === 'string' && /^storage(?:\?|$)/.test(back);
+  const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));
+  if (typeof back === 'string' && /^(monitoring|live|storage)(?:\?|$)/.test(back)) {
+    const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
@@ -2639,15 +2645,15 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
-    const anchor = typeof back === 'string' && back.startsWith('live') ? new URLSearchParams(back.split('?')[1]) : null;
+    const anchor = typeof back === 'string' && (back.startsWith('live') || storageBack) ? new URLSearchParams(back.split('?')[1]) : null;
     const anchorStart = Date.parse(anchor?.get('from'));
-    const end = Date.parse(anchor?.get('end'));
+    const end = Date.parse(anchor?.get('end') || anchor?.get('to'));
     const windowMinutes = Number(anchor?.get('window'));
     link.href = window.DbSphereLive.grafanaPath({ asset: event.assetId, organization: asset?.organizationId,
-      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id,
+      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id, container: anchor?.get('container'),
       from: Number.isFinite(anchorStart) ? anchorStart : Number.isFinite(end) && windowMinutes > 0 ? end - windowMinutes * 60000 : start - 5 * 60000,
       to: Number.isFinite(end) ? end : Math.min(Date.now(), (Date.parse(event.endedAt) || Date.now()) + 5 * 60000),
-      section: mysql ? 'mysql' : 'waits' });
+      section: mysql ? 'mysql' : storageIncident ? 'containerRCA' : 'waits' });
     summary.append(link);
   }
   target.replaceChildren(summary);

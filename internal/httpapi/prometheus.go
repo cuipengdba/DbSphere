@@ -112,4 +112,7 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 			}
 		}
 	}
+	for i, asset := range assets {
+		writeContainerMetrics(w, labels[i], asset.Container)
+	}
 }

@@ -425,6 +425,8 @@
     tablist.setAttribute('aria-label', '实例监控专题');
     const body = el('div', null, 'monitor-content');
     const instanceTitle = el('h2', null, 'monitor-instance-title');
+    const storageLink = el('a', '容器 I/O 与文件缓存历史', 'monitor-link monitor-breadcrumb');
+    storageLink.hidden = true;
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
     let dbOid = '', objectOid = '', objectKind = '', deviceType = '', deviceName = '';
@@ -496,7 +498,7 @@
         void refreshFleet();
       }), share, shareField, rangeForm);
     for (const [key, label] of tabs) tablist.append(button(label, () => { mode = key; if (key === 'sql') queryId = ''; change(); }));
-    details.append(button('← 集群总览', backToFleet, 'monitor-link monitor-breadcrumb'), instanceTitle, timeLabel, tablist, body);
+    details.append(button('← 集群总览', backToFleet, 'monitor-link monitor-breadcrumb'), instanceTitle, timeLabel, storageLink, tablist, body);
     root.append(header, fleet, details);
 
     function validRange(from, to) {
@@ -2467,6 +2469,13 @@
       details.hidden = !asset;
       if (asset) {
         instanceTitle.textContent = asset.name;
+        storageLink.hidden = !['linux', 'k8s'].includes(asset.runtime);
+        const windowParams = { asset: asset.id, mode: 'history' };
+        if (time.from && time.to) {
+          windowParams.from = new Date(time.from).toISOString();
+          windowParams.to = new Date(time.to).toISOString();
+        }
+        storageLink.href = '#storage?' + new URLSearchParams(windowParams);
         timeLabel.textContent = [clusterLabel(asset), asset.database, roleLabels[asset.role] || '角色未知', assetHealth(asset).label, caption].join(' · ');
         for (const [i, item] of [...tablist.children].entries()) item.setAttribute('aria-pressed', String(tabs[i][0] === mode));
         void load(asset, time);

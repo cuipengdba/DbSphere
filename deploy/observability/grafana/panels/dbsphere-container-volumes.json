@@ -1,0 +1,365 @@
+{
+  "uid": "dbsphere-container-volumes",
+  "title": "DbSphere · Kubernetes 节点与存储卷",
+  "tags": [
+    "dbsphere",
+    "dbsphere-storage"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "15s",
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "在 DbSphere 查看相同事件和时段",
+      "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "targetBlank": false,
+      "type": "link"
+    },
+    {
+      "title": "回到原事件",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=event&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
+    },
+    {
+      "title": "DbSphere 专题",
+      "type": "dashboards",
+      "asDropdown": true,
+      "tags": [
+        "dbsphere-storage"
+      ],
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "asset",
+        "label": "资产 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "container",
+        "label": "容器",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "event",
+        "label": "事件 ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "节点设备等待",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "{{node}} · {{device}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "节点设备忙碌与队列",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_node_device_busy_ratio{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "忙碌 {{device}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "队列 {{device}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "PVC 容量",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "已用 {{pvc}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "容量 {{pvc}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "PVC 绑定与容器采集状态",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_pvc_bound{asset_id=~\"${asset:regex}\"}",
+          "legendFormat": "Bound {{pvc}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_container_sample_available{asset_id=~\"${asset:regex}\",container=~\"${container:regex}\"}",
+          "legendFormat": "采集正常 {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    }
+  ]
+}

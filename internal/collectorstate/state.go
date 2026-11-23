@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const MinimumIntervalSeconds = 10
+
 // Cycle counts work observed by this Go process. It does not estimate work
 // performed by other replicas or measure the number of due assets beyond the
 // scheduler's batch limit.

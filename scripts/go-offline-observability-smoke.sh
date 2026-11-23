@@ -94,7 +94,7 @@ done
 test "$seen" = true
 metric_url 'api/v1/rules' | jq -e '.data.groups[]|select(.name=="dbsphere.observation")|.rules|length>=5' >/dev/null
 
-if [[ "$(jq -er .version package.json)" == 1.50.* ]]; then
+if [[ -d deploy/observability/grafana/panels ]]; then
   bash scripts/go-offline-grafana-proof.sh "$project" "$base" "$root/session.cookie" "$csrf" "$asset" "$viewer"
 fi
 
@@ -129,7 +129,7 @@ api -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId!=null' >/d
 api "$base/api/live/overview" | jq -e --arg id "$asset" '.assets|any(.id==$id)' >/dev/null
 install --disable-observability
 api "$base/api/live/integrations" | jq -e '.prometheus=="disabled"' >/dev/null
-if [[ "$(jq -er .version package.json)" == 1.50.* ]]; then
+if [[ -d deploy/observability/grafana/panels ]]; then
   test "$(curl -sS -b "$root/session.cookie" -o /dev/null -w '%{http_code}' "$base/grafana/api/health")" = 404
 fi
 api "$base/api/live/overview" | jq -e --arg id "$asset" '.assets|any(.id==$id)' >/dev/null

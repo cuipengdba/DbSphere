@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/ai"
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/config"
 	"github.com/cuipengdba/dbsphere/internal/httpapi"
@@ -25,6 +26,13 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) == 2 && os.Args[1] == "container-agent" {
+		if err := runContainerAgent(); err != nil {
+			log.Error("DbSphere container agent exited", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "gateway" {
 		if err := runGateway(); err != nil {
 			log.Error("DbSphere gateway exited", "error", err)
@@ -136,6 +144,11 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	storageConfig, err := collector.ParseContainerStorageConfig(os.Getenv("DBSPHERE_CONTAINER_STORAGE_BINDINGS"),
+		os.Getenv("DBSPHERE_CONTAINER_AGENT_TOKEN"), os.Getenv("DBSPHERE_PROMETHEUS_TOKEN"))
+	if err != nil {
+		return err
+	}
 	workProfiles, err := httpapi.ParseWorkOrderProfiles(os.Getenv("DBSPHERE_WORK_ORDER_TARGETS"))
 	if err != nil {
 		return fmt.Errorf("DBSPHERE_WORK_ORDER_TARGETS: %w", err)
@@ -159,6 +172,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pg.Close()
+	pg.ConfigureContainerStorage(storageConfig)
 	pg.ConfigureRetention(cfg.SampleDays, cfg.EventDays)
 	notifyConfig, err := notify.Load()
 	if err != nil {

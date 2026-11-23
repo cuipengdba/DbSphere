@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/security"
 )
 
@@ -98,8 +99,8 @@ func Load() (Config, error) {
 	interval := 60
 	if value := os.Getenv("DBSPHERE_COLLECT_INTERVAL_SECONDS"); value != "" {
 		interval, err = strconv.Atoi(value)
-		if err != nil || interval < 15 || interval > 3600 {
-			return Config{}, errors.New("DBSPHERE_COLLECT_INTERVAL_SECONDS must be between 15 and 3600")
+		if err != nil || interval < collectorstate.MinimumIntervalSeconds || interval > 3600 {
+			return Config{}, errors.New("DBSPHERE_COLLECT_INTERVAL_SECONDS must be between 10 and 3600")
 		}
 	}
 	workers := 4

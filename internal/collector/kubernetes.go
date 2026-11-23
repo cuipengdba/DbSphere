@@ -592,7 +592,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		if len(terminated) == 0 {
 			terminated = kubeObject(kubeObject(item["lastState"])["terminated"])
 		}
-		containers = append(containers, map[string]any{"name": item["name"], "ready": item["ready"],
+		containers = append(containers, map[string]any{"name": item["name"], "ready": item["ready"], "runtimeId": RuntimeContainerID(kubeString(item["containerID"])),
 			"image": item["image"], "imageId": item["imageID"],
 			"restartCount": item["restartCount"], "terminatedReason": terminated["reason"],
 			"lastTerminatedAt": terminated["finishedAt"], "waitingReason": kubeObject(kubeObject(item["state"])["waiting"])["reason"]})
@@ -610,11 +610,17 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		result["cloudNativePG"] = operator
 	}
 	resourceSpecs := map[string]any{}
+	ports := map[string][]int{}
 	for _, raw := range kubeList(spec["containers"]) {
 		container := kubeObject(raw)
 		name := kubeString(container["name"])
 		if name == "" || len(resourceSpecs) >= 32 {
 			continue
+		}
+		for _, rawPort := range kubeList(container["ports"]) {
+			if port, ok := kubeObject(rawPort)["containerPort"].(float64); ok && port >= 1 && port <= 65535 {
+				ports[name] = append(ports[name], int(port))
+			}
 		}
 		values := map[string]any{}
 		for _, kind := range []string{"requests", "limits"} {
@@ -624,6 +630,7 @@ func Kubernetes(ctx context.Context, target KubernetesTarget) map[string]any {
 		}
 		resourceSpecs[name] = values
 	}
+	result["containerPorts"] = ports
 	result["resourceSpecs"] = resourceSpecs
 	for _, raw := range kubeList(metadata["ownerReferences"]) {
 		owner := kubeObject(raw)

@@ -16,12 +16,13 @@
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-  function grafanaPath({ asset, organization, cluster, engine, event, from, to, section, night }) {
+  function grafanaPath({ asset, organization, cluster, engine, event, container, from, to, section, night }) {
     const pages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
-      replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql' };
+      replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
+      containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
     const page = pages[section] || pages.overview;
     const params = new URLSearchParams();
-    for (const [key, value] of Object.entries({ asset, organization, cluster, engine, event })) {
+    for (const [key, value] of Object.entries({ asset, organization, cluster, engine, event, container })) {
       if (value) params.set('var-' + key, key === 'cluster' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value);
     }
     if (finite(from) && from > 0) params.set('from', String(Math.trunc(from)));
@@ -92,6 +93,7 @@
 
     function updateRoute() {
       history.replaceState(null, '', '#' + route());
+      get('storage').href = '#storage?' + new URLSearchParams(selection.asset ? { asset: selection.asset } : {});
     }
 
     function detail(event) {
@@ -149,6 +151,7 @@
     function syncGrafanaLink() {
       const asset = snapshot?.assets.find(item => item.id === selection.asset);
       const incident = snapshot?.events.find(item => item.assetId === asset?.id && item.status === 'open');
+      get('storage').href = '#storage?' + new URLSearchParams(asset?.id ? { asset: asset.id } : {});
       get('grafana').href = grafanaPath({ asset: asset?.id, organization: asset?.organizationId || selection.organization,
         cluster: asset?.cluster, engine: asset?.engine, event: incident?.id, from, to, night: root.dataset.night === 'true',
         section: asset?.engine === 'mysql' ? 'mysql' : asset ? 'postgres' : 'overview' });

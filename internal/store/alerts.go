@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,6 +49,10 @@ var goDefaultRules = []alertRule{
 	{"linux_cpu_high", "Linux CPU 使用率高", "linux.cpu_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true, 0},
 	{"linux_memory_high", "Linux 内存使用率高", "linux.memory_used_percent", "node_exporter", "capacity", "warning", ">=", 90, 300, 1, true, 0},
 	{"linux_disk_high", "Linux 文件系统使用率高", "linux.disk_used_percent", "node_exporter", "storage", "warning", ">=", 90, 300, 1, true, 0},
+	{"container_cache_reread", "容器缓存回收与重读", "container.cache_reread", "Container storage", "storage", "warning", ">=", 1, 20, 1, true, 20},
+	{"container_writeback", "容器持续写回压力", "container.writeback", "Container storage", "storage", "warning", ">=", 1, 20, 1, true, 20},
+	{"container_io_limit", "容器 I/O 接近配置上限", "container.io_limit", "Container storage", "storage", "warning", ">=", 1, 20, 1, true, 20},
+	{"container_node_congestion", "所在节点设备 I/O 忙碌", "container.node_congestion", "Container storage", "storage", "warning", ">=", 1, 20, 1, true, 20},
 	{"k8s_pod_not_ready", "Kubernetes Pod 未就绪", "k8s.pod_not_ready", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true, 0},
 	{"k8s_pod_unscheduled", "Kubernetes Pod 调度失败", "k8s.pod_unscheduled", "Kubernetes API", "availability", "critical", ">=", 1, 60, 1, true, 0},
 	{"k8s_scheduling_event", "Kubernetes 近期调度或挂载失败", "k8s.scheduling_failure_recent", "Kubernetes Event", "availability", "warning", ">=", 1, 0, 1, true, 0},
@@ -114,6 +119,9 @@ func numeric(value any) (float64, bool) {
 }
 
 func supportedAlertMetric(metric string) bool {
+	if _, found := storageFindings[strings.TrimPrefix(metric, "container.")]; found && strings.HasPrefix(metric, "container.") {
+		return true
+	}
 	switch metric {
 	case "pg.unavailable", "collector.pg_failed", "collector.missed_intervals",
 		"collector.k8s_failed", "collector.linux_failed", "collector.patroni_failed",
@@ -134,6 +142,9 @@ func readGoSignal(metric string, metrics map[string]any, now time.Time) alertSig
 
 func readGoSignalWithPrevious(metric string, metrics, previous map[string]any, now time.Time) alertSignal {
 	signal := alertSignal{Source: "PostgreSQL", Reason: "signal unavailable"}
+	if key, found := strings.CutPrefix(metric, "container."); found {
+		return containerStorageAlert(metrics, key)
+	}
 	switch metric {
 	case "pg.unavailable", "collector.pg_failed":
 		status := stringValue(object(metrics["collector"])["pgStatus"])

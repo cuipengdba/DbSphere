@@ -42,9 +42,13 @@ func TestLoadRejectsMissingStorageAndWeakSecrets(t *testing.T) {
 	if err != nil || cfg.ListenAddr != "127.0.0.1:8081" {
 		t.Fatalf("valid config should load: %+v, %v", cfg, err)
 	}
-	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "10")
+	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "9")
 	if _, err := Load(); err == nil {
-		t.Fatal("collection interval below 15 seconds was accepted")
+		t.Fatal("collection interval below 10 seconds was accepted")
+	}
+	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "10")
+	if cfg, err := Load(); err != nil || cfg.CollectEvery != 10 {
+		t.Fatalf("10-second collection was not loaded: %v", err)
 	}
 	t.Setenv("DBSPHERE_COLLECT_INTERVAL_SECONDS", "60")
 	t.Setenv("DBSPHERE_ENABLE_GO_COLLECTOR", "true")
