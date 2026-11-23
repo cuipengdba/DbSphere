@@ -95,6 +95,37 @@ jobs:
             http://127.0.0.1:18085/api/session | grep '"authenticated":true'
           node scripts/named-access-drill.mjs
 
+  mysql84-preview:
+    runs-on: ubuntu-latest
+    services:
+      pg18:
+        image: postgres:18-bookworm
+        ports:
+          - 15434:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-store-test
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+      mysql84:
+        image: mysql:8.4.13@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
+        ports:
+          - 13346:3306
+        env:
+          MYSQL_ROOT_PASSWORD: dbsphere-mysql-test
+          MYSQL_ROOT_HOST: '%'
+        options: >-
+          --health-cmd "mysqladmin ping -h127.0.0.1 --silent" --health-interval 5s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Verify MySQL 8.4 lock evidence and recovery in one incident
+        env:
+          DBSPHERE_TEST_MYSQL_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_MYSQL84_DSN: 'root:dbsphere-mysql-test@tcp(127.0.0.1:13346)/'
+        run: go test ./internal/store -run '^TestLiveMySQL84PreviewLockReplay$' -count=1 -v
+
   go-storage-retention-capacity:
     runs-on: ubuntu-latest
     services:
@@ -441,8 +472,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='1.44.0'
-          previous_sha='a91b2dcb1c9f8f6e34c4f46fe27b1ef1fdb71734f107cfb2fe3cd22a7ee5e73d'
+          previous_version='1.45.0'
+          previous_sha='440a223d1a596b81a75d932488bffc0c6897f8bdc5442b9282ff5f3f2e49e915'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -511,8 +542,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='1.44.0'
-          previous_arm_sha='a9d25c4930dfba2dccc181661a4d464b9a4d735a78069d887780b96d9924c4b6'
+          previous_version='1.45.0'
+          previous_arm_sha='c9deb9d721ac7961a6b153a3fda3a8d5d1ef6ed9a90baa32ad7d6c0a10d483a7'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

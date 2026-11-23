@@ -58,7 +58,7 @@ func (s *Postgres) RunWaitCapture(ctx context.Context, assetID, eventID, profile
 	}
 	var target collector.Target
 	var encrypted string
-	err = tx.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc FROM assets WHERE id=$1`, assetID).
+	err = tx.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc FROM assets WHERE id=$1 AND runtime<>'mysql'`, assetID).
 		Scan(&target.Host, &target.Port, &target.Database, &target.Username, &target.SSLMode, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAssetNotFound

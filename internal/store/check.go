@@ -29,14 +29,14 @@ type CheckResult struct {
 	CollectedAt time.Time `json:"collectedAt"`
 }
 
-// DueAssetIDs schedules Linux, Kubernetes and managed PostgreSQL assets, including
+// DueAssetIDs schedules database assets, including
 // configured PgBouncer endpoints.
 func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limit int) ([]string, error) {
 	if interval < 15*time.Second || interval > time.Hour || limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s','managed')
+		WHERE runtime IN ('linux','k8s','managed','mysql')
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -164,13 +164,16 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if runtime != "linux" && runtime != "k8s" && runtime != "managed" {
+	if runtime != "linux" && runtime != "k8s" && runtime != "managed" && runtime != assets.RuntimeMySQL {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	target.Runtime = runtime
 	password, err := security.Decrypt(key, encrypted)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("decrypt monitoring credential: %w", err)
+	}
+	if runtime == assets.RuntimeMySQL {
+		return s.checkMySQL(ctx, id, target, password, lease, interval)
 	}
 	poolerURL := ""
 	if poolerEncrypted != nil {
@@ -355,12 +358,17 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		return CheckResult{}, err
 	}
 	defer tx.Rollback(ctx)
-	var locked string
-	if err := tx.QueryRow(ctx, "SELECT id FROM assets WHERE id=$1 FOR UPDATE", id).Scan(&locked); err != nil {
+	var runtime string
+	if err := tx.QueryRow(ctx, "SELECT runtime FROM assets WHERE id=$1 FOR UPDATE", id).Scan(&runtime); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CheckResult{}, ErrAssetNotFound
 		}
 		return CheckResult{}, err
+	}
+	isMySQL := runtime == assets.RuntimeMySQL
+	label, source := "PostgreSQL", "go_postgres_collector"
+	if isMySQL {
+		label, source = "MySQL", "go_mysql_collector"
 	}
 	if lease != nil {
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
@@ -387,7 +395,7 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	if reason != "" {
 		status = "error"
 	}
-	if status == "ok" {
+	if status == "ok" && !isMySQL {
 		if err := attachDatabaseGrowth(ctx, tx, id, metrics, now); err != nil {
 			return CheckResult{}, err
 		}
@@ -448,9 +456,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 			if err != nil {
 				return CheckResult{}, err
 			}
-			title := "PostgreSQL 采集失败"
+			title := label + " 采集失败"
 			if group == "availability" {
-				title = "PostgreSQL 无法连接"
+				title = label + " 无法连接"
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
 				VALUES($1,$2,'collection_failure',$3,'open',$4,$5)`, eventID, id, title, now, group)
@@ -466,7 +474,7 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		} else if err != nil {
 			return CheckResult{}, err
 		}
-		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "error": reason, "source": "go_postgres_collector"})
+		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "error": reason, "source": source})
 		var collectionEvidenceID string
 		err = tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'collection_error',$2,$3) RETURNING id::text`, eventID, now, payload).
@@ -531,17 +539,25 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 			}
 		}
 	}
-	var observed map[string]any
-	if err := json.Unmarshal(encoded, &observed); err != nil {
-		return CheckResult{}, err
+	if isMySQL {
+		if status == "ok" {
+			if err := recordMySQLLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
+				return CheckResult{}, fmt.Errorf("record MySQL lock event: %w", err)
+			}
+		}
+	} else {
+		var observed map[string]any
+		if err := json.Unmarshal(encoded, &observed); err != nil {
+			return CheckResult{}, err
+		}
+		if err := recordObservedChanges(ctx, tx, id, previousID, sampleID, previousAt, now, previous, observed); err != nil {
+			return CheckResult{}, fmt.Errorf("record observed changes: %w", err)
+		}
+		if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now, ""); err != nil {
+			return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
+		}
 	}
-	if err := recordObservedChanges(ctx, tx, id, previousID, sampleID, previousAt, now, previous, observed); err != nil {
-		return CheckResult{}, fmt.Errorf("record observed changes: %w", err)
-	}
-	if err := s.applyGoAlerts(ctx, tx, id, sampleID, observed, previous, now, ""); err != nil {
-		return CheckResult{}, fmt.Errorf("evaluate Go alert rules: %w", err)
-	}
-	if err := s.resolveGoCollectionFailures(ctx, tx, id, sampleID, group, now); err != nil {
+	if err := s.resolveGoCollectionFailures(ctx, tx, id, sampleID, group, source, now); err != nil {
 		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
 	}
 	if lease != nil {
@@ -570,7 +586,7 @@ func encodeStateEvidence(state map[string]any, sampleID string) []byte {
 	return encoded
 }
 
-func (s *Postgres) resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup string, now time.Time) error {
+func (s *Postgres) resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, assetID, sampleID, currentGroup, source string, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT id::text FROM events WHERE asset_id=$1 AND status='open'
 		AND kind='collection_failure' FOR UPDATE`, assetID)
 	if err != nil {
@@ -606,7 +622,7 @@ func (s *Postgres) resolveGoCollectionFailures(ctx context.Context, tx pgx.Tx, a
 			return err
 		}
 		if !recovered {
-			payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": "go_postgres_collector"})
+			payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": source})
 			if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 				VALUES(gen_random_uuid(),$1,'collection_recovered',$2,$3)`, eventID, now, payload); err != nil {
 				return err

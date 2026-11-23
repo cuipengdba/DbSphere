@@ -19,6 +19,10 @@ PG18 的 OOM 全链路结论来自 V1.0.10–V1.0.11 的明确 `OOMKilled` 作�
 
 资产页按样本展示等待、I/O、检查点、WAL、复制和 Top SQL 的实际采集状态。PG16 起提供 `pg_stat_io`，PG17 起从 `pg_stat_checkpointer` 读取检查点统计。等待明细与跨账号 SQL 指纹需要可用的 `pg_read_all_stats` 权限，后者还需目标数据库安装 `pg_stat_statements`。DbSphere 继续回归已结束上游支持的 PostgreSQL 14，并在资产界面标注其生命周期。[PostgreSQL 版本策略](https://www.postgresql.org/support/versioning/) · [监控系统视图](https://www.postgresql.org/docs/19/monitoring-stats.html)
 
+## MySQL 8.4 只读预览
+
+读取连接指标、InnoDB 等待关系、按数据库筛选的 SQL 指纹和入站复制通道。采集和事件证据使用与 PostgreSQL 相同的独立 PG18 监控库。MySQL 专项验收使用 Linux 上的 MySQL Community Server 8.4 实例，覆盖实际阻塞和同事件恢复。[接入与权限](MYSQL_PREVIEW.md)
+
 ## 部署与依赖
 
 | 交付方式 | 已验证平台 | 运行时依赖 | 监控存储 |

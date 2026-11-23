@@ -110,7 +110,7 @@ func (s *Postgres) SetRouting(ctx context.Context, id string, input RoutingInput
 		}
 		return RoutingSettings{}, err
 	}
-	if settings.Kind == "k8s_service" && runtime != "k8s" {
+	if runtime == assets.RuntimeMySQL || (settings.Kind == "k8s_service" && runtime != "k8s") {
 		return RoutingSettings{}, ErrRoutingSettings
 	}
 	if settings.Kind == "" {

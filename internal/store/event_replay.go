@@ -123,6 +123,10 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		point := replayPoint{EvidenceID: item.ID, At: item.ObservedAt, Kind: item.Kind, Stage: "observation", Strength: "insufficient"}
 		point.Signal, point.Source = stringValue(payload["metric"]), stringValue(payload["source"])
 		point.Layer = incidentLayer(item.Kind, point.Signal)
+		if item.Kind == mysqlLockGroup || point.Source == "go_mysql_collector" ||
+			(event.Kind == mysqlLockGroup && item.Kind == "collection_recovered") {
+			point.Layer = "mysql"
+		}
 		if point.Layer == "" {
 			continue
 		}
@@ -135,7 +139,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			layers[point.Layer] = true
 		}
 		switch item.Kind {
-		case "collection_error", "alert_firing":
+		case "collection_error", "alert_firing", mysqlLockGroup:
 			point.Stage = "detection"
 			if detection == nil || (detection.SampleID == "" && point.SampleID != "") {
 				value := point

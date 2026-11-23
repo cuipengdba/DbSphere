@@ -226,6 +226,19 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if item.Kind == mysqlLockGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {
+				wait := object(list(payload["waits"])[0])
+				title := "已观测到 InnoDB 持锁阻塞关系"
+				if holder, waiter := number(wait["blockingThread"]), number(wait["waitingThread"]); holder > 0 && waiter > 0 {
+					title = fmt.Sprintf("InnoDB 线程 %.0f 持锁，阻塞线程 %.0f", holder, waiter)
+				}
+				addCandidate("mysql_innodb_lock_wait", title, "high", []string{item.ID},
+					[]string{"核对持锁事务的开始时间和提交路径"}, "证据确认采样时的直接阻塞关系。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind != "root_cause_candidate" {
 			continue
 		}

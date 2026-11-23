@@ -22,7 +22,7 @@ const monitoringInstancesSQL = `SELECT jsonb_build_object(
 		ORDER BY id DESC LIMIT 1
 	) m ON true LEFT JOIN LATERAL (
 		SELECT count(*)::int AS total FROM open_event_groups WHERE asset_id=a.id
-	) e ON true /*asset_scope*/ ORDER BY a.id`
+	) e ON true WHERE a.runtime<>'mysql' /*asset_scope*/ ORDER BY a.id`
 
 func monitoringBucketLimit(minutes int) time.Duration {
 	if minutes == 60 {

@@ -20,7 +20,7 @@ func (s *Postgres) ReadCollection(ctx context.Context, path string) (any, bool, 
 
 var scopedCollectionPredicates = map[string]string{
 	"/api/assets":               "WHERE id = ANY($1::uuid[])",
-	"/api/monitoring/instances": "WHERE a.id = ANY($1::uuid[])",
+	"/api/monitoring/instances": "AND a.id = ANY($1::uuid[])",
 	"/api/events":               "WHERE e.asset_id = ANY($1::uuid[])",
 	"/api/alerts":               "AND s.asset_id = ANY($1::uuid[])",
 	"/api/alert-workbench":      "AND e.asset_id = ANY($1::uuid[])",

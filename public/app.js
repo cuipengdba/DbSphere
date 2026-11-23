@@ -50,7 +50,7 @@ const views = {
   overview: ['总览', '先看异常，再进入资产和证据。'],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
-  assets: ['资产与实例', '纳管 PostgreSQL 14–19，并查看实例与基础设施状态。'],
+  assets: ['资产与实例', '纳管 PostgreSQL 14–19，并试用 MySQL 8.4 只读监控。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
   inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
   settings: ['系统状态', '检查监控数据存储与部署状态。']
@@ -405,6 +405,7 @@ async function renderRCAWorkbench(eventId = '', preferredCode = '') {
 }
 
 function assetRuntimeLabel(asset) {
+  if (asset.runtime === 'mysql') return 'MySQL 8.4 预览';
   if (asset.runtime === 'k8s') return `K8S${asset.namespace ? ' / ' + asset.namespace : ''}`;
   return asset.runtime === 'managed' ? '托管 PG' : 'Linux';
 }
@@ -607,7 +608,8 @@ async function refresh() {
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
   allAssets = assets;
   assetServerPaging = runtime?.backend === 'go';
-  monitoring.sync(assets, assetServerPaging, [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
+  monitoring.sync(assets.filter(asset => asset.runtime !== 'mysql'), assetServerPaging,
+    [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
   renderOverview(assets, eventOverview.latestOpen);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
@@ -776,7 +778,9 @@ function renderAssets(assets, summary = '') {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
     info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${assetRuntimeLabel(asset)}`));
-    info.append(cell('small', `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''} · ${formatTime(asset.lastSampleAt)}`));
+    const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
+      : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
+    info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
     const health = assetHealth(asset);
     actions.append(cell('span', health.label, `pill ${health.kind}`));
@@ -804,10 +808,15 @@ async function showAsset(id, layer) {
   const preferredLayer = layer ?? (selectedAsset === id ? selectedAssetLayer : null);
   const restoreLayerFocus = selectedAsset === id && document.activeElement?.getAttribute('role') === 'tab';
   selectedAsset = id;
-  const [{ asset }, { samples }, { performance }, { entries: slowLogs }, { plans }] = await Promise.all([
-    api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
-    api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`),
-    api(`/api/assets/${id}/sql-plans`)]);
+  const [{ asset }, { samples }] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`)]);
+  if (selectedAsset !== id) return;
+  if (asset.runtime === 'mysql') {
+    renderMySQLAsset($('detail'), asset, samples);
+    return;
+  }
+  const [{ performance }, { entries: slowLogs }, { plans }] = await Promise.all([
+    api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`), api(`/api/assets/${id}/sql-plans`)]);
+  if (selectedAsset !== id) return;
   const detail = $('detail'); detail.replaceChildren();
   detail.append(cell('h3', asset.name));
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
@@ -1136,6 +1145,73 @@ function renderSignalCoverage(target, asset, sample, performance) {
     panel.append(cell('h4', `PostgreSQL ${compatibility.major} 版本能力${compatibility.lifecycle === 'upstream_eol' ? ' · 上游已停止支持' : ''}`), signals);
   }
   target.append(panel);
+}
+
+function renderMySQLAsset(detail, asset, samples) {
+  detail.replaceChildren(cell('h3', asset.name),
+    cell('p', `${asset.host}:${asset.port}/${asset.database} · MySQL 8.4 只读预览`),
+    cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
+  const sample = samples[0];
+  const metrics = sample?.status === 'ok' && sample.collectedAt === asset.lastSampleAt ? sample.metrics : null;
+  if (!metrics?.mysql || !metrics.adapter) {
+    detail.append(cell('p', '当前配置尚无成功采样。', 'empty'));
+    return;
+  }
+  const data = metrics.mysql;
+  const report = metrics.adapter;
+  const role = { writable: '可写实例', read_only: '只读实例', replica: '复制副本' }[report.role];
+  const transport = report.transport;
+  const tls = transport.verified ? `证书与主机名已验证${transport.protocol ? ' · ' + transport.protocol : ''}` : '未启用 TLS';
+  const grid = cell('div', '', 'metric-grid');
+  for (const [label, value] of [['版本', data.version], ['角色', role], ['当前连接', data.connections], ['运行线程', data.running], ['最大连接', data.maxConnections]]) {
+    const metric = cell('div', '');
+    metric.append(cell('span', label), cell('strong', value == null ? '未采集' : String(value)));
+    grid.append(metric);
+  }
+  detail.append(grid, cell('p', `采集会话 · ${transport.readOnly ? '只读' : '只读状态异常'} · ${tls}`, 'hint'));
+  const coverage = cell('details', '', 'settings-details');
+  coverage.append(cell('summary', '采集能力与缺口'));
+  const labels = { connections: '连接状态', lockWaits: 'InnoDB 锁等待', sqlPerformance: 'Top SQL 指纹', replication: '复制状态' };
+  const status = { ok: '已采集', limited_permissions: '权限受限', not_configured: '未启用', unavailable: '采集失败' };
+  coverage.append(importTable(['指标', '数据源', '采集状态'], report.signals.map(signal => [
+    labels[signal.key] || signal.key, signal.source, `${status[signal.status] || '未知'}${signal.reason ? ' · ' + signal.reason : ''}`
+  ])));
+  detail.append(coverage);
+  const available = key => report.signals.some(signal => signal.key === key && signal.status === 'ok');
+  const connectionHistory = samples.slice(0, 12).filter(point => point.metrics?.mysql?.connections != null);
+  if (connectionHistory.length) {
+    const history = cell('details', '', 'settings-details');
+    history.append(cell('summary', '最近连接采样'), importTable(['时间', '当前连接', '运行线程', '最大连接'],
+      connectionHistory.map(point => [formatTime(point.collectedAt), String(point.metrics.mysql.connections),
+        String(point.metrics.mysql.running ?? '未采集'), String(point.metrics.mysql.maxConnections)])));
+    detail.append(history);
+  }
+  const incident = recentEvents.find(event => event.assetId === asset.id && event.kind === 'mysql_lock_wait');
+  detail.append(cell('h3', 'InnoDB 锁等待'));
+  if (incident) {
+    const link = cell('button', incident.status === 'resolved' ? '查看最近锁等待事件' : '查看锁等待事件', 'ghost small-button');
+    link.type = 'button';
+    link.addEventListener('click', () => void openEvent(incident.id));
+    detail.append(link);
+  }
+  if (available('lockWaits') && data.lockWaits?.length) {
+    detail.append(importTable(['等待线程', '阻塞线程', '对象', '请求锁模式'], data.lockWaits.map(wait => [
+      String(wait.waitingThread || '未知'), String(wait.blockingThread || '未知'), [wait.schema, wait.table].filter(Boolean).join('.') || '未采集', wait.mode || '未采集'
+    ])));
+    if (data.locksTruncated) detail.append(cell('p', '显示当前样本中的 20 条等待关系。', 'hint'));
+  } else detail.append(cell('p', available('lockWaits') ? '本次采样未发现 InnoDB 锁等待。' : '本次锁等待信号不可用。', 'empty'));
+  detail.append(cell('h3', 'Top SQL 指纹'));
+  if (available('sqlPerformance') && data.topSql?.length) {
+    detail.append(importTable(['指纹', '执行次数', '累计耗时 ms', '平均耗时 ms', '扫描行数'], data.topSql.map(row => [
+      cell('code', row.digest), String(row.calls), row.totalMs.toFixed(2), row.meanMs.toFixed(2), String(row.rowsExamined)
+    ])));
+  } else detail.append(cell('p', available('sqlPerformance') ? '指定数据库暂无指纹数据。' : '本次 SQL 指纹信号不可用。', 'empty'));
+  detail.append(cell('h3', '复制通道'));
+  if (available('replication') && data.replication?.length) {
+    detail.append(importTable(['通道', '源实例 UUID', '接收线程', '应用线程', '最近 I/O 错误码'], data.replication.map(row => [
+      row.name || '默认', row.sourceUuid || '未知', row.receiver, row.applier, String(row.lastIoError)
+    ])));
+  } else detail.append(cell('p', available('replication') ? '本次采样未发现入站复制通道。' : '本次复制信号不可用。', 'empty'));
 }
 
 function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false) {
@@ -2103,6 +2179,7 @@ setupAssetImport();
 function editAsset(asset) {
   editingAsset = asset.id;
   const form = $('asset-form');
+  for (const option of $('runtime').options) option.disabled = (option.value === 'mysql') !== (asset.runtime === 'mysql');
   for (const [field, value] of Object.entries({
     name: asset.name, host: asset.host, port: asset.port, database: asset.database,
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
@@ -2119,7 +2196,7 @@ function editAsset(asset) {
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '更新资产';
   $('asset-dialog').dataset.mode = 'edit';
-  $('asset-dialog-title').textContent = '编辑 PostgreSQL 实例';
+  $('asset-dialog-title').textContent = asset.runtime === 'mysql' ? '编辑 MySQL 实例' : '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
@@ -2127,8 +2204,9 @@ function editAsset(asset) {
 function resetEdit() {
   if ($('asset-dialog').open) $('asset-dialog').close();
   editingAsset = null;
-  $('asset-dialog-title').textContent = '纳管 PostgreSQL 实例';
+  $('asset-dialog-title').textContent = '纳管数据库实例';
   $('asset-error').textContent = '';
+  for (const option of $('runtime').options) option.disabled = false;
   $('asset-form').reset();
   $('asset-organization-field').hidden = true;
   $('asset-organization-field').querySelector('select').disabled = true;
@@ -2138,7 +2216,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', mysql: 'MySQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -2148,7 +2226,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
-  collection_error: '采集发现异常', collection_recovered: '采样已恢复', recovery_verified: '人工验证恢复',
+  collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
 
@@ -3295,6 +3373,18 @@ $('silence-form').addEventListener('submit', async event => {
 $('runtime').addEventListener('change', (event) => {
   const k8s = event.target.value === 'k8s';
   const linux = event.target.value === 'linux';
+  const mysql = event.target.value === 'mysql';
+  const wasMySQL = event.target.dataset.previousRuntime === 'mysql';
+  event.target.dataset.previousRuntime = event.target.value;
+  const form = $('asset-form');
+  if (!editingAsset && mysql && !wasMySQL && form.elements.port.value === '5432') form.elements.port.value = '3306';
+  if (!editingAsset && !mysql && wasMySQL && form.elements.port.value === '3306') form.elements.port.value = '5432';
+  if (!editingAsset && mysql && !wasMySQL && form.elements.database.value === 'postgres') form.elements.database.value = '';
+  if (!editingAsset && !mysql && wasMySQL && form.elements.database.value === '') form.elements.database.value = 'postgres';
+  $('asset-integrations').hidden = mysql;
+  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql;
+  $('asset-runtime-hint').textContent = mysql ? '数据库名称用于筛选 SQL 指纹。使用专用账号读取 Performance Schema。'
+    : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
   $('k8s-fields').hidden = !k8s;
   for (const field of document.querySelectorAll('.linux-field')) {
     field.hidden = !linux;

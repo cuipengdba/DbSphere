@@ -79,7 +79,7 @@ func createAsset(ctx context.Context, db assetQueryer, input assets.Input, key [
 		nullable(input.Pod), nullable(input.Node), nullable(input.PoolerEndpoint), input.MonitoringClusterName(),
 		input.MonitoringEnvironment(), input.MonitoringTags(), nullable(explicitID), organizationID).Scan(&id)
 	if err != nil {
-		return nil, fmt.Errorf("create PostgreSQL asset: %w", err)
+		return nil, fmt.Errorf("create database asset: %w", err)
 	}
 	return assetByID(ctx, db, id)
 }
@@ -135,7 +135,8 @@ func updateAsset(ctx context.Context, db assetQueryer, id string, input assets.I
 		pooler_endpoint=$21,cluster_name=CASE WHEN $22::text IS NULL THEN cluster_name ELSE nullif($22,'') END,
 		environment=CASE WHEN $23::text IS NULL THEN environment ELSE nullif($23,'') END,tags=coalesce($24::text[],tags),
 		last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
-		WHERE id=$20 AND (nullif($25,'')::uuid IS NULL OR organization_id=nullif($25,'')::uuid) RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username,
+		WHERE id=$20 AND (runtime='mysql')=($8='mysql')
+		AND (nullif($25,'')::uuid IS NULL OR organization_id=nullif($25,'')::uuid) RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username,
 		password, input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		input.PoolerClear, pooler, input.PatroniClear, patroni, nullable(input.K8sCluster), nullable(input.Namespace),
 		nullable(input.Workload), nullable(input.Pod), nullable(input.Node), id,
@@ -144,7 +145,7 @@ func updateAsset(ctx context.Context, db assetQueryer, id string, input assets.I
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("update PostgreSQL asset: %w", err)
+		return nil, fmt.Errorf("update database asset: %w", err)
 	}
 	return assetByID(ctx, db, updated)
 }

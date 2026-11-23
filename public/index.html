@@ -78,14 +78,14 @@
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
       <div data-view="assets">
         <section class="panel">
-          <div class="section-head"><div><h2>PostgreSQL 资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
-          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索 PostgreSQL 资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></div>
+          <div class="section-head"><div><h2>数据库资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
+          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索数据库资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux PostgreSQL</option><option value="k8s">Kubernetes PostgreSQL</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 预览</option></select></div>
           <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <div id="asset-list" class="list"></div>
           <div id="asset-page-controls" class="event-page-controls" hidden><button id="asset-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="asset-next" type="button" class="ghost small-button" disabled>下一页</button></div>
         </section>
         <details id="asset-import-panel" class="panel admin-only platform-only asset-import">
-          <summary>批量纳管与清单导出</summary>
+          <summary>PostgreSQL 批量纳管与清单导出</summary>
           <form id="asset-import-form" class="form-grid">
             <label>清单格式<select name="format"><option value="yaml">DbSphere YAML</option><option value="csv">DbSphere CSV</option><option value="pigsty">Pigsty Inventory</option></select></label>
             <label>默认监控用户名<input name="username" maxlength="63" autocomplete="off" placeholder="dbsphere_monitor"></label>
@@ -109,12 +109,12 @@
           </details>
         </details>
         <dialog id="asset-dialog" class="asset-drawer" aria-labelledby="asset-dialog-title">
-          <div class="section-head"><h2 id="asset-dialog-title">纳管 PostgreSQL 实例</h2><button id="asset-close" class="ghost" type="button">关闭</button></div>
+          <div class="section-head"><h2 id="asset-dialog-title">纳管数据库实例</h2><button id="asset-close" class="ghost" type="button">关闭</button></div>
           <p id="asset-error" class="notice error" role="alert"></p>
           <form id="asset-form" class="form-grid">
             <label id="asset-organization-field" hidden>所属组织<select name="organizationId" disabled></select></label>
             <label>资产名称<input name="name" required maxlength="100" placeholder="生产主库"></label>
-            <label>PG 集群名（可选）<input name="clusterName" maxlength="100" placeholder="生产订单库"><span class="hint">同一 PostgreSQL 集群的主备填写相同名称。与 K8S 集群名独立。</span></label>
+            <label>集群名（可选）<input name="clusterName" maxlength="100" placeholder="生产订单库"><span class="hint">同一数据库集群的成员可填写相同名称。</span></label>
             <label>环境（可选）<input name="environment" maxlength="26" placeholder="例如生产、预发"></label>
             <label>标签（可选）<input name="tags" maxlength="780" placeholder="以逗号分隔，例如订单,核心"></label>
             <label>主机地址<input name="host" required placeholder="pg.example.internal"></label>
@@ -123,7 +123,7 @@
             <label>监控用户名<input name="username" required placeholder="dbsphere_monitor"></label>
             <label>密码<input name="password" type="password" autocomplete="new-password"></label>
             <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
-            <label>运行环境<select name="runtime" id="runtime"><option value="linux">Linux 主机</option><option value="k8s">Kubernetes</option><option value="managed">托管 PostgreSQL</option></select></label>
+            <label>数据库与运行环境<select name="runtime" id="runtime"><option value="linux">PostgreSQL · Linux 主机</option><option value="k8s">PostgreSQL · Kubernetes</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 · 只读预览</option></select></label>
             <label class="linux-field">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <div id="k8s-fields" class="nested wide" hidden>
@@ -146,7 +146,7 @@
                 <label class="wide edit-only"><input name="patroniClear" type="checkbox">清除已保存的 Patroni 连接</label>
               </div>
             </details>
-            <p class="hint wide">Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。</p>
+            <p id="asset-runtime-hint" class="hint wide">Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。</p>
           </form>
           <div class="drawer-actions"><button class="ghost" id="cancel-edit" type="button">取消</button><button id="asset-submit" form="asset-form" type="submit">保存资产</button></div>
         </dialog>
