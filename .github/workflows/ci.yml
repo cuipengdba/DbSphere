@@ -526,8 +526,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.17.0'
-          previous_sha='9d91d4c9a34dcb2aa4917dc0c8b08ef3a8d8677595b6716ad11ebf1845f93362'
+          previous_version='2.18.0'
+          previous_sha='03b25c9d5e11c8fcc88657d67cb8310c59988d854fa8f213f94034360259d7ee'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -596,8 +596,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.17.0'
-          previous_arm_sha='f4bc3005aab435562405fbed162a09eac77e975f94744d444cc835c0380e6bfb'
+          previous_version='2.18.0'
+          previous_arm_sha='4be6bda6090e827c2c07ccf5f3a301ac271c0c4c671fabe304d733b77de7b5a3'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
