@@ -115,6 +115,7 @@
     let directory = { projects: [], instances: [] };
     let active = false, generation = 0, timer, page = 0, current = '', batches = [];
     let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
+    const pendingUploads = new Map();
     let comparing = false, baseline = '', comparisonData, compareRequest = 0;
     let caseId = '', sourceId = '';
     let reportCharts = [];
@@ -224,11 +225,22 @@
       get('files').replaceChildren(table(['文件', '来源及格式', '状态', '解析记录', '原始 / 归档', '操作'], files.map(file => {
         const state = element('div', fileStates[file.state] || file.state);
         if (file.reason) state.append(element('small', file.reason));
-        let action = '—';
-        if (file.state === 'failed') action = button('重新解析', () => showUpload(file.id));
+        const action = element('div', undefined, 'log-actions');
+        if (file.archiveExpiredAt) state.append(element('small', '原文归档已到期'));
+        if (file.verifiedAt) state.append(element('small', '已通过完整性校验 · ' + formatTime(file.verifiedAt)));
+        if (file.state === 'failed' && !file.archiveExpiredAt) action.append(button('重新解析', () => showUpload(file.id)));
+        if (file.state === 'uploading') action.append(button('继续上传', () => showUpload()));
+        if (file.storedSize > 0 && ['complete', 'partial', 'failed'].includes(file.state)) {
+          action.append(button('校验归档', () => run(async () => {
+            await api(base + 'files/' + file.id + '/verify', 'POST');
+            notice('归档校验通过');
+            await loadBatch();
+          })));
+        }
         if (file.state === 'duplicate' && safeId(file.duplicateBatch)) {
-          action = element('a', '查看原批次');
-          action.href = '#logs?batch=' + file.duplicateBatch;
+          const link = element('a', '查看原批次');
+          link.href = '#logs?batch=' + file.duplicateBatch;
+          action.append(link);
         }
         return [file.filename, [file.node, file.detectedFormat || file.format].filter(Boolean).join(' · '),
           state, file.parsedCount + ' / ' + file.recordCount, bytes(file.rawSize) + ' / ' + bytes(file.storedSize), action];
@@ -346,8 +358,9 @@
         content.append(element('small', row.file + ' · ' + row.offset));
         const type = [kinds[row.kind] || row.kind, row.sqlstate].filter(Boolean).join(' · ');
         const actions = element('div', undefined, 'log-actions');
-        actions.append(button('查看原文', () => run(() => openOriginal(row.id))),
-          button('调查', () => run(() => investigate(row.id))));
+        if (row.archiveExpiredAt) actions.append(element('small', '原文已到期'));
+        else actions.append(button('查看原文', () => run(() => openOriginal(row.id))));
+        actions.append(button('调查', () => run(() => investigate(row.id))));
         return [row.at ? formatTime(row.at) : '—', type, row.application || '未标识', content,
           row.durationMs == null ? '—' : number.format(row.durationMs) + ' ms', actions];
       }), '这个范围暂无日志记录。'));
@@ -489,7 +502,7 @@
       scroll.append(table(['批次', '时间', '类型', 'SQL / 应用', '原文'], data.records.map(row => [
         row.batchName, row.at ? formatTime(row.at) : '—', kinds[row.kind] || row.kind,
         row.sql ? element('code', row.sql, 'log-record') : row.app || '—',
-        button('查看原文', () => run(() => openOriginal(row.id), get('investigation-status')))
+        row.archiveExpiredAt ? '原文已到期' : button('查看原文', () => run(() => openOriginal(row.id), get('investigation-status')))
       ]), '暂无关联证据。'));
       view.append(scroll);
       const dialog = get('investigation-dialog');
@@ -511,6 +524,28 @@
       get('upload-dialog').showModal();
     }
 
+    function saveUpload(key, id) {
+      if (id) pendingUploads.set(key, id);
+      else pendingUploads.delete(key);
+      try {
+        if (id) localStorage.setItem(key, id);
+        else localStorage.removeItem(key);
+      } catch {}
+    }
+
+    async function savedUpload(key, batch, file) {
+      let id = pendingUploads.get(key);
+      try { id ||= localStorage.getItem(key); } catch {}
+      if (!safeId(id)) return null;
+      let status;
+      try { status = await api(base + 'files/' + id + '/status'); }
+      catch (error) {
+        if (!String(error.message).includes('找不到该日志分析资源')) throw error;
+        return null;
+      }
+      return status.batchId === batch && status.size === file.size ? status : null;
+    }
+
     async function upload(form) {
       const batch = current;
       const { format, prefix, zone, node } = Object.fromEntries(new FormData(form));
@@ -523,15 +558,34 @@
         let sent = 0;
         for (const file of files) {
           get('upload-status').textContent = file.name;
-          const created = await api(base + 'batches/' + batch + '/files', 'POST',
+          const key = 'dbsphere:log-upload:' + JSON.stringify([batch, file.name, file.size, file.lastModified, node]);
+          const resumed = await savedUpload(key, batch, file);
+          const created = resumed || await api(base + 'batches/' + batch + '/files', 'POST',
             { name: file.name, size: file.size, format, prefix, zone, node });
+          saveUpload(key, created.id);
+          if (created.state !== 'uploading') {
+            saveUpload(key, '');
+            sent += file.size;
+            get('progress').value = sent / total;
+            continue;
+          }
           for (let offset = 0, part = 0; offset < file.size; offset += created.chunkBytes, part++) {
             const block = file.slice(offset, offset + created.chunkBytes);
-            await api(base + 'files/' + created.id + '/blocks?part=' + part, 'PUT', block);
+            if (part < created.parts && window.crypto?.subtle) {
+              const digest = await crypto.subtle.digest('SHA-256', await block.arrayBuffer());
+              const hash = Array.from(new Uint8Array(digest), octet => octet.toString(16).padStart(2, '0')).join('');
+              if (hash !== created.digests[part]) {
+                saveUpload(key, '');
+                throw new Error('选择的文件与已上传内容不同。请重新提交此文件。');
+              }
+            } else {
+              await api(base + 'files/' + created.id + '/blocks?part=' + part, 'PUT', block);
+            }
             sent += block.size;
             get('progress').value = sent / total;
           }
           await api(base + 'files/' + created.id + '/queue', 'POST');
+          saveUpload(key, '');
         }
       }
       get('upload-dialog').close();
@@ -554,6 +608,60 @@
     get('baseline').addEventListener('change', () => run(() => toggleComparison(true), get('compare-coverage')));
     get('compare-filter').addEventListener('change', renderComparison);
     get('open-health').addEventListener('click', () => run(openHealth));
+    get('open-archive').addEventListener('click', () => run(openArchive));
+    get('rebuild').addEventListener('click', event => {
+      const trigger = event.currentTarget;
+      trigger.disabled = true;
+      run(async () => {
+        try {
+          await api(base + 'batches/' + current + '/rebuild', 'POST');
+          notice('对比索引已重建');
+          if (active && comparing) await toggleComparison(true);
+        } finally {
+          trigger.disabled = false;
+        }
+      });
+    });
+
+    async function openArchive() {
+      const data = await api(base + 'archive');
+      if (!active) return;
+      const dialog = get('archive-dialog');
+      const status = get('archive-status');
+      const rows = data.organizations.map(row => {
+        const policy = element('form', undefined, 'log-actions');
+        const days = element('input');
+        days.type = 'number';
+        days.min = '0';
+        days.max = '3650';
+        days.value = row.keepDays;
+        days.required = true;
+        days.setAttribute('aria-label', row.name + '原文保留天数');
+        const save = element('button', '保存', 'ghost');
+        policy.append(days, save);
+        policy.addEventListener('submit', event => {
+          event.preventDefault();
+          const keepDays = Number(days.value);
+          if (keepDays > 0 && keepDays < 7) {
+            status.textContent = '请输入 0 或 7 至 3650 天。';
+            return;
+          }
+          if (keepDays > 0 && (row.keepDays === 0 || keepDays < row.keepDays) &&
+            !confirm('超过新保留期限且未被调查引用的原文将自动清理。继续保存？')) return;
+          run(async () => {
+            await api(base + 'archive/' + row.organizationId + '/policy', 'POST', { keepDays });
+            await openArchive();
+            status.textContent = '保留期限已保存';
+          }, status);
+        });
+        const ratio = row.rawSize > 0 ? number.format(row.storedSize / row.rawSize * 100) + '%' : '—';
+        return [row.name, bytes(row.rawSize), bytes(row.storedSize), ratio, row.uploading, row.queued, row.expired, policy];
+      });
+      get('archive-overview').replaceChildren(
+        element('p', '每个组织的上传与待解析任务上限为 ' + data.uploadLimit + ' 个文件 / ' + bytes(data.pendingBytesLimit), 'hint'),
+        table(['组织', '留存原文', '归档空间', '压缩后占比', '上传中', '待解析', '已到期', '保留天数'], rows, '暂无组织归档。'));
+      if (!dialog.open) dialog.showModal();
+    }
     get('new-project').addEventListener('click', () => run(async () => {
       const form = get('project-form');
       form.reset();

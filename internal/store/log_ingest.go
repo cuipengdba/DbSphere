@@ -63,13 +63,37 @@ func (s *Postgres) CreateLogFile(ctx context.Context, batch string, input LogFil
 		len(input.Node) > 120 || strings.ContainsAny(input.Node, "\x00\r\n") || input.Size <= 0 || input.Size > LogFileLimit {
 		return nil, ErrLogInput
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var org string
+	if err := tx.QueryRow(ctx, `SELECT p.organization_id::text`+logBatchScope+
+		`WHERE b.id=$1 AND ($2='' OR p.organization_id::text=$2)`, batch, OrganizationFromContext(ctx)).Scan(&org); err != nil {
+		return nil, logWriteError(err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,56))", org); err != nil {
+		return nil, err
+	}
+	var outstanding, reserved int64
+	if err := tx.QueryRow(ctx, `SELECT count(*),coalesce(sum(f.expected_size),0)`+logFileScope+
+		`WHERE p.organization_id=$1 AND f.state IN ('uploading','queued')`, org).Scan(&outstanding, &reserved); err != nil {
+		return nil, err
+	}
+	if outstanding >= logUploadLimit || reserved+input.Size > logOutstandingLimit {
+		return nil, ErrLogQuota
+	}
 	var value json.RawMessage
-	err = s.pool.QueryRow(ctx, `INSERT INTO log_files(batch_id,filename,node,expected_size,format,prefix,zone)
+	err = tx.QueryRow(ctx, `INSERT INTO log_files(batch_id,filename,node,expected_size,format,prefix,zone)
 		SELECT b.id,$3,$4,$5,$6,$7,$8`+logBatchScope+` WHERE b.id=$1 AND ($2='' OR p.organization_id::text=$2)
 		RETURNING jsonb_build_object('id',id,'state',state,'parts',parts,'rawSize',raw_size,'chunkBytes',$9::int)`,
 		batch, OrganizationFromContext(ctx), input.Name, strings.TrimSpace(input.Node), input.Size,
 		options.Format, options.Prefix, options.Zone.String(), LogArchiveBlockBytes).Scan(&value)
-	return value, logWriteError(err)
+	if err != nil {
+		return nil, logWriteError(err)
+	}
+	return value, tx.Commit(ctx)
 }
 
 func (s *Postgres) AppendLogBlock(ctx context.Context, file string, part int, raw []byte) (any, error) {
@@ -130,7 +154,7 @@ func (s *Postgres) QueueLogFile(ctx context.Context, file string, override *LogP
 	var state, batch, instance, node, format, prefix, zone string
 	var received, expected int64
 	err = tx.QueryRow(ctx, `SELECT f.state,b.id::text,i.id::text,f.node,f.format,f.prefix,f.zone,f.raw_size,f.expected_size`+
-		logFileScope+`WHERE f.id=$1 AND ($2='' OR p.organization_id::text=$2) FOR UPDATE OF f`,
+		logFileScope+`WHERE f.id=$1 AND f.archive_expired_at IS NULL AND ($2='' OR p.organization_id::text=$2) FOR UPDATE OF f`,
 		file, OrganizationFromContext(ctx)).Scan(&state, &batch, &instance, &node, &format, &prefix, &zone, &received, &expected)
 	if err != nil {
 		return nil, logWriteError(err)
@@ -146,7 +170,8 @@ func (s *Postgres) QueueLogFile(ctx context.Context, file string, override *LogP
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE log_files SET state='queued',format=$2,prefix=$3,zone=$4,reason='',updated_at=now()
+		if _, err := tx.Exec(ctx, `UPDATE log_files SET state='queued',format=$2,prefix=$3,zone=$4,reason='',updated_at=now(),
+			processing_attempts=0,next_attempt_at=now()
 			WHERE id=$1`, file, opts.Format, opts.Prefix, opts.Zone.String()); err != nil {
 			return nil, err
 		}
@@ -256,17 +281,28 @@ var logRecordColumns = []string{"batch_id", "file_id", "record_key", "raw_offset
 	"kind", "severity", "database_name", "application", "session_key", "process_id", "blocker_id", "sqlstate",
 	"sql_shape", "fingerprint", "command", "duration_ms", "temp_bytes", "object_key", "checkpoint_buffers"}
 
-func (s *Postgres) ProcessNextLogFile(ctx context.Context) (bool, error) {
+func (s *Postgres) ProcessNextLogFile(ctx context.Context) (processed bool, resultErr error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(ctx)
 	var file, batch, node, engine, format, prefix, zone string
-	var parts int
-	err = tx.QueryRow(ctx, `SELECT f.id,b.id,f.node,i.engine,f.format,f.prefix,f.zone,f.parts`+logFileScope+
-		`WHERE f.state='queued' ORDER BY f.updated_at,f.id FOR UPDATE OF f SKIP LOCKED LIMIT 1`).
-		Scan(&file, &batch, &node, &engine, &format, &prefix, &zone, &parts)
+	var parts, attempts int
+	defer func() {
+		_ = tx.Rollback(ctx)
+		if file != "" && resultErr != nil && ctx.Err() == nil {
+			_, retryErr := s.pool.Exec(ctx, `UPDATE log_files SET processing_attempts=processing_attempts+1,
+				next_attempt_at=now()+make_interval(secs=>10*power(2,processing_attempts)),
+				state=CASE WHEN processing_attempts>=4 THEN 'failed' ELSE state END,
+				reason=CASE WHEN processing_attempts>=4 THEN '解析重试已用尽，可确认存储后手动重试。' ELSE '等待自动重试。' END
+				WHERE id=$1 AND state='queued' AND processing_attempts=$2`, file, attempts)
+			resultErr = errors.Join(resultErr, retryErr)
+		}
+	}()
+	err = tx.QueryRow(ctx, `SELECT f.id,b.id,f.node,i.engine,f.format,f.prefix,f.zone,f.parts,f.processing_attempts`+logFileScope+
+		`WHERE f.state='queued' AND next_attempt_at<=now() ORDER BY f.next_attempt_at,f.updated_at,f.id
+			FOR UPDATE OF f SKIP LOCKED LIMIT 1`).
+		Scan(&file, &batch, &node, &engine, &format, &prefix, &zone, &parts, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -343,6 +379,9 @@ func (s *Postgres) ProcessNextLogFile(ctx context.Context) (bool, error) {
 		record_count=$5,parsed_count=$6,updated_at=now() WHERE id=$1`, file, state, reason, resolved, count, parsed); err != nil {
 		return false, err
 	}
+	if _, err := tx.Exec(ctx, "UPDATE log_batches SET archive_revision=archive_revision+1 WHERE id=$1", batch); err != nil {
+		return false, err
+	}
 	return true, tx.Commit(ctx)
 }
 
@@ -355,11 +394,17 @@ func limitedLogText(value string, limit int) string {
 }
 
 func (s *Postgres) LogOriginal(ctx context.Context, record string) (any, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 	var file, name string
 	var offset, size, fileSize int64
 	var parts int
-	err := s.pool.QueryRow(ctx, `SELECT f.id,f.filename,r.raw_offset,r.raw_length,f.raw_size,f.parts`+logFileScope+
-		`JOIN log_records r ON r.file_id=f.id WHERE r.id=$1 AND ($2='' OR p.organization_id::text=$2)`,
+	err = tx.QueryRow(ctx, `SELECT f.id,f.filename,r.raw_offset,r.raw_length,f.raw_size,f.parts`+logFileScope+
+		`JOIN log_records r ON r.file_id=f.id WHERE r.id=$1 AND f.archive_expired_at IS NULL
+			AND ($2='' OR p.organization_id::text=$2) FOR KEY SHARE OF f`,
 		record, OrganizationFromContext(ctx)).Scan(&file, &name, &offset, &size, &fileSize, &parts)
 	if err != nil {
 		return nil, logWriteError(err)
@@ -368,7 +413,7 @@ func (s *Postgres) LogOriginal(ctx context.Context, record string) (any, error) 
 	from := max(0, offset-2048)
 	to := min(fileSize, offset+min(size, LogArchiveBlockBytes)+2048)
 	first := int(from / LogArchiveBlockBytes)
-	reader := &logArchiveReader{ctx: ctx, db: s.pool, file: file, part: first, parts: parts}
+	reader := &logArchiveReader{ctx: ctx, db: tx, file: file, part: first, parts: parts}
 	if _, err := io.CopyN(io.Discard, reader, from%LogArchiveBlockBytes); err != nil {
 		return nil, err
 	}
@@ -377,5 +422,5 @@ func (s *Postgres) LogOriginal(ctx context.Context, record string) (any, error) 
 		return nil, err
 	}
 	return map[string]any{"file": name, "offset": offset, "size": size, "contextOffset": from,
-		"truncated": size > LogArchiveBlockBytes, "text": strings.ToValidUTF8(string(raw), "�")}, nil
+		"truncated": size > LogArchiveBlockBytes, "text": strings.ToValidUTF8(string(raw), "�")}, tx.Commit(ctx)
 }

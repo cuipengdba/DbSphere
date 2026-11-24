@@ -59,6 +59,12 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 			if _, err := pg.AppendLogBlock(ctx, file, part, block); err != nil {
 				t.Fatal("idempotent retry:", err)
 			}
+			if part == 0 {
+				value, err := pg.LogUploadStatus(ctx, file)
+				if err != nil || !strings.Contains(string(value.(json.RawMessage)), `"parts": 1`) {
+					t.Fatalf("upload continuation status: %v %v", value, err)
+				}
+			}
 		}
 		return file
 	}
@@ -150,5 +156,21 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	}
 	if _, err := pg.LogInvestigation(outOfScope, caseID); !errors.Is(err, ErrLogNotFound) {
 		t.Fatalf("cross-organization investigation exposed: %v", err)
+	}
+	if result, err := pg.VerifyLogFile(ctx, file); err != nil || result.(map[string]any)["rawSize"] != int64(len(payload)) {
+		t.Fatalf("archive validation: %v %v", result, err)
+	}
+	if _, err := pg.RebuildLogBatchRollup(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	indexed, err := pg.LogComparison(ctx, batch, second)
+	expected, _ := json.Marshal(comparison)
+	actual, _ := json.Marshal(indexed)
+	if err != nil || string(expected) != string(actual) {
+		t.Fatalf("rebuilt index changed comparison: %s %v", actual, err)
+	}
+	archived, err := pg.LogArchiveOverview(ctx)
+	if err != nil || !strings.Contains(string(archived.(map[string]any)["organizations"].([]json.RawMessage)[0]), "storedSize") {
+		t.Fatalf("archive usage: %v %v", archived, err)
 	}
 }

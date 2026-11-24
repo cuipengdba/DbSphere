@@ -316,7 +316,29 @@ func run(log *slog.Logger) error {
 func runLogAnalysis(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
 	tick := time.NewTicker(3 * time.Second)
 	defer tick.Stop()
+	maintainAfter := time.Now()
 	for {
+		if !time.Now().Before(maintainAfter) {
+			maintainAfter = time.Now().Add(time.Minute)
+			for range 16 {
+				cleaned, err := pg.SweepLogArchives(ctx)
+				if err != nil && ctx.Err() == nil {
+					log.Error("clean log archives", "error", err)
+				}
+				if err != nil || !cleaned {
+					break
+				}
+			}
+			for range 2 {
+				indexed, err := pg.RefreshNextLogBatchRollup(ctx)
+				if err != nil && ctx.Err() == nil {
+					log.Error("refresh log comparison index", "error", err)
+				}
+				if err != nil || !indexed {
+					break
+				}
+			}
+		}
 		for ctx.Err() == nil {
 			processed, err := pg.ProcessNextLogFile(ctx)
 			if err != nil && ctx.Err() == nil {

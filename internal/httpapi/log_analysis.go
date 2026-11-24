@@ -34,6 +34,23 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 	switch {
 	case path == "directory" && r.Method == http.MethodGet:
 		value, err = pg.LogDirectory(ctx)
+	case path == "archive" && r.Method == http.MethodGet:
+		value, err = pg.LogArchiveOverview(ctx)
+	case len(sections) == 3 && sections[0] == "archive" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "policy" && r.Method == http.MethodPost:
+		var input struct{ KeepDays int }
+		if readJSONLimit(w, r, &input, 1024) != nil {
+			err = storepkg.ErrLogInput
+			break
+		}
+		var audit string
+		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
+		if err == nil {
+			value, err = pg.SetLogArchivePolicy(ctx, sections[1], input.KeepDays)
+			if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(status, err)); auditErr != nil {
+				err = auditErr
+			}
+		}
 	case path == "projects" && r.Method == http.MethodPost:
 		var input storepkg.LogProjectInput
 		if readJSONLimit(w, r, &input, 4096) != nil {
@@ -103,11 +120,17 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			if err == nil {
 				value, err = pg.LogReport(ctx, sections[1], filters)
 			}
+		case len(sections) == 3 && sections[2] == "rebuild" && r.Method == http.MethodPost:
+			value, err = pg.RebuildLogBatchRollup(ctx, sections[1])
 		default:
 			err = storepkg.ErrLogNotFound
 		}
 	case len(sections) == 3 && sections[0] == "files" && opsUUID.MatchString(sections[1]):
 		switch {
+		case sections[2] == "status" && r.Method == http.MethodGet:
+			value, err = pg.LogUploadStatus(ctx, sections[1])
+		case sections[2] == "verify" && r.Method == http.MethodPost:
+			value, err = pg.VerifyLogFile(ctx, sections[1])
 		case sections[2] == "blocks" && r.Method == http.MethodPut:
 			var part int
 			part, err = strconv.Atoi(r.URL.Query().Get("part"))
@@ -176,6 +199,8 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			message = "名称已存在或文件状态已改变"
 		case http.StatusRequestEntityTooLarge:
 			message = "上传内容超过单块上限"
+		case http.StatusTooManyRequests:
+			message = "当前组织的上传或解析队列已满，请等候已有任务完成"
 		}
 		value = map[string]string{"error": message}
 	}
@@ -193,6 +218,8 @@ func logAnalysisStatus(success int, err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, storepkg.ErrLogConflict):
 		return http.StatusConflict
+	case errors.Is(err, storepkg.ErrLogQuota):
+		return http.StatusTooManyRequests
 	case errors.As(err, &tooLarge):
 		return http.StatusRequestEntityTooLarge
 	default:

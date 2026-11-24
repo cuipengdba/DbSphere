@@ -46,8 +46,9 @@ func investigationLogSource(ctx context.Context, tx pgx.Tx, record string) (logI
 	err := tx.QueryRow(ctx, `SELECT r.id::text,b.id::text,i.id::text,p.organization_id::text,a.id::text,
 		r.kind,r.severity,i.engine,i.version,b.coverage,r.sql_shape,r.fingerprint,r.sqlstate,r.blocker_id,r.observed_at,r.duration_ms`+
 		logBatchScope+` JOIN log_records r ON r.batch_id=b.id
+		JOIN log_files f ON f.id=r.file_id
 		LEFT JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
-		WHERE r.id=$1 AND ($2='' OR p.organization_id::text=$2)`, record, OrganizationFromContext(ctx)).
+		WHERE r.id=$1 AND ($2='' OR p.organization_id::text=$2) FOR KEY SHARE OF f`, record, OrganizationFromContext(ctx)).
 		Scan(&source.Record, &source.Batch, &source.Instance, &source.Organization, &source.Asset,
 			&source.Kind, &source.Severity, &source.Engine, &source.Version, &source.Coverage, &source.Shape, &source.Fingerprint, &source.Code,
 			&source.Blocker, &source.Observed, &source.Duration)
@@ -242,8 +243,10 @@ func (s *Postgres) LogInvestigation(ctx context.Context, id string) (any, error)
 		return nil, err
 	}
 	linked, err := queryJSONRows(ctx, tx, `SELECT jsonb_build_object('id',r.id,'batch',b.id,'batchName',b.name,
-		'at',r.observed_at,'kind',r.kind,'sql',r.sql_shape,'app',r.application,'durationMs',r.duration_ms)
+		'at',r.observed_at,'kind',r.kind,'sql',r.sql_shape,'app',r.application,'durationMs',r.duration_ms,
+		'archiveExpiredAt',a.archive_expired_at)
 		FROM log_investigation_records f JOIN log_records r ON r.id=f.record_id JOIN log_batches b ON b.id=r.batch_id
+		JOIN log_files a ON a.id=r.file_id
 		WHERE f.investigation_id=$1 ORDER BY r.observed_at NULLS LAST,r.id LIMIT 100`, id)
 	if err != nil {
 		return nil, err

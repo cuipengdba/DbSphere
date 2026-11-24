@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type logBatchSummary struct {
@@ -33,8 +35,6 @@ const logBatchCounts = `min(r.observed_at),max(r.observed_at),count(r.id) FILTER
 	count(r.id) FILTER(WHERE r.kind='statement'), count(r.duration_ms) FILTER(WHERE r.kind='statement'),
 	count(r.id) FILTER(WHERE r.kind='statement' AND r.duration_ms>=1000),
 	count(r.id) FILTER(WHERE r.kind='error'),count(r.id) FILTER(WHERE r.kind='lock'),count(r.id) FILTER(WHERE r.kind='deadlock')`
-
-const logBatchSummaryFields = `b.id::text,b.name,i.id::text,i.name,p.name,b.coverage,b.coverage_note,` + logBatchCounts
 
 func (value *logBatchSummary) destinations() []any {
 	return []any{&value.ID, &value.Name, &value.InstanceID, &value.Instance, &value.Project, &value.Coverage, &value.Note,
@@ -84,15 +84,6 @@ type logCompareRow struct {
 	Current     *logCompareMeasure `json:"current"`
 }
 
-func (s *Postgres) logBatchSummary(ctx context.Context, id string) (logBatchSummary, error) {
-	var value logBatchSummary
-	err := s.pool.QueryRow(ctx, "SELECT "+logBatchSummaryFields+logBatchScope+
-		`LEFT JOIN log_records r ON r.batch_id=b.id WHERE b.id=$1 AND ($2='' OR p.organization_id::text=$2)
-		GROUP BY b.id,i.id,p.id`, id, OrganizationFromContext(ctx)).Scan(value.destinations()...)
-	value.score()
-	return value, logWriteError(err)
-}
-
 func logComparisonCoverage(base, current logBatchSummary) string {
 	if base.Health == nil || current.Health == nil {
 		return "样本不足或日志覆盖待确认"
@@ -117,20 +108,35 @@ func (s *Postgres) LogComparison(ctx context.Context, baseID, currentID string) 
 	if baseID == currentID {
 		return nil, ErrLogInput
 	}
-	baseline, err := s.logBatchSummary(ctx, baseID)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	current, err := s.logBatchSummary(ctx, currentID)
+	defer tx.Rollback(ctx)
+	first, second := baseID, currentID
+	if first > second {
+		first, second = second, first
+	}
+	baseline, err := loadLogBatchRollup(ctx, tx, first, false)
 	if err != nil {
 		return nil, err
+	}
+	current, err := loadLogBatchRollup(ctx, tx, second, false)
+	if err != nil {
+		return nil, err
+	}
+	if first != baseID {
+		baseline, current = current, baseline
 	}
 	if baseline.InstanceID != current.InstanceID {
 		return nil, ErrLogInput
 	}
 	reason := logComparisonCoverage(baseline, current)
-	rows, err := s.readComparisonRows(ctx, baseline, current, reason == "")
+	rows, err := readComparisonRows(ctx, tx, baseline, current, reason == "")
 	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	counts := map[string]int{"resolved": 0, "improved": 0, "regressed": 0, "new": 0, "unobserved": 0, "uncertain": 0, "stable": 0}
@@ -155,16 +161,10 @@ const logIssueGrouping = `CASE
 	WHEN kind='error' AND sqlstate<>'' THEN concat(sqlstate,':',fingerprint)
 	ELSE '' END`
 
-func (s *Postgres) readComparisonRows(ctx context.Context, baseline, current logBatchSummary, comparable bool) ([]*logCompareRow, error) {
-	cursor, err := s.pool.Query(ctx, `WITH marked AS (
-		SELECT r.*,`+logIssueGrouping+` AS issue FROM log_records r
-		WHERE batch_id IN ($1,$2) AND observed_at IS NOT NULL
-	) SELECT batch_id::text,kind,issue,database_name,application,
-		coalesce(nullif(min(sql_shape),''),nullif(min(object_key),''),nullif(min(sqlstate),''),kind),
-		count(*),count(duration_ms),count(*) FILTER (WHERE duration_ms>=1000),
-		avg(duration_ms),percentile_cont(0.95) WITHIN GROUP(ORDER BY duration_ms),sum(duration_ms),
-		(array_agg(id::text ORDER BY duration_ms DESC NULLS LAST,observed_at DESC,id))[1]
-		FROM marked WHERE issue<>'' GROUP BY batch_id,kind,issue,database_name,application`, baseline.ID, current.ID)
+func readComparisonRows(ctx context.Context, tx pgx.Tx, baseline, current logBatchSummary, comparable bool) ([]*logCompareRow, error) {
+	cursor, err := tx.Query(ctx, `SELECT batch_id::text,kind,issue,database_name,application,
+		label,calls,timed,slow,mean,p95,total,evidence_id::text
+		FROM log_issue_rollups WHERE batch_id IN ($1,$2)`, baseline.ID, current.ID)
 	if err != nil {
 		return nil, err
 	}

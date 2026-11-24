@@ -154,6 +154,7 @@ func (s *Postgres) LogBatch(ctx context.Context, batch string) (any, error) {
 	files, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'filename',filename,'state',state,'parts',parts,
 		'format',format,'detectedFormat',detected_format,'rawSize',raw_size,'storedSize',stored_size,
 		'recordCount',record_count,'parsedCount',parsed_count,'reason',reason,'node',node,
+		'verifiedAt',verified_at,'archiveExpiredAt',archive_expired_at,
 		'duplicateBatch', (SELECT original.batch_id FROM log_files original WHERE original.id=f.duplicate_of))
 		FROM log_files f WHERE batch_id=$1 ORDER BY created_at,id`, batch)
 	if err != nil {
@@ -178,7 +179,8 @@ func (s *Postgres) LogRecords(ctx context.Context, batch string, filters LogReco
 	}
 	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',r.id,'at',r.observed_at,'kind',r.kind,'severity',r.severity,
 		'application',r.application,'database',r.database_name,'fingerprint',r.fingerprint,'sql',r.sql_shape,'durationMs',r.duration_ms,
-		'file',f.filename,'offset',r.raw_offset,'process',r.process_id,'blocker',r.blocker_id,'sqlstate',r.sqlstate)
+		'file',f.filename,'offset',r.raw_offset,'process',r.process_id,'blocker',r.blocker_id,'sqlstate',r.sqlstate,
+		'archiveExpiredAt',f.archive_expired_at)
 		FROM log_records r JOIN log_files f ON f.id=r.file_id JOIN log_batches b ON b.id=r.batch_id
 		JOIN log_instances i ON i.id=b.instance_id JOIN log_projects p ON p.id=i.project_id
 		WHERE r.batch_id=$1 AND ($2='' OR p.organization_id::text=$2) AND ($3='' OR r.kind=$3)

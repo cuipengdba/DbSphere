@@ -107,7 +107,10 @@
           <p data-logs="coverage" class="hint"></p>
           <section class="panel log-section" data-logs="report" aria-label="全景分析"></section>
           <section class="panel log-section">
-            <h2>批次文件</h2><div data-logs="files" class="log-scroll"></div>
+            <div class="log-actions"><h2>批次文件</h2>
+              <button type="button" class="ghost" data-logs="open-archive">归档管理</button>
+              <button type="button" class="ghost" data-logs="rebuild">重建对比索引</button></div>
+            <div data-logs="files" class="log-scroll"></div>
           </section>
           <section class="panel log-section">
             <h2>日志明细</h2>
@@ -187,6 +190,13 @@
         <dialog data-logs="investigation-dialog" class="log-dialog log-raw">
           <div data-logs="investigation"></div>
           <p data-logs="investigation-status" class="hint" role="status"></p>
+          <button type="button" class="ghost" data-log-close>关闭</button>
+        </dialog>
+        <dialog data-logs="archive-dialog" class="log-dialog log-raw">
+          <h2>日志归档管理</h2>
+          <p class="hint">保留天数为 0 时永久保留归档。归档到期后保留结构化记录和调查已引用的原文。未提交的上传保留 7 天。</p>
+          <div data-logs="archive-overview" class="log-scroll"></div>
+          <p data-logs="archive-status" class="hint" role="status"></p>
           <button type="button" class="ghost" data-log-close>关闭</button>
         </dialog>
       </section>
