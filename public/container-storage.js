@@ -450,7 +450,9 @@
           const amount = sample?.status === 'ok' ? sample.memory?.[cacheFields[i][0] + '_file'] : undefined;
           view.values[i].textContent = fmt(amount, 'bytes');
         }
-        view.source.textContent = sample?.observedAt ? `采样 ${formatTime(sample.observedAt)} · ${statusNames[sample.status] || sample.status}` :
+        const stale = route.mode === 'live' && Date.now() - Date.parse(sample?.observedAt) > Math.max(30, 2 * (storage?.cadenceSeconds || 60)) * 1000;
+        const state = stale ? statusNames.stale : statusNames[sample?.status];
+        view.source.textContent = sample?.observedAt ? `采样 ${formatTime(sample.observedAt)} · ${state || '状态未知'}` :
           data ? '此时段没有所选容器的样本' : '暂时无法读取此容器';
         cards.push(view.card);
       }
@@ -494,6 +496,8 @@
         const rows = source?.buckets || [], prior = cache ? [] : comparison?.buckets || [];
         const start = Date.parse(source?.from), end = Date.parse(source?.to), previousShift = end - start;
         const reading = cache ? 'mean' : 'max';
+        const cadence = cache ? source?.latest?.storage?.cadenceSeconds || 60 : 0;
+        const maxGap = Math.max((source?.stepSeconds || 0) + 4, cadence) * 1500;
         const width = canvas.clientWidth, height = canvas.clientHeight;
         if (width < 80 || !height) continue;
         const ctx = canvas.getContext('2d');
@@ -530,8 +534,10 @@
             for (const point of points) {
               const value = point.series?.[key]?.[reading], at = Date.parse(point.at) + shift;
               if (!Number.isFinite(value)) { last = undefined; continue; }
-              if (!last || point.identityChanged || point.counterReset || at - last > (source.stepSeconds + 4) * 1500) ctx.moveTo(x(at), y(value));
-              else ctx.lineTo(x(at), y(value));
+              if (!last || point.identityChanged || point.counterReset || at - last > maxGap) {
+                if (cache) { ctx.fillStyle = ctx.strokeStyle; ctx.fillRect(x(at) - 1, y(value) - 1, 2, 2); }
+                ctx.moveTo(x(at), y(value));
+              } else ctx.lineTo(x(at), y(value));
               last = at;
             }
             ctx.stroke(); ctx.setLineDash([]);
