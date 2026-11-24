@@ -3202,6 +3202,70 @@ function eventSharingPanel(eventId) {
   return panel;
 }
 
+function eventLogSearch(event, refreshEvent) {
+  const panel = cell('details', '', 'settings-details event-log-search');
+  const info = cell('p', '', 'hint');
+  const matches = cell('div', '', 'event-highlights');
+  const refreshLogs = cell('button', '刷新同窗日志', 'ghost');
+  refreshLogs.type = 'button';
+  const base = '/api/log-analysis/events/' + event.id;
+  const kinds = { statement: '慢 SQL', error: '错误', lock: '锁等待', deadlock: '死锁', temp: '临时文件' };
+  let request = 0;
+  async function load() {
+    const current = ++request;
+    info.textContent = '正在读取同窗日志';
+    try {
+      const result = await api(base + '/candidates');
+      if (!panel.isConnected || current !== request) return;
+      info.textContent = [formatTime(result.from) + ' – ' + formatTime(result.to), '同资产同时间窗',
+        result.limited ? '显示优先级最高的 50 条' : result.records.length + ' 条'].join(' · ');
+      matches.replaceChildren(...result.records.map(row => {
+        const entry = cell('div', '', 'evidence');
+        const state = row.caseId ? '已采纳' : row.retained ? '待核实' : '原文已到期';
+        entry.append(cell('strong', [kinds[row.kind] || row.kind, state, formatTime(row.at)].join(' · ')),
+          cell('p', [row.batch, row.database, row.application, row.process && '会话 ' + row.process,
+            row.blocker && '阻塞者 ' + row.blocker, row.sqlState, row.durationMs == null ? '' : row.durationMs.toFixed(2) + ' ms'].filter(Boolean).join(' · ')));
+        if (row.sql) entry.append(cell('code', row.sql));
+        const actions = cell('div', '', 'log-actions');
+        if (row.retained) {
+          const source = cell('a', '查看原文', 'monitor-link');
+          source.href = '#logs?' + new URLSearchParams({ batch: row.batchId, source: row.id, incident: event.id });
+          actions.append(source);
+        }
+        if (row.caseId) {
+          const investigation = cell('a', '查看日志调查', 'monitor-link');
+          investigation.href = '#logs?' + new URLSearchParams({ batch: row.batchId, case: row.caseId, incident: event.id });
+          actions.append(investigation);
+        } else if (row.retained) {
+          const adopt = cell('button', '采纳到当前事件', 'ghost');
+          adopt.type = 'button';
+          adopt.addEventListener('click', async () => {
+            adopt.disabled = true;
+            try {
+              await api(base + '/records', 'POST', { recordId: row.id });
+              if (panel.isConnected) await refreshEvent();
+            } catch(error) {
+              info.textContent = error.message;
+            } finally {
+              adopt.disabled = false;
+            }
+          });
+          actions.append(adopt);
+        }
+        entry.append(actions);
+        return entry;
+      }));
+      if (!result.records.length) matches.append(cell('p', '同窗暂无可核对的异常日志。', 'hint'));
+    } catch(error) {
+      if (panel.isConnected && current === request) info.textContent = error.message;
+    }
+  }
+  panel.append(cell('summary', '查找同窗日志'), info, refreshLogs, matches);
+  panel.addEventListener('toggle', () => { if (panel.open && !request) void load(); });
+  refreshLogs.addEventListener('click', () => void load());
+  return panel;
+}
+
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   const params = investigationParams(id);
@@ -3275,6 +3339,17 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const sections = ['evidence', 'response', 'timeline'];
   const content = new Map(sections.map(key => [key, cell('section', '', 'incident-content')]));
   const evidencePanel = content.get('evidence');
+  if (nativeOverview && currentRole === 'admin') {
+    const search = eventLogSearch(event, async () => {
+      await showEvent(id, false, back);
+      if (selectedEvent === id) {
+        const updated = target.querySelector('.event-log-search');
+        if (updated) updated.open = true;
+        notice('日志已采纳到当前事件。');
+      }
+    });
+    evidencePanel.append(search);
+  }
   const responsePanel = content.get('response');
   const timelinePanel = content.get('timeline');
   const sectionBar = cell('div', '', 'section-nav incident-nav');
@@ -3901,7 +3976,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (risk && evidence.payload.sampleId) row.append(document.createTextNode(' · '), replaySampleLink(event.assetId, evidence.payload.sampleId));
     if (evidence.kind === 'log_record' && logEvidenceID.test(evidence.payload.batchId || '') && logEvidenceID.test(evidence.payload.recordId || '')) {
       const link = cell('a', '查看原始记录', 'monitor-link');
-      link.href = '#logs?' + new URLSearchParams({ batch: evidence.payload.batchId, source: evidence.payload.recordId });
+      link.href = '#logs?' + new URLSearchParams({ batch: evidence.payload.batchId, source: evidence.payload.recordId, incident: event.id });
       row.append(document.createTextNode(' · '), link);
     }
     if (external && evidence.payload.url?.startsWith('https://')) {

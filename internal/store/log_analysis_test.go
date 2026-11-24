@@ -187,6 +187,49 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if _, err := pg.LogInvestigation(outOfScope, caseID); !errors.Is(err, ErrLogNotFound) {
 		t.Fatalf("cross-organization investigation exposed: %v", err)
 	}
+	if _, err := pg.LogEventCandidates(outOfScope, *event); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("cross-organization event logs exposed: %v", err)
+	}
+	if existing := idOf(pg.AdoptEventLogRecord(ctx, *event, retestID)); existing != caseID {
+		t.Fatalf("re-adopting an existing retest changed its investigation: %s", existing)
+	}
+	discovered := idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Name: "Event search fixture"}))
+	extra := []byte(strings.Replace(line, "select a from orders", "select a from orders_archive", 1) +
+		strings.ReplaceAll(strings.Replace(line, "select a from orders", "select a from long_ago", 1), "19:10:00.123", "15:10:00.123"))
+	newLog := idOf(pg.CreateLogFile(ctx, discovered, LogFileInput{Name: "incident.log", Size: int64(len(extra)), Format: "text"}))
+	if _, err := pg.AppendLogBlock(ctx, newLog, 0, extra); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.QueueLogFile(ctx, newLog, nil); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := pg.ProcessNextLogFile(ctx); err != nil || !done {
+		t.Fatalf("prepare incident candidates: %v %v", done, err)
+	}
+	candidates, err := pg.LogEventCandidates(ctx, *event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate string
+	for _, row := range candidates.(map[string]any)["records"].([]json.RawMessage) {
+		if strings.Contains(string(row), "long_ago") {
+			t.Fatal("out-of-window record leaked into incident candidates")
+		}
+		if strings.Contains(string(row), "orders_archive") {
+			candidate = idOf(row, nil)
+		}
+	}
+	if candidate == "" {
+		t.Fatal("same-asset, same-window candidate was missing")
+	}
+	adopted := idOf(pg.AdoptEventLogRecord(ctx, *event, candidate))
+	if again := idOf(pg.AdoptEventLogRecord(ctx, *event, candidate)); again != adopted {
+		t.Fatalf("adoption was not idempotent: %s", again)
+	}
+	updatedReport, _, err := pg.EventAIEvidence(ctx, *event)
+	if err != nil || !strings.Contains(updatedReport, candidate) {
+		t.Fatalf("adopted record missing from original event: %v", err)
+	}
 	if result, err := pg.VerifyLogFile(ctx, file); err != nil || result.(map[string]any)["rawSize"] != int64(len(payload)) {
 		t.Fatalf("archive validation: %v %v", result, err)
 	}

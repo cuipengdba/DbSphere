@@ -39,19 +39,21 @@ type logInvestigationSource struct {
 	Code, Blocker                         string
 	Observed                              *time.Time
 	Duration                              *float64
+	RawAvailable                          bool
 }
 
 func investigationLogSource(ctx context.Context, tx pgx.Tx, record string) (logInvestigationSource, error) {
 	var source logInvestigationSource
 	err := tx.QueryRow(ctx, `SELECT r.id::text,b.id::text,i.id::text,p.organization_id::text,a.id::text,
-		r.kind,r.severity,i.engine,i.version,b.coverage,r.sql_shape,r.fingerprint,r.sqlstate,r.blocker_id,r.observed_at,r.duration_ms`+
+		r.kind,r.severity,i.engine,i.version,b.coverage,r.sql_shape,r.fingerprint,r.sqlstate,r.blocker_id,r.observed_at,r.duration_ms,
+		f.archive_expired_at IS NULL AND f.stored_size>0`+
 		logBatchScope+` JOIN log_records r ON r.batch_id=b.id
 		JOIN log_files f ON f.id=r.file_id
 		LEFT JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
 		WHERE r.id=$1 AND ($2='' OR p.organization_id::text=$2) FOR KEY SHARE OF f`, record, OrganizationFromContext(ctx)).
 		Scan(&source.Record, &source.Batch, &source.Instance, &source.Organization, &source.Asset,
 			&source.Kind, &source.Severity, &source.Engine, &source.Version, &source.Coverage, &source.Shape, &source.Fingerprint, &source.Code,
-			&source.Blocker, &source.Observed, &source.Duration)
+			&source.Blocker, &source.Observed, &source.Duration, &source.RawAvailable)
 	return source, logWriteError(err)
 }
 
@@ -106,6 +108,10 @@ func diagnoseLog(source logInvestigationSource) LogDiagnosis {
 }
 
 func (s *Postgres) StartLogInvestigation(ctx context.Context, record, event string) (any, error) {
+	return s.startLogInvestigation(ctx, record, event, nil)
+}
+
+func (s *Postgres) startLogInvestigation(ctx context.Context, record, event string, window *logEventWindow) (any, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -115,10 +121,28 @@ func (s *Postgres) StartLogInvestigation(ctx context.Context, record, event stri
 	if err != nil {
 		return nil, err
 	}
+	if window != nil && (source.Asset == nil || *source.Asset != window.asset || source.Observed == nil ||
+		source.Observed.Before(window.from) || source.Observed.After(window.to) || !source.RawAvailable) {
+		return nil, ErrLogNotFound
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,55))`, record); err != nil {
 		return nil, err
 	}
 	var caseID string
+	if window != nil {
+		err = tx.QueryRow(ctx, `SELECT i.id::text FROM log_investigations i
+			JOIN log_investigation_records r ON r.investigation_id=i.id
+			WHERE i.event_id=$1 AND r.record_id=$2 ORDER BY i.created_at,i.id LIMIT 1`, event, record).Scan(&caseID)
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return s.LogInvestigation(ctx, caseID)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
 	var existing *string
 	err = tx.QueryRow(ctx, `SELECT id::text,event_id::text FROM log_investigations WHERE primary_record=$1`, record).Scan(&caseID, &existing)
 	if err == nil {
@@ -188,7 +212,9 @@ func linkInvestigationLog(ctx context.Context, tx pgx.Tx, caseID, event string, 
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,'log_record',$2,$3)`, event, at, payload)
+		SELECT gen_random_uuid(),$1::uuid,'log_record',$2::timestamptz,$3::jsonb
+		WHERE NOT EXISTS (SELECT 1 FROM evidence WHERE event_id=$1 AND kind='log_record' AND payload_json->>'recordId'=$4)`,
+		event, at, payload, source.Record)
 	return err
 }
 
@@ -200,6 +226,9 @@ func (s *Postgres) LinkLogInvestigation(ctx context.Context, caseID, record stri
 	defer tx.Rollback(ctx)
 	source, err := investigationLogSource(ctx, tx, record)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,55))`, record); err != nil {
 		return nil, err
 	}
 	var event string

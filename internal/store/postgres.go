@@ -495,6 +495,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateLogInvestigation(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log investigations: %w", err)
 	}
+	if err := migrateLogEventSearch(ctx, tx); err != nil {
+		return fmt.Errorf("migrate incident log search: %w", err)
+	}
 	if err := migrateLogArchiveManagement(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log archive management: %w", err)
 	}

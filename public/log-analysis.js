@@ -117,7 +117,7 @@
     let retryFile = '', resumeFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
     const pendingUploads = new Map();
     let comparing = false, baseline = '', comparisonData, compareRequest = 0;
-    let caseId = '', sourceId = '';
+    let caseId = '', sourceId = '', returnIncident = '';
     let taskRequest = 0, taskNext = null;
     let reportCharts = [];
     const filters = get('record-filters');
@@ -146,6 +146,7 @@
       if (comparing && baseline) query.set('baseline', baseline);
       if (caseId) query.set('case', caseId);
       if (sourceId) query.set('source', sourceId);
+      if (returnIncident) query.set('incident', returnIncident);
       history.replaceState(null, '', '#logs' + (query.size ? '?' + query : ''));
     }
 
@@ -844,6 +845,9 @@
       comparing = !!baseline;
       caseId = safeId(params?.get('case'));
       sourceId = safeId(params?.get('source'));
+      returnIncident = safeId(params?.get('incident'));
+      get('return-incident').hidden = !returnIncident;
+      if (returnIncident) get('return-incident').href = '#incidents?' + new URLSearchParams({ event: returnIncident });
       const requestedCase = caseId, requestedSource = sourceId;
       run(async () => {
         await loadDirectory();
