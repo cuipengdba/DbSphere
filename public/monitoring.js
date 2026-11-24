@@ -431,7 +431,7 @@
     storageLink.hidden = true;
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
-    let dbOid = '', objectOid = '', objectKind = '', deviceType = '', deviceName = '';
+    let dbOid = '', objectOid = '', objectKind = '', deviceType = '', deviceName = '', catalogFrom = '';
     const fleetLabel = el('p', null, 'monitor-range-caption');
     const clusterSelect = select('PG 集群', value => {
       cluster = value; instance = ''; database = ''; chooseCluster = false;
@@ -514,6 +514,7 @@
         ['period', period, defaultPeriod], ['tab', mode, 'metrics'], ['group', group, 'type'],
         ['waitType', waitType, ''], ['waitEvent', waitEvent, ''], ['queryId', queryId, ''], ['event', eventAnchor, ''],
         ['sqlOrder', sqlOrder, 'time'], ['dbOid', dbOid, ''], ['objectOid', objectOid, ''], ['objectKind', objectKind, ''],
+        ['catalogFrom', mode === 'sql' && dbOid ? catalogFrom : '', ''],
         ['at', focusAt == null ? '' : new Date(focusAt).toISOString(), ''], ['sample', focusSample, ''], ['waitCapture', waitCapturePick, ''],
         ['baseline', baseline, ''], ['lockSample', lockPick, ''], ['lockAt', lockAt == null ? '' : new Date(lockAt).toISOString(), ''],
         ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''], ['change', mode === 'changes' ? changePick : '', ''],
@@ -559,6 +560,7 @@
       deviceType = ['disk', 'network', 'filesystem'].includes(params.get('deviceType')) ? params.get('deviceType') : '';
       deviceName = deviceType ? (params.get('device') || '').slice(0, 128) : '';
       dbOid = /^\d{1,10}$/.test(params.get('dbOid') || '') ? params.get('dbOid') : '';
+      catalogFrom = /^[0-9a-f-]{36}$/.test(params.get('catalogFrom') || '') ? params.get('catalogFrom') : '';
       objectOid = dbOid && /^\d{1,10}$/.test(params.get('objectOid') || '') ? params.get('objectOid') : '';
       objectKind = objectOid && ['table', 'index'].includes(params.get('objectKind')) ? params.get('objectKind') : '';
       if (!objectKind) objectOid = '';
@@ -613,7 +615,7 @@
     }
 
     function resetFleet() { compare = null; abnormalOnly = false; fleetAt = null; rangeEvents = []; memberSeries = new Map(); }
-    function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
+    function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; catalogFrom = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; waitCapturePick = ''; }
 
     function freezeWindow() {
@@ -667,9 +669,7 @@
         level(asset.name, mode === 'metrics' ? null : () => {
           resetWaitFilters(); resetCatalog(); mode = 'metrics'; change();
         });
-        if (dbOid && ['catalog', 'sql'].includes(mode)) level(`数据库 OID ${dbOid}`, mode === 'sql' ? () => {
-          mode = 'catalog'; queryId = ''; change();
-        } : null);
+        if (dbOid && ['catalog', 'sql'].includes(mode)) level(`数据库 OID ${dbOid}`, mode === 'sql' ? () => backToDatabase(asset) : null);
         if (mode !== 'metrics' && (mode !== 'catalog' || !dbOid)) {
           level(tabs.find(([key]) => key === mode)?.[1], queryId && mode === 'sql' ? () => { queryId = ''; change(); } : null);
         }
@@ -1057,10 +1057,22 @@
     function openQuery(value, oid = '') {
       freezeWindow();
       queryId = value;
+      if (!oid || oid !== dbOid) catalogFrom = '';
       dbOid = oid;
       objectOid = ''; objectKind = '';
       mode = 'sql';
       change();
+    }
+
+    function sameDatabaseServer(a, b) {
+      return ['organizationId', 'environment', 'clusterName', 'runtime', 'host', 'port', 'k8sCluster', 'namespace', 'pod']
+        .every(field => a[field] === b[field]);
+    }
+
+    function backToDatabase(asset) {
+      const source = assets.find(row => row.id === catalogFrom && sameDatabaseServer(row, asset));
+      if (source) instance = source.id;
+      catalogFrom = ''; mode = 'catalog'; queryId = ''; change();
     }
 
     function blockerTree(edges) {
@@ -1750,8 +1762,16 @@
       if (dbOid) {
         const databasePanel = panel(selected?.name || `数据库 OID ${dbOid}`);
         if (!selected) databasePanel.append(el('p', '此库缺少末次采样。保留历史观测。', 'monitor-note'));
-        databasePanel.append(button('查看此库 SQL', () => openQuery('', dbOid), 'monitor-link'),
-          el('p', 'pg_stat_database · 吞吐和行操作按秒折算 · 临时文件与死锁为区间增量 · 连接与容量为观测值', 'monitor-note'));
+        const configured = selected?.connected ? [asset] : selected ? assets.filter(item =>
+          sameDatabaseServer(item, asset) && item.database === selected.name) : [];
+        if (configured.length === 1) databasePanel.append(button('查看此库 SQL', () => {
+          catalogFrom = configured[0].id === asset.id ? '' : asset.id;
+          instance = configured[0].id;
+          if (database && database !== configured[0].database) database = '';
+          openQuery('', dbOid);
+        }, 'monitor-link'));
+        else databasePanel.append(el('p', '此库的 SQL 统计需要能唯一匹配的纳管连接。', 'monitor-note'));
+        databasePanel.append(el('p', 'pg_stat_database · 吞吐和行操作按秒折算 · 临时文件与死锁为区间增量 · 连接与容量为观测值', 'monitor-note'));
         const rows = data.series.map(row => ({ ...row,
           writesPerSecond: [row.rates?.rowsInserted, row.rates?.rowsUpdated, row.rates?.rowsDeleted].every(finite)
             ? row.rates.rowsInserted + row.rates.rowsUpdated + row.rates.rowsDeleted : null,
@@ -1768,8 +1788,6 @@
         if (!rows.some(row => row.observed)) databasePanel.append(el('p', '所选 OID 在此时间范围内无可见样本。', 'monitor-note'));
         result.append(databasePanel);
         if (selected && !selected.connected) {
-          const configured = assets.filter(item => clusterKey(item) === clusterKey(asset) && item.host === asset.host &&
-            item.port === asset.port && item.database === selected.name);
           const link = panel('表与索引');
           link.append(el('p', configured.length === 1 ? '对象统计从该库的纳管连接读取。' : `对象统计仅覆盖当前纳管连接 ${asset.database}。`, 'monitor-note'));
           if (configured.length === 1) link.append(button(`打开 ${selected.name} 的对象采样`, () => openInstance(configured[0].id, 'catalog')));
