@@ -26,7 +26,7 @@
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
       "icon": "bolt",
       "targetBlank": true
     },
@@ -102,6 +102,18 @@
         },
         "hide": 2,
         "skipUrlSync": false
+      },
+      {
+        "name": "dbsphere_context",
+        "label": "调查上下文",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
       }
     ]
   },
@@ -153,7 +165,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -224,7 +236,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -299,7 +311,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -374,7 +386,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -445,7 +457,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -529,7 +541,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -613,7 +625,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],
@@ -697,7 +709,7 @@
           "links": [
             {
               "title": "核对 DbSphere 原事件",
-              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
               "targetBlank": true
             }
           ],

@@ -116,6 +116,10 @@ grep -Eq 'grafanaBootData|Grafana' "$scratch/grafana-waits.html"
 redirect="$(api -D - -o /dev/null "$base/grafana/dbsphere-return?view=event&event=$event&asset=$asset&from=2026-01-01T00:00:00Z&to=2026-01-01T00:15:00Z" |
   tr -d '\r' | sed -n 's/^Location: //p')"
 test "$redirect" = "/#incidents?asset=$asset&event=$event&from=2026-01-01T00%3A00%3A00Z&to=2026-01-01T00%3A15%3A00Z"
+redirect="$(api -D - -o /dev/null --get --data-urlencode "view=event" --data-urlencode "event=$event" \
+  --data-urlencode "context=incidents?event=$event&focusPhase=after&return=overview%3Fenvironment%3DProduction" \
+  "$base/grafana/dbsphere-return" | tr -d '\r' | sed -n 's/^Location: //p')"
+test "$redirect" = "/#incidents?event=$event&focusPhase=after&return=overview%3Fenvironment%3DProduction"
 release_lock
 wait "$holder" || true
 wait "$waiter"

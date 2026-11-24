@@ -2554,6 +2554,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
       const href = new URL(grafanaLink.href);
       href.searchParams.set('from', String(viewport.from));
       href.searchParams.set('to', String(viewport.to));
+      href.searchParams.set('var-dbsphere_context', `incidents?${investigationParams(event.id)}`);
       grafanaLink.href = href;
     }
     list.replaceChildren();
@@ -3014,7 +3015,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const end = Date.parse(anchor?.get('end') || anchor?.get('to'));
     const windowMinutes = Number(anchor?.get('window'));
     link.href = window.DbSphereLive.grafanaPath({ asset: event.assetId, organization: asset?.organizationId,
-      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id, container: anchor?.get('container'),
+      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id,
+      eventContext: `incidents?${investigationParams(event.id)}`, container: anchor?.get('container'),
       from: Number.isFinite(anchorStart) ? anchorStart : Number.isFinite(end) && windowMinutes > 0 ? end - windowMinutes * 60000 : start - 5 * 60000,
       to: Number.isFinite(end) ? end : Math.min(Date.now(), (Date.parse(event.endedAt) || Date.now()) + 5 * 60000),
       section: mysql ? 'mysql' : storageIncident ? 'containerRCA' : 'waits' });

@@ -25,7 +25,7 @@
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}"
+      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}"
     },
     {
       "title": "DbSphere 专题",
@@ -74,6 +74,18 @@
           "value": ""
         },
         "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dbsphere_context",
+        "label": "调查上下文",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
         "skipUrlSync": false
       }
     ]
