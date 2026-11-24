@@ -3341,8 +3341,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const evidencePanel = content.get('evidence');
   if (nativeOverview && currentRole === 'admin') {
     const search = eventLogSearch(event, async () => {
+      if (document.body.dataset.activeView !== 'incidents' || selectedEvent !== id) return;
       await showEvent(id, false, back);
-      if (selectedEvent === id) {
+      if (document.body.dataset.activeView === 'incidents' && selectedEvent === id) {
         const updated = target.querySelector('.event-log-search');
         if (updated) updated.open = true;
         notice('日志已采纳到当前事件。');
