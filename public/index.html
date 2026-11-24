@@ -128,28 +128,34 @@
         <header class="live-hero">
           <div><div class="live-indicator"><span aria-hidden="true"></span><strong data-live="connection" role="status">正在连接</strong></div>
             <h2>实时观测大盘</h2><p data-live="recency">等待读取采样</p></div>
-          <div class="live-actions"><span data-live="prometheus" class="live-integration" role="status" hidden></span><a href="#grafana?panel=dbsphere-overview" data-live="grafana" class="live-specialty" hidden>打开专题面板</a><button type="button" data-live="night" aria-pressed="false">夜览模式</button><button type="button" data-live="fullscreen" aria-pressed="false">全屏</button></div>
+          <div class="live-actions"><span data-live="prometheus" class="live-integration" role="status" hidden></span><a href="#grafana?panel=dbsphere-overview" data-live="grafana" class="live-specialty" hidden>打开专题面板</a><button type="button" data-live="pause" aria-pressed="false">暂停刷新</button><button type="button" data-live="night" aria-pressed="false">夜览模式</button><button type="button" data-live="fullscreen" aria-pressed="false">全屏</button></div>
         </header>
         <div class="live-filters">
           <label>组织<select data-live="organization"></select></label>
+          <label>环境<select data-live="environment"></select></label>
           <label>集群<select data-live="cluster"></select></label>
           <label>引擎<select data-live="engine"><option value="">全部引擎</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option></select></label>
           <label>时间范围<select data-live="window"><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="60" selected>1 小时</option><option value="360">6 小时</option></select></label>
           <button type="button" data-live="follow" hidden>跟随实时</button>
+          <button type="button" data-live="baseline" aria-pressed="false">对比前一时段</button>
         </div>
+        <section class="live-priority" data-live="priority" aria-label="优先处理"></section>
         <div class="live-kpis" data-live="kpis" aria-label="监控状态"></div>
-        <a class="storage-launch" data-live="storage" href="#storage"><span>磁盘 I/O 与文件缓存</span><small>容器设备、缓存变化与数据库等待</small><b aria-hidden="true">↗</b></a>
         <div class="live-grid">
           <section class="live-panel"><header><h3>集群与实例</h3><small data-live="asset-count"></small></header><div class="live-topology" data-live="topology"></div></section>
           <section class="live-panel live-trends"><header><h3 data-live="asset-title">实例趋势</h3><small data-live="sample-age"></small></header>
             <div class="live-metrics" data-live="metrics" aria-label="趋势指标"></div>
             <div class="live-chart"><canvas data-live="chart" role="img" aria-label="选定实例的采样趋势"></canvas><div data-live="chart-empty" class="live-chart-empty" hidden></div></div>
             <div class="live-chart-footer"><span data-live="chart-note"></span><div data-live="aligned-event"></div></div>
+            <nav class="live-markers" data-live="markers" aria-label="故障与变更标记"></nav>
+            <div class="live-wait-legend" data-live="wait-legend" aria-label="等待类型图例" hidden></div>
           </section>
-          <section class="live-panel"><header><h3>事件与恢复</h3><small>最近 6 小时恢复</small></header><div class="live-feed" data-live="feed"></div></section>
-          <section class="live-panel live-sql"><header><h3>Top SQL</h3><small data-live="sql-source"></small></header><div data-live="sql"></div></section>
-          <section class="live-panel live-context"><header><h3>采集覆盖</h3><small>最近一次采样</small></header><div data-live="coverage"></div></section>
+          <section class="live-panel"><header><h3>异常与恢复</h3></header><div class="live-feed" data-live="feed"></div></section>
+          <details class="live-panel live-sql" data-live="sql-panel"><summary>Top SQL <small data-live="sql-source"></small></summary><div data-live="sql"></div></details>
+          <section class="live-panel live-context"><header><h3>采集覆盖</h3></header><div data-live="coverage"></div></section>
         </div>
+        <details class="live-panel live-path" data-live="path"><summary>查看实例依赖与原始采样</summary><div data-live="path-nodes"></div><div data-live="path-reading" aria-live="polite"></div></details>
+        <a class="storage-launch" data-live="storage" href="#storage"><span>磁盘 I/O 与文件缓存</span><small>容器设备、缓存变化与数据库等待</small><b aria-hidden="true">↗</b></a>
       </section>
       <section class="grafana-workspace" data-view="grafana" aria-label="观测专题" hidden>
         <div class="grafana-toolbar">

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -14,7 +15,16 @@ func (s *Postgres) containerStorageHistory(ctx context.Context, id string, param
 		return nil, ErrInvalidRange
 	}
 	step := max(10, int(to.Sub(from).Seconds()/240)+1)
-	rows, err := s.queryJSON(ctx, containerHistorySQL, id, from, to, name, device, step, pvcUID)
+	origin := from
+	if raw := params.Get("bucketMinutes"); raw != "" {
+		minutes, err := strconv.Atoi(raw)
+		if err != nil || (minutes != 1 && minutes != 5 && minutes != 15 && minutes != 60) || to.Sub(from) > monitoringBucketLimit(minutes) {
+			return nil, ErrInvalidRange
+		}
+		step = minutes * 60
+		origin = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	rows, err := s.queryJSON(ctx, containerHistorySQL, id, from, to, name, device, step, pvcUID, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +115,7 @@ SELECT jsonb_build_object('at',at,'sampleId',id,'uid',uid,'name',name,'volumeUid
 	'used',used,'capacity',capacity) FROM observed ORDER BY at::timestamptz DESC,id DESC`
 
 const containerHistorySQL = `WITH observations AS (
-	SELECT date_bin(make_interval(secs=>$6::integer),collected_at,$2::timestamptz) AS bucket,
+	SELECT date_bin(make_interval(secs=>$6::integer),collected_at,$8::timestamptz) AS bucket,
 		metrics_json#>'{containerStorage}' AS storage, metrics_json AS metrics
 	FROM samples WHERE asset_id=$1 AND collected_at >= $2 AND collected_at <= $3
 	AND metrics_json ?| ARRAY['containerStorage','linux','k8s']

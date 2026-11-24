@@ -49,7 +49,22 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 		FROM events e JOIN assets a ON a.id=e.asset_id WHERE e.asset_id=ANY($1::uuid[])
 		AND e.started_at<$3 AND (e.ended_at IS NULL OR e.ended_at >= $2)
 		ORDER BY (e.status='open') DESC,e.started_at DESC,e.id LIMIT 40`, ids, from, to)
-	return map[string]any{"series": values, "events": events}, err
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"series": values, "events": events}
+	if params.Get("changes") == "true" {
+		changes, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',c.id,'assetId',c.asset_id,
+			'at',c.occurred_at,'label',c.label,'kind',c.kind) FROM asset_changes c JOIN assets a ON a.id=c.asset_id
+			WHERE c.asset_id=ANY($1::uuid[]) AND c.occurred_at>=$2 AND c.occurred_at<$3
+			AND ($4='' OR a.organization_id::text=$4) ORDER BY c.occurred_at DESC,c.id LIMIT 40`,
+			ids, from, to, OrganizationFromContext(ctx))
+		if err != nil {
+			return nil, err
+		}
+		result["changes"] = changes
+	}
+	return result, nil
 }
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {

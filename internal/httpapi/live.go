@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/cuipengdba/dbsphere/internal/store"
 )
 
 type liveObservationReader interface {
-	LiveObservation(context.Context, []string, int) (json.RawMessage, error)
+	LiveObservation(context.Context, []string, int, store.LiveScope) (json.RawMessage, error)
 }
 
 const liveOverviewPath, liveStreamPath = "/api/live/overview", "/api/live/stream"
@@ -18,6 +20,14 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 	reader, ok := db.(liveObservationReader)
 	if !ok {
 		respond(w, http.StatusNotImplemented, map[string]string{"error": "Live observation unavailable"})
+		return
+	}
+	params := r.URL.Query()
+	scope := store.LiveScope{Organization: params.Get("organization"), Environment: params.Get("environment"),
+		Cluster: params.Get("cluster"), Engine: params.Get("engine")}
+	if (scope.Organization != "" && !opsUUID.MatchString(scope.Organization)) || len(scope.Environment) > 80 || len(scope.Cluster) > 256 ||
+		(scope.Engine != "" && scope.Engine != "postgres" && scope.Engine != "mysql") {
+		respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid live observation scope"})
 		return
 	}
 	stream := r.URL.Path == liveStreamPath
@@ -38,7 +48,7 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 			staleAfter = max(10, state.IntervalSeconds*2)
 		}
 	}
-	observed, err := reader.LiveObservation(r.Context(), ids, staleAfter)
+	observed, err := reader.LiveObservation(r.Context(), ids, staleAfter, scope)
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {
 		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Live observation unavailable"})
@@ -74,7 +84,7 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 			_ = controller.Flush()
 			return
 		case <-ticker.C:
-			value, err := reader.LiveObservation(r.Context(), ids, staleAfter)
+			value, err := reader.LiveObservation(r.Context(), ids, staleAfter, scope)
 			if err != nil || send(value) != nil {
 				return
 			}

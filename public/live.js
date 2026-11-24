@@ -4,9 +4,10 @@
   const metrics = [
     { key: 'averageConnectionUsagePercent', title: '连接使用率', unit: '%', ceiling: 100, source: '连接数 / 配置上限' },
     { key: 'transactionsPerSecond', title: 'TPS', unit: '/s', source: '提交与回滚计数差值' },
-    { key: 'waiting', title: '活跃等待', unit: '', source: 'pg_stat_activity · 采样均值' },
+    { key: 'waiting', title: '等待组成', unit: '', source: 'pg_stat_activity · 各类活跃会话采样均值' },
     { key: 'peakBlockedSessions', title: '阻塞会话', unit: '', source: 'pg_blocking_pids · 桶内峰值' },
-    { key: 'averageReplicationLagBytes', title: '复制延迟', unit: ' B', source: 'WAL 差值 · 桶内均值' }
+    { key: 'averageReplicationLagBytes', title: '复制延迟', unit: ' B', source: 'WAL 差值 · 桶内均值' },
+    { key: 'ioPressure', title: '存储 I/O 压力', unit: '%', source: '容器 I/O PSI · 选区内分桶均值' }
   ];
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
@@ -15,6 +16,9 @@
   const shortTime = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
+  const waitColors = { CPU: 'blue', IO: 'hot', Lock: 'violet', LWLock: 'signal', Client: 'gold' };
+  const severityLabels = { critical: '严重', warning: '警告', info: '提示' };
+  const bytes = value => !finite(value) ? '—' : value >= 1048576 ? number.format(value / 1048576) + ' MiB' : number.format(value) + ' B';
 
   const grafanaPages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
     replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
@@ -73,27 +77,38 @@
 
   function create(root, { api, openEvent, formatTime, assetRuntimeLabel }) {
     const get = name => root.querySelector('[data-live="' + name + '"]');
-    const filters = { organization: get('organization'), cluster: get('cluster'), engine: get('engine'), minutes: get('window') };
+    const filters = { organization: get('organization'), environment: get('environment'), cluster: get('cluster'),
+      engine: get('engine'), minutes: get('window') };
     const canvas = get('chart');
-    let active = false;
+    let active = false, paused = false, compare = false;
     let source, fallback, retryTimer, integrationTimer, session = 0, request = 0;
-    let selection = { organization: '', cluster: '', engine: '', minutes: 60, asset: '', start: null, end: null };
+    let selection = { organization: '', environment: '', cluster: '', engine: '', minutes: 60, asset: '', event: '', start: null, end: null, cursor: null };
     let snapshot, sampleKey = '', filterKey = '', trendKey = '', feedKey = '', points = [], timelineEvents = [];
     let selectedMetric = metrics[0], from = 0, to = 0, focused = -1, chartGeometry, chartStatus = '';
+    let trendRequest, pathKey = '', priorityKey = '', markers = [], coverageKey = '';
+    let inventory = [];
+
+    function scope() {
+      const params = new URLSearchParams();
+      for (const key of ['organization', 'environment', 'cluster', 'engine']) if (selection[key]) params.set(key, selection[key]);
+      return params;
+    }
 
     function route(anchor = false, assetId = selection.asset) {
-      const params = new URLSearchParams();
-      for (const key of ['organization', 'cluster', 'engine']) {
-        if (selection[key]) params.set(key, selection[key]);
-      }
+      const params = scope();
       if (assetId) params.set('asset', assetId);
+      if (selection.event) params.set('event', selection.event);
       params.set('window', String(selection.minutes));
-      if (selection.start) params.set('from', new Date(selection.start).toISOString());
+      if (selection.start || (anchor && from)) params.set('from', new Date(selection.start || from).toISOString());
       if (selection.end || (anchor && to)) params.set('end', new Date(selection.end || to).toISOString());
+      const cursor = points[focused]?.at || selection.cursor;
+      if (cursor && (anchor || selection.cursor)) params.set('cursor', new Date(cursor).toISOString());
+      if (compare) params.set('compare', '1');
       return 'live?' + params;
     }
 
     function restore(params) {
+      const previous = scope().toString();
       const start = Date.parse(params.get('from'));
       const end = Date.parse(params.get('end'));
       const now = Date.now();
@@ -101,15 +116,20 @@
       const validRange = validEnd && Number.isFinite(start) && end > start && end - start <= 360 * minute;
       const minutes = Number(params.get('window')) || (validRange ? Math.round((end - start) / minute) : 60);
       const engine = params.get('engine');
+      compare = params.get('compare') === '1';
       selection = {
         organization: validId(params.get('organization')) ? params.get('organization') : '',
-        cluster: (params.get('cluster') || '').slice(0, 160),
+        environment: (params.get('environment') || '').slice(0, 80),
+        cluster: (params.get('cluster') || '').slice(0, 256),
         engine: ['postgres', 'mysql'].includes(engine) ? engine : '',
         minutes: [5, 15, 60, 360].includes(minutes) ? minutes : 60,
         asset: validId(params.get('asset')) ? params.get('asset') : '',
+        event: validId(params.get('event')) ? params.get('event') : '',
         start: validRange ? start : null,
-        end: validEnd ? end : null
+        end: validEnd ? end : null,
+        cursor: validRange && Date.parse(params.get('cursor')) >= start && Date.parse(params.get('cursor')) <= end ? Date.parse(params.get('cursor')) : null
       };
+      if (previous !== scope().toString()) rescope();
       if (active && snapshot) render();
     }
 
@@ -120,7 +140,17 @@
 
     function detail(event) {
       if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {});
-      void openEvent(event.id, true, route(true, event.assetId));
+      const params = new URLSearchParams(route(true, event.assetId).split('?')[1]);
+      params.set('event', event.id);
+      const started = Date.parse(event.startedAt);
+      if (finite(started) && (started < from || started > to)) {
+        const left = started - 5 * minute;
+        const right = Math.min(Date.now(), started + 15 * minute);
+        params.set('from', new Date(left).toISOString());
+        params.set('end', new Date(right).toISOString());
+        params.set('cursor', new Date(started).toISOString());
+      }
+      void openEvent(event.id, true, 'live?' + params);
     }
 
     function connection(state, text) {
@@ -133,20 +163,42 @@
       active = value;
       session++;
       if (active) {
-        connection('pending', '正在连接');
+        connection(paused ? 'paused' : 'pending', paused ? '已暂停' : '正在连接');
         if (snapshot) render();
-        connect();
+        if (!paused) connect();
         void loadIntegrations();
         integrationTimer = setInterval(loadIntegrations, 15000);
       } else {
-        source?.close();
-        source = null;
-        clearInterval(fallback);
-        clearTimeout(retryTimer);
+        stopStream();
         clearInterval(integrationTimer);
-        fallback = retryTimer = null;
-        request++;
         trendKey = sampleKey = '';
+      }
+    }
+
+    function stopStream() {
+      source?.close();
+      source = null;
+      clearInterval(fallback);
+      clearTimeout(retryTimer);
+      fallback = retryTimer = null;
+      trendRequest?.abort();
+      request++;
+    }
+
+    function rescope() {
+      stopStream();
+      session++;
+      snapshot = undefined;
+      points = timelineEvents = markers = [];
+      trendKey = sampleKey = filterKey = feedKey = pathKey = priorityKey = coverageKey = '';
+      for (const key of ['kpis', 'priority', 'feed', 'topology', 'markers', 'coverage', 'path-nodes', 'path-reading']) get(key).replaceChildren();
+      if (active) {
+        paused = false;
+        get('pause').setAttribute('aria-pressed', 'false');
+        get('pause').textContent = '暂停刷新';
+        connection('pending', '正在读取选定范围');
+        draw('正在读取选定范围…');
+        connect();
       }
     }
 
@@ -167,6 +219,7 @@
 
     function accept(value) {
       snapshot = value;
+      inventory = value.filters || value.assets || [];
       render();
     }
 
@@ -181,12 +234,12 @@
     }
 
     function connect() {
-      if (!active || source) return;
+      if (!active || paused || source) return;
       if (typeof EventSource !== 'function') {
         startFallback();
         return;
       }
-      const stream = new EventSource('/api/live/stream');
+      const stream = new EventSource('/api/live/stream?' + scope());
       source = stream;
       stream.addEventListener('observation', event => {
         if (stream !== source) return;
@@ -216,12 +269,12 @@
       const generation = session;
       async function poll() {
         try {
-          const value = await api('/api/live/overview');
-          if (!active || generation !== session || root.dataset.connection === 'live') return;
+          const value = await api('/api/live/overview?' + scope());
+          if (!active || paused || generation !== session || root.dataset.connection === 'live') return;
           connection('fallback', '轮询更新');
           accept(value);
         } catch {
-          if (active && generation === session && root.dataset.connection !== 'live') connection('error', '连接中断');
+          if (active && !paused && generation === session && root.dataset.connection !== 'live') connection('error', '连接中断');
         }
       }
       connection('fallback', '正在重连');
@@ -247,80 +300,138 @@
       const now = Date.parse(snapshot.observedAt);
       get('recency').textContent = '数据读于 ' + formatTime(snapshot.observedAt) + ' · ' +
         (snapshot.staleAfter ? '采样超过 ' + snapshot.staleAfter + ' 秒标记为陈旧' : '当前按手动采样显示');
-      const organizations = new Map(assets.map(asset => [asset.organizationId, asset.organization]));
-      if (!organizations.has(selection.organization)) selection.organization = '';
-      const withinEngine = assets.filter(asset => (!selection.organization || selection.organization === asset.organizationId) &&
+      const organizations = new Map(inventory.map(asset => [asset.organizationId, asset.organization]));
+      const withinOrg = inventory.filter(asset => (!selection.organization || selection.organization === asset.organizationId) &&
         (!selection.engine || selection.engine === asset.engine));
-      const clusters = new Map(withinEngine.map(asset => [clusterKey(asset), asset.cluster || asset.name]));
-      if (!clusters.has(selection.cluster)) selection.cluster = '';
+      const environments = [...new Set(withinOrg.map(asset => asset.environment).filter(Boolean))].sort().map(value => [value, value]);
+      const clusters = new Map(withinOrg.filter(asset => !selection.environment || asset.environment === selection.environment)
+        .map(asset => [asset.clusterKey || clusterKey(asset), asset.cluster || asset.name]));
       fillSelect(filters.organization, [['', '全部组织'], ...orderedEntries(organizations)], selection.organization);
+      fillSelect(filters.environment, [['', '全部环境'], ...environments], selection.environment);
       fillSelect(filters.cluster, [['', '全部集群'], ...orderedEntries(clusters)], selection.cluster);
       filters.engine.value = selection.engine;
       filters.minutes.value = String(selection.minutes);
       get('follow').hidden = !selection.end;
-      const visible = withinEngine.filter(asset => !selection.cluster || clusterKey(asset) === selection.cluster);
-      const selected = visible.find(asset => asset.id === selection.asset) || visible[0];
+      const visible = assets;
+      const firstEvent = events.find(event => event.status === 'open');
+      const selected = visible.find(asset => asset.id === selection.asset) || visible.find(asset => asset.id === firstEvent?.assetId) || visible[0];
       selection.asset = selected?.id || '';
 
-      const eventAssets = new Set(visible.map(asset => asset.id));
-      const isFiltered = !!(selection.organization || selection.cluster || selection.engine);
-      const visibleEvents = isFiltered ? events.filter(event => eventAssets.has(event.assetId)) : events;
-      const nextFilter = JSON.stringify(visible.map(asset => [asset.id, asset.name, asset.freshness, asset.openEvents, asset.role, asset.pod, asset.node, clusterKey(asset)])) + selection.asset;
+      const nextFilter = JSON.stringify(visible.map(asset => [asset.id, asset.name, asset.freshness, asset.openEvents, asset.unavailable,
+        asset.role, asset.pod, asset.node, clusterKey(asset)])) + selection.asset;
       if (nextFilter !== filterKey) {
         filterKey = nextFilter;
         renderTopology(visible, selected);
       }
-      get('asset-count').textContent = isFiltered || snapshot.total === assets.length ? visible.length + ' 个实例' : '展示 ' + visible.length + ' / ' + snapshot.total;
-      const nextFeed = JSON.stringify(visibleEvents);
+      get('asset-count').textContent = snapshot.total === assets.length ? visible.length + ' 个实例' : '展示 ' + visible.length + ' / ' + snapshot.total;
+      const nextFeed = JSON.stringify(events);
       if (nextFeed !== feedKey) {
         feedKey = nextFeed;
-        renderFeed(visibleEvents);
+        renderFeed(events);
       }
+      renderPriority(firstEvent, selected, now);
       get('asset-title').textContent = selected?.name || '实例趋势';
       get('sample-age').textContent = selected ? freshnessLabels[selected.freshness] + ' · ' + age(selected.collectedAt, now) : '';
-      renderKPIs(visible, selected, isFiltered);
+      renderKPIs(selected, now);
 
       const nextKey = [selected?.id, selected?.sampleId, selected?.freshness, selection.minutes, selection.start, selection.end,
-        ...visibleEvents.filter(event => event.assetId === selected?.id).map(event => event.id + event.status)].join(':');
+        ...events.filter(event => event.assetId === selected?.id).map(event => event.id + event.status)].join(':');
       if (nextKey !== trendKey) {
         trendKey = nextKey;
         void loadTrend(selected, now);
       }
       const nextSample = [selected?.id, selected?.sampleId, selected?.freshness, selection.start, selection.end].join(':');
-      if (nextSample !== sampleKey) {
-        sampleKey = nextSample;
-        renderCoverage(selected);
-        void loadSQL(selected);
-      }
+      renderCoverage(selected);
+      if (get('sql-panel').open && nextSample !== sampleKey) { sampleKey = nextSample; void loadSQL(selected); }
+      if (get('path').open) void loadPath(selected);
       syncGrafanaLink();
     }
 
-    function renderKPIs(assets, selected, isFiltered) {
-      const total = isFiltered ? assets.length : snapshot.total;
-      const healthy = isFiltered ? assets.filter(asset => asset.freshness === 'ok').length : snapshot.fresh;
-      const issues = isFiltered ? assets.reduce((sum, asset) => sum + asset.openEvents, 0) : snapshot.openEvents;
+    function renderPriority(event, selected, now) {
+      const asset = snapshot.assets.find(row => row.id === event?.assetId) || selected;
+      const key = [event?.id, selected?.id, snapshot.openEvents, snapshot.unavailable, asset?.freshness].join(':');
+      const board = get('priority');
+      if (key === priorityKey) {
+        const duration = board.querySelector('[data-live-duration]');
+        if (duration && event) duration.textContent = age(event.startedAt, now);
+        return;
+      }
+      priorityKey = key;
+      const title = event?.title || (snapshot.total ? '当前范围暂无处理中事件' : '当前范围暂无实例');
+      const summary = element('div', '', 'live-priority-copy');
+      const caption = element('small', event ? (severityLabels[event.severity] || (event.group === 'availability' ? '可用性告警' : '处理中')) : '当前状态');
+      summary.append(caption, element('strong', title));
+      const context = element('div', '', 'live-priority-facts');
+      if (event) {
+        context.append(element('span', [asset?.cluster, event.assetName].filter(Boolean).join(' / ')));
+        const duration = element('span', age(event.startedAt, now));
+        duration.dataset.liveDuration = '';
+        context.append(duration);
+      }
+      context.append(element('span', (snapshot.unavailable || 0) + ' 个实例有可用性告警'));
+      board.replaceChildren(summary, context);
+      board.dataset.alert = String(!!event);
+      if (event) {
+        const button = element('button', '调查事件 →');
+        button.type = 'button';
+        button.onclick = () => detail(event);
+        board.append(button);
+      }
+    }
+
+    function renderKPIs(selected, now) {
       const current = selected?.freshness === 'ok';
       const connections = current && finite(selected.connections) && selected.maxConnections > 0
         ? number.format(selected.connections / selected.maxConnections * 100) + '%' : '—';
-      const blocked = current && finite(selected.blocked) ? number.format(selected.blocked) : '—';
+      const count = key => current && finite(selected[key]) ? number.format(selected[key]) : '—';
+      const observed = selected ? age(selected.collectedAt, now) : '暂无样本';
       const cards = [
-        ['正常采样', healthy + ' / ' + total, '可见实例', 'cyan'],
-        ['处理中事件', String(issues), '当前监控范围', issues > 0 ? 'alert' : 'cyan'],
-        ['连接使用率', connections, selected?.name || '选择实例', 'blue'],
-        ['阻塞会话', blocked, selected?.name || '选择实例', blocked !== '—' && selected.blocked > 0 ? 'alert' : 'violet']
+        ['可用性', snapshot.fresh + ' / ' + snapshot.total, `采样正常 · 不可用 ${snapshot.unavailable}`, snapshot.unavailable ? 'alert' : 'cyan', 'pgAvailable'],
+        ['连接与排队', connections, `池等待 ${count('poolWaiting')} · ${observed}`, 'blue', 'averageConnectionUsagePercent'],
+        ['活跃与等待', count('active'), `阻塞 ${count('blocked')} · ${observed}`, current && selected.blocked > 0 ? 'alert' : 'violet', 'waiting'],
+        ['复制差距', bytes(current ? selected.replicationLag : null), `观测字节差 · ${observed}`, 'blue', 'averageReplicationLagBytes'],
+        ['存储压力', count('ioPressure') === '—' ? '—' : count('ioPressure') + '%', `I/O PSI · ${observed}`, 'cyan', 'ioPressure']
       ];
       const list = get('kpis');
-      for (const [index, [label, value, description, tone]] of cards.entries()) {
+      for (const [index, [label, value, description, tone, metric]] of cards.entries()) {
         let card = list.children[index];
         if (!card) {
           card = element('article', '', 'live-kpi');
-          card.append(element('span'), element('strong'), element('small'));
+          const spark = element('canvas');
+          spark.width = 90;
+          spark.height = 24;
+          spark.setAttribute('aria-hidden', 'true');
+          card.append(element('span'), element('strong'), element('small'), spark);
           list.append(card);
         }
         card.dataset.tone = tone;
+        card.dataset.metric = metric;
         card.children[0].textContent = label;
         card.children[1].textContent = value;
         card.children[2].textContent = description;
+      }
+      drawSparks();
+    }
+
+    function drawSparks() {
+      for (const card of get('kpis').children) {
+        const spark = card.querySelector('canvas');
+        const ctx = spark.getContext('2d');
+        ctx.clearRect(0, 0, spark.width, spark.height);
+        const values = points.slice(-24).map(point => point[card.dataset.metric]);
+        const max = Math.max(1, ...values.filter(finite));
+        ctx.strokeStyle = getComputedStyle(card).color;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        let prior = false;
+        values.forEach((value, i) => {
+          if (!finite(value)) { prior = false; return; }
+          const x = i * spark.width / Math.max(1, values.length - 1);
+          const y = 22 - 19 * value / max;
+          if (prior) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+          prior = true;
+        });
+        ctx.stroke();
       }
     }
 
@@ -352,9 +463,11 @@
           const label = [roleLabels[member.role], member.pod && [member.namespace, member.pod].filter(Boolean).join('/'),
             member.node, runtime, freshnessLabels[member.freshness]].filter(Boolean);
           button.append(name, element('small', label.join(' · ')));
-          if (member.openEvents) button.append(element('span', String(member.openEvents), 'live-member-events'));
+        if (member.unavailable) button.dataset.unavailable = 'true';
+        if (member.openEvents) button.append(element('span', String(member.openEvents), 'live-member-events'));
           button.onclick = () => {
             selection.asset = member.id;
+            selection.event = '';
             updateRoute();
             render();
           };
@@ -374,7 +487,7 @@
         button.type = 'button';
         button.dataset.eventId = event.id;
         button.dataset.status = event.status;
-        button.append(element('span', event.status === 'open' ? '处理中' : '已恢复', 'live-event-state'),
+        button.append(element('span', event.status === 'open' ? severityLabels[event.severity] || '处理中' : '已恢复', 'live-event-state'),
           element('strong', event.title), element('small', event.assetName + ' · ' + formatTime(event.endedAt || event.startedAt)));
         button.onclick = () => detail(event);
         parent.append(button);
@@ -382,6 +495,9 @@
     }
 
     function renderCoverage(asset) {
+      const key = [asset?.id, asset?.freshness, asset?.linux, asset?.k8s].join(':');
+      if (key === coverageKey) return;
+      coverageKey = key;
       const parent = get('coverage');
       parent.replaceChildren();
       if (!asset) {
@@ -397,6 +513,52 @@
         const row = element('div', '', 'live-coverage-row');
         row.append(element('span', label), element('strong', value));
         parent.append(row);
+      }
+    }
+
+    async function loadPath(asset) {
+      const point = points[focused] || points.findLast(row => row.latestSampleId);
+      const sampleId = selection.end ? point?.latestSampleId : point?.latestSampleId || asset?.sampleId;
+      const next = `${asset?.id}:${sampleId}`;
+      if (next === pathKey) return;
+      pathKey = next;
+      const list = get('path-nodes'), detail = get('path-reading');
+      list.replaceChildren();
+      detail.textContent = sampleId ? '正在读取所选时刻的采样…' : '此时段暂无实例依赖证据。';
+      if (!validId(sampleId)) return;
+      try {
+        const endpoint = `/api/assets/${asset.id}/samples/${sampleId}`;
+        const { sample } = await api(endpoint);
+        if (next !== pathKey || !active || !get('path').open) return;
+        const m = sample?.metrics || {}, route = m.routing, storage = m.containerStorage, node = storage?.node || m.k8s?.pod?.node;
+        const groups = [];
+        if (route?.entry) groups.push(['访问入口', route.entry, route.probe?.backend ? `入口 → ${route.probe.backend} · ${route.probe.role || '角色未确认'}` : '本次未观测到入口后端']);
+        if (route?.kind === 'pgbouncer' || m.pgbouncer?.status === 'ok') groups.push(['PgBouncer', '连接池',
+          finite(asset.poolWaiting) && sampleId === asset.sampleId ? `观察到 ${asset.poolWaiting} 个等待客户端` : '查看该采样的连接池记录']);
+        groups.push(['PostgreSQL', asset.name, roleLabels[m.role] || '主备角色未确认']);
+        if (route?.direct?.backend) groups.push(['直连后端', route.direct.backend, roleLabels[route.direct.role] || '主备角色未确认']);
+        if (m.k8s?.pod?.uid || storage?.podUID) groups.push(['Pod', [storage?.namespace || asset.namespace, storage?.pod || asset.pod].filter(Boolean).join('/'), `Pod UID ${storage?.podUID || m.k8s.pod.uid}`]);
+        if (storage?.primary && storage.containers?.[storage.primary]?.id) groups.push(['容器', storage.primary, `容器 ID ${storage.containers[storage.primary].id}`]);
+        if (node) groups.push(['节点', node, storage?.nodeUID ? `Node UID ${storage.nodeUID}` : '本次采样的运行节点']);
+        for (const volume of (storage?.volumeLinks || []).filter(item => item.status === 'claim_verified' && item.pvcUID).slice(0, 4))
+          groups.push(['PVC', volume.pvc, `${volume.container} → ${volume.pvcUID}`]);
+        for (const [layer, name, reading] of groups) {
+          const button = element('button', '', 'live-path-node');
+          button.type = 'button';
+          button.append(element('small', layer), element('strong', name));
+          button.onclick = () => display(reading);
+          list.append(button);
+        }
+        function display(reading) {
+          const raw = element('a', '原始采样');
+          raw.href = endpoint;
+          raw.target = '_blank';
+          raw.rel = 'noopener';
+          detail.replaceChildren(element('span', `${reading} · ${formatTime(sample?.collectedAt)}`), raw);
+        }
+        display('采样已记录的身份与连接路径');
+      } catch {
+        if (active && next === pathKey) detail.textContent = '依赖与原始采样暂不可读取。';
       }
     }
 
@@ -436,8 +598,12 @@
 
     async function loadTrend(asset, now) {
       const current = ++request;
+      trendRequest?.abort();
+      const controller = new AbortController();
+      trendRequest = controller;
+      const read = path => api(path, 'GET', undefined, controller.signal);
       const selectedTimescale = selection.minutes;
-      const bucketMinutes = selectedTimescale === 360 ? 5 : 1;
+      const bucketMinutes = selectedTimescale === 360 || (selection.end - selection.start) * (compare ? 2 : 1) > 360 * minute ? 5 : 1;
       const bucketMs = bucketMinutes * minute;
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
@@ -452,7 +618,6 @@
           button.dataset.metric = metric.key;
           button.onclick = () => {
             selectedMetric = metric;
-            focused = -1;
             draw();
           };
           return button;
@@ -462,45 +627,80 @@
       if (!asset?.sampleId) {
         points = [];
         timelineEvents = [];
+        markers = [];
+        renderMarkers();
         draw('暂无时间序列');
         return;
       }
-      const q = { from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucketMinutes: String(bucketMinutes) };
-      const trend = new URLSearchParams({ ...q, asset: asset.id });
+      const comparisonStart = from - (to - from);
+      const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
+        bucketMinutes: String(bucketMinutes) };
+      const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
       const waits = new URLSearchParams({ ...q, group: 'type' });
-      if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end) {
+      if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];
         timelineEvents = [];
         draw('正在读取趋势…');
       }
       try {
-        const [{ series, events }, { buckets }] = await Promise.all([
-          api('/api/monitoring/series?' + trend),
-          asset.engine === 'postgres' ? api('/api/assets/' + asset.id + '/wait-history?' + waits).catch(() => ({ buckets: [] })) : { buckets: [] }
+        const base = `/api/assets/${asset.id}/`;
+        const [{ series, events, changes }, { buckets }, storage] = await Promise.all([
+          read('/api/monitoring/series?' + trend),
+          asset.engine === 'postgres' ? read(base + 'wait-history?' + waits).catch(() => ({ buckets: [] })) : { buckets: [] },
+          ['linux', 'k8s'].includes(asset.runtime) ? read(base + 'container-storage?' + new URLSearchParams(q)).catch(() => null) : null
         ]);
         if (!active || current !== request) return;
         const observed = new Map(series.map(row => [Date.parse(row.bucket), row]));
-        const waiting = new Map(buckets.map(row => [Date.parse(row.bucket), row.observed > 0
-          ? row.groups.reduce((sum, group) => sum + group.averageSessions, 0) : null]));
+        const waiting = new Map(buckets.filter(row => row.observed > 0).map(row => [Date.parse(row.bucket), row.groups]));
+        const incoming = new Map((storage?.buckets || []).map(row => [Date.parse(row.at), row.series?.ioPressure?.mean]));
         const start = Math.floor(from / bucketMs) * bucketMs;
+        const priorStart = Math.floor(comparisonStart / bucketMs) * bucketMs;
+        const pointAt = at => ({ ...observed.get(at), waitGroups: waiting.get(at),
+          waiting: waiting.get(at)?.reduce((sum, group) => sum + group.averageSessions, 0), ioPressure: incoming.get(at) });
         points = Array.from({ length: Math.floor((to - start) / bucketMs) + 1 }, (_, i) => {
           const at = start + i * bucketMs;
-          return { ...observed.get(at), at: Math.max(at, from), waiting: waiting.get(at) };
+          return { ...pointAt(at), at: Math.max(at, from), baseline: compare ? pointAt(priorStart + i * bucketMs) : null };
         });
         points[0].assetId = asset.id;
         points.range = selectedTimescale;
         points.anchor = selection.end;
-        timelineEvents = events;
-        focused = -1;
+        points.start = selection.start;
+        timelineEvents = events.filter(event => !event.endedAt || Date.parse(event.endedAt) >= from);
+        markers = [...timelineEvents.flatMap(event => [{ at: event.startedAt, title: '发现 · ' + event.title, eventId: event.id },
+          ...(event.endedAt ? [{ at: event.endedAt, title: '恢复 · ' + event.title, eventId: event.id }] : [])]),
+        ...(changes || []).map(change => ({ at: change.at, title: '变更 · ' + change.label }))]
+          .filter(item => Date.parse(item.at) >= from && Date.parse(item.at) <= to).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+        focused = selection.cursor ? points.reduce((best, row, i) => Math.abs(row.at - selection.cursor) < Math.abs(points[best].at - selection.cursor) ? i : best, 0) : -1;
+        renderMarkers();
         draw('');
+        if (get('path').open) void loadPath(asset);
       } catch {
         if (active && current === request) draw('趋势暂不可读取');
       }
     }
 
+    function renderMarkers() {
+      const host = get('markers');
+      host.replaceChildren(...markers.slice(-8).map(mark => {
+        const at = Date.parse(mark.at);
+        const button = element('button', `${shortTime.format(at)} · ${mark.title}`);
+        button.type = 'button';
+        button.onclick = () => {
+          selection.start = at - 5 * minute;
+          selection.end = Math.min(Date.now(), at + 15 * minute);
+          selection.cursor = at;
+          selection.event = mark.eventId || '';
+          render();
+          updateRoute();
+        };
+        return button;
+      }));
+    }
+
     function draw(message = chartStatus) {
       if (!active) return;
       chartStatus = message;
+      get('baseline').setAttribute('aria-pressed', String(compare));
       const chartEmpty = get('chart-empty');
       const { width, height } = canvas.getBoundingClientRect();
       if (!width || !height) return;
@@ -512,7 +712,19 @@
       const color = key => getComputedStyle(root).getPropertyValue('--live-' + key).trim();
       for (const button of get('metrics').children)
         button.setAttribute('aria-pressed', String(button.dataset.metric === selectedMetric.key));
-      const values = points.map(point => point[selectedMetric.key]).filter(finite);
+      const values = points.flatMap(point => [point[selectedMetric.key], point.baseline?.[selectedMetric.key]]).filter(finite);
+      const waitLegend = get('wait-legend');
+      const waiting = selectedMetric.key === 'waiting';
+      const types = [...new Set(points.flatMap(point => (point.waitGroups || []).map(row => row.waitType)))];
+      waitLegend.hidden = !waiting || !types.length;
+      if (!waitLegend.hidden && waitLegend.dataset.types !== types.join(',')) {
+        waitLegend.dataset.types = types.join(',');
+        waitLegend.replaceChildren(...types.map(type => {
+          const label = element('span', type || '未知');
+          label.dataset.waitColor = waitColors[type] || 'muted';
+          return label;
+        }));
+      }
       chartEmpty.textContent = message || '此时间范围暂无该指标';
       chartEmpty.hidden = !message && values.length > 0;
       const top = 22, left = 54, bottom = height - 37, right = width - 14;
@@ -541,6 +753,13 @@
         ctx.fillStyle = color(event.status === 'open' ? 'event-fill' : 'recovery-fill');
         ctx.fillRect(start, top, Math.max(2, end - start), bottom - top);
       }
+      if (!message) for (const marker of markers) {
+        const px = x(Date.parse(marker.at));
+        ctx.strokeStyle = color(marker.title.startsWith('恢复') ? 'signal' : marker.title.startsWith('变更') ? 'violet' : 'hot');
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, bottom); ctx.stroke();
+        ctx.setLineDash([]);
+      }
       if (!message && values.length) {
         const gradient = ctx.createLinearGradient(0, top, 0, bottom);
         gradient.addColorStop(0, color('area'));
@@ -559,12 +778,36 @@
           ctx.beginPath(); ctx.arc(run.at(-1)[0], run.at(-1)[1], 3, 0, Math.PI * 2); ctx.fill();
           run = [];
         };
-        for (const point of points) {
-          const value = point[selectedMetric.key];
-          if (finite(value)) run.push([x(point.at), y(value)]);
-          else finish();
+        if (waiting) {
+          const width = Math.max(1, (right - left) / Math.max(1, points.length) * .78);
+          for (const point of points) {
+            let level = 0;
+            for (const group of point.waitGroups || []) {
+              ctx.fillStyle = color(waitColors[group.waitType] || 'muted');
+              const up = level + group.averageSessions;
+              ctx.fillRect(x(point.at) - width / 2, y(up), width, y(level) - y(up));
+              level = up;
+            }
+          }
+        } else {
+          for (const point of points) {
+            const value = point[selectedMetric.key];
+            if (finite(value)) run.push([x(point.at), y(value)]);
+            else finish();
+          }
+          finish();
         }
-        finish();
+        if (compare) {
+          ctx.strokeStyle = color('violet'); ctx.lineWidth = 1.3; ctx.setLineDash([5, 4]); ctx.beginPath();
+          let adjacent = false;
+          for (const point of points) {
+            const value = point.baseline?.[selectedMetric.key];
+            if (!finite(value)) { adjacent = false; continue; }
+            if (adjacent) ctx.lineTo(x(point.at), y(value)); else ctx.moveTo(x(point.at), y(value));
+            adjacent = true;
+          }
+          ctx.stroke(); ctx.setLineDash([]);
+        }
         if (points[focused]) {
           const point = points[focused];
           const px = x(point.at);
@@ -574,17 +817,21 @@
         }
       }
       renderChartReadout();
+      drawSparks();
     }
 
     function renderChartReadout() {
       const point = points[focused] || points.findLast(row => finite(row[selectedMetric.key]));
       const value = point?.[selectedMetric.key];
+      const prior = point?.baseline?.[selectedMetric.key];
       const note = selectedMetric.source + (point ? ' · ' + shortTime.format(point.at) + ' · ' +
-        (finite(value) ? number.format(value) + selectedMetric.unit : '缺采') : '');
+        (finite(value) ? number.format(value) + selectedMetric.unit : '缺采或指标不可用') : '') +
+        (compare ? ` · 前一等长时段 ${finite(prior) ? number.format(prior) + selectedMetric.unit : '缺少可比样本'}` : '');
       get('chart-note').textContent = note;
       canvas.setAttribute('aria-label', selectedMetric.title + '。' + note);
-      const matching = focused >= 0 && point ? timelineEvents.find(event => Date.parse(event.startedAt) <= point.at &&
-        (!event.endedAt || Date.parse(event.endedAt) >= point.at)) : timelineEvents[0];
+      const matching = timelineEvents.find(event => event.id === selection.event) || (focused >= 0 && point
+        ? timelineEvents.find(event => Date.parse(event.startedAt) <= point.at && (!event.endedAt || Date.parse(event.endedAt) >= point.at))
+        : timelineEvents[0]);
       const actions = get('aligned-event');
       if (actions.dataset.event !== (matching?.id || '')) {
         actions.dataset.event = matching?.id || '';
@@ -601,18 +848,44 @@
 
     for (const [key, select] of Object.entries(filters)) {
       select.addEventListener('change', () => {
+        const previous = scope().toString();
         selection[key] = key === 'minutes' ? Number(select.value) : select.value;
-        if (key === 'organization' || key === 'engine') selection.cluster = '';
-        if (key === 'minutes') selection.start = selection.end = null;
+        if (['organization', 'engine', 'environment'].includes(key)) selection.cluster = '';
+        if (key === 'minutes') { selection.start = selection.end = selection.cursor = null; selection.event = ''; }
+        if (previous !== scope().toString()) rescope();
         if (snapshot) render();
         updateRoute();
       });
     }
     get('follow').onclick = () => {
-      selection.start = selection.end = null;
+      selection.start = selection.end = selection.cursor = null;
+      selection.event = '';
       if (snapshot) render();
       updateRoute();
     };
+    get('baseline').onclick = () => {
+      compare = !compare;
+      trendKey = '';
+      if (snapshot) render();
+      updateRoute();
+    };
+    get('pause').onclick = () => {
+      paused = !paused;
+      get('pause').setAttribute('aria-pressed', String(paused));
+      get('pause').textContent = paused ? '恢复刷新' : '暂停刷新';
+      if (paused) {
+        stopStream();
+        connection('paused', '已暂停');
+      } else {
+        trendKey = '';
+        connection('pending', '正在连接');
+        connect();
+      }
+    };
+    get('sql-panel').addEventListener('toggle', () => { if (get('sql-panel').open && snapshot) render(); });
+    get('path').addEventListener('toggle', () => {
+      if (get('path').open && snapshot) { pathKey = ''; void loadPath(snapshot.assets.find(asset => asset.id === selection.asset)); }
+    });
     get('night').onclick = () => {
       const enabled = root.dataset.night !== 'true';
       root.dataset.night = String(enabled);
@@ -638,11 +911,19 @@
       const index = Math.max(0, Math.min(points.length - 1, Math.round((event.offsetX - left) / (right - left) * (points.length - 1))));
       if (focused !== index) { focused = index; draw(); }
     });
-    canvas.addEventListener('pointerleave', () => { focused = -1; draw(); });
+    canvas.addEventListener('pointerleave', () => { if (!selection.cursor) focused = -1; draw(); });
+    canvas.addEventListener('click', () => {
+      if (!points[focused]) return;
+      selection.cursor = points[focused].at;
+      updateRoute();
+      if (get('path').open && snapshot) void loadPath(snapshot.assets.find(asset => asset.id === selection.asset));
+    });
     canvas.addEventListener('keydown', event => {
       if (!points.length || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
       event.preventDefault();
       focused = Math.max(0, Math.min(points.length - 1, (focused < 0 ? points.length - 1 : focused) + (event.key === 'ArrowLeft' ? -1 : 1)));
+      selection.cursor = points[focused].at;
+      updateRoute();
       draw();
     });
     new ResizeObserver(() => draw()).observe(canvas.parentElement);

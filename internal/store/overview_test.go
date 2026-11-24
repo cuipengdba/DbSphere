@@ -98,4 +98,24 @@ func TestMonitoringOverviewScopesTimelineAndCurrentAlerts(t *testing.T) {
 	if empty.Summary.Assets != 0 || len(empty.Alerts) != 0 || empty.Timeline[2].Opened != 0 || len(empty.Inspection.Rows) != 0 {
 		t.Fatal("empty authorization scope included assets or events")
 	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE assets SET environment=CASE WHEN id=$1 THEN 'production' ELSE 'staging' END
+		WHERE id IN ($1,$2)`, visible, hidden); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pg.LiveObservation(ctx, []string{visible, hidden}, 60, LiveScope{Environment: "production", Engine: "postgres"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var live struct {
+		Total, Unavailable int
+		Assets             []struct{ ID string }
+		Events             []struct{ AssetID, Severity string }
+	}
+	if err := json.Unmarshal(raw, &live); err != nil {
+		t.Fatal(err)
+	}
+	if live.Total != 1 || live.Unavailable != 1 || len(live.Assets) != 1 || live.Assets[0].ID != visible ||
+		len(live.Events) == 0 || live.Events[0].AssetID != visible || live.Events[0].Severity != "critical" {
+		t.Fatalf("live scope and severity mismatch: %+v", live)
+	}
 }

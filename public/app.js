@@ -110,7 +110,7 @@ function setView(route, updateHash = true) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && !['overview', 'grafana'].includes(selected) && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'live', 'grafana'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -3808,7 +3808,8 @@ async function boot() {
     const runtime = await api('/api/version').catch(() => null);
     updateRuntime(runtime);
     setView(location.hash.slice(1), false);
-    if (document.body.dataset.activeView !== 'grafana' && (!nativeOverview || document.body.dataset.activeView !== 'overview')) await prepareWorkspace();
+    if (document.body.dataset.activeView !== 'grafana' &&
+        (!nativeOverview || !['overview', 'live'].includes(document.body.dataset.activeView))) await prepareWorkspace();
   }
 }
 
@@ -4045,6 +4046,6 @@ boot().catch(e => { $('login-panel').hidden = false; $('login-error').textConten
 window.setTimeout(pollStorageAvailability, 5000);
 setInterval(() => {
   if (csrf && !longTermStoreUnavailable && !workspaceData.pending && document.body.dataset.activeView !== 'grafana' &&
-      (!nativeOverview || document.body.dataset.activeView !== 'overview'))
+      (!nativeOverview || !['overview', 'live'].includes(document.body.dataset.activeView)))
     refresh().catch(() => {});
 }, 30000);
