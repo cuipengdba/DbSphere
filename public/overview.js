@@ -39,7 +39,7 @@
       return params.size ? `overview?${params}` : 'overview';
     }
     function save() {
-      if (visible && /^#(?:overview(?:\?|$)|$)/.test(location.hash))
+      if (visible && (!location.hash || /^#overview(?:\?|$)/.test(location.hash)))
         history.replaceState(history.state, '', '#' + route());
     }
     function restore(params) {
