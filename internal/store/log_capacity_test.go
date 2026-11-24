@@ -179,7 +179,8 @@ func capacityLogBlock(at time.Time, side, part int) []byte {
 	for index := range LogArchiveBlockBytes / recordSize {
 		at = at.Add(time.Second)
 		prefix := at.Format("2006-01-02 15:04:05.000") + " UTC "
-		statement := fmt.Sprintf("[52] app=orders-api LOG: duration: %d ms statement: select id from orders where key='%d-%d-%d'", 700+side*500, side, part, index)
+		statement := fmt.Sprintf("[52] app=orders-%d LOG: duration: %d ms statement: select id from orders_%d where key='%d-%d-%d'",
+			part%7, 700+side*500+part%47, part%101, side, part, index)
 		switch index % 8 {
 		case 1:
 			statement = "[52] app=orders-api ERROR: 22012: division by zero"
