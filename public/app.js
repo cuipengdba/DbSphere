@@ -3,6 +3,7 @@ let currentRole = null;
 let initialAdminLogin = null;
 let currentUsername = '';
 let currentOrganization = '';
+let nativeOverview = false;
 let oidcEnabled = false;
 let organizations = [];
 let approvalEnabled = false;
@@ -49,7 +50,7 @@ const growthMetric = 'pg.database_growth_bytes_per_day';
 const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
   metric === growthMetric ? `${(Number(value) / (1024 ** 3)).toFixed(2)} GiB/日` : String(value);
 const views = {
-  overview: ['总览', '先看异常，再进入资产和证据。'],
+  overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
   storage: ['容器磁盘 I/O 与文件缓存', ''],
@@ -99,7 +100,8 @@ function setView(route, updateHash = true) {
   monitoring.setVisible(selected === 'monitoring');
   live.setVisible(selected === 'live' && !!currentRole);
   containerStorage.show(selected === 'storage' && !!currentRole, params);
-  if (selected === 'overview' && assetServerPaging) void loadFleetOverview();
+  if (selected === 'overview' && (!updateHash || query)) operationsOverview.restore(params);
+  showOverview(selected === 'overview');
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
@@ -442,12 +444,6 @@ function renderOverview(assets, events) {
     focus.append(button);
   }
   const fleet = $('overview-assets'); fleet.replaceChildren();
-  fleet.hidden = assetServerPaging;
-  $('overview-fleet').hidden = !assetServerPaging;
-  if (assetServerPaging) {
-    if (document.body.dataset.activeView === 'overview') void loadFleetOverview();
-    return;
-  }
   if (!assets.length) fleet.append(cell('p', '尚未纳管 PostgreSQL 实例。', 'empty'));
   const healthOrder = { error: 0, stale: 1, pending: 2, manual: 3, ok: 4 };
   const ordered = [...assets].sort((a, b) => healthOrder[assetHealth(a).kind] - healthOrder[assetHealth(b).kind]);
@@ -455,90 +451,19 @@ function renderOverview(assets, events) {
     const health = assetHealth(asset);
     const button = cell('button', '', `event-button overview-row health-${health.kind}`);
     button.append(cell('strong', asset.name), cell('small', `${assetRuntimeLabel(asset)} · ${health.label} · ${formatTime(asset.lastSampleAt)}`));
-    button.addEventListener('click', () => {
-      if (assetServerPaging) { monitoring.openInstance(asset.id); setView('monitoring'); }
-      else { setView('assets'); void showAsset(asset.id); }
-    });
+    button.addEventListener('click', () => { setView('assets'); void showAsset(asset.id); });
     fleet.append(button);
   }
 }
 
-let fleetPage = 1, fleetOverviewRequest = 0;
-
-async function loadFleetOverview() {
-  const key = ++fleetOverviewRequest;
-  const target = $('fleet-result');
-  const caption = $('fleet-caption');
-  const params = new URLSearchParams(new FormData($('fleet-filters')));
-  params.set('page', String(fleetPage));
-  target.setAttribute('aria-busy', 'true');
-  try {
-    const { clusters, summary, total } = await api(`/api/monitoring/fleet?${params}`);
-    if (key !== fleetOverviewRequest || document.body.dataset.activeView !== 'overview') return;
-    if (!clusters.length && fleetPage > 1) { fleetPage--; return loadFleetOverview(); }
-    caption.textContent = `${summary.clusters} 个匹配集群 · ${summary.incidents} 个有异常 · ` +
-      `${summary.observed}/${summary.members} 个成员采集成功 · ${summary.failed} 个失败 · ${summary.stale} 个过期 · ${summary.pending} 个待采集`;
-    $('fleet-prev').disabled = fleetPage <= 1;
-    $('fleet-next').disabled = fleetPage * 12 >= total;
-    target.replaceChildren();
-    if (!clusters.length) { target.append(cell('p', '没有匹配的集群。', 'empty')); return; }
-    const grid = cell('table', '');
-    grid.setAttribute('aria-label', '集群值班列表');
-    const head = grid.createTHead().insertRow();
-    for (const title of ['集群 / 运行形态', 'PG 可用', '采集', '当前异常', '开始时间']) {
-      const heading = cell('th', title); heading.scope = 'col'; head.append(heading);
-    }
-    const body = grid.createTBody();
-    const names = { linux: 'Linux', k8s: 'Kubernetes', managed: '托管 PG' };
-    const statusLabels = { incident: '有异常', coverage: '采集不完整', healthy: '已观测健康' };
-    for (const item of clusters) {
-      const row = body.insertRow();
-      const link = cell('button', item.cluster_name, 'monitor-link');
-      link.type = 'button';
-      link.addEventListener('click', () => { monitoring.openCluster(item.cluster_key); setView('monitoring'); });
-      row.insertCell().append(link, cell('small', [item.runtimes.map(value => names[value]).join(' / '),
-        item.versions?.length ? `PG ${item.versions.join('/')}` : 'PG 版本待采集'].join(' · '), 'fleet-row-meta'));
-      row.insertCell().textContent = `${item.available} / ${item.members}`;
-      row.insertCell().append(cell('span', `${item.observed} / ${item.members}`),
-        cell('small', statusLabels[item.status], `fleet-row-meta fleet-${item.status}`));
-      const affected = row.insertCell();
-      if (item.affected) {
-        const member = cell('button', item.affected.name, 'monitor-link');
-        member.type = 'button';
-        member.addEventListener('click', () => { monitoring.openInstance(item.affected.id, 'waits'); setView('monitoring'); });
-        affected.append(member);
-      }
-      if (item.first_event) {
-        const event = cell('button', `${item.events} 个事件`, 'monitor-link fleet-row-meta');
-        event.addEventListener('click', () => openEvent(item.first_event)); affected.append(event);
-      }
-      if (!affected.childNodes.length) affected.textContent = '—';
-      const began = row.insertCell();
-      began.textContent = item.started_at ? formatTime(item.started_at) : '—';
-      if (item.started_at) {
-        const elapsed = Math.max(0, Date.now() - Date.parse(item.started_at));
-        began.append(cell('small', elapsed < 60000 ? '不足 1 分钟' : elapsed < 3600000 ?
-          `${Math.floor(elapsed / 60000)} 分钟` : `${(elapsed / 3600000).toFixed(1)} 小时`, 'fleet-row-meta'));
-      }
-    }
-    target.append(grid);
-  } catch (error) {
-    if (key !== fleetOverviewRequest) return;
-    caption.textContent = `集群摘要读取失败 · ${error.message}`;
-    target.replaceChildren();
-  } finally {
-    if (key === fleetOverviewRequest) target.removeAttribute('aria-busy');
-  }
-}
-
-async function api(path, method = 'GET', payload) {
+async function api(path, method = 'GET', payload, signal) {
   if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout')
     throw new Error('只读账号不能修改监控数据。');
   if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' &&
       !(method === 'POST' && /^\/api\/work-orders\/[0-9a-f-]+\/(approve|reject)$/.test(path)))
     throw new Error('审批账号只能审批事件工单。');
   const response = await fetch(path, {
-    method, credentials: 'same-origin',
+    method, signal, credentials: 'same-origin',
     headers: { ...(payload ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
     body: payload ? JSON.stringify(payload) : undefined
   });
@@ -597,6 +522,13 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 
 const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
 const containerStorage = window.DbSphereContainerStorage.create($('container-storage'), { api, openEvent, formatTime });
+const operationsOverview = window.DbSphereOverview.create($('operations-board'), { api, openEvent, formatTime });
+
+function showOverview(selected) {
+  $('operations-board').hidden = !selected || !nativeOverview;
+  $('legacy-overview').hidden = !selected || nativeOverview;
+  operationsOverview.show(selected && !!currentRole, nativeOverview);
+}
 
 async function refresh() {
   const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
@@ -633,9 +565,11 @@ async function refresh() {
   allAssets = assets;
   containerStorage.setAssets(assets);
   assetServerPaging = runtime?.backend === 'go';
+  nativeOverview = assetServerPaging;
+  showOverview(document.body.dataset.activeView === 'overview');
   monitoring.sync(assets.filter(asset => asset.runtime !== 'mysql'), assetServerPaging,
     [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
-  renderOverview(assets, eventOverview.latestOpen);
+  if (!nativeOverview) renderOverview(assets, eventOverview.latestOpen);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
   else renderLegacyAssets();
@@ -3023,8 +2957,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const back = history.state?.monitoringReturn;
   const storageBack = typeof back === 'string' && /^storage(?:\?|$)/.test(back);
   const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));
-  if (typeof back === 'string' && /^(monitoring|live|storage)(?:\?|$)/.test(back)) {
-    const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' : '返回集群同窗', 'monitor-link incident-monitor-return');
+  if (typeof back === 'string' && /^(overview|monitoring|live|storage)(?:\?|$)/.test(back)) {
+    const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' : back.startsWith('overview') ? '返回全域总览' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
@@ -3713,6 +3647,7 @@ async function boot() {
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
+  if (!session.authenticated) showOverview(false);
   $('logout').hidden = !session.authenticated;
   const initialization = $('initial-admin-note');
   initialization.hidden = !session.setupRequired;
@@ -3946,9 +3881,6 @@ $('asset-form').addEventListener('submit', async (event) => {
   finally { $('asset-submit').disabled = false; }
 });
 
-$('fleet-filters').addEventListener('submit', event => { event.preventDefault(); fleetPage = 1; void loadFleetOverview(); });
-$('fleet-prev').addEventListener('click', () => { if (fleetPage > 1) { fleetPage--; void loadFleetOverview(); } });
-$('fleet-next').addEventListener('click', () => { fleetPage++; void loadFleetOverview(); });
 $('platform-refresh').addEventListener('click', loadPlatformStatus);
 $('organization-form').addEventListener('submit', async event => {
   event.preventDefault();

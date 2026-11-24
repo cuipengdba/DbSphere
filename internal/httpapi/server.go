@@ -596,6 +596,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			readLiveObservation(w, r, store, credentials, scopeIDs, liveConnections)
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == monitoringOverviewPath {
+			readMonitoringOverview(w, r, store, credentials, scopeIDs)
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == liveIntegrationsPath {
 			readLiveIntegrations(w, r, credentials.Observability, role == "admin" && principal.OrganizationID == "")
 			return

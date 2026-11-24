@@ -10,9 +10,11 @@
   <link rel="stylesheet" href="/freshness.css">
   <link rel="stylesheet" href="/console.css">
   <link rel="stylesheet" href="/live.css">
+  <link rel="stylesheet" href="/overview.css">
   <script src="/observability.js" defer></script>
   <script src="/monitoring.js" defer></script>
   <script src="/live.js" defer></script>
+  <script src="/overview.js" defer></script>
   <link rel="stylesheet" href="/container-storage.css">
   <script src="/container-storage.js" defer></script>
   <script src="/app.js" defer></script>
@@ -62,31 +64,61 @@
       <div class="workspace-main">
       <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
-      <section class="summary" aria-label="总览" data-view="overview">
+      <section class="operations-board" id="operations-board" data-view="overview" aria-label="全域监控总览">
+        <div class="operations-toolbar">
+          <div class="operations-filters">
+            <label>组织<select data-overview="organization"><option value="">全部组织</option></select></label>
+            <label>环境<select data-overview="environment"><option value="">全部环境</option></select></label>
+            <label>集群<select data-overview="cluster"><option value="">全部集群</option></select></label>
+            <label>时间<select data-overview="range"><option value="15">近 15 分钟</option><option value="60" selected>近 1 小时</option><option value="360">近 6 小时</option><option value="1440">近 24 小时</option><option value="custom">固定时段</option></select></label>
+          </div>
+          <div class="operations-actions">
+            <label>刷新<select data-overview="interval"><option value="15">15 秒</option><option value="30" selected>30 秒</option><option value="60">1 分钟</option></select></label>
+            <button type="button" class="ghost" data-overview="pause" aria-pressed="false">暂停刷新</button>
+            <button type="button" class="ghost" data-overview="fullscreen" aria-pressed="false">全屏</button>
+          </div>
+        </div>
+        <form class="operations-dates" data-overview="dates" hidden>
+          <label>起始<input type="datetime-local" data-overview="from" required></label>
+          <label>结束<input type="datetime-local" data-overview="to" required></label>
+          <button type="submit">应用时段</button>
+        </form>
+        <p class="operations-status" data-overview="status" role="status">正在读取监控总览</p>
+        <div class="operations-kpis" data-overview="kpis"></div>
+        <div class="operations-main">
+          <section class="operations-panel">
+            <header><h2>实例状态</h2><small data-overview="matrix-caption">当前状态</small></header>
+            <div data-overview="matrix" class="operations-matrix" aria-label="实例状态矩阵"></div>
+            <footer class="operations-pages"><button type="button" class="ghost small-button" data-overview="prev" disabled>上一页</button><button type="button" class="ghost small-button" data-overview="next" disabled>下一页</button></footer>
+          </section>
+          <section class="operations-panel">
+            <header><h2>当前告警</h2><a href="#incidents">查看事件</a></header>
+            <div data-overview="alerts" class="operations-alerts"></div>
+            <h3 class="operations-links-heading">专题入口</h3>
+            <nav data-overview="shortcuts" class="operations-shortcuts" aria-label="监控专题"></nav>
+          </section>
+        </div>
+        <section class="operations-panel operations-history">
+          <header><h2>告警与可用性时间线</h2><small>拖动框选时段</small></header>
+          <div class="operations-legend"><span class="legend-opened">新开事件</span><span class="legend-recovered">恢复事件</span><span class="legend-availability">可用性告警</span></div>
+          <div class="operations-chart" data-overview="timeline" aria-label="告警与可用性活动分布"></div>
+          <div class="operations-axis" data-overview="axis"></div>
+          <p class="operations-chart-note" data-overview="bucket" aria-live="polite"></p>
+        </section>
+      </section>
+      <section id="legacy-overview" data-view="overview" hidden>
+      <section class="summary" aria-label="总览">
         <div class="stat"><span>纳管实例</span><strong id="asset-count">0</strong></div>
         <div class="stat"><span id="healthy-label">采集正常</span><strong id="healthy-count">0</strong></div>
         <div class="stat"><span>开放事件</span><strong id="event-count">0</strong></div>
       </section>
-      <div class="grid overview-grid" data-view="overview">
+      <div class="grid overview-grid">
         <section class="panel"><div class="section-head"><div><h2>待处理事件</h2></div><button type="button" class="ghost" data-open-view="incidents">全部事件</button></div><div id="overview-events" class="list"></div></section>
         <section class="panel"><div class="section-head"><h2>集群健康</h2><button type="button" class="ghost" data-open-view="monitoring">进入监控</button></div>
           <div id="overview-assets" class="list"></div>
-          <div id="overview-fleet" hidden>
-            <form id="fleet-filters" class="asset-filters">
-              <input name="q" type="search" maxlength="128" aria-label="集群或成员名称" placeholder="集群或成员名称">
-              <select name="status" aria-label="集群状态"><option value="">全部状态</option><option value="incident">有异常</option><option value="coverage">采集不完整</option><option value="healthy">已观测健康</option></select>
-              <select name="runtime" aria-label="运行形态"><option value="">全部运行形态</option><option value="linux">Linux</option><option value="k8s">Kubernetes</option><option value="managed">托管 PG</option></select>
-              <select name="major" aria-label="PostgreSQL 大版本"><option value="0">全部 PG 版本</option><option>14</option><option>15</option><option>16</option><option>17</option><option>18</option><option>19</option></select>
-              <input name="environment" maxlength="26" aria-label="环境" placeholder="环境，例如生产">
-              <input name="tag" maxlength="21" aria-label="标签" placeholder="标签，例如订单">
-              <button type="submit" class="ghost">筛选</button>
-            </form>
-            <p id="fleet-caption" class="hint" aria-live="polite"></p>
-            <div id="fleet-result" class="monitor-table"></div>
-            <div class="event-page-controls"><button id="fleet-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="fleet-next" type="button" class="ghost small-button" disabled>下一页</button></div>
-          </div>
         </section>
       </div>
+      </section>
       <section id="monitoring-workspace" class="monitor-workspace" data-view="monitoring" aria-label="PostgreSQL 监控工作台" hidden></section>
       <section id="live-workspace" class="live-board" data-view="live" aria-label="实时观测大盘" hidden>
         <header class="live-hero">
