@@ -1,0 +1,99 @@
+name: v2.11 capacity comparison
+on:
+  push:
+    branches: [verify/v2.11.0-capacity]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build exact test versions
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/baseline" v2.6.0
+          git worktree add --detach "$RUNNER_TEMP/candidate" b1bbd452873706a3a2f003285d266e42ddf910eb
+          mkdir -p "$RUNNER_TEMP/load-results"
+          for label in baseline candidate; do
+            (cd "$RUNNER_TEMP/$label"; CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/dbsphere-$label" ./cmd/dbsphere)
+            git -C "$RUNNER_TEMP/$label" rev-parse HEAD > "$RUNNER_TEMP/load-results/$label.sha"
+          done
+      - name: Compare both versions on the same Linux runner
+        run: |
+          set -euo pipefail
+          export DBSPHERE_LOAD_ADMIN_PASSWORD="$(openssl rand -hex 18)"
+          export DBSPHERE_LOAD_MONITOR_PASSWORD="$(openssl rand -hex 18)"
+          export POSTGRES_PASSWORD="$(openssl rand -hex 18)"
+          export DBSPHERE_ADMIN_PASSWORD="$DBSPHERE_LOAD_ADMIN_PASSWORD"
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
+          for secret in "$DBSPHERE_LOAD_ADMIN_PASSWORD" "$DBSPHERE_LOAD_MONITOR_PASSWORD" "$POSTGRES_PASSWORD" "$DBSPHERE_MASTER_KEY"; do echo "::add-mask::$secret"; done
+          docker network create load-fixture >/dev/null
+          docker info --format '{{.NCPU}} CPUs, {{.MemTotal}} bytes' > "$RUNNER_TEMP/load-results/host.txt"
+          for major in 14 16 18; do
+            docker run -d --name "load-pg$major" --network load-fixture -e POSTGRES_PASSWORD "postgres:$major-bookworm" -c shared_preload_libraries=pg_stat_statements >/dev/null
+          done
+          docker run -d --name load-history --network load-fixture -e POSTGRES_PASSWORD -v dbsphere-load-history:/var/lib/postgresql postgres:18-bookworm >/dev/null
+          for name in load-pg14 load-pg16 load-pg18 load-history; do
+            ready=false
+            for n in {1..90}; do
+              if docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null; then ready=true; break; fi
+              sleep 1
+            done
+            "$ready"
+          done
+          for major in 14 16 18; do
+            docker exec "load-pg$major" psql -XAtq -U postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION pg_stat_statements; CREATE ROLE dbsphere_collector LOGIN PASSWORD '$DBSPHERE_LOAD_MONITOR_PASSWORD'; GRANT pg_monitor TO dbsphere_collector"
+          done
+          for label in baseline candidate; do
+            docker exec load-history createdb -U postgres "$label"
+            export DBSPHERE_DATABASE_URL="postgres://postgres:$POSTGRES_PASSWORD@load-history:5432/$label?sslmode=disable"
+            for replica in 1 2; do
+              docker run -d --name "load-app$replica" --network load-fixture -p "127.0.0.1:$((18089+replica)):18090" \
+                --mount "type=bind,source=$RUNNER_TEMP/dbsphere-$label,target=/app/dbsphere,readonly" \
+                -e DBSPHERE_ADMIN_PASSWORD -e DBSPHERE_MASTER_KEY -e DBSPHERE_DATABASE_URL \
+                -e DBSPHERE_HOST=0.0.0.0 -e DBSPHERE_PORT=18090 -e DBSPHERE_ENABLE_GO_COLLECTOR=true \
+                -e DBSPHERE_COLLECT_INTERVAL_SECONDS=30 -e DBSPHERE_COLLECT_WORKERS=16 \
+                --entrypoint /app/dbsphere postgres:18-bookworm >/dev/null
+              ready=false
+              for n in {1..90}; do
+                if curl -fsS "http://127.0.0.1:$((18089+replica))/readyz" >/dev/null 2>&1; then ready=true; break; fi
+                sleep 1
+              done
+              "$ready"
+            done
+            cat > "$RUNNER_TEMP/$label.json" <<JSON
+          {
+            "storeContainer": "load-history",
+            "storeDatabase": "$label",
+            "targets": [
+              {"host":"load-pg14","container":"load-pg14"},
+              {"host":"load-pg16","container":"load-pg16"},
+              {"host":"load-pg18","container":"load-pg18"}
+            ],
+            "site":"http://127.0.0.1:18090",
+            "assetCount":100,
+            "intervalSeconds":30,
+            "durationSeconds":900,
+            "report":"$RUNNER_TEMP/load-results/$label.json"
+          }
+          JSON
+            node scripts/drill-collector-load.mjs "$RUNNER_TEMP/$label.json" || test -s "$RUNNER_TEMP/load-results/$label.json"
+            docker stop --time 20 load-app1 load-app2 >/dev/null
+            docker rm load-app1 load-app2 >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dbsphere-capacity-comparison
+          path: ${{ runner.temp }}/load-results
+          retention-days: 7
