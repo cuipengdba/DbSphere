@@ -3913,6 +3913,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'k8s_state') text = k8sStateText(evidence.payload);
     if (evidence.kind === 'root_cause_candidate') text = `${evidence.payload.hypothesis} · 置信度 ${evidence.payload.confidence}。${evidence.payload.limitation}`;
     if (evidence.kind === 'log_record') text = [evidence.payload.code, evidence.payload.rootReason, evidence.payload.confidence].filter(Boolean).join(' · ');
+    if (evidence.kind === 'log_retest') {
+      const state = { met: '已达标', missed: '未达标', regressed: '性能回退', insufficient: '覆盖不足' };
+      text = [state[evidence.payload.code], '目标 ' + evidence.payload.targetP95Ms + ' ms',
+        evidence.payload.currentP95Ms == null ? '' : '复测 P95 ' + evidence.payload.currentP95Ms + ' ms'].filter(Boolean).join(' · ');
+    }
     if (evidence.kind === 'linux_state') text = evidence.payload.status === 'ok'
       ? `Linux 内存已用 ${evidence.payload.memory?.usedPercent ?? '未知'}%；负载 ${evidence.payload.cpu?.load1 ?? '未知'}`
       : evidence.payload.reason || evidence.payload.status;
@@ -3969,7 +3974,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = evidence.kind === 'log_record' ? '日志原始证据' :
+    const label = evidence.kind === 'log_record' ? '日志原始证据' : evidence.kind === 'log_retest' ? '调优复测' :
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
@@ -3977,6 +3982,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'log_record' && logEvidenceID.test(evidence.payload.batchId || '') && logEvidenceID.test(evidence.payload.recordId || '')) {
       const link = cell('a', '查看原始记录', 'monitor-link');
       link.href = '#logs?' + new URLSearchParams({ batch: evidence.payload.batchId, source: evidence.payload.recordId, incident: event.id });
+      row.append(document.createTextNode(' · '), link);
+    }
+    if (evidence.kind === 'log_retest' && logEvidenceID.test(evidence.payload.batchId || '') && logEvidenceID.test(evidence.payload.caseId || '')) {
+      const link = cell('a', '查看复测记录', 'monitor-link');
+      link.href = '#logs?' + new URLSearchParams({ batch: evidence.payload.batchId, case: evidence.payload.caseId, incident: event.id });
       row.append(document.createTextNode(' · '), link);
     }
     if (external && evidence.payload.url?.startsWith('https://')) {

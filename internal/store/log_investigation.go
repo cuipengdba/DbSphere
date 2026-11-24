@@ -280,7 +280,12 @@ func (s *Postgres) LogInvestigation(ctx context.Context, id string) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	retests, err := queryJSONRows(ctx, tx, `SELECT result||jsonb_build_object('id',id,'createdAt',created_at)
+		FROM log_retests WHERE investigation_id=$1 ORDER BY created_at DESC,id LIMIT 30`, id)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{"id": id, "eventId": event, "diagnosis": diagnoseLog(source),
 		"records": linked, "observedAt": source.Observed, "engine": source.Engine, "version": source.Version,
-		"coverage": strings.TrimSpace(source.Coverage)}, nil
+		"coverage": strings.TrimSpace(source.Coverage), "retests": retests, "targetSQL": source.Kind == "statement" && source.Fingerprint != ""}, nil
 }

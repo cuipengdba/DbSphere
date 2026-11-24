@@ -206,6 +206,21 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 	case len(sections) == 2 && sections[0] == "investigations" && opsUUID.MatchString(sections[1]) && r.Method == http.MethodGet:
 		value, err = pg.LogInvestigation(ctx, sections[1])
 	case len(sections) == 3 && sections[0] == "investigations" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "retests" && r.Method == http.MethodPost:
+		var input storepkg.LogRetestInput
+		if readJSONLimit(w, r, &input, 2048) != nil || !opsUUID.MatchString(input.BaselineBatchID) || !opsUUID.MatchString(input.CurrentBatchID) {
+			err = storepkg.ErrLogInput
+			break
+		}
+		var audit string
+		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
+		if err == nil {
+			value, err = pg.SaveLogRetest(ctx, sections[1], input)
+			if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(status, err)); auditErr != nil {
+				err = auditErr
+			}
+		}
+	case len(sections) == 3 && sections[0] == "investigations" && opsUUID.MatchString(sections[1]) &&
 		sections[2] == "records" && r.Method == http.MethodPost:
 		var input struct{ RecordID string }
 		if readJSONLimit(w, r, &input, 2048) != nil || !opsUUID.MatchString(input.RecordID) {

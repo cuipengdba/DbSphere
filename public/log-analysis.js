@@ -12,6 +12,7 @@
   const formatted = value => typeof value === 'number' ? number.format(value) : '—';
   const changes = { resolved:'已解决', improved:'明显改善', regressed:'性能劣化', new:'新增问题',
     unobserved:'本批次未检出', uncertain:'覆盖不足', stable:'稳定' };
+  const retestStates = { met: '已达标', missed: '未达标', regressed: '性能回退', insufficient: '覆盖不足' };
 
   function element(tag, value, className) {
     const item = document.createElement(tag);
@@ -557,8 +558,96 @@
         row.archiveExpiredAt ? '原文已到期' : button('查看原文', () => run(() => openOriginal(row.id), get('investigation-status')))
       ]), '暂无关联证据。'));
       view.append(scroll);
+      if (data.targetSQL) view.append(retestPanel(data));
       const dialog = get('investigation-dialog');
       if (!dialog.open) dialog.showModal();
+    }
+
+    function retestPanel(investigation) {
+      const panel = element('section', undefined, 'log-report-section');
+      panel.append(element('h3', '调优复测结果'));
+      const batches = [...new Map(investigation.records.map(row => [row.batch, row.batchName]))];
+      if (batches.length > 1) {
+        const form = element('form', undefined, 'log-toolbar');
+        function select(label, name, value) {
+          const wrapper = element('label', label);
+          const field = element('select');
+          field.name = name;
+          options(field, batches, value);
+          wrapper.append(field);
+          return wrapper;
+        }
+        const targetLabel = element('label', '目标 P95（毫秒）');
+        const target = element('input');
+        target.name = 'target';
+        target.type = 'number';
+        target.min = '0.01';
+        target.max = '3600000';
+        target.step = 'any';
+        target.required = true;
+        targetLabel.append(target);
+        const save = element('button', '保存复测结果');
+        save.type = 'submit';
+        form.append(select('基线批次', 'before', batches[0][0]), select('复测批次', 'after', batches.at(-1)[0]), targetLabel, save);
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          const baselineBatchId = form.elements.before.value;
+          const currentBatchId = form.elements.after.value;
+          if (baselineBatchId === currentBatchId) {
+            get('investigation-status').textContent = '请选择两个批次。';
+            return;
+          }
+          save.disabled = true;
+          run(async () => {
+            try {
+              const url = base + 'investigations/' + investigation.id;
+              await api(url + '/retests', 'POST', { baselineBatchId, currentBatchId, targetP95Ms: Number(target.value) });
+              const data = await api(url);
+              if (active && caseId === investigation.id) {
+                showInvestigation(data);
+                get('investigation-status').textContent = '复测结果已保存。';
+              }
+            } finally {
+              save.disabled = false;
+            }
+          }, get('investigation-status'));
+        });
+        panel.append(form);
+      } else {
+        panel.append(element('p', '关联至少两个批次的同 SQL 样本后可保存复测。', 'hint'));
+      }
+      const scroll = element('div', undefined, 'log-scroll');
+      scroll.append(table(['保存时间', '判定依据', '基线 P95', '复测 P95', '目标 P95', '报告'], investigation.retests.map(row => [
+        formatTime(row.createdAt), [retestStates[row.status], row.reason].join(' · '),
+        formatted(row.baseline.p95Ms), formatted(row.current.p95Ms), formatted(row.targetP95Ms),
+        button('下载复测报告', () => downloadRetest(row))
+      ]), '暂无复测记录。'));
+      panel.append(scroll);
+      return panel;
+    }
+
+    function downloadRetest(row) {
+      function evidenceLink(sample) {
+        const url = new URL(location.href);
+        const params = { batch: sample.batchId, source: sample.recordId };
+        if (row.eventId) params.incident = row.eventId;
+        url.hash = 'logs?' + new URLSearchParams(params);
+        return url.href;
+      }
+      const text = [
+        '# DbSphere 调优复测', '', '复测编号 ' + row.id, '调查编号 ' + row.caseId,
+        '事件编号 ' + (row.eventId || '离线调查'), '保存时间 ' + row.createdAt,
+        '判定 ' + retestStates[row.status] + ' · ' + row.reason, '目标 P95 ' + row.targetP95Ms + ' ms', '',
+        '| 样本 | 计时记录数 | P95（毫秒） | 原始证据 |', '| --- | --- | --- | --- |',
+        ...[['基线', row.baseline], ['复测', row.current]].map(([label, sample]) =>
+          '| ' + label + ' | ' + sample.timed + ' | ' + formatted(sample.p95Ms) +
+          ' | [' + sample.recordId + '](' + evidenceLink(sample) + ') |'), ''
+      ].join('\n');
+      const link = element('a');
+      link.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
+      link.download = 'dbsphere-retest-' + row.id + '.md';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1500);
     }
 
     function showUpload(file = '', resume) {

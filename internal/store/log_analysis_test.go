@@ -232,6 +232,20 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if err != nil || !strings.Contains(updatedReport, candidate) {
 		t.Fatalf("adopted record missing from original event: %v", err)
 	}
+	retestInput := LogRetestInput{BaselineBatchID: batch, CurrentBatchID: second, TargetP95MS: 600}
+	decision, err := pg.SaveLogRetest(ctx, caseID, retestInput)
+	if err != nil || decision.(map[string]any)["status"] != "insufficient" {
+		t.Fatalf("small-sample retest should retain coverage reason: %v %v", decision, err)
+	}
+	measurement := idOf(decision, nil)
+	if repeated := idOf(pg.SaveLogRetest(ctx, caseID, retestInput)); repeated != measurement {
+		t.Fatalf("unchanged evidence produced a different retest: %s", repeated)
+	}
+	var results int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM evidence WHERE event_id=$1
+		AND kind='log_retest' AND payload_json->>'retestId'=$2`, *event, measurement).Scan(&results); err != nil || results != 1 {
+		t.Fatalf("retest must appear once on the original event: %d %v", results, err)
+	}
 	hotspot := idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Name: "Application latency", Coverage: "sampled"}))
 	var sample strings.Builder
 	for index, message := range []string{

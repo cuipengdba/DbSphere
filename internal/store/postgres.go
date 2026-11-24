@@ -495,14 +495,17 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateLogInvestigation(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log investigations: %w", err)
 	}
-	if err := migrateLogEventSearch(ctx, tx); err != nil {
-		return fmt.Errorf("migrate incident log search: %w", err)
-	}
 	if err := migrateLogArchiveManagement(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log archive management: %w", err)
 	}
 	if err := migrateLogTasks(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log tasks: %w", err)
+	}
+	if err := migrateLogEventSearch(ctx, tx); err != nil {
+		return fmt.Errorf("migrate incident log search: %w", err)
+	}
+	if err := migrateLogRetests(ctx, tx); err != nil {
+		return fmt.Errorf("migrate log retest results: %w", err)
 	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)

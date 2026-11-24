@@ -578,7 +578,7 @@ func renderEventMarkdown(data eventReportData) string {
 		var payload map[string]any
 		_ = json.Unmarshal(evidence.Payload, &payload)
 		ids := []string{}
-		for _, key := range []string{"sampleId", "ruleId", "code", "recordId", "batchId"} {
+		for _, key := range []string{"sampleId", "ruleId", "code", "recordId", "batchId", "retestId"} {
 			if id, ok := payload[key].(string); ok && id != "" {
 				ids = append(ids, id)
 			}
