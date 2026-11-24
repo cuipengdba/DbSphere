@@ -132,6 +132,10 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .lock-tree li { line-height: 1.65; overflow-wrap: anywhere; }
 .monitor-table table[aria-label="集群成员"] { min-width: 540px; }
 .monitor-breadcrumb { justify-self: start; }
+.monitor-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; margin: 4px 0 10px; font-size: 13px; color: var(--muted); }
+.monitor-path .monitor-link { padding: 4px 0; font-size: inherit; }
+.monitor-path > :not(:first-child)::before { content: '/'; margin-right: 9px; color: var(--muted); }
+.monitor-path [aria-current] { color: var(--text); font-weight: 650; }
 .monitor-plot svg { height: 175px; }
 .monitor-focus-chart .monitor-plot svg { height: 245px; }
 .monitor-plot { cursor: crosshair; }

@@ -354,12 +354,12 @@
   }
 
   function clusterKey(asset) {
-    if (asset.clusterName) return `pg:${asset.clusterName}`;
+    if (asset.clusterName) return `pg:${JSON.stringify([asset.organizationId || '', asset.environment || '', asset.clusterName])}`;
     return `instance:${asset.id}`;
   }
 
   function clusterLabel(asset) {
-    return asset.clusterName || `${asset.name}（独立）`;
+    return asset.clusterName ? [asset.clusterName, asset.environment].filter(Boolean).join(' · ') : `${asset.name}（独立）`;
   }
 
   function renderInfra(snapshot, asset) {
@@ -408,7 +408,7 @@
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
-    let focusAt = null, focusSample = '';
+    let focusAt = null, focusSample = '', overviewReturn = '';
     let changePick = '';
     let waitCapturePick = '', waitCaptureRunning = false;
     let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
@@ -416,6 +416,8 @@
     let rangeEvents = [];
     let memberSeries = new Map();
     const header = el('div', null, 'monitor-controls');
+    const pathNav = el('nav', null, 'monitor-path');
+    pathNav.setAttribute('aria-label', '看板层级');
     const fleet = el('div', null, 'monitor-fleet');
     const overview = el('div', null, 'cluster-overview');
     const charts = el('div', null, 'monitor-layout');
@@ -497,9 +499,9 @@
         update();
         void refreshFleet();
       }), share, shareField, rangeForm);
-    for (const [key, label] of tabs) tablist.append(button(label, () => { mode = key; if (key === 'sql') queryId = ''; change(); }));
-    details.append(button('← 集群总览', backToFleet, 'monitor-link monitor-breadcrumb'), instanceTitle, timeLabel, storageLink, tablist, body);
-    root.append(header, fleet, details);
+    for (const [key, label] of tabs) tablist.append(button(label, () => { freezeWindow(); mode = key; if (key === 'sql') queryId = ''; change(); }));
+    details.append(instanceTitle, timeLabel, storageLink, tablist, body);
+    root.append(header, pathNav, fleet, details);
 
     function validRange(from, to) {
       return Number.isFinite(from) && Number.isFinite(to) && to <= Date.now() && to - from >= minute && to - from <= 43200 * minute;
@@ -517,7 +519,7 @@
         ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''], ['change', mode === 'changes' ? changePick : '', ''],
         ['deviceType', deviceType, ''], ['device', deviceName, ''],
         ['compare', compare ? [...compare].join(',') || 'none' : '', ''],
-        ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), '']
+        ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), ''], ['return', overviewReturn, '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (window) {
         params.set('from', new Date(window.from).toISOString());
@@ -532,6 +534,8 @@
       chooseCluster = !params.has('cluster');
       cluster = params.get('cluster') === 'all' ? '' : params.get('cluster') || '';
       instance = params.get('instance') || '';
+      const returning = params.get('return') || '';
+      overviewReturn = returning.length <= 2048 && /^overview(?:\?|$)/.test(returning) ? returning : '';
       database = params.get('database') || '';
       period = periods.find(([name]) => params.get('period') === name)?.[0] || defaultPeriod;
       mode = tabs.find(([name]) => params.get('tab') === name)?.[0] || 'metrics';
@@ -612,8 +616,15 @@
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; waitCapturePick = ''; }
 
+    function freezeWindow() {
+      if (fixed || !activeWindow) return;
+      const { from, to, bucketMs } = activeWindow;
+      fixed = { from, to, minutes: bucketMs / minute };
+    }
+
     function openCluster(key) {
       if (!assets.some(asset => clusterKey(asset) === key)) return;
+      freezeWindow();
       cluster = key; instance = ''; database = ''; chooseCluster = false; mode = 'metrics';
       replicaAt = null;
       eventAnchor = ''; focusAt = null; focusSample = '';
@@ -626,6 +637,7 @@
     function openInstance(id, topic) {
       const asset = assets.find(item => item.id === id);
       if (!asset) return;
+      freezeWindow();
       if (id !== instance) {
         deviceType = ''; deviceName = '';
         changePick = '';
@@ -643,7 +655,29 @@
       change();
     }
 
-    function backToFleet() { instance = ''; eventAnchor = ''; focusAt = null; focusSample = ''; resetWaitFilters(); resetCatalog(); change(); }
+    function backToFleet() { freezeWindow(); instance = ''; eventAnchor = ''; focusAt = null; focusSample = ''; resetWaitFilters(); resetCatalog(); change(); }
+
+    function showPath(asset, clusterName) {
+      const start = el('a', '全域总览', 'monitor-link');
+      start.href = `#${overviewReturn || 'overview'}`;
+      const steps = [start];
+      const level = (label, action) => steps.push(action ? button(label, action, 'monitor-link') : el('span', label));
+      level(clusterName || '全部集群', asset ? backToFleet : null);
+      if (asset) {
+        level(asset.name, mode === 'metrics' ? null : () => {
+          resetWaitFilters(); resetCatalog(); mode = 'metrics'; change();
+        });
+        if (dbOid && ['catalog', 'sql'].includes(mode)) level(`数据库 OID ${dbOid}`, mode === 'sql' ? () => {
+          mode = 'catalog'; queryId = ''; change();
+        } : null);
+        if (mode !== 'metrics' && (mode !== 'catalog' || !dbOid)) {
+          level(tabs.find(([key]) => key === mode)?.[1], queryId && mode === 'sql' ? () => { queryId = ''; change(); } : null);
+        }
+        if (queryId && mode === 'sql') level(`Query ID ${queryId}`);
+      }
+      steps.at(-1).setAttribute('aria-current', 'location');
+      pathNav.replaceChildren(...steps);
+    }
 
     function health(asset) {
       const status = assetHealth(asset);
@@ -655,7 +689,7 @@
       return finite(values?.connections) && values.maxConnections > 0 ? values.connections * 100 / values.maxConnections : null;
     }
 
-    function eventList(events, title, navigate = openEvent) {
+    function eventList(events, title, navigate = id => openEvent(id, true, route(activeWindow || fixed))) {
       const card = panel(title);
       if (eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
       if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
@@ -1020,8 +1054,11 @@
       body.replaceChildren(charts, hourlyDetails(time, [asset], new Map([[asset.id, series]])), eventList(events, '此实例的问题事件'));
     }
 
-    function openQuery(value) {
+    function openQuery(value, oid = '') {
+      freezeWindow();
       queryId = value;
+      dbOid = oid;
+      objectOid = ''; objectKind = '';
       mode = 'sql';
       change();
     }
@@ -1193,7 +1230,10 @@
       card.append(controls);
       const observed = performance.firstSampleAt && performance.lastSampleAt
         ? `${formatTime(performance.firstSampleAt)} 至 ${formatTime(performance.lastSampleAt)}` : '无采样';
-      card.append(el('p', `来源 pg_stat_statements · ${observed} · ${performance.comparablePairs} 个可比区间`, 'monitor-note'));
+      const provenance = el('p', `来源 pg_stat_statements · ${observed} · ${performance.comparablePairs} 个可比区间` +
+        (performance.databaseOid ? ` · 数据库 OID ${performance.databaseOid}` : ''), 'monitor-note');
+      if (performance.sampleId) provenance.append(' · ', sampleLink(instance, performance.sampleId, 'SQL 原始采样'));
+      card.append(provenance);
       if (!performance.statements.length) {
         card.append(el('p', performance.reason || (queryId ? '该 Query ID 在所选时段没有可比较的执行增量。' :
           '此范围没有可比较的 SQL 执行增量。统计重置、样本缺失和未配置扩展会影响覆盖。'), 'monitor-empty'));
@@ -1203,7 +1243,7 @@
       if (performance.statements.length) {
         card.append(table(['Query ID', '数据库 OID', '角色 OID', '调用/s', '总耗时', '平均耗时', '共享块读', '临时块写', '覆盖时长'],
           performance.statements.map(row => [
-            queryId ? row.queryId : button(row.queryId, () => openQuery(row.queryId), 'monitor-link'),
+            queryId ? row.queryId : button(row.queryId, () => openQuery(row.queryId, dbOid || row.databaseOid), 'monitor-link'),
             row.databaseOid, row.userOid, number(row.callsPerSecond, 2), milliseconds(row.totalExecMs), milliseconds(row.averageExecMs),
             number(row.sharedBlocksRead, 0), number(row.tempBlocksWritten, 0), `${number(row.coveredSeconds)} s`
           ]), 'SQL 区间排行'));
@@ -1215,7 +1255,7 @@
         ['slow-logs', evidence?.entries || []],
         ['sql-plans', (evidence?.plans || []).filter(plan => Date.parse(plan.observedAt) >= time.from && Date.parse(plan.observedAt) < time.to)]
       ]) {
-        for (const item of items.filter(row => !row.database || row.database === evidence.database).slice(0, 8)) {
+        for (const item of items.filter(row => dbOid ? row.database && row.database === evidence.database : !row.database || row.database === evidence.database).slice(0, 8)) {
           const link = el('a', kind === 'slow-logs' ? '慢日志证据' : '执行计划证据', 'monitor-link');
           link.href = `${path}${kind}/${item.id}`;
           link.target = '_blank';
@@ -1710,6 +1750,8 @@
       if (dbOid) {
         const databasePanel = panel(selected?.name || `数据库 OID ${dbOid}`);
         if (!selected) databasePanel.append(el('p', '此库缺少末次采样。保留历史观测。', 'monitor-note'));
+        databasePanel.append(button('查看此库 SQL', () => openQuery('', dbOid), 'monitor-link'),
+          el('p', 'pg_stat_database · 吞吐和行操作按秒折算 · 临时文件与死锁为区间增量 · 连接与容量为观测值', 'monitor-note'));
         const rows = data.series.map(row => ({ ...row,
           writesPerSecond: [row.rates?.rowsInserted, row.rates?.rowsUpdated, row.rates?.rowsDeleted].every(finite)
             ? row.rates.rowsInserted + row.rates.rowsUpdated + row.rates.rowsDeleted : null,
@@ -1764,6 +1806,7 @@
     }
 
     function chooseDatabase(oid, selectedObject = '', kind = '') {
+      freezeWindow();
       dbOid = oid; objectOid = selectedObject; objectKind = kind; change();
     }
 
@@ -2316,6 +2359,7 @@
         section = 'sql-window';
         query.set('order', sqlOrder);
         if (queryId) query.set('queryId', queryId);
+        if (dbOid) query.set('dbOid', dbOid);
       }
       if (mode === 'catalog') {
         section = 'catalog';
@@ -2343,7 +2387,7 @@
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
         const showWaitCaptures = ['waits', 'locks'].includes(mode);
-        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture] = await Promise.all([
+        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture, catalog] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
@@ -2354,11 +2398,13 @@
           Promise.all(peers.map(peer => api(`/api/assets/${peer.id}/replication?${topologyQuery}&view=topology`)
             .then(value => ({ asset: peer, observations: value.topology })).catch(() => ({ asset: peer, observations: [] })))),
           showWaitCaptures ? api(`${path}wait-captures`).catch(() => null) : null,
-          showWaitCaptures && waitCapturePick ? api(`${path}wait-captures?id=${encodeURIComponent(waitCapturePick)}`).catch(() => null) : null
+          showWaitCaptures && waitCapturePick ? api(`${path}wait-captures?id=${encodeURIComponent(waitCapturePick)}`).catch(() => null) : null,
+          linkedSQL && dbOid ? api(`${path}catalog?${time.params}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
         time.cursors.clear();
+        time.cursors.add(index => { fleetAt = Math.max(time.from, time.first + index * time.bucketMs); });
         const fragment = document.createDocumentFragment();
         if (eventAnchor) {
           const context = el('div', null, 'monitor-wait-controls');
@@ -2408,7 +2454,12 @@
           }));
           fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context));
         }
-        if (mode === 'sql') fragment.append(rankSQL(data.performance, { ...slow, ...plans, ...traces, database: asset.database, baseline: prior?.performance }, path, time));
+        if (mode === 'sql') {
+          const observedDB = catalog?.snapshot?.databases?.data?.databases?.find(row => row.oid === dbOid);
+          const evidence = { ...slow, ...plans, database: dbOid ? observedDB?.name : asset.database,
+            traces: !dbOid || observedDB?.connected ? traces?.traces : [], baseline: prior?.performance };
+          fragment.append(rankSQL(data.performance, evidence, path, time));
+        }
         if (mode === 'locks') fragment.append(lockPanel(asset, data, time));
         if (showWaitCaptures && captures) fragment.append(waitCapturePanel(asset, captures.captures || [], capture, events));
         if (mode === 'replication') fragment.append(replicationPanel(asset, replication, data.series, time, events,
@@ -2420,7 +2471,7 @@
         if ((mode !== 'metrics' && mode !== 'changes') || waits?.buckets.some(bucket => bucket.observed > 0))
           fragment.append(eventList(events, '此实例的问题事件'));
         body.replaceChildren(fragment);
-        const marker = mode === 'waits' && lockAt != null ? lockAt : focusAt;
+        const marker = mode === 'waits' && lockAt != null ? lockAt : focusAt ?? fleetAt;
         if (marker != null && marker >= time.from && marker < time.to) {
           const index = Math.floor((marker - time.first) / time.bucketMs);
           for (const cursor of time.cursors) cursor(index);
@@ -2435,6 +2486,7 @@
     function update() {
       if (!visible || !ready) return;
       header.hidden = !enabled;
+      pathNav.hidden = !enabled;
       if (!enabled) {
         details.hidden = true;
         fleet.hidden = false;
@@ -2443,7 +2495,13 @@
         return;
       }
       const clusters = new Map(assets.map(asset => [clusterKey(asset), clusterLabel(asset)]));
-      if (cluster && !clusters.has(cluster)) { cluster = ''; chooseCluster = true; }
+      const incoming = assets.find(asset => asset.id === instance);
+      if (incoming) cluster = clusterKey(incoming);
+      if (cluster && !clusters.has(cluster)) {
+        const previousKeys = new Set(assets.filter(asset => cluster === `pg:${asset.clusterName}`).map(clusterKey));
+        cluster = previousKeys.size === 1 ? [...previousKeys][0] : '';
+        chooseCluster = false;
+      }
       if (chooseCluster && clusters.size) {
         let previous;
         try { previous = localStorage.getItem('dbsphere.lastCluster'); } catch {}
@@ -2462,11 +2520,12 @@
       options(instanceSelect, [['', '集群总览'], ...list.map(item => [item.id, item.name])], instance);
       updatePeriodOptions();
       const time = activeWindow ??= windowFor(period, fixed);
-      time.openEvent = openEvent;
+      time.openEvent = id => openEvent(id, true, route(time));
       time.zoom = zoom;
       const caption = `${formatTime(time.from)} 至 ${formatTime(time.to)} · ${fixed ? '固定范围' : '滚动范围'}`;
       fleet.hidden = !!asset;
       details.hidden = !asset;
+      showPath(asset, clusters.get(cluster));
       if (asset) {
         instanceTitle.textContent = asset.name;
         storageLink.hidden = !['linux', 'k8s'].includes(asset.runtime);
@@ -2481,7 +2540,6 @@
         void load(asset, time);
       } else {
         fleetTime = time;
-        time.openEvent = id => openEvent(id, true, route(time));
         fleetLabel.textContent = caption;
         renderFleet(time);
         void compareTrends(time);
@@ -2561,5 +2619,5 @@
     return graph(title, window, buckets, [], format);
   }
 
-  window.DbSphereMonitoring = { create, historyChart };
+  window.DbSphereMonitoring = { create, historyChart, clusterKey };
 })();

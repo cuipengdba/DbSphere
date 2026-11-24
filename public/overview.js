@@ -70,13 +70,16 @@
       }
       select.value = filters[name] || '';
     }
-    function monitoringPath(asset) {
+    function monitoringPath(asset, clusterOnly = false) {
       const time = lastWindow || window();
-      const params = new URLSearchParams({ from: iso(time.from), to: iso(time.to), cluster: 'all' });
+      const params = new URLSearchParams({ from: iso(time.from), to: iso(time.to), cluster: 'all', return: route(true) });
       if (asset?.runtime === 'mysql') return '#live?' + new URLSearchParams({ asset: asset.id, end: iso(time.to), from: iso(time.from), engine: 'mysql' });
       if (asset) {
-        params.set('instance', asset.id);
-        if (asset.events) params.set('tab', 'waits');
+        params.set('cluster', DbSphereMonitoring.clusterKey({ ...asset, clusterName: asset.cluster }));
+        if (!clusterOnly) {
+          params.set('instance', asset.id);
+          if (asset.events) params.set('tab', 'waits');
+        }
       }
       return '#monitoring?' + params;
     }
@@ -131,7 +134,8 @@
       }));
       if (!data.alerts.length) get('alerts').append(element('p', '当前没有开放告警。', 'empty'));
       const history = new URLSearchParams({ mode: 'history', from: data.from, to: data.to });
-      get('shortcuts').replaceChildren(link('PostgreSQL 看板', monitoringPath()),
+      const selectedCluster = s.clusters === 1 ? data.assets.find(asset => asset.runtime !== 'mysql') : null;
+      get('shortcuts').replaceChildren(link('PostgreSQL 看板', monitoringPath(selectedCluster, true)),
         link('实时观测', `#live?${new URLSearchParams({ from: data.from, end: data.to, organization: filters.organization || '', cluster: filters.cluster || '' })}`),
         link(`主机与容器 · Linux ${s.linux} / K8S ${s.kubernetes}`, '#storage?' + history), link('采集系统', '#settings?section=collector'));
       drawTimeline(data.timeline);

@@ -27,6 +27,10 @@ func (s *Postgres) sqlWindow(ctx context.Context, assetID string, params url.Val
 			return nil, ErrInvalidRange
 		}
 	}
+	databaseOID := params.Get("dbOid")
+	if !validCatalogOID(databaseOID) {
+		return nil, ErrInvalidRange
+	}
 	metric := sqlWindowOrder[params.Get("order")]
 	if params.Get("order") == "" {
 		metric = sqlWindowOrder["time"]
@@ -73,24 +77,30 @@ func (s *Postgres) sqlWindow(ctx context.Context, assetID string, params url.Val
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	ranked, pairs := rankSQLWindow(snapshots, queryID, metric)
+	ranked, pairs := rankSQLWindow(snapshots, queryID, databaseOID, metric)
 	count := len(ranked)
 	if count > 50 {
 		ranked = ranked[:50]
 	}
 	result := map[string]any{"source": "pg_stat_statements", "sampleCount": len(snapshots),
 		"comparablePairs": pairs, "truncated": truncated, "collectionLimited": latest["truncated"] == true,
-		"statements": ranked, "total": count, "latestStatus": latest["status"], "reason": latest["reason"]}
+		"statements": ranked, "total": count, "latestStatus": latest["status"], "reason": latest["reason"], "databaseOid": databaseOID}
 	if len(snapshots) != 0 {
 		result["firstSampleAt"] = snapshots[len(snapshots)-1].At
 		result["lastSampleAt"] = snapshots[0].At
+	}
+	for _, sample := range snapshots {
+		if stringValue(sample.Data["status"]) == "ok" {
+			result["sampleId"] = sample.ID
+			break
+		}
 	}
 	return map[string]any{"performance": result}, nil
 }
 
 // Snapshots are newest first. Adjacent samples across a reset, failure or
 // unknown interval cannot contribute to an observed query rate.
-func rankSQLWindow(snapshots []sqlSnapshot, queryID, metric string) ([]map[string]any, int) {
+func rankSQLWindow(snapshots []sqlSnapshot, queryID, databaseOID, metric string) ([]map[string]any, int) {
 	totals := map[string]map[string]any{}
 	pairs := 0
 	for i := 0; i+1 < len(snapshots); i++ {
@@ -106,6 +116,9 @@ func rankSQLWindow(snapshots []sqlSnapshot, queryID, metric string) ([]map[strin
 		pairs++
 		for _, statement := range sqlStatementRows(after.Data["statements"]) {
 			id := stringValue(statement["queryId"])
+			if databaseOID != "" && stringValue(statement["databaseOid"]) != databaseOID {
+				continue
+			}
 			key := stringValue(statement["fingerprint"])
 			delta := deltas[key]
 			if id == "" || key == "" || (queryID != "" && queryID != id) || delta == nil {

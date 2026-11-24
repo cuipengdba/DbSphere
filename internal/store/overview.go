@@ -81,7 +81,7 @@ SELECT jsonb_build_object(
 		FROM (SELECT DISTINCT cluster_name AS value FROM visible WHERE cluster_name IS NOT NULL
 		AND ($3='' OR organization_id::text=$3) AND ($4='' OR environment=$4)) choices),'[]'),
 	'assets',coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'runtime',runtime,'role',role,
-		'organization',organization,'environment',environment,'cluster',cluster_name,'sampleAt',last_sample_at,
+		'organizationId',organization_id,'organization',organization,'environment',environment,'cluster',cluster_name,'sampleAt',last_sample_at,
 		'freshness',freshness,'unavailable',unavailable,'events',events)
 		ORDER BY priority,organization_id,environment,cluster_name,name,id) FROM page),'[]'),
 	'alerts',coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'assetId',asset_id,'assetName',asset_name,

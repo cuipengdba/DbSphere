@@ -9,13 +9,18 @@ import (
 func TestSQLWindowCountsIdleCoverageAndDoesNotCrossGaps(t *testing.T) {
 	at := time.Now().UTC()
 	sample := func(offset int, reset string, calls, elapsed float64) sqlSnapshot {
-		statement := map[string]any{"queryId": "-234", "fingerprint": "1:2:-234:1"}
+		statement := map[string]any{"queryId": "-234", "fingerprint": "1:2:-234:1", "databaseOid": "1"}
 		for _, field := range sqlCounterFields {
 			statement[field] = float64(0)
 		}
 		statement["calls"], statement["totalExecMs"] = calls, elapsed
+		other := make(map[string]any, len(statement))
+		for field, value := range statement {
+			other[field] = value
+		}
+		other["databaseOid"], other["fingerprint"], other["calls"] = "3", "3:2:-234:1", calls*4
 		return sqlSnapshot{At: at.Add(time.Duration(offset) * time.Second), Data: map[string]any{
-			"status": "ok", "resetAt": reset, "statements": []map[string]any{statement},
+			"status": "ok", "resetAt": reset, "statements": []map[string]any{statement, other},
 		}}
 	}
 	samples := []sqlSnapshot{
@@ -26,7 +31,7 @@ func TestSQLWindowCountsIdleCoverageAndDoesNotCrossGaps(t *testing.T) {
 		sample(10, "reset-A", 2, 40),
 		sample(0, "reset-A", 2, 40),
 	}
-	ranked, pairs := rankSQLWindow(samples, "-234", "callsPerSecond")
+	ranked, pairs := rankSQLWindow(samples, "-234", "1", "callsPerSecond")
 	if pairs != 2 || len(ranked) != 1 || number(ranked[0]["calls"]) != 2 ||
 		number(ranked[0]["totalExecMs"]) != 40 || number(ranked[0]["coveredSeconds"]) != 20 ||
 		math.Abs(number(ranked[0]["callsPerSecond"])-0.1) > 1e-9 {
