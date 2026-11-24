@@ -9,7 +9,11 @@
   const findings = { cache_reread: '缓存回收与重读', writeback: '写回压力', io_limit: '接近 I/O 限流', node_congestion: '节点设备忙碌' };
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const clock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const topics = ['resources', 'containers', 'claims'];
+  const topics = ['resources', 'containers', 'cache', 'claims'];
+  const rangeHours = [0.25, 1, 6, 24, 168];
+  const cacheFields = [['active', '活跃文件页', 'active'], ['inactive', '非活跃文件页', 'write']];
+  const cacheKey = /^[0-9a-f-]{36}:.{0,63}$/i;
+  const dayClock = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const charts = [
     ['块设备读写', 'throughput', [['readBps', '读吞吐', 'blue'], ['writeBps', '写吞吐', 'write']]],
     ['文件缓存变化', 'bytes', [['active', 'Active file', 'active'], ['inactive', 'Inactive file', 'inactive'], ['file', 'File cache', 'blue']]],
@@ -57,6 +61,8 @@
     const get = name => root.querySelector(`[data-storage="${name}"]`);
     let assets = [], result, comparison, poll, active = false, pending = false, generation = 0, focus = null, grafana = false;
     let capacityAt = 0, capacity = [];
+    let cachePins = [], cacheSeries = [], cacheLoadedAt = 0;
+    const cacheViews = new Map();
     let route = { mode: 'live', topic: 'resources', hours: 1, asset: '', container: '', device: '', pvc: '', pvcUid: '', event: '', from: '', to: '' };
     const viewSpecs = [...charts.slice(0, -1).map(spec => ['containers', spec]), ['', charts.at(-1)],
       ...resourceCharts.map(spec => ['resources', spec]), ...claimCharts.map(spec => ['claims', spec])];
@@ -95,6 +101,7 @@
     function routeHash() {
       const params = new URLSearchParams();
       for (const [key, value] of Object.entries(route)) if (value) params.set(key, value);
+      for (const key of cachePins) params.append('watch', key);
       return 'storage?' + params;
     }
 
@@ -103,7 +110,9 @@
       for (const topic of topics) get(topic).setAttribute('aria-pressed', String(route.topic === topic));
       get('range').value = route.from && route.to ? 'custom' : String(route.hours);
       get('dates').hidden = !route.from || !route.to;
-      get('compare-wrap').hidden = route.mode !== 'history';
+      get('compare-wrap').hidden = route.mode !== 'history' || route.topic === 'cache';
+      for (const button of get('cache-ranges').querySelectorAll('[data-hours]'))
+        button.setAttribute('aria-pressed', String(button.dataset.hours === get('range').value));
       if (route.from && route.to) {
         for (const key of ['from', 'to']) {
           const date = new Date(route[key]);
@@ -124,7 +133,7 @@
       const requestedTopic = params.get('topic');
       route = { mode: params.get('mode') === 'history' || custom ? 'history' : 'live',
         topic: topics.includes(requestedTopic) ? requestedTopic : params.get('asset') ? 'containers' : 'resources',
-        hours: [1, 6, 24, 168].includes(Number(params.get('hours'))) ? Number(params.get('hours')) : 1,
+        hours: rangeHours.includes(Number(params.get('hours'))) ? Number(params.get('hours')) : requestedTopic === 'cache' ? 24 : 1,
         asset: uuid.test(params.get('asset') || '') ? params.get('asset') : '',
         container: (params.get('container') || '').slice(0, 63), device: (params.get('device') || '').slice(0, 128),
         pvc: (params.get('pvc') || '').slice(0, 253),
@@ -134,6 +143,9 @@
         event: uuid.test(params.get('event') || '') ? params.get('event') : '',
         from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '' };
       result = comparison = undefined;
+      cachePins = [...new Set(params.getAll('watch').filter(value => cacheKey.test(value) && uuid.test(value.slice(0, 36))))].slice(0, 5);
+      cacheSeries = [];
+      cacheLoadedAt = 0;
       capacityAt = 0; capacity = [];
       refreshOptions();
       settings();
@@ -141,7 +153,9 @@
       const request = generation;
       api('/api/live/integrations').then(integrations => { if (request === generation) { grafana = integrations.grafana; showGrafana(); } }).catch(() => {});
       void load();
-      poll = setInterval(() => { if (route.mode === 'live' && !document.hidden) void load(); }, 5000);
+      poll = setInterval(() => {
+        if (route.mode === 'live' && !document.hidden && (route.topic !== 'cache' || Date.now() - cacheLoadedAt >= 15000)) void load();
+      }, 5000);
     }
 
     function refreshOptions() {
@@ -162,6 +176,18 @@
       const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(),
         container: route.container, device: route.device, pvcUid: route.pvcUid });
       try {
+        if (route.topic === 'cache') {
+          cacheLoadedAt = Date.now();
+          const current = `${route.asset}:${route.container}`;
+          const keys = [...new Set([...cachePins, current])].filter(key => assets.some(asset => asset.id === key.slice(0, 36)));
+          const responses = await Promise.allSettled(keys.map(key => api(`/api/assets/${key.slice(0, 36)}/container-storage?` +
+            new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), container: key.slice(37) }))));
+          if (request !== generation || !active) return;
+          cacheSeries = keys.map((key, index) => ({ key, data: responses[index].value }));
+          result = cacheSeries.find(item => item.key === current)?.data;
+          render();
+          return;
+        }
         const current = params(from, to);
         const forecast = route.pvc && Date.now() - capacityAt >= 60000;
         if (forecast) {
@@ -189,8 +215,9 @@
       if (!active) return;
       generation++;
       pending = false;
+      focus = null;
       capacityAt = 0; capacity = [];
-      if (clear) { result = comparison = undefined; render(); }
+      if (clear) { result = comparison = undefined; cacheSeries = []; render(); }
       settings();
       history.replaceState(null, '', '#' + routeHash());
       void load();
@@ -205,8 +232,9 @@
       const nav = get('grafana');
       nav.hidden = !grafana || !route.asset;
       if (nav.hidden) return;
-      const sections = [['infrastructure', '节点与工作负载'], ['containerIO', '容器磁盘 I/O'], ['containerCache', '文件缓存与内存回收'],
-        ['containerVolumes', '节点与存储卷'], ['containerRCA', '存储等待与根因']];
+      const sections = route.topic === 'cache' ? [['containerCache', '文件缓存与内存回收']] :
+        [['infrastructure', '节点与工作负载'], ['containerIO', '容器磁盘 I/O'], ['containerCache', '文件缓存与内存回收'],
+          ['containerVolumes', '节点与存储卷'], ['containerRCA', '存储等待与根因']];
       nav.replaceChildren(node('strong', 'Grafana 专项'), ...sections.map(([section, title]) => {
         const link = node('a', title);
         link.href = window.DbSphereLive.grafanaPath({ section, asset: route.asset, container: route.container,
@@ -237,6 +265,14 @@
       back.href = '#' + (route.return || 'overview');
       back.textContent = route.return?.startsWith('incidents') ? '返回事件证据' : route.return?.startsWith('monitoring') ? '返回 PostgreSQL 同窗' :
         route.return?.startsWith('live') ? '返回实时观测' : '返回全域总览';
+      root.dataset.topic = route.topic;
+      get('heading').textContent = route.topic === 'cache' ? '文件页缓存' : '主机、容器与存储';
+      get('cache-board').hidden = route.topic !== 'cache';
+      if (route.topic === 'cache') {
+        get('identity').replaceChildren();
+        renderCache();
+        return;
+      }
       for (const view of views) view.card.hidden = !!view.topic && (view.topic !== route.topic ||
         (view.fields[0][0].startsWith('pod') && source !== 'Kubernetes') || (view.topic === 'claims' && !route.pvcUid));
       renderIdentity(asset, latest, sample);
@@ -353,6 +389,80 @@
       requestAnimationFrame(draw);
     }
 
+    function cacheCard(key) {
+      const card = node('article', null, 'storage-chart cache-card');
+      const header = node('header');
+      const title = node('h3');
+      const identity = node('small', '', 'cache-identity');
+      const remove = node('button', '移除', 'ghost small-button');
+      remove.type = 'button';
+      remove.onclick = () => { cachePins = cachePins.filter(item => item !== key); restart(true); };
+      header.append(title, identity, remove);
+      const readings = node('div', null, 'cache-readings');
+      const values = cacheFields.map(([, label, color]) => {
+        const reading = node('div'); reading.dataset.color = color;
+        const value = node('strong', '—');
+        reading.append(node('span', label), value); readings.append(reading);
+        return value;
+      });
+      const canvas = node('canvas'); canvas.setAttribute('role', 'img');
+      const summary = node('p', '暂无样本', 'storage-chart-readout');
+      const source = node('small', '', 'cache-sample');
+      card.append(header, readings, canvas, summary, source);
+      const view = { card, title, identity, remove, values, source, canvas, summary, fields: cacheFields, unit: 'bytes', cache: true };
+      canvas.onpointermove = event => {
+        if (!view.data) return;
+        const prop = Math.max(0, Math.min(1, (event.offsetX - 61) / Math.max(1, canvas.clientWidth - 72)));
+        const start = Date.parse(view.data.from);
+        focus = start + prop * (Date.parse(view.data.to) - start);
+        draw();
+      };
+      canvas.onpointerleave = () => { focus = null; draw(); };
+      return view;
+    }
+
+    function renderCache() {
+      const area = get('cache-tiles');
+      const current = `${route.asset}:${route.container}`;
+      const first = cacheSeries.find(item => item.data)?.data;
+      get('cache-window').textContent = first ? `${formatTime(first.from)} — ${formatTime(first.to)}` : '等待文件缓存采样';
+      get('pin-cache').disabled = !route.asset || cachePins.includes(current) || cachePins.length >= 5;
+      get('only-cache').disabled = !cachePins.length;
+      const identities = new Set();
+      const cards = [];
+      for (const { key, data } of cacheSeries) {
+        const asset = assets.find(row => row.id === key.slice(0, 36));
+        const storage = data?.latest?.storage;
+        const name = key.slice(37) || storage?.primary || '';
+        const identity = `${asset?.id}:${name}`;
+        if (identities.has(identity)) continue;
+        identities.add(identity);
+        const sample = storage?.containers?.[name];
+        const view = cacheViews.get(key) || cacheCard(key);
+        cacheViews.set(key, view);
+        view.data = data;
+        view.title.textContent = name || asset?.name || 'PostgreSQL 容器';
+        view.identity.textContent = [name && asset?.name, storage?.pod, sample?.id?.split('://').at(-1).slice(0, 16)].filter(Boolean).join(' · ');
+        view.remove.hidden = !cachePins.includes(key);
+        view.remove.setAttribute('aria-label', '移除 ' + view.title.textContent);
+        view.canvas.setAttribute('aria-label', `${view.title.textContent} 文件页缓存趋势`);
+        for (let i = 0; i < cacheFields.length; i++) {
+          const amount = sample?.status === 'ok' ? sample.memory?.[cacheFields[i][0] + '_file'] : undefined;
+          view.values[i].textContent = fmt(amount, 'bytes');
+        }
+        view.source.textContent = sample?.observedAt ? `采样 ${formatTime(sample.observedAt)} · ${statusNames[sample.status] || sample.status}` :
+          data ? '此时段没有所选容器的样本' : '暂时无法读取此容器';
+        cards.push(view.card);
+      }
+      for (const [key, view] of cacheViews) if (!cards.includes(view.card)) cacheViews.delete(key);
+      area.dataset.count = String(cards.length);
+      if (!cards.length) area.replaceChildren(node('p', '选择已纳管的容器以查看文件页缓存。', 'storage-empty'));
+      else if (area.children.length !== cards.length || !cards.every((card, index) => area.children[index] === card)) area.replaceChildren(...cards);
+      setStatus(first ? 'ok' : 'unavailable', first ? `${route.mode === 'live' ? '实时' : '历史'} · ${cards.length} 个容器` : '等待采样');
+      showGrafana();
+      requestAnimationFrame(draw);
+    }
+
     function renderIdentity(asset, latest, sample) {
       const storage = latest?.storage, parts = [];
       const add = (label, value) => { if (value) parts.push(node('span', `${label} ${value}`)); };
@@ -377,11 +487,13 @@
 
     function draw() {
       if (!active) return;
-      const rows = result?.buckets || [], prior = comparison?.buckets || [];
-      const start = Date.parse(result?.from), end = Date.parse(result?.to), previousShift = end - start;
       const styles = getComputedStyle(root);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      for (const { canvas, summary, fields, unit } of views) {
+      for (const { canvas, summary, fields, unit, cache, data } of route.topic === 'cache' ? cacheViews.values() : views) {
+        const source = cache ? data : result;
+        const rows = source?.buckets || [], prior = cache ? [] : comparison?.buckets || [];
+        const start = Date.parse(source?.from), end = Date.parse(source?.to), previousShift = end - start;
+        const reading = cache ? 'mean' : 'max';
         const width = canvas.clientWidth, height = canvas.clientHeight;
         if (width < 80 || !height) continue;
         const ctx = canvas.getContext('2d');
@@ -396,29 +508,41 @@
           const value = max * i / 4, line = y(value);
           ctx.beginPath(); ctx.moveTo(plot.left, line); ctx.lineTo(width - 10, line); ctx.stroke();
           ctx.fillText(fmt(value, unit), 2, line + 3, 55);
-          if (start < end) ctx.fillText(clock.format(start + (end - start) * i / 4), Math.min(width - 39, plot.left + plot.width * i / 4), height - 3);
+          if (start < end) {
+            const time = (cache && previousShift >= 24 * hour ? dayClock : clock).format(start + previousShift * i / 4);
+            ctx.fillText(time, Math.min(width - ctx.measureText(time).width, plot.left + plot.width * i / 4), height - 3);
+          }
         }
         for (const [key, , color] of fields) {
           ctx.strokeStyle = styles.getPropertyValue('--store-' + color); ctx.lineWidth = 1.75;
+          if (cache && rows.length) {
+            ctx.fillStyle = ctx.strokeStyle; ctx.globalAlpha = .18;
+            const bar = Math.max(1, Math.min(6, plot.width * source.stepSeconds * 1000 / previousShift));
+            for (const row of rows) {
+              const band = row.series?.[key];
+              if (band?.max > band?.min) ctx.fillRect(x(Date.parse(row.at)) - bar / 2, y(band.max), bar, y(band.min) - y(band.max));
+            }
+            ctx.globalAlpha = 1;
+          }
           for (const [points, shift] of [[rows, 0], [prior, previousShift]]) {
             ctx.setLineDash(shift ? [4, 4] : []); ctx.beginPath();
             let last;
             for (const point of points) {
-              const value = point.series?.[key]?.max, at = Date.parse(point.at) + shift;
+              const value = point.series?.[key]?.[reading], at = Date.parse(point.at) + shift;
               if (!Number.isFinite(value)) { last = undefined; continue; }
-              if (!last || point.identityChanged || point.counterReset || at - last > (result.stepSeconds + 4) * 1500) ctx.moveTo(x(at), y(value));
+              if (!last || point.identityChanged || point.counterReset || at - last > (source.stepSeconds + 4) * 1500) ctx.moveTo(x(at), y(value));
               else ctx.lineTo(x(at), y(value));
               last = at;
             }
             ctx.stroke(); ctx.setLineDash([]);
           }
         }
-        if (Number.isFinite(focus)) {
+        if (Number.isFinite(focus) && start < end) {
           ctx.strokeStyle = styles.getPropertyValue('--live-muted'); ctx.lineWidth = 1;
           ctx.beginPath(); ctx.moveTo(x(focus), plot.top); ctx.lineTo(x(focus), plot.top + plot.height); ctx.stroke();
         }
         const nearest = focus ? rows.reduce((a, b) => !a || Math.abs(Date.parse(b.at) - focus) < Math.abs(Date.parse(a.at) - focus) ? b : a, null) : rows.at(-1);
-        summary.textContent = nearest ? [formatTime(nearest.at), ...fields.map(([key, label]) => `${label} ${fmt(nearest.series?.[key]?.max, unit)}`)].join(' · ') : '暂无样本';
+        summary.textContent = nearest ? [formatTime(nearest.at), ...fields.map(([key, label]) => `${label} ${fmt(nearest.series?.[key]?.[reading], unit)}`)].join(' · ') : '暂无样本';
       }
     }
 
@@ -428,6 +552,20 @@
       restart();
     };
     for (const topic of topics) get(topic).onclick = () => { route.topic = topic; restart(); render(); };
+    get('pin-cache').onclick = () => {
+      const key = `${route.asset}:${route.container}`;
+      if (!route.asset || cachePins.includes(key) || cachePins.length >= 5) return;
+      cachePins.push(key);
+      restart();
+      renderCache();
+    };
+    get('only-cache').onclick = () => { cachePins = []; restart(true); };
+    for (const button of get('cache-ranges').querySelectorAll('[data-hours]')) button.onclick = () => {
+      if (button.dataset.hours === 'custom') { get('dates').hidden = false; get('from').focus(); return; }
+      route.hours = Number(button.dataset.hours);
+      route.from = route.to = '';
+      restart(true);
+    };
     for (const key of ['asset', 'container', 'device']) get(key).onchange = () => {
       route[key] = get(key).value;
       if (key === 'asset') { route.event = route.container = route.device = route.pvc = route.pvcUid = ''; }
@@ -451,7 +589,9 @@
       else if (root.requestFullscreen) void root.requestFullscreen().catch(() => {});
     };
     document.addEventListener('fullscreenchange', () => get('full').setAttribute('aria-pressed', String(document.fullscreenElement === root)));
-    new ResizeObserver(draw).observe(get('charts'));
+    const resize = new ResizeObserver(draw);
+    resize.observe(get('charts'));
+    resize.observe(get('cache-tiles'));
     new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     return { show, setAssets(value) { assets = value; if (active) { refreshOptions(); void load(); } } };
   }

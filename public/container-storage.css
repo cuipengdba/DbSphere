@@ -76,3 +76,23 @@ body[data-active-view="storage"] .workspace-heading { display: none; }
 .storage-specialty strong { margin-right: 6px; }
 @media (max-width: 1250px) { .storage-grid { grid-template-columns: 1fr; } .storage-inspector { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 750px) { .storage-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .storage-plots, .storage-inspector { grid-template-columns: 1fr; } .storage-hero { flex-direction: column; } }
+.storage-board[data-topic="cache"] :is(.storage-stats, .storage-grid, .storage-timeline, .storage-device-field, .storage-range-field) { display: none; }
+.cache-board { display: grid; gap: 13px; }
+.cache-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.cache-legend { display: flex; flex-wrap: wrap; gap: 14px; font: 13px ui-monospace, monospace; }
+.cache-legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--stat); }
+.cache-legend span::before { content: ''; width: 16px; height: 2px; background: var(--stat); }
+.cache-selection, .cache-note, .cache-sample { color: var(--live-muted); font-size: .78rem; }
+.cache-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cache-tiles[data-count="1"] { grid-template-columns: minmax(0, 1fr); }
+.cache-card { display: grid; gap: 10px; padding: clamp(13px, 1.6vw, 22px); }
+.cache-card h3 { font-size: clamp(18px, 1.7vw, 27px); overflow-wrap: anywhere; }
+.cache-identity { color: var(--live-muted); overflow-wrap: anywhere; }
+.cache-readings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block: 1px solid var(--live-line); padding: 12px 0; }
+.cache-readings > div { display: grid; gap: 6px; min-width: 0; }
+.cache-readings > div + div { padding-left: 12px; border-left: 1px solid var(--live-line); }
+.cache-readings span { color: var(--live-muted); font-size: .82rem; }
+.cache-readings strong { font-size: clamp(24px, 2.5vw, 42px); color: var(--stat); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cache-card canvas { height: clamp(180px, 24vh, 305px); }
+.cache-note { margin: 0; }
+@media (max-width: 840px) { .cache-tiles { grid-template-columns: minmax(0, 1fr); } }

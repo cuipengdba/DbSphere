@@ -161,22 +161,36 @@
       </section>
       <section id="container-storage" class="live-board storage-board" data-view="storage" hidden>
         <header class="storage-hero">
-          <div><a class="storage-back" data-storage="back" href="#overview">返回全域总览</a><h2>主机、容器与存储</h2><p data-storage="context">选择要查看的数据库资产。</p></div>
+          <div><a class="storage-back" data-storage="back" href="#overview">返回全域总览</a><h2 data-storage="heading">主机、容器与存储</h2><p data-storage="context">选择要查看的数据库资产。</p></div>
           <div class="storage-actions"><span data-storage="status" role="status">等待采样</span><button type="button" data-storage="full" aria-pressed="false">全屏</button></div>
         </header>
         <div class="storage-toolbar">
           <div class="storage-switch" aria-label="观测模式"><button type="button" data-storage="live">实时监控</button><button type="button" data-storage="history">历史分析</button></div>
           <label>数据库资产<select data-storage="asset" aria-label="数据库资产"></select></label>
           <label>容器<select data-storage="container" aria-label="容器"></select></label>
-          <label>块设备<select data-storage="device" aria-label="块设备"></select></label>
-          <label>时间范围<select data-storage="range" aria-label="时间范围"><option value="1">近 1 小时</option><option value="6">近 6 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="custom">自定义</option></select></label>
+          <label class="storage-device-field">块设备<select data-storage="device" aria-label="块设备"></select></label>
+          <label class="storage-range-field">时间范围<select data-storage="range" aria-label="时间范围"><option value="0.25">近 15 分钟</option><option value="1">近 1 小时</option><option value="6">近 6 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="custom">自定义</option></select></label>
           <form class="storage-dates" data-storage="dates" hidden><label>起始<input data-storage="from" type="datetime-local" required></label><label>结束<input data-storage="to" type="datetime-local" required></label><button type="submit">应用</button></form>
           <label class="storage-compare" data-storage="compare-wrap" hidden><input type="checkbox" data-storage="compare">对比上一时段</label>
         </div>
         <div class="storage-sources">
-          <nav class="storage-switch" aria-label="基础设施专题"><button type="button" data-storage="resources">资源</button><button type="button" data-storage="containers">容器 I/O 与文件缓存</button><button type="button" data-storage="claims">卷与设备</button></nav>
+          <nav class="storage-switch" aria-label="基础设施专题"><button type="button" data-storage="resources">资源</button><button type="button" data-storage="containers">容器 I/O 与文件缓存</button><button type="button" data-storage="cache">文件页缓存</button><button type="button" data-storage="claims">卷与设备</button></nav>
           <nav class="storage-identity" data-storage="identity" aria-label="基础设施身份与采样"></nav>
         </div>
+        <section class="cache-board" data-storage="cache-board" aria-label="文件页缓存容器对比" hidden>
+          <div class="cache-tools">
+            <div class="cache-legend" aria-label="图例"><span data-color="active">active_file</span><span data-color="write">inactive_file</span></div>
+            <div class="storage-switch" data-storage="cache-ranges" aria-label="文件缓存时间范围">
+              <button type="button" data-hours="0.25">15 分钟</button><button type="button" data-hours="1">1 小时</button><button type="button" data-hours="6">6 小时</button><button type="button" data-hours="24">24 小时</button><button type="button" data-hours="168">7 天</button><button type="button" data-hours="custom">自定义</button>
+            </div>
+          </div>
+          <div class="cache-tools cache-selection">
+            <div data-storage="cache-window" role="status"></div>
+            <div class="storage-switch"><button type="button" data-storage="pin-cache">加入并排</button><button type="button" data-storage="only-cache">只看所选</button></div>
+          </div>
+          <div class="cache-tiles" data-storage="cache-tiles"></div>
+          <p class="cache-note">历史曲线显示分桶均值及最小至最大范围，缺采时段留空。</p>
+        </section>
         <div class="storage-stats" data-storage="stats" aria-label="当前采样"></div>
         <div class="storage-grid">
           <div class="storage-plots" data-storage="charts" aria-label="基础设施趋势"></div>
