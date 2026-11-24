@@ -222,6 +222,21 @@
             <button type="button" class="ghost" data-log-close>关闭</button>
           </div>
         </dialog>
+        <dialog data-logs="archive-files-dialog" class="log-dialog log-raw">
+          <h2 data-logs="archive-files-title">归档文件</h2>
+          <label>归档状态 <select data-logs="archive-file-state">
+            <option value="">全部</option><option value="retained">留存中</option>
+            <option value="protected">调查保护</option><option value="unverified">待校验</option>
+            <option value="expired">原文已到期</option>
+          </select></label>
+          <div data-logs="archive-files" class="log-scroll"></div>
+          <p data-logs="archive-files-status" class="hint" role="status"></p>
+          <div class="log-actions">
+            <button type="button" class="ghost" data-logs="archive-files-prev">上一页</button>
+            <button type="button" class="ghost" data-logs="archive-files-next">下一页</button>
+            <button type="button" class="ghost" data-log-close>关闭</button>
+          </div>
+        </dialog>
       </section>
       <section id="wallboard-workspace" class="wallboard" data-view="wallboard" aria-label="资产监控大屏" hidden>
         <header class="wallboard-header">

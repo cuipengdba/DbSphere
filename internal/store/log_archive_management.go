@@ -14,6 +14,14 @@ const logOutstandingLimit = 32 << 30
 
 var ErrLogQuota = errors.New("log upload quota exceeded")
 
+const retainedLogArchive = `f.state IN ('complete','partial','failed') AND f.stored_size>0 AND f.archive_expired_at IS NULL`
+const pinnedLogArchive = `EXISTS(SELECT 1 FROM log_records r JOIN log_investigation_records q ON q.record_id=r.id
+	WHERE r.file_id=f.id)`
+
+func validLogKeepDays(days int) bool {
+	return days == 0 || days >= 7 && days <= 3650
+}
+
 func (s *Postgres) LogUploadStatus(ctx context.Context, file string) (any, error) {
 	var value json.RawMessage
 	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('id',f.id,'batchId',b.id,'state',f.state,'name',f.filename,
@@ -38,7 +46,7 @@ func (s *Postgres) LogArchiveOverview(ctx context.Context) (any, error) {
 }
 
 func (s *Postgres) SetLogArchivePolicy(ctx context.Context, organization string, keepDays int) (any, error) {
-	if keepDays != 0 && (keepDays < 7 || keepDays > 3650) {
+	if !validLogKeepDays(keepDays) {
 		return nil, ErrLogInput
 	}
 	updated, err := s.pool.Exec(ctx, `INSERT INTO log_archive_policies(organization_id,keep_days)
@@ -54,6 +62,68 @@ func (s *Postgres) SetLogArchivePolicy(ctx context.Context, organization string,
 	return s.LogArchiveOverview(ctx)
 }
 
+func (s *Postgres) PreviewLogArchivePolicy(ctx context.Context, organization string, days int) (any, error) {
+	if !validLogKeepDays(days) {
+		return nil, ErrLogInput
+	}
+	var result json.RawMessage
+	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('organizationId',o.id,'keepDays',$3::int,'evaluatedAt',now(),
+		'expiringFiles',stats.expiring,'reclaimableBytes',stats.reclaimable,'protectedFiles',stats.protected,
+		'protectedBytes',stats.protected_size)
+		FROM organizations o CROSS JOIN LATERAL (
+			SELECT count(*) FILTER(WHERE NOT pinned) expiring,
+				coalesce(sum(stored_size) FILTER(WHERE NOT pinned),0) reclaimable,
+				count(*) FILTER(WHERE pinned) protected,
+				coalesce(sum(stored_size) FILTER(WHERE pinned),0) protected_size
+			FROM (SELECT f.stored_size,`+pinnedLogArchive+` AS pinned`+logFileScope+`
+				WHERE p.organization_id=o.id AND $3>0 AND `+retainedLogArchive+`
+					AND f.updated_at<now()-make_interval(days=>$3)) eligible
+		) stats WHERE o.id=$1 AND ($2='' OR o.id::text=$2)`,
+		organization, OrganizationFromContext(ctx), days).Scan(&result)
+	return result, logWriteError(err)
+}
+
+func (s *Postgres) LogArchiveFiles(ctx context.Context, organization, state string, offset int) (any, error) {
+	switch state {
+	case "", "retained", "protected", "unverified", "expired":
+	default:
+		return nil, ErrLogInput
+	}
+	if offset < 0 || offset > 1000000 {
+		return nil, ErrLogInput
+	}
+	org := OrganizationFromContext(ctx)
+	var selected string
+	if err := s.pool.QueryRow(ctx, `SELECT id::text FROM organizations WHERE id=$1 AND ($2='' OR id::text=$2)`,
+		organization, org).Scan(&selected); err != nil {
+		return nil, logWriteError(err)
+	}
+	const limit = 40
+	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',f.id,'batchId',b.id,'batch',b.name,'file',f.filename,
+		'instance',i.name,'project',p.name,'rawBytes',f.raw_size,'storedBytes',f.stored_size,
+		'verifiedAt',f.verified_at,'expiredAt',f.archive_expired_at,'protectionCaseId',pin.id,'updatedAt',f.updated_at)`+logFileScope+`
+		LEFT JOIN LATERAL (
+			SELECT q.investigation_id AS id FROM log_records r JOIN log_investigation_records q ON q.record_id=r.id
+			WHERE r.file_id=f.id ORDER BY q.investigation_id LIMIT 1
+		) pin ON true
+		WHERE p.organization_id=$1 AND ($2='' OR p.organization_id::text=$2) AND
+			CASE $3
+			WHEN 'retained' THEN (`+retainedLogArchive+`)
+			WHEN 'protected' THEN (`+retainedLogArchive+`) AND pin.id IS NOT NULL
+			WHEN 'unverified' THEN (`+retainedLogArchive+`) AND f.verified_at IS NULL
+			WHEN 'expired' THEN f.archive_expired_at IS NOT NULL
+			ELSE (`+retainedLogArchive+`) OR f.archive_expired_at IS NOT NULL END
+		ORDER BY f.created_at DESC,f.id DESC OFFSET $4 LIMIT $5`, selected, org, state, offset, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	more := len(rows) > limit
+	if more {
+		rows = rows[:limit]
+	}
+	return map[string]any{"files": rows, "more": more, "pageSize": limit}, nil
+}
+
 // SweepLogArchives removes one expired raw file or abandoned upload at a time.
 func (s *Postgres) SweepLogArchives(ctx context.Context) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -61,15 +131,14 @@ func (s *Postgres) SweepLogArchives(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback(ctx)
-	var file string
-	err = tx.QueryRow(ctx, `SELECT f.id::text`+logFileScope+
+	var file, organization string
+	err = tx.QueryRow(ctx, `SELECT f.id::text,p.organization_id::text`+logFileScope+
 		`LEFT JOIN log_archive_policies a ON a.organization_id=p.organization_id
-		WHERE (f.state='uploading' AND f.updated_at<now()-interval '7 days')
-		OR (a.keep_days>0 AND f.state IN ('complete','partial','failed') AND f.stored_size>0
+		WHERE ($1='' OR p.organization_id::text=$1) AND ((f.state='uploading' AND f.updated_at<now()-interval '7 days')
+		OR (a.keep_days>0 AND `+retainedLogArchive+`
 			AND f.updated_at<now()-make_interval(days=>a.keep_days)
-			AND NOT EXISTS (SELECT 1 FROM log_records r
-				JOIN log_investigation_records q ON q.record_id=r.id WHERE r.file_id=f.id))
-		ORDER BY f.updated_at,f.id FOR UPDATE OF f SKIP LOCKED LIMIT 1`).Scan(&file)
+			AND NOT `+pinnedLogArchive+`))
+		ORDER BY f.updated_at,f.id FOR UPDATE OF f SKIP LOCKED LIMIT 1`, OrganizationFromContext(ctx)).Scan(&file, &organization)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -81,9 +150,15 @@ func (s *Postgres) SweepLogArchives(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		var pinned bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM log_records r JOIN log_investigation_records q
-			ON q.record_id=r.id WHERE r.file_id=$1)`, file).Scan(&pinned); err != nil || pinned {
+		var keepDays int
+		if err := tx.QueryRow(ctx, `SELECT keep_days FROM log_archive_policies WHERE organization_id=$1 FOR SHARE`,
+			organization).Scan(&keepDays); err != nil {
+			return false, err
+		}
+		var eligible bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM log_files f WHERE f.id=$1
+			AND $2::int>0 AND `+retainedLogArchive+` AND f.updated_at<now()-make_interval(days=>$2)
+			AND NOT `+pinnedLogArchive+`)`, file, keepDays).Scan(&eligible); err != nil || !eligible {
 			return false, err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM log_archive_blocks WHERE file_id=$1", file); err != nil {

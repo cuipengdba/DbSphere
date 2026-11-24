@@ -341,4 +341,72 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if len(tail) == 0 || strings.Contains(string(tail[0]), page.Next.ID) {
 		t.Fatalf("older task page repeated its cursor: %s", tail)
 	}
+	workspace, err := pg.CreateOrganization(ctx, "Log archive retention "+time.Now().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveCtx := WithOrganization(ctx, workspace.ID)
+	defer func() {
+		_, _ = pg.pool.Exec(ctx, "DELETE FROM log_projects WHERE organization_id=$1", workspace.ID)
+		_, _ = pg.pool.Exec(ctx, "DELETE FROM organizations WHERE id=$1", workspace.ID)
+	}()
+	retentionProject := idOf(pg.CreateLogProject(archiveCtx, LogProjectInput{Name: "Retention fixture"}))
+	retentionInstance := idOf(pg.CreateLogInstance(archiveCtx, LogInstanceInput{ProjectID: retentionProject, Name: "Retention instance",
+		Environment: "qa", Engine: "postgres", Version: "18"}))
+	prepareArchive := func(name string) (string, string) {
+		t.Helper()
+		batch := idOf(pg.CreateLogBatch(archiveCtx, LogBatchInput{InstanceID: retentionInstance, Name: name}))
+		file := idOf(pg.CreateLogFile(archiveCtx, batch, LogFileInput{Name: name + ".log", Node: name, Format: "text", Size: int64(len(line))}))
+		if _, err := pg.AppendLogBlock(archiveCtx, file, 0, []byte(line)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.QueueLogFile(archiveCtx, file, nil); err != nil {
+			t.Fatal(err)
+		}
+		if done, err := pg.ProcessNextLogFile(archiveCtx); err != nil || !done {
+			t.Fatalf("parse archive fixture: %v %v", done, err)
+		}
+		result, err := pg.LogRecords(archiveCtx, batch, LogRecordQuery{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pg.pool.Exec(ctx, "UPDATE log_files SET updated_at=now()-interval '9 days' WHERE id=$1", file); err != nil {
+			t.Fatal(err)
+		}
+		return file, idOf(result.(map[string]any)["records"].([]json.RawMessage)[0], nil)
+	}
+	retainedFile, retainedRecord := prepareArchive("protected")
+	dueFile, dueRecord := prepareArchive("eligible")
+	protection := idOf(pg.StartLogInvestigation(archiveCtx, retainedRecord, ""))
+	if _, err := pg.PreviewLogArchivePolicy(outOfScope, workspace.ID, 7); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("archive preview crossed organization boundary: %v", err)
+	}
+	var plan struct{ ExpiringFiles, ProtectedFiles, ReclaimableBytes int }
+	preview, err := pg.PreviewLogArchivePolicy(archiveCtx, workspace.ID, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(preview.(json.RawMessage), &plan); err != nil || plan.ExpiringFiles != 1 || plan.ProtectedFiles != 1 || plan.ReclaimableBytes == 0 {
+		t.Fatalf("retention preview: %+v %v", plan, err)
+	}
+	if _, err := pg.SetLogArchivePolicy(archiveCtx, workspace.ID, 7); err != nil {
+		t.Fatal(err)
+	}
+	if cleaned, err := pg.SweepLogArchives(archiveCtx); err != nil || !cleaned {
+		t.Fatalf("retention policy did not sweep eligible file %s: %v %v", dueFile, cleaned, err)
+	}
+	if _, err := pg.LogOriginal(archiveCtx, dueRecord); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("expired archive still served raw data: %v", err)
+	}
+	if _, err := pg.VerifyLogFile(archiveCtx, retainedFile); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := pg.LogArchiveFiles(archiveCtx, workspace.ID, "protected", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preserved := listed.(map[string]any)["files"].([]json.RawMessage)
+	if len(preserved) != 1 || !strings.Contains(string(preserved[0]), protection) {
+		t.Fatalf("protected archive lookup lost its investigation: %s", preserved)
+	}
 }

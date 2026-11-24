@@ -121,6 +121,7 @@
     let caseId = '', sourceId = '', returnIncident = '';
     let taskRequest = 0, taskNext = null;
     let reportCharts = [];
+    let archiveOrganization = null, archiveOffset = 0, archiveStep = 40, archiveRequest = 0;
     const filters = get('record-filters');
     const repaint = () => { if (active) reportCharts.forEach(chart => chart.draw()); };
     const resize = new ResizeObserver(repaint);
@@ -838,15 +839,38 @@
         days.value = row.keepDays;
         days.required = true;
         days.setAttribute('aria-label', row.name + '原文保留天数');
+        const action = element('div', undefined, 'log-actions');
+        const estimate = element('p', '', 'hint');
         const save = element('button', '保存', 'ghost');
-        policy.append(days, save);
+        let reviewedDays = null;
+        save.disabled = true;
+        days.addEventListener('input', () => {
+          reviewedDays = null;
+          save.disabled = true;
+          estimate.textContent = '';
+        });
+        const preview = button('预览影响', () => {
+          const keepDays = Number(days.value);
+          if (!days.reportValidity() || (keepDays > 0 && keepDays < 7)) {
+            estimate.textContent = '请输入 0 或 7 至 3650 天。';
+            return;
+          }
+          run(async () => {
+            const result = await api(base + 'archive/' + row.organizationId + '/preview?' + new URLSearchParams({ keepDays }));
+            if (Number(days.value) !== keepDays || !policy.isConnected) return;
+            estimate.textContent = ['预计到期 ' + result.expiringFiles + ' 个',
+              '可释放 ' + bytes(result.reclaimableBytes), '调查保护 ' + result.protectedFiles + ' 个（' +
+              bytes(result.protectedBytes) + '）'].join(' · ');
+            reviewedDays = keepDays;
+            save.disabled = false;
+          }, estimate);
+        });
+        action.append(preview, save);
+        policy.append(days, action, estimate);
         policy.addEventListener('submit', event => {
           event.preventDefault();
           const keepDays = Number(days.value);
-          if (keepDays > 0 && keepDays < 7) {
-            status.textContent = '请输入 0 或 7 至 3650 天。';
-            return;
-          }
+          if (keepDays !== reviewedDays || save.disabled) return;
           if (keepDays > 0 && (row.keepDays === 0 || keepDays < row.keepDays) &&
             !confirm('超过新保留期限且未被调查引用的原文将自动清理。继续保存？')) return;
           run(async () => {
@@ -856,13 +880,73 @@
           }, status);
         });
         const ratio = row.rawSize > 0 ? number.format(row.storedSize / row.rawSize * 100) + '%' : '—';
-        return [row.name, bytes(row.rawSize), bytes(row.storedSize), ratio, row.uploading, row.queued, row.expired, policy];
+        return [button(row.name, () => {
+          archiveOrganization = row;
+          archiveOffset = 0;
+          get('archive-file-state').value = '';
+          get('archive-files-title').textContent = row.name + ' · 归档文件';
+          get('archive-files-dialog').showModal();
+          run(loadArchiveFiles, get('archive-files-status'));
+        }), bytes(row.rawSize), bytes(row.storedSize), ratio, row.uploading, row.queued, row.expired, policy];
       });
       get('archive-overview').replaceChildren(
         element('p', '每个组织的上传与待解析任务上限为 ' + data.uploadLimit + ' 个文件 / ' + bytes(data.pendingBytesLimit), 'hint'),
         table(['组织', '留存原文', '归档空间', '压缩后占比', '上传中', '待解析', '已到期', '保留天数'], rows, '暂无组织归档。'));
       if (!dialog.open) dialog.showModal();
     }
+
+    async function loadArchiveFiles() {
+      const request = ++archiveRequest;
+      const selected = archiveOrganization;
+      if (!selected) return;
+      const state = get('archive-file-state').value;
+      const status = get('archive-files-status');
+      status.textContent = '正在读取归档';
+      get('archive-files-prev').disabled = true;
+      get('archive-files-next').disabled = true;
+      const query = new URLSearchParams({ state, offset: archiveOffset });
+      const result = await api(base + 'archive/' + selected.organizationId + '/files?' + query);
+      if (!active || request !== archiveRequest || !get('archive-files-dialog').open) return;
+      get('archive-files').replaceChildren(table(['文件', '批次', '原始 / 归档', '状态', '操作'], result.files.map(row => {
+        const cell = element('div');
+        cell.append(element('strong', row.file), element('small', row.project + ' · ' + row.instance));
+        const action = element('div', undefined, 'log-actions');
+        const link = element('a', row.protectionCaseId ? '查看保护调查' : '查看批次', 'monitor-link');
+        const params = new URLSearchParams({ batch: row.batchId });
+        if (row.protectionCaseId) params.set('case', row.protectionCaseId);
+        link.href = '#logs?' + params;
+        link.addEventListener('click', () => {
+          get('archive-files-dialog').close();
+          get('archive-dialog').close();
+        });
+        action.append(link);
+        if (row.storedBytes > 0 && !row.expiredAt) action.append(button('校验归档', () => run(async () => {
+          await api(base + 'files/' + row.id + '/verify', 'POST');
+          await loadArchiveFiles();
+          status.textContent = '归档校验通过。';
+        }, status)));
+        const state = [row.expiredAt ? '原文已到期' : '留存中', row.protectionCaseId ? '调查保护' : '',
+          row.verifiedAt ? '校验 ' + formatTime(row.verifiedAt) : ''].filter(Boolean).join(' · ');
+        return [cell, row.batch, bytes(row.rawBytes) + ' / ' + bytes(row.storedBytes), state, action];
+      }), '这个范围没有归档文件。'));
+      archiveStep = result.pageSize;
+      get('archive-files-prev').disabled = archiveOffset === 0;
+      get('archive-files-next').disabled = !result.more;
+      status.textContent = '第 ' + (Math.floor(archiveOffset / archiveStep) + 1) + ' 页';
+    }
+
+    get('archive-file-state').addEventListener('change', () => {
+      archiveOffset = 0;
+      run(loadArchiveFiles, get('archive-files-status'));
+    });
+    get('archive-files-prev').addEventListener('click', () => {
+      archiveOffset = Math.max(0, archiveOffset - archiveStep);
+      run(loadArchiveFiles, get('archive-files-status'));
+    });
+    get('archive-files-next').addEventListener('click', () => {
+      archiveOffset += archiveStep;
+      run(loadArchiveFiles, get('archive-files-status'));
+    });
     get('new-project').addEventListener('click', () => run(async () => {
       const form = get('project-form');
       form.reset();

@@ -7,7 +7,7 @@ on:
 
 jobs:
   log-archive-capacity:
-    if: github.ref == 'refs/heads/release/v2.19.0'
+    if: github.ref == 'refs/heads/release/v2.19.0' || github.ref == 'refs/heads/release/v2.24.0'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     services:

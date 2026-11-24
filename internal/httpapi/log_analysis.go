@@ -49,6 +49,26 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 	case path == "archive" && r.Method == http.MethodGet:
 		value, err = pg.LogArchiveOverview(ctx)
 	case len(sections) == 3 && sections[0] == "archive" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "preview" && r.Method == http.MethodGet:
+		days, parseErr := strconv.Atoi(r.URL.Query().Get("keepDays"))
+		if parseErr != nil {
+			err = storepkg.ErrLogInput
+			break
+		}
+		value, err = pg.PreviewLogArchivePolicy(ctx, sections[1], days)
+	case len(sections) == 3 && sections[0] == "archive" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "files" && r.Method == http.MethodGet:
+		query := r.URL.Query()
+		var offset int
+		if raw := query.Get("offset"); raw != "" {
+			offset, err = strconv.Atoi(raw)
+			if err != nil {
+				err = storepkg.ErrLogInput
+				break
+			}
+		}
+		value, err = pg.LogArchiveFiles(ctx, sections[1], query.Get("state"), offset)
+	case len(sections) == 3 && sections[0] == "archive" && opsUUID.MatchString(sections[1]) &&
 		sections[2] == "policy" && r.Method == http.MethodPost:
 		var input struct{ KeepDays int }
 		if readJSONLimit(w, r, &input, 1024) != nil {
