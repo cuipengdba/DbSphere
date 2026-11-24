@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,32 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	batch := idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Name: "Rotation 1", Coverage: "slow"}))
 	line := "2026-11-24 19:10:00.123 UTC [12] app=orders-api LOG: duration: 2100.5 ms statement: select a from orders where code='fixture-private'\n"
 	payload := []byte(strings.Repeat("x", LogArchiveBlockBytes-18) + "\n" + line)
+	abandoned := idOf(pg.CreateLogFile(ctx, batch, LogFileInput{Name: "abandoned.log", Size: int64(len(payload))}))
+	if _, err := pg.AppendLogBlock(ctx, abandoned, 0, payload[:LogArchiveBlockBytes]); err != nil {
+		t.Fatal(err)
+	}
+	taskView, err := pg.LogTasks(ctx, LogTaskQuery{State: "uploading"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := taskView.(map[string]any)["tasks"].([]json.RawMessage)
+	if len(tasks) == 0 || !strings.Contains(string(tasks[0]), abandoned) {
+		t.Fatalf("incomplete upload missing from task queue: %s", tasks)
+	}
+	otherOrg := WithOrganization(ctx, "00000000-0000-4000-8000-000000000002")
+	if _, err := pg.CancelLogUpload(otherOrg, abandoned); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("out-of-scope cancellation: %v", err)
+	}
+	if _, err := pg.CancelLogUpload(ctx, abandoned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.LogUploadStatus(ctx, abandoned); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("cancelled upload still exists: %v", err)
+	}
+	var abandonedBlocks int
+	if err := pg.pool.QueryRow(ctx, "SELECT count(*) FROM log_archive_blocks WHERE file_id=$1", abandoned).Scan(&abandonedBlocks); err != nil || abandonedBlocks != 0 {
+		t.Fatalf("cancelled upload retained %d blocks: %v", abandonedBlocks, err)
+	}
 	upload := func(batch string) string {
 		t.Helper()
 		file := idOf(pg.CreateLogFile(ctx, batch, LogFileInput{Name: "server.log", Node: "node01", Format: "text", Zone: "UTC", Size: int64(len(payload))}))
@@ -71,6 +98,9 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	file := upload(batch)
 	if value, err := pg.QueueLogFile(ctx, file, nil); err != nil || value.(map[string]any)["state"] != "queued" {
 		t.Fatalf("queue: %v %v", value, err)
+	}
+	if _, err := pg.CancelLogUpload(ctx, file); !errors.Is(err, ErrLogConflict) {
+		t.Fatalf("submitted file was cancellable: %v", err)
 	}
 	if processed, err := pg.ProcessNextLogFile(ctx); err != nil || !processed {
 		t.Fatalf("worker: %v %v", processed, err)
@@ -183,5 +213,31 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	archived, err := pg.LogArchiveOverview(ctx)
 	if err != nil || !strings.Contains(string(archived.(map[string]any)["organizations"].([]json.RawMessage)[0]), "storedSize") {
 		t.Fatalf("archive usage: %v %v", archived, err)
+	}
+	for index := range 41 {
+		idOf(pg.CreateLogFile(ctx, batch, LogFileInput{Name: "paging-" + strconv.Itoa(index), Size: 1}))
+	}
+	first, err := pg.LogTasks(ctx, LogTaskQuery{State: "uploading"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawPage, _ := json.Marshal(first)
+	var page struct {
+		Tasks []json.RawMessage
+		Next  struct {
+			ID        string
+			CreatedAt time.Time
+		}
+	}
+	if err := json.Unmarshal(rawPage, &page); err != nil || len(page.Tasks) != 40 || page.Next.ID == "" {
+		t.Fatalf("first task page: %d %v", len(page.Tasks), err)
+	}
+	older, err := pg.LogTasks(ctx, LogTaskQuery{State: "uploading", Before: &page.Next.CreatedAt, BeforeID: page.Next.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := older.(map[string]any)["tasks"].([]json.RawMessage)
+	if len(tail) == 0 || strings.Contains(string(tail[0]), page.Next.ID) {
+		t.Fatalf("older task page repeated its cursor: %s", tail)
 	}
 }

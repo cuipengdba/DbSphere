@@ -118,6 +118,7 @@
     const pendingUploads = new Map();
     let comparing = false, baseline = '', comparisonData, compareRequest = 0;
     let caseId = '', sourceId = '';
+    let taskRequest = 0, taskNext = null;
     let reportCharts = [];
     const filters = get('record-filters');
     const repaint = () => { if (active) reportCharts.forEach(chart => chart.draw()); };
@@ -621,6 +622,62 @@
     get('baseline').addEventListener('change', () => run(() => toggleComparison(true), get('compare-coverage')));
     get('compare-filter').addEventListener('change', renderComparison);
     get('open-health').addEventListener('click', () => run(openHealth));
+    const taskStatus = get('task-status');
+    get('open-tasks').addEventListener('click', () => {
+      get('tasks-dialog').showModal();
+      run(loadTasks, taskStatus);
+    });
+    for (const name of ['task-refresh', 'task-first']) {
+      get(name).addEventListener('click', () => run(loadTasks, taskStatus));
+    }
+    get('task-state').addEventListener('change', () => run(loadTasks, taskStatus));
+    get('task-next').addEventListener('click', () => run(() => loadTasks(taskNext), taskStatus));
+
+    async function loadTasks(before = null) {
+      const request = ++taskRequest;
+      const query = new URLSearchParams({ state: get('task-state').value });
+      if (before) {
+        query.set('before', before.createdAt);
+        query.set('beforeId', before.id);
+      }
+      taskStatus.textContent = '正在读取导入任务';
+      get('task-next').hidden = true;
+      const data = await api(base + 'tasks?' + query);
+      if (!active || !get('tasks-dialog').open || request !== taskRequest) return;
+      const summary = data.summary;
+      const limit = data.organizationScoped ? ' / ' + bytes(data.byteLimit) : ' · 单组织上限 ' + bytes(data.byteLimit);
+      get('task-summary').textContent = [
+        '上传中 ' + summary.uploading, '等待或解析 ' + summary.queued,
+        '预留 ' + bytes(summary.reservedBytes) + limit,
+        summary.oldestQueuedAt ? '最早等待自 ' + formatTime(summary.oldestQueuedAt) : ''
+      ].filter(Boolean).join(' · ');
+      get('tasks').replaceChildren(table(['文件', '项目 · 实例', '批次', '状态', '分块进度', '更新时间', '操作'], data.tasks.map(row => {
+        const link = element('a', row.batch, 'monitor-link');
+        link.href = '#logs?' + new URLSearchParams({ batch: row.batchId });
+        link.addEventListener('click', () => get('tasks-dialog').close());
+        const state = element('div', fileStates[row.state] || row.state);
+        if (row.attempts) state.append(element('small', '自动重试 ' + row.attempts + ' 次'));
+        if (row.reason) state.append(element('small', row.reason));
+        if (row.state === 'queued' && Date.parse(row.nextAttemptAt) > Date.now()) {
+          state.append(element('small', '下次重试 ' + formatTime(row.nextAttemptAt)));
+        }
+        const action = row.state === 'uploading' ? button('取消上传', () => {
+          if (!confirm('取消此上传会释放未提交的分块。继续？')) return;
+          run(async () => {
+            await api(base + 'files/' + row.id + '/cancel', 'POST');
+            if (current === row.batchId) await loadBatch();
+            await loadTasks();
+            taskStatus.textContent = '上传已取消，分块和配额已释放。';
+          }, taskStatus);
+        }) : '—';
+        return [row.filename, [row.project, row.environment, row.instance].join(' · '), link, state,
+          bytes(row.receivedBytes) + ' / ' + bytes(row.expectedBytes), formatTime(row.updatedAt), action];
+      }), '当前范围没有导入任务。'));
+      taskNext = data.next;
+      get('task-next').hidden = !taskNext;
+      get('task-first').hidden = !before;
+      taskStatus.textContent = '';
+    }
     get('open-archive').addEventListener('click', () => run(openArchive));
     get('rebuild').addEventListener('click', event => {
       const trigger = event.currentTarget;

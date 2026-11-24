@@ -85,6 +85,7 @@
           <button type="button" class="ghost" data-logs="refresh">刷新</button>
           <button type="button" class="ghost" data-logs="open-comparison" aria-pressed="false">跨批次对比</button>
           <button type="button" class="ghost" data-logs="open-health">项目健康</button>
+          <button type="button" class="ghost" data-logs="open-tasks">导入任务</button>
         </div>
         <p data-logs="status" class="hint" role="status"></p>
         <section class="panel log-section log-comparison" data-logs="comparison" hidden>
@@ -198,6 +199,26 @@
           <div data-logs="archive-overview" class="log-scroll"></div>
           <p data-logs="archive-status" class="hint" role="status"></p>
           <button type="button" class="ghost" data-log-close>关闭</button>
+        </dialog>
+        <dialog data-logs="tasks-dialog" class="log-dialog log-raw">
+          <h2>日志导入任务</h2>
+          <div class="log-actions">
+            <label>状态 <select data-logs="task-state">
+              <option value="">全部</option><option value="uploading">上传中</option>
+              <option value="queued">等待或解析中</option><option value="failed">失败</option>
+              <option value="partial">部分解析</option><option value="complete">已完成</option>
+              <option value="duplicate">重复导入</option>
+            </select></label>
+            <button type="button" class="ghost" data-logs="task-refresh">刷新</button>
+          </div>
+          <p data-logs="task-summary" class="hint"></p>
+          <div data-logs="tasks" class="log-scroll"></div>
+          <p data-logs="task-status" class="hint" role="status"></p>
+          <div class="log-actions">
+            <button type="button" class="ghost" data-logs="task-first" hidden>返回第一页</button>
+            <button type="button" class="ghost" data-logs="task-next" hidden>下一页</button>
+            <button type="button" class="ghost" data-log-close>关闭</button>
+          </div>
         </dialog>
       </section>
       <section id="wallboard-workspace" class="wallboard" data-view="wallboard" aria-label="资产监控大屏" hidden>

@@ -498,6 +498,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateLogArchiveManagement(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log archive management: %w", err)
 	}
+	if err := migrateLogTasks(ctx, tx); err != nil {
+		return fmt.Errorf("migrate log tasks: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

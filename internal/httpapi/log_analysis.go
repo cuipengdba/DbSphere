@@ -34,6 +34,18 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 	switch {
 	case path == "directory" && r.Method == http.MethodGet:
 		value, err = pg.LogDirectory(ctx)
+	case path == "tasks" && r.Method == http.MethodGet:
+		query := r.URL.Query()
+		filter := storepkg.LogTaskQuery{State: query.Get("state"), BeforeID: query.Get("beforeId")}
+		if before := query.Get("before"); before != "" || filter.BeforeID != "" {
+			at, parseErr := time.Parse(time.RFC3339Nano, before)
+			if parseErr != nil || !opsUUID.MatchString(filter.BeforeID) {
+				err = storepkg.ErrLogInput
+				break
+			}
+			filter.Before = &at
+		}
+		value, err = pg.LogTasks(ctx, filter)
 	case path == "archive" && r.Method == http.MethodGet:
 		value, err = pg.LogArchiveOverview(ctx)
 	case len(sections) == 3 && sections[0] == "archive" && opsUUID.MatchString(sections[1]) &&
@@ -129,6 +141,15 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 		switch {
 		case sections[2] == "status" && r.Method == http.MethodGet:
 			value, err = pg.LogUploadStatus(ctx, sections[1])
+		case sections[2] == "cancel" && r.Method == http.MethodPost:
+			var audit string
+			audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
+			if err == nil {
+				value, err = pg.CancelLogUpload(ctx, sections[1])
+				if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(status, err)); auditErr != nil {
+					err = auditErr
+				}
+			}
 		case sections[2] == "verify" && r.Method == http.MethodPost:
 			value, err = pg.VerifyLogFile(ctx, sections[1])
 		case sections[2] == "blocks" && r.Method == http.MethodPut:
