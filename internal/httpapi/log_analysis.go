@@ -52,6 +52,18 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 		value, err = pg.CreateLogInstance(ctx, input)
 	case path == "batches" && r.Method == http.MethodGet:
 		value, err = pg.LogBatches(ctx, r.URL.Query().Get("instance"))
+	case path == "compare" && r.Method == http.MethodGet:
+		base, current := r.URL.Query().Get("baseline"), r.URL.Query().Get("current")
+		if !opsUUID.MatchString(base) || !opsUUID.MatchString(current) {
+			err = storepkg.ErrLogInput
+			break
+		}
+		value, err = pg.LogComparison(ctx, base, current)
+	case path == "health" && r.Method == http.MethodGet:
+		value, err = pg.LogProjectHealth(ctx, "")
+	case len(sections) == 3 && sections[0] == "projects" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "health" && r.Method == http.MethodGet:
+		value, err = pg.LogProjectHealth(ctx, sections[1])
 	case path == "batches" && r.Method == http.MethodPost:
 		var input storepkg.LogBatchInput
 		if readJSONLimit(w, r, &input, 4096) != nil {

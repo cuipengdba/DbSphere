@@ -93,4 +93,16 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if err != nil || value.(map[string]any)["duplicateBatch"] != batch {
 		t.Fatalf("duplicate did not resolve to original batch: %v %v", value, err)
 	}
+	comparison, err := pg.LogComparison(ctx, batch, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := comparison.(map[string]any)["rows"].([]*logCompareRow)
+	if len(changes) != 1 || changes[0].Status != "unobserved" || changes[0].Baseline.EvidenceID != id {
+		t.Fatalf("comparison lost original evidence: %+v", changes)
+	}
+	health, err := pg.LogProjectHealth(ctx, project)
+	if err != nil || len(health.(map[string]any)["history"].([]logBatchSummary)) != 2 {
+		t.Fatalf("project history: %v %v", health, err)
+	}
 }

@@ -10,6 +10,8 @@
   const safeId = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value || '') ? value : '';
   const bytes = value => value >= 1048576 ? number.format(value / 1048576) + ' MiB' : number.format(value / 1024) + ' KiB';
   const formatted = value => typeof value === 'number' ? number.format(value) : '—';
+  const changes = { resolved:'已解决', improved:'明显改善', regressed:'性能劣化', new:'新增问题',
+    unobserved:'本批次未检出', uncertain:'覆盖不足', stable:'稳定' };
 
   function element(tag, value, className) {
     const item = document.createElement(tag);
@@ -113,6 +115,7 @@
     let directory = { projects: [], instances: [] };
     let active = false, generation = 0, timer, page = 0, current = '', batches = [];
     let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
+    let comparing = false, baseline = '', comparisonData, compareRequest = 0;
     let reportCharts = [];
     const filters = get('record-filters');
     const repaint = () => { if (active) reportCharts.forEach(chart => chart.draw()); };
@@ -121,10 +124,22 @@
     resize.observe(get('report'));
 
     function selectBatch(id) {
+      if (current !== id) {
+        baseline = '';
+        comparing = false;
+      }
       current = safeId(id);
       page = 0;
       filters.reset();
-      if (active) history.replaceState(null, '', '#logs' + (current ? '?batch=' + current : ''));
+      saveSelection();
+    }
+
+    function saveSelection() {
+      if (!active) return;
+      const query = new URLSearchParams();
+      if (current) query.set('batch', current);
+      if (comparing && baseline) query.set('baseline', baseline);
+      history.replaceState(null, '', '#logs' + (query.size ? '?' + query : ''));
     }
 
     function configureDirectory() {
@@ -139,6 +154,7 @@
       options(get('instance'), visible.map(item => [item.id, item.name + ' · ' + item.version]), instance?.id || get('instance').value);
       get('new-instance').disabled = !get('project').value;
       get('new-batch').disabled = !get('instance').value;
+      get('open-health').disabled = !get('project').value;
     }
 
     async function loadDirectory() {
@@ -161,6 +177,8 @@
       clearTimeout(timer);
       get('details').hidden = true;
       get('upload').disabled = true;
+      get('open-comparison').disabled = true;
+      get('comparison').hidden = true;
       if (!instance) {
         options(get('batch'), [], '', '暂无批次');
         get('status').textContent = '先在项目下登记实例，再新建分析批次。';
@@ -171,12 +189,15 @@
       batches = result.batches;
       options(get('batch'), batches.map(item => [item.id, item.name]), current);
       selectBatch(get('batch').value);
+      options(get('baseline'), batches.filter(item => item.id !== current).map(item => [item.id, item.name]), baseline);
+      get('open-comparison').disabled = batches.length < 2;
       if (!current) {
         get('status').textContent = '新建批次后可以上传一组日志。';
         return;
       }
       get('upload').disabled = false;
       await loadBatch();
+      if (comparing && !get('open-comparison').disabled) await toggleComparison(true);
     }
 
     async function loadBatch() {
@@ -210,6 +231,93 @@
       await loadRecords();
       await loadReport();
       if (active && id === current && files.some(file => file.state === 'queued')) timer = setTimeout(() => run(loadBatch), 3200);
+    }
+
+    async function toggleComparison(on = !comparing) {
+      comparing = on;
+      get('open-comparison').setAttribute('aria-pressed', String(on));
+      get('comparison').hidden = !on;
+      if (!on) {
+        saveSelection();
+        return;
+      }
+      baseline = safeId(get('baseline').value);
+      saveSelection();
+      const request = ++compareRequest;
+      get('current-name').textContent = batches.find(item => item.id === current)?.name || '';
+      get('compare-coverage').textContent = '正在对齐两个批次';
+      get('compare-summary').replaceChildren();
+      get('compare-rows').replaceChildren();
+      comparisonData = null;
+      const query = new URLSearchParams({baseline, current});
+      const value = await api(base + 'compare?' + query);
+      if (!active || !comparing || request !== compareRequest) return;
+      comparisonData = value;
+      const score = [value.baseline.health, value.current.health].map(formatted).join(' → ');
+      const windowLabel = batch => [batch.from && formatTime(batch.from), batch.to && formatTime(batch.to)].filter(Boolean).join(' – ');
+      get('compare-coverage').textContent = [
+        windowLabel(value.baseline), windowLabel(value.current), value.coverageReason || '日志口径可比',
+        '健康评分 ' + score, value.limited ? '显示优先级最高的 500 项' : ''
+      ].filter(Boolean).join(' · ');
+      const summary = [
+        ['慢 SQL 改善或解决', value.slowImproved],
+        ['锁等待与死锁记录', (value.baseline.locks + value.baseline.deadlocks) + ' → ' + (value.current.locks + value.current.deadlocks)],
+        ['劣化与新增风险', value.counts.regressed + ' / ' + value.counts.new]
+      ];
+      get('compare-summary').replaceChildren(...summary.map(([label, metric]) => {
+        const card = element('div', undefined, 'log-metric');
+        card.append(element('span', label), element('strong', metric));
+        return card;
+      }));
+      renderComparison();
+    }
+
+    function renderComparison() {
+      const value = comparisonData;
+      if (!value) return;
+      const mode = get('compare-filter').value;
+      const rows = value.rows.filter(row => !mode || row.status === mode);
+      const displayMeasure = (row, key) => row.kind === 'statement' ? row[key]?.p95Ms : row[key]?.perHour;
+      get('compare-rows').replaceChildren(table(['演进状态', '类型与来源', 'SQL 或问题对象', '基线与本次', '变化幅度', '原始证据'], rows.map(row => {
+        const state = element('span', changes[row.status], 'log-change');
+        state.dataset.change = row.status;
+        const label = element('div', undefined, 'log-record');
+        label.append(element(row.kind === 'statement' ? 'code' : 'span', row.label), element('small', row.key.slice(0, 20)));
+        const values = element('div', undefined, 'log-compare-meters');
+        const baseValue = displayMeasure(row, 'baseline'), currentValue = displayMeasure(row, 'current');
+        const max = Math.max(baseValue ?? 0, currentValue ?? 0, 1);
+        const unit = row.kind === 'statement' ? ' ms' : ' 次/小时';
+        for (const [name, numberValue] of [['基线', baseValue], ['本次', currentValue]]) {
+          values.append(element('span', name + ' ' + formatted(numberValue) + (numberValue == null ? '' : unit)));
+          if (numberValue != null) {
+            const meter = element('meter');
+            meter.max = max;
+            meter.value = numberValue;
+            meter.setAttribute('aria-label', name + unit);
+            values.append(meter);
+          }
+        }
+        const delta = baseValue > 0 && currentValue != null ? formatted((currentValue / baseValue - 1) * 100) + '%' : '—';
+        const actions = element('div', undefined, 'log-actions');
+        for (const [name, item] of [['基线', row.baseline], ['本次', row.current]]) {
+          if (item) actions.append(button(name, () => run(() => openOriginal(item.evidenceId))));
+        }
+        return [state, (kinds[row.kind] || row.kind) + ' · ' + (row.application || '未标识'), label, values, delta, actions];
+      }), '当前筛选暂无可对齐的问题。'));
+    }
+
+    async function openHealth() {
+      const data = await api(base + 'health');
+      if (!active) return;
+      const rows = data.history.map(row => {
+        const link = element('a', row.name);
+        link.href = '#logs?batch=' + row.id;
+        return [row.project, link, row.instance, row.health == null ? '覆盖不足' : row.health + ' 分',
+          row.slow, row.errors, row.locks, row.deadlocks, row.from ? formatTime(row.from) : '—'];
+      });
+      get('health-history').replaceChildren(table(['项目', '批次', '实例', '健康评分', '慢 SQL', '错误', '锁等待', '死锁', '开始'],
+        rows, '当前范围暂无分析批次。'));
+      get('health-dialog').showModal();
     }
 
     async function loadRecords() {
@@ -380,6 +488,10 @@
       run(loadBatch);
     });
     get('refresh').addEventListener('click', () => run(loadDirectory));
+    get('open-comparison').addEventListener('click', () => run(toggleComparison, get('compare-coverage')));
+    get('baseline').addEventListener('change', () => run(() => toggleComparison(true), get('compare-coverage')));
+    get('compare-filter').addEventListener('change', renderComparison);
+    get('open-health').addEventListener('click', () => run(openHealth));
     get('new-project').addEventListener('click', () => run(async () => {
       const form = get('project-form');
       form.reset();
@@ -479,6 +591,8 @@
         return;
       }
       current = safeId(params?.get('batch')) || current;
+      baseline = safeId(params?.get('baseline'));
+      comparing = !!baseline;
       run(loadDirectory);
     } };
   }

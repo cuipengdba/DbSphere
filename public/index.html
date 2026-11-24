@@ -83,8 +83,25 @@
           <button type="button" class="ghost" data-logs="new-batch">新建批次</button>
           <button type="button" data-logs="upload">上传日志</button>
           <button type="button" class="ghost" data-logs="refresh">刷新</button>
+          <button type="button" class="ghost" data-logs="open-comparison" aria-pressed="false">跨批次对比</button>
+          <button type="button" class="ghost" data-logs="open-health">项目健康</button>
         </div>
         <p data-logs="status" class="hint" role="status"></p>
+        <section class="panel log-section log-comparison" data-logs="comparison" hidden>
+          <div class="log-comparison-top">
+            <label>基线批次<select data-logs="baseline"></select></label>
+            <span aria-hidden="true">→</span>
+            <div><span>当前批次</span><strong data-logs="current-name"></strong></div>
+          </div>
+          <p class="hint" data-logs="compare-coverage" role="status"></p>
+          <div class="log-metrics" data-logs="compare-summary"></div>
+          <label class="log-compare-filter">筛选变化<select data-logs="compare-filter">
+            <option value="">所有变化</option><option value="resolved">已解决</option><option value="improved">明显改善</option>
+            <option value="regressed">性能劣化</option><option value="new">新增问题</option>
+            <option value="unobserved">本批次未检出</option><option value="uncertain">覆盖不足</option>
+            <option value="stable">稳定</option></select></label>
+          <div data-logs="compare-rows" class="log-scroll"></div>
+        </section>
         <div data-logs="details" hidden>
           <div data-logs="summary" class="log-metrics"></div>
           <p data-logs="coverage" class="hint"></p>
@@ -159,6 +176,12 @@
         </dialog>
         <dialog data-logs="raw-dialog" class="log-dialog log-raw">
           <h2>原始日志上下文</h2><p data-logs="raw-info" class="hint"></p><pre data-logs="raw-text"></pre>
+          <button type="button" class="ghost" data-log-close>关闭</button>
+        </dialog>
+        <dialog data-logs="health-dialog" class="log-dialog log-raw">
+          <h2>项目健康</h2>
+          <p class="hint">评分 v1 以慢 SQL 比例、每小时错误、锁等待与死锁计算扣分。缺采时显示覆盖不足。</p>
+          <div data-logs="health-history" class="log-scroll"></div>
           <button type="button" class="ghost" data-log-close>关闭</button>
         </dialog>
       </section>

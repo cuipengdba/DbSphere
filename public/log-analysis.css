@@ -34,6 +34,16 @@
 .log-report-section > h3 { font-size: .86rem; margin: 4px 0; }
 .log-chain { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .log-chain > span { border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; }
+.log-comparison-top { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; }
+.log-comparison-top label, .log-comparison-top div { display: grid; gap: 5px; font-size: .81rem; color: var(--muted); }
+.log-comparison-top strong { color: var(--text); font-size: .9rem; }
+.log-compare-filter { display: grid; gap: 3px; max-width: 190px; font-size: .76rem; color: var(--muted); }
+.log-compare-meters { display: grid; gap: 4px; min-width: 130px; }
+.log-compare-meters meter { width: 100%; height: 8px; }
+.log-comparison .log-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.log-change { font-weight: 650; }
+.log-change[data-change="resolved"], .log-change[data-change="improved"] { color: var(--accent); }
+.log-change[data-change="regressed"], .log-change[data-change="new"] { color: var(--issue); }
 @media (max-width: 750px) {
   .log-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .log-table th, .log-table td { padding: 6px; }
