@@ -149,7 +149,7 @@
       </section>
       <section id="container-storage" class="live-board storage-board" data-view="storage" hidden>
         <header class="storage-hero">
-          <div><a class="storage-back" href="#live">← 实时观测</a><h2>容器磁盘 I/O 与文件缓存</h2><p data-storage="context">选择 Docker 或 Kubernetes 中的 PostgreSQL。</p></div>
+          <div><a class="storage-back" data-storage="back" href="#overview">返回全域总览</a><h2>主机、容器与存储</h2><p data-storage="context">选择要查看的数据库资产。</p></div>
           <div class="storage-actions"><span data-storage="status" role="status">等待采样</span><button type="button" data-storage="full" aria-pressed="false">全屏</button></div>
         </header>
         <div class="storage-toolbar">
@@ -161,9 +161,13 @@
           <form class="storage-dates" data-storage="dates" hidden><label>起始<input data-storage="from" type="datetime-local" required></label><label>结束<input data-storage="to" type="datetime-local" required></label><button type="submit">应用</button></form>
           <label class="storage-compare" data-storage="compare-wrap" hidden><input type="checkbox" data-storage="compare">对比上一时段</label>
         </div>
+        <div class="storage-sources">
+          <nav class="storage-switch" aria-label="基础设施专题"><button type="button" data-storage="resources">资源</button><button type="button" data-storage="containers">容器 I/O 与文件缓存</button><button type="button" data-storage="claims">卷与设备</button></nav>
+          <nav class="storage-identity" data-storage="identity" aria-label="基础设施身份与采样"></nav>
+        </div>
         <div class="storage-stats" data-storage="stats" aria-label="当前采样"></div>
         <div class="storage-grid">
-          <div class="storage-plots" data-storage="charts" aria-label="容器存储趋势"></div>
+          <div class="storage-plots" data-storage="charts" aria-label="基础设施趋势"></div>
           <aside class="storage-inspector">
             <section><h3>设备热点</h3><div data-storage="devices"></div></section>
             <section><h3>节点与存储卷</h3><div data-storage="volumes"></div></section>

@@ -31,8 +31,8 @@ func writeContainerMetrics(w io.Writer, assetLabels string, raw json.RawMessage)
 			PGIOWait                      *float64
 			CadenceSeconds                float64
 			PVCs                          []struct {
-				Name, Namespace, Phase string
-				Usage                  map[string]any
+				Name, Namespace, Phase, UID string
+				Usage                       map[string]any
 			}
 			Containers map[string]struct {
 				Source, Status          string
@@ -120,7 +120,7 @@ func writeContainerMetrics(w io.Writer, assetLabels string, raw json.RawMessage)
 		if pvc.Name == "" {
 			continue
 		}
-		labels := base + ",pvc=" + quote(pvc.Name)
+		labels := base + ",pvc=" + quote(pvc.Name) + ",pvc_uid=" + quote(pvc.UID)
 		if pvc.Phase == "Bound" {
 			write("pvc_bound", labels, 1)
 		} else if pvc.Phase != "" {

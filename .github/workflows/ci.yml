@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.7.0'
-          previous_sha='033eab2b813b4dcb5203cf4b09cbf2ae9a235d80da42db9bdd39f9561139ca1d'
+          previous_version='2.8.0'
+          previous_sha='ec6d3b891f5a811b7de13f5e19e1e01e922019957dfd247e2439743f4bd8039c'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.7.0'
-          previous_arm_sha='6ce483d81f69495f451c00bd3fda5f08ed77cf7c82d9a279b0cf2e364a8c118a'
+          previous_version='2.8.0'
+          previous_arm_sha='2070c50a9a72a53090c04d203eda9e29f8163d41427c2b2515489c639463708f'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -1422,7 +1422,20 @@ jobs:
           csrf="$(jq -c '{username:"admin",password:.adminPassword}' "$RUNNER_TEMP/dbsphere-kind-credentials.json" |
             curl -fsS -c "$cookie" -H 'Content-Type: application/json' --data-binary @- "$base/api/login" | jq -er .csrf)"
           curl -fsS -b "$cookie" -H "X-CSRF-Token: $csrf" -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId' >/dev/null
-          curl -fsS -b "$cookie" "$base/api/assets/$asset/container-storage" |
+          kubectl -n dbsphere-matrix exec deployment/pg18 -c postgres -- sh -ec '
+            f=$(mktemp "$PGDATA/dbsphere-ci-io.XXXXXX")
+            trap "rm -f -- \"$f\"" EXIT
+            dd if=/dev/zero of="$f" bs=1M count=24 conv=fdatasync status=none'
+          sleep 2
+          curl -fsS -b "$cookie" -H "X-CSRF-Token: $csrf" -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId' >/dev/null
+          history="$RUNNER_TEMP/dbsphere-kind-storage-history.json"
+          curl -fsS -b "$cookie" "$base/api/assets/$asset/container-storage" > "$history"
+          jq -e 'any(.buckets[]; .pods>0)' "$history" >/dev/null
+          jq -er '.latest.storage.pvcs[]|select(.name=="pg18-data")|.uid' "$history" | while IFS= read -r uid; do
+            curl -fsS -b "$cookie" --get --data-urlencode "pvcUid=$uid" "$base/api/assets/$asset/container-storage" |
+              jq -e --arg uid "$uid" '.latest.storage.pvcs | any(.uid==$uid)' >/dev/null
+          done
+          cat "$history" |
             jq -e '.latest.storage | .status=="ok" and .primary=="postgres" and (.podUID|length>0) and
               (.pvcs|any(.name=="pg18-data" and .phase=="Bound")) and
               (.volumeLinks|any(.container=="postgres" and .pvc=="pg18-data" and .status=="claim_verified")) and

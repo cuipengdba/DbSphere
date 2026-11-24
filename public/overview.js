@@ -133,7 +133,7 @@
         return button;
       }));
       if (!data.alerts.length) get('alerts').append(element('p', '当前没有开放告警。', 'empty'));
-      const history = new URLSearchParams({ mode: 'history', from: data.from, to: data.to });
+      const history = new URLSearchParams({ mode: 'history', from: data.from, to: data.to, return: route(true) });
       const selectedCluster = s.clusters === 1 ? data.assets.find(asset => asset.runtime !== 'mysql') : null;
       get('shortcuts').replaceChildren(link('PostgreSQL 看板', monitoringPath(selectedCluster, true)),
         link('实时观测', `#live?${new URLSearchParams({ from: data.from, end: data.to, organization: filters.organization || '', cluster: filters.cluster || '' })}`),

@@ -11,6 +11,8 @@ type PrometheusAsset struct {
 	Connections, MaxConnections, Blocked             *float64
 	ReplicationLag, Transactions, LinuxCPU, LinuxRAM *float64
 	PodReady, PGWaiting, PGSQLFingerprints           *float64
+	LinuxRX, LinuxTX, LinuxDiskRead, LinuxDiskWrite  *float64
+	PodCPU, PodMemory                                *float64
 	MySQLRunning, MySQLLockWaits                     *float64
 	Container                                        json.RawMessage
 }
@@ -27,7 +29,8 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 		if err := rows.Scan(&a.ID, &a.Name, &a.Organization, &a.Cluster, &a.Engine, &a.Runtime,
 			&a.SampleAt, &a.Fresh, &a.OpenEvents, &a.Connections, &a.MaxConnections, &a.Blocked,
 			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
-			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits, &a.Container); err != nil {
+			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits,
+			&a.LinuxRX, &a.LinuxTX, &a.LinuxDiskRead, &a.LinuxDiskWrite, &a.PodCPU, &a.PodMemory, &a.Container); err != nil {
 			return nil, err
 		}
 		samples = append(samples, a)
@@ -63,6 +66,12 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
 		AND jsonb_typeof(raw.metrics_json#>'{mysql,lockWaits}')='array'
 		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END,
+	(raw.metrics_json#>>'{linux,interval,networkReceiveBps}')::float8,
+	(raw.metrics_json#>>'{linux,interval,networkTransmitBps}')::float8,
+	(raw.metrics_json#>>'{linux,interval,diskReadBps}')::float8,
+	(raw.metrics_json#>>'{linux,interval,diskWriteBps}')::float8,
+	(raw.metrics_json#>>'{k8s,resourceMetrics,podUsage,cpuCores}')::float8,
+	(raw.metrics_json#>>'{k8s,resourceMetrics,podUsage,memoryBytes}')::float8,
 	CASE WHEN raw.metrics_json ? 'containerStorage' THEN jsonb_build_object(
 		'storage',raw.metrics_json->'containerStorage','node',raw.metrics_json#>'{linux,deviceRates,disk}',
 		'nodeNumbers',raw.metrics_json#>'{linux,deviceNumbers}',

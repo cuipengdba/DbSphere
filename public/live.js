@@ -16,7 +16,7 @@
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-  function grafanaPath({ asset, organization, cluster, engine, event, container, device, pvc, from, to, section, night }) {
+  function grafanaPath({ asset, organization, cluster, engine, event, container, device, pvc, pvcUid, from, to, section, night }) {
     const pages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
       replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
       containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
@@ -29,8 +29,9 @@
       params.set('var-device', device);
     }
     if (section === 'containerVolumes' && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(pvc || '')) {
-      params.set('var-pvc', pvc.replaceAll('.', '\\.'));
+      params.set('var-pvc', pvc.replaceAll('.', '\\\\.'));
     }
+    if (section === 'containerVolumes' && /^[a-zA-Z0-9_-]{1,128}$/.test(pvcUid || '')) params.set('var-pvc_uid', pvcUid);
     if (finite(from) && from > 0) params.set('from', String(Math.trunc(from)));
     if (finite(to) && to > 0) params.set('to', String(Math.trunc(to)));
     if (night || document.documentElement.dataset.theme === 'dark') params.set('theme', 'dark');

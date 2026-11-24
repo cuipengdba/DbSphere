@@ -427,7 +427,7 @@
     tablist.setAttribute('aria-label', '实例监控专题');
     const body = el('div', null, 'monitor-content');
     const instanceTitle = el('h2', null, 'monitor-instance-title');
-    const storageLink = el('a', '容器 I/O 与文件缓存历史', 'monitor-link monitor-breadcrumb');
+    const storageLink = el('a', '基础设施同窗', 'monitor-link monitor-breadcrumb');
     storageLink.hidden = true;
     const timeLabel = el('div', null, 'monitor-range-caption');
     let activeWindow = null;
@@ -2547,7 +2547,7 @@
       if (asset) {
         instanceTitle.textContent = asset.name;
         storageLink.hidden = !['linux', 'k8s'].includes(asset.runtime);
-        const windowParams = { asset: asset.id, mode: 'history' };
+        const windowParams = { asset: asset.id, mode: 'history', topic: 'resources', return: route(time) };
         if (time.from && time.to) {
           windowParams.from = new Date(time.from).toISOString();
           windowParams.to = new Date(time.to).toISOString();

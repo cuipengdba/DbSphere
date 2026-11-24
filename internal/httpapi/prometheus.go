@@ -100,7 +100,13 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_pg_transactions_total", "PostgreSQL database commits and rollbacks.", "counter", func(a storepkg.PrometheusAsset) *float64 { return a.Transactions }},
 		{"asset_linux_cpu_percent", "Linux CPU use observed by the collector.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxCPU }},
 		{"asset_linux_memory_percent", "Linux memory use observed by the collector.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxRAM }},
+		{"asset_linux_network_receive_bytes_per_second", "Linux network receive rate from the collector interval.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxRX }},
+		{"asset_linux_network_transmit_bytes_per_second", "Linux network transmit rate from the collector interval.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxTX }},
+		{"asset_linux_disk_read_bytes_per_second", "Linux disk read rate from the collector interval.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxDiskRead }},
+		{"asset_linux_disk_write_bytes_per_second", "Linux disk write rate from the collector interval.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.LinuxDiskWrite }},
 		{"asset_k8s_pod_ready", "Pod readiness reported by Kubernetes.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PodReady }},
+		{"asset_k8s_pod_cpu_cores", "Pod CPU cores reported by the Kubernetes resource metrics API.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PodCPU }},
+		{"asset_k8s_pod_memory_bytes", "Pod memory bytes reported by the Kubernetes resource metrics API.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PodMemory }},
 		{"asset_mysql_threads_running", "MySQL running threads from Performance Schema.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLRunning }},
 		{"asset_mysql_lock_waits_observed", "MySQL InnoDB lock waits in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLLockWaits }},
 	} {

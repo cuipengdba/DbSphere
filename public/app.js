@@ -53,7 +53,7 @@ const views = {
   overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
-  storage: ['容器磁盘 I/O 与文件缓存', ''],
+  storage: ['基础设施监控', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
   assets: ['资产与实例', '纳管 PostgreSQL 14–19、瀚高安全版 4.5.9，并试用 MySQL 8.4 只读监控。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
@@ -118,7 +118,8 @@ function setView(route, updateHash = true) {
       if (uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from) {
         if (params.get('origin') === 'storage') {
           const query = new URLSearchParams({asset, event: id, mode: 'history', from: new Date(from).toISOString(), to: new Date(to).toISOString()});
-          for (const key of ['container', 'device', 'pvc']) if (params.get(key)) query.set(key, params.get(key));
+          for (const key of ['container', 'device', 'pvc', 'pvcUid']) if (params.get(key)) query.set(key, params.get(key));
+          if (params.get('pvcUid')) query.set('topic', 'claims');
           back = 'storage?' + query;
         } else back = 'live?' + new URLSearchParams({asset, from: new Date(from).toISOString(), end: new Date(to).toISOString()});
       }

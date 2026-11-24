@@ -33,16 +33,27 @@ api -H 'X-WEBAUTH-USER: admin' "$base/grafana/api/user" |
 echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql; do
+  panels=8
+  if [[ "$topic" == infrastructure ]]; then panels=12; fi
   api "$base/grafana/api/dashboards/uid/dbsphere-$topic" |
-    jq -e --arg uid "dbsphere-$topic" '.dashboard.uid==$uid and (.dashboard.panels|length)==8 and
+    jq -e --arg uid "dbsphere-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and
       (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=event")))' >/dev/null
 done
 echo 'Grafana dashboard provisioning passed for all six topics.'
 for topic in io cache volumes rca; do
+  panels=4
+  if [[ "$topic" == volumes ]]; then panels=5; fi
   api "$base/grafana/api/dashboards/uid/dbsphere-container-$topic" |
-    jq -e --arg uid "dbsphere-container-$topic" '.dashboard.uid==$uid and (.dashboard.panels|length)==4 and
+    jq -e --arg uid "dbsphere-container-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and
       (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=storage")))' >/dev/null
 done
+api "$base/grafana/api/dashboards/uid/dbsphere-container-volumes" |
+  jq -c --arg asset "$asset" '{from:"now-5m",to:"now",queries:([.dashboard.panels[].targets[].expr]
+    | to_entries | map({refId:("V"+(.key|tostring)),range:true,intervalMs:15000,maxDataPoints:100,
+       datasource:{type:"prometheus",uid:"dbsphere-prometheus"},
+       expr:(.value | gsub("\\$\\{asset:raw\\}";$asset) | gsub("\\$\\{[a-z_]+:raw\\}";".*"))}))}' |
+  api -H 'Content-Type: application/json' --data-binary @- "$base/grafana/api/ds/query" |
+  jq -e '.results | length>0 and all(.[]; .error == null and (.status // 200) == 200)' >/dev/null
 echo 'Grafana container storage specialties passed for all four topics.'
 query="$(
   jq -nc --arg asset "$asset" '{from:"now-5m",to:"now",queries:[{refId:"A",range:true,intervalMs:15000,maxDataPoints:100,

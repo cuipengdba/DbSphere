@@ -116,6 +116,10 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	if input.Get("view") == "storage" {
 		view = "storage"
 		output.Set("mode", "history")
+		switch topic := input.Get("topic"); topic {
+		case "resources", "containers", "claims":
+			output.Set("topic", topic)
+		}
 		if id := input.Get("event"); opsUUID.MatchString(id) {
 			output.Set("event", id)
 		}
@@ -136,8 +140,11 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 		if device := input.Get("device"); storageDeviceID.MatchString(device) {
 			output.Set("device", device)
 		}
-		if pvc := strings.ReplaceAll(input.Get("pvc"), `\.`, "."); storageClaimName.MatchString(pvc) {
+		if pvc := strings.NewReplacer(`\\.`, ".", `\.`, ".").Replace(input.Get("pvc")); storageClaimName.MatchString(pvc) {
 			output.Set("pvc", pvc)
+		}
+		if uid := input.Get("pvcUid"); opsUUID.MatchString(uid) {
+			output.Set("pvcUid", uid)
 		}
 	}
 	if asset := input.Get("asset"); opsUUID.MatchString(asset) {

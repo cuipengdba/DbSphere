@@ -8,6 +8,7 @@
   const findings = { cache_reread: '缓存回收与重读', writeback: '写回压力', io_limit: '接近 I/O 限流', node_congestion: '节点设备忙碌' };
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const clock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const topics = ['resources', 'containers', 'claims'];
   const charts = [
     ['块设备读写', 'throughput', [['readBps', '读吞吐', 'blue'], ['writeBps', '写吞吐', 'write']]],
     ['文件缓存变化', 'bytes', [['active', 'Active file', 'active'], ['inactive', 'Inactive file', 'inactive'], ['file', 'File cache', 'blue']]],
@@ -17,6 +18,14 @@
     ['文件重读与回收', 'ops', [['refault', 'Refault', 'inactive'], ['reclaims', '回收', 'active']]],
     ['PostgreSQL I/O 等待', 'count', [['pgIOWait', '等待会话', 'blue']]]
   ];
+  const resourceCharts = [
+    ['节点 CPU 与内存 · node_exporter', 'percent', [['hostCpu', 'CPU', 'blue'], ['hostMemory', '内存', 'inactive']]],
+    ['节点磁盘吞吐 · node_exporter', 'throughput', [['hostRead', '读', 'blue'], ['hostWrite', '写', 'write']]],
+    ['节点网络 · node_exporter', 'throughput', [['hostRx', '接收', 'blue'], ['hostTx', '发送', 'active']]],
+    ['Pod CPU · metrics.k8s.io', 'count', [['podCPU', '核', 'blue']]],
+    ['Pod 内存 · metrics.k8s.io', 'bytes', [['podMemory', '内存', 'inactive']]]
+  ];
+  const claimCharts = [['所选 PVC 容量 · Kubelet', 'bytes', [['pvcUsed', '已用', 'write'], ['pvcCapacity', '容量', 'blue']]]];
 
   function node(tag, text, className) {
     const result = document.createElement(tag);
@@ -47,8 +56,10 @@
     const get = name => root.querySelector(`[data-storage="${name}"]`);
     let assets = [], result, comparison, poll, active = false, pending = false, generation = 0, focus = null, grafana = false;
     let capacityAt = 0, capacity = [];
-    let route = { mode: 'live', hours: 1, asset: '', container: '', device: '', pvc: '', event: '', from: '', to: '' };
-    const views = charts.map(([title, unit, fields]) => {
+    let route = { mode: 'live', topic: 'resources', hours: 1, asset: '', container: '', device: '', pvc: '', pvcUid: '', event: '', from: '', to: '' };
+    const viewSpecs = [...charts.slice(0, -1).map(spec => ['containers', spec]), ['', charts.at(-1)],
+      ...resourceCharts.map(spec => ['resources', spec]), ...claimCharts.map(spec => ['claims', spec])];
+    const views = viewSpecs.map(([topic, [title, unit, fields]]) => {
       const card = node('section', null, 'storage-chart');
       const hdr = node('header');
       hdr.append(node('h3', title));
@@ -77,7 +88,7 @@
         route.to = new Date(Math.min(Date.parse(result.to), focus + duration / 5)).toISOString();
         restart();
       });
-      return { canvas, summary, unit, fields };
+      return { card, canvas, summary, unit, fields, topic };
     });
 
     function routeHash() {
@@ -88,6 +99,7 @@
 
     function settings() {
       for (const mode of ['live', 'history']) get(mode).setAttribute('aria-pressed', route.mode === mode ? 'true' : 'false');
+      for (const topic of topics) get(topic).setAttribute('aria-pressed', String(route.topic === topic));
       get('range').value = route.from && route.to ? 'custom' : String(route.hours);
       get('dates').hidden = !route.from || !route.to;
       get('compare-wrap').hidden = route.mode !== 'history';
@@ -107,11 +119,16 @@
       if (!value) return;
       const start = Date.parse(params.get('from')), end = Date.parse(params.get('to'));
       const custom = Number.isFinite(start) && Number.isFinite(end) && end > start;
+      const back = params.get('return') || '';
+      const requestedTopic = params.get('topic');
       route = { mode: params.get('mode') === 'history' || custom ? 'history' : 'live',
+        topic: topics.includes(requestedTopic) ? requestedTopic : params.get('asset') ? 'containers' : 'resources',
         hours: [1, 6, 24, 168].includes(Number(params.get('hours'))) ? Number(params.get('hours')) : 1,
         asset: uuid.test(params.get('asset') || '') ? params.get('asset') : '',
         container: (params.get('container') || '').slice(0, 63), device: (params.get('device') || '').slice(0, 128),
         pvc: (params.get('pvc') || '').slice(0, 253),
+        pvcUid: (params.get('pvcUid') || '').slice(0, 128),
+        return: back.length <= 3500 && /^(overview|monitoring|live)(?:\?|$)/.test(back) ? back : '',
         event: uuid.test(params.get('event') || '') ? params.get('event') : '',
         from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '' };
       result = comparison = undefined;
@@ -140,7 +157,8 @@
       const endpoint = `/api/assets/${route.asset}/container-storage`;
       const to = route.to ? Date.parse(route.to) : Date.now();
       const from = route.from ? Date.parse(route.from) : to - route.hours * hour;
-      const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(), container: route.container, device: route.device });
+      const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(),
+        container: route.container, device: route.device, pvcUid: route.pvcUid });
       try {
         const current = params(from, to);
         const forecast = route.pvc && Date.now() - capacityAt >= 60000;
@@ -185,12 +203,12 @@
       const nav = get('grafana');
       nav.hidden = !grafana || !route.asset;
       if (nav.hidden) return;
-      const sections = [['containerIO', '容器磁盘 I/O'], ['containerCache', '文件缓存与内存回收'],
+      const sections = [['infrastructure', '节点与工作负载'], ['containerIO', '容器磁盘 I/O'], ['containerCache', '文件缓存与内存回收'],
         ['containerVolumes', '节点与存储卷'], ['containerRCA', '存储等待与根因']];
       nav.replaceChildren(node('strong', 'Grafana 专项'), ...sections.map(([section, title]) => {
         const link = node('a', title);
         link.href = window.DbSphereLive.grafanaPath({ section, asset: route.asset, container: route.container,
-          device: route.device, pvc: route.pvc,
+          device: route.device, pvc: route.pvc, pvcUid: route.pvcUid,
           event: route.event || result?.events?.[0]?.id, from: Date.parse(result?.from), to: Date.parse(result?.to) });
         return link;
       }));
@@ -198,6 +216,7 @@
 
     function render() {
       const latest = result?.latest, storage = latest?.storage;
+      const asset = assets.find(item => item.id === route.asset);
       const containerNames = Object.keys(storage?.containers || {}).sort();
       const containerName = route.container || storage?.primary;
       const sample = storage?.containers?.[containerName];
@@ -205,17 +224,35 @@
       selectOptions(get('container'), [['', 'PostgreSQL 容器'], ...containerNames.map(name => [name, name])], route.container);
       selectOptions(get('device'), [['', '全部可比设备'], ...Object.keys(sample?.devices || {}).sort().map(name => [name, name])], route.device);
       const outdated = route.mode === 'live' && Date.now() - Date.parse(sample?.observedAt) > Math.max(30, 2 * (storage?.cadenceSeconds || 60)) * 1000;
-      const state = outdated ? 'stale' : sample?.status || storage?.status || 'unbound';
+      const resourceState = (asset?.runtime === 'k8s' ? latest?.kubernetes?.status : latest?.host?.status) || 'unbound';
+      const resourceStale = route.mode === 'live' && Date.now() - Date.parse(latest?.at) > Math.max(30, 2 * (storage?.cadenceSeconds || 60)) * 1000;
+      const state = route.topic === 'resources' ? resourceStale ? 'stale' : resourceState :
+        outdated ? 'stale' : sample?.status || storage?.status || 'unbound';
       setStatus(state);
-      get('context').textContent = [storage?.runtime === 'k8s' ? 'Kubernetes' : storage?.runtime === 'docker' ? 'Docker' : '',
-        storage?.namespace, storage?.pod, storage?.node, sample?.source].filter(Boolean).join(' / ') || '选择已接入容器采集的 PostgreSQL。';
+      const source = asset?.runtime === 'k8s' ? 'Kubernetes' : storage?.runtime === 'docker' ? 'Docker' : 'Linux';
+      get('context').textContent = asset ? [asset.name, source, storage?.namespace, storage?.pod, storage?.node || asset.linuxHost].filter(Boolean).join(' / ') : '选择要查看的数据库资产。';
+      const back = get('back');
+      back.href = '#' + (route.return || 'overview');
+      back.textContent = route.return?.startsWith('monitoring') ? '返回 PostgreSQL 同窗' : route.return?.startsWith('live') ? '返回实时观测' : '返回全域总览';
+      for (const view of views) view.card.hidden = !!view.topic && (view.topic !== route.topic ||
+        (view.fields[0][0].startsWith('pod') && source !== 'Kubernetes') || (view.topic === 'claims' && !route.pvcUid));
+      renderIdentity(asset, latest, sample);
       const values = route.device ? sample?.deviceRates?.[route.device] : sample?.rates;
-      const stats = [['读吞吐', values?.readBps, 'throughput', 'blue'], ['写吞吐', values?.writeBps, 'throughput', 'write'],
+      const claim = storage?.pvcs?.find(item => route.pvcUid && item.uid === route.pvcUid);
+      const storageStats = [['读吞吐', values?.readBps, 'throughput', 'blue'], ['写吞吐', values?.writeBps, 'throughput', 'write'],
         ['Active file', sample?.memory?.active_file, 'bytes', 'active'], ['Inactive file', sample?.memory?.inactive_file, 'bytes', 'inactive'],
         ['I/O 压力', sample?.pressure?.io_some_avg10, 'percent', 'write']];
+      const resources = source === 'Kubernetes' ? [['Pod CPU（核）', latest?.kubernetes?.podUsage?.cpuCores, 'count', 'blue'],
+        ['Pod 内存', latest?.kubernetes?.podUsage?.memoryBytes, 'bytes', 'inactive']] :
+        [['节点 CPU', latest?.host?.cpu, 'percent', 'blue'], ['节点内存', latest?.host?.memory, 'percent', 'inactive'],
+          ['1 分钟负载', latest?.host?.load, 'count', 'write']];
+      const claimStats = [['PVC 已用', claim?.usage?.usedBytes, 'bytes', 'write'],
+        ['PVC 容量', claim?.usage?.capacityBytes, 'bytes', 'blue'], ['PVC 使用率', claim?.usage?.usedPercent, 'percent', 'inactive']];
+      const stats = route.topic === 'resources' ? resources : route.topic === 'claims' ? claimStats : storageStats;
       get('stats').replaceChildren(...stats.map(([title, value, unit, color]) => {
         const card = node('div', null, 'storage-stat'); card.dataset.color = color;
-        card.append(node('span', title), node('strong', fmt(value, unit)), node('small', sample?.observedAt ? formatTime(sample.observedAt) : '暂无样本'));
+        const at = route.topic === 'resources' ? latest?.at : route.topic === 'claims' ? claim?.usage?.observedAt : sample?.observedAt;
+        card.append(node('span', title), node('strong', fmt(value, unit)), node('small', at ? formatTime(at) : '暂无样本'));
         return card;
       }));
       const maximum = Math.max(1, ...devices.map(([, d]) => (d.readBps || 0) + (d.writeBps || 0)));
@@ -228,21 +265,23 @@
         button.addEventListener('click', () => { route.device = route.device === device ? '' : device; restart(); });
         return button;
       }) : [node('p', '等待相邻样本计算设备速率。', 'storage-empty')]));
-      const claims = (storage?.pvcs || []).filter(pvc => !route.pvc || pvc.name === route.pvc);
+      const claims = (storage?.pvcs || []).filter(pvc => (!route.pvc || pvc.name === route.pvc) && (!route.pvcUid || pvc.uid === route.pvcUid));
       const forecast = new Map(capacity.map(item => [item.pvcUID, item]));
-      const source = node('p', 'PVC 挂载与节点设备分开核对，卷级 I/O 归属待核验。', 'storage-empty');
-      const volumeNodes = [source];
-      if (route.pvc) {
+      const volumeNodes = [node('p', 'PVC 通过挂载和 UID 核对。设备等待按所在节点统计。', 'storage-empty')];
+      if (route.pvc || route.pvcUid) {
         const clear = node('button', '查看全部 PVC', 'ghost small-button');
         clear.type = 'button';
-        clear.addEventListener('click', () => { route.pvc = ''; restart(); });
+        clear.addEventListener('click', () => { route.pvc = route.pvcUid = ''; restart(); });
         volumeNodes.push(clear);
+        if (!claims.length) volumeNodes.push(node('p', '此时间窗的最新采样未包含所选 PVC UID。', 'storage-empty'));
       }
       for (const pvc of claims) {
         const select = node('button', `${pvc.name} · ${pvc.phase || pvc.status || '未知'} · ${fmt(pvc.usage?.usedPercent, 'percent')}`, 'storage-device');
         select.type = 'button';
         select.setAttribute('aria-pressed', String(route.pvc === pvc.name));
-        select.addEventListener('click', () => { route.pvc = route.pvc === pvc.name ? '' : pvc.name; restart(); });
+        select.addEventListener('click', () => {
+          route.pvc = pvc.name; route.pvcUid = pvc.uid || ''; route.topic = 'claims'; restart();
+        });
         const links = (storage.volumeLinks || []).filter(link => link.pvc === pvc.name);
         const identity = links.map(link => `${link.container} · ${link.status === 'claim_verified' ? '已核对 PVC UID' : '仅挂载声明'}${link.sharedInPod ? ' · 同 Pod 共享' : ''}`).join(' / ');
         const capacity = forecast.get(pvc.uid);
@@ -260,7 +299,9 @@
         if (route.device && route.device !== link.device) continue;
         volumeNodes.push(node('p', `${link.device} → 节点设备 ${link.nodeDevice} · 队列深度 ${fmt(link.queueDepth, 'count')} · ${formatTime(link.to)}`));
       }
-      for (const [dev, rates] of Object.entries(latest?.nodeRates || {}).slice(0, 6)) {
+      const ranked = Object.entries(latest?.nodeRates || {}).sort(([, a], [, b]) => (b.ioSeconds || 0) - (a.ioSeconds || 0));
+      for (const [dev, rates] of ranked.slice(0, 6)) {
+        if (route.device && latest?.nodeNumbers?.[dev]?.number !== route.device) continue;
         const io = (rates.reads || 0) + (rates.writes || 0);
         const ms = io && Number.isFinite(rates.readSeconds) && Number.isFinite(rates.writeSeconds) ? (rates.readSeconds + rates.writeSeconds) * 1000 / io : null;
         volumeNodes.push(node('p', `${dev} · 平均 ${fmt(ms, '')} ms · 忙碌 ${fmt(rates.ioSeconds * 100, 'percent')}`));
@@ -268,7 +309,7 @@
       get('volumes').replaceChildren(...(volumeNodes.length ? volumeNodes : [node('p', '暂无节点设备或 PVC 样本。', 'storage-empty')]));
       const finding = storage?.finding;
       const selectedPrimary = containerName && containerName === storage?.primary;
-      const evidence = [node('p', `I/O 等待会话 ${fmt(storage?.pgIOWait, 'count')}`)];
+      const evidence = [node('p', `PostgreSQL I/O 等待 ${fmt(storage?.pgIOWait ?? result?.buckets?.at(-1)?.series?.pgIOWait?.max, 'count')} 个会话`)];
       if (selectedPrimary && finding?.intervalStart) {
         evidence.push(node('p', `${formatTime(finding.intervalStart)} 至 ${formatTime(finding.observedAt)} · 重读 ${fmt(finding.rates?.refaultPerSecond, 'ops')} · I/O 压力 ${fmt(finding.ioPressure, 'percent')}`, 'storage-empty'));
       }
@@ -281,14 +322,15 @@
       if (latest?.pgIO?.rows) evidence.push(node('p', `pg_stat_io ${latest.pgIO.rows.length} 项 · 计时${latest.pgIO.timing ? '开启' : '关闭'}`));
       get('evidence').replaceChildren(...evidence);
       const buckets = result?.buckets || [];
-      const count = buckets.reduce((sum, row) => sum + row.available, 0);
+      const key = route.topic === 'resources' ? (source === 'Kubernetes' ? 'pods' : 'hosts') : route.topic === 'claims' && route.pvcUid ? 'claims' : 'available';
+      const count = buckets.reduce((sum, row) => sum + (row[key] || 0), 0);
       const total = buckets.reduce((sum, row) => sum + row.samples, 0);
       get('coverage').textContent = total ? `${count}/${total} 有效样本` : '暂无样本';
       const timeline = [];
       for (const event of result?.events || []) {
         const link = node('a', `${formatTime(event.at)}  ${event.title}`);
         link.href = '#incidents?' + new URLSearchParams({ event: event.id, asset: route.asset, origin: 'storage',
-          from: result.from, to: result.to, container: route.container, device: route.device, pvc: route.pvc });
+          from: result.from, to: result.to, container: route.container, device: route.device, pvc: route.pvc, pvcUid: route.pvcUid });
         link.addEventListener('click', click => {
           click.preventDefault(); route.event = event.id;
           if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {});
@@ -306,6 +348,28 @@
       get('events').replaceChildren(...(timeline.length ? timeline : [node('p', '当前时段没有记录到存储相关事件。', 'storage-empty')]));
       showGrafana();
       requestAnimationFrame(draw);
+    }
+
+    function renderIdentity(asset, latest, sample) {
+      const storage = latest?.storage, parts = [];
+      const add = (label, value) => { if (value) parts.push(node('span', `${label} ${value}`)); };
+      add('工作负载', storage?.workload?.name || (typeof storage?.workload === 'string' ? storage.workload : latest?.kubernetes?.owner?.name));
+      add('Pod UID', storage?.podUID);
+      add('Node UID', storage?.nodeUID);
+      add('容器 ID', sample?.id);
+      add('PVC UID', route.pvcUid);
+      if (asset && result?.from && result?.to) {
+        const panel = node('a', '查看环境同窗');
+        panel.href = '#monitoring?' + new URLSearchParams({ instance: asset.id, tab: 'infra', from: result.from, to: result.to });
+        parts.push(panel);
+      }
+      if (asset && latest?.sampleId) {
+        const raw = node('a', '原始采样');
+        raw.href = `/api/assets/${asset.id}/samples/${latest.sampleId}`;
+        raw.target = '_blank'; raw.rel = 'noopener';
+        parts.push(raw);
+      }
+      get('identity').replaceChildren(...parts);
     }
 
     function draw() {
@@ -360,9 +424,10 @@
       if (mode === 'live') { route.from = route.to = ''; route.hours = 1; }
       restart();
     };
+    for (const topic of topics) get(topic).onclick = () => { route.topic = topic; restart(); render(); };
     for (const key of ['asset', 'container', 'device']) get(key).onchange = () => {
       route[key] = get(key).value;
-      if (key === 'asset') { route.event = route.container = route.device = route.pvc = ''; }
+      if (key === 'asset') { route.event = route.container = route.device = route.pvc = route.pvcUid = ''; }
       if (key === 'container') route.device = '';
       restart(true);
     };

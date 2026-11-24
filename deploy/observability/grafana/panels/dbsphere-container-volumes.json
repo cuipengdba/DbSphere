@@ -18,14 +18,14 @@
   "links": [
     {
       "title": "在 DbSphere 查看相同事件和时段",
-      "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}",
+      "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
       "targetBlank": false,
       "type": "link"
     },
     {
       "title": "回到原事件",
       "type": "link",
-      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}"
+      "url": "/grafana/dbsphere-return?view=event&source=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}"
     },
     {
       "title": "DbSphere 专题",
@@ -89,6 +89,18 @@
         "skipUrlSync": false
       },
       {
+        "name": "pvc_uid",
+        "label": "PVC UID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
         "name": "event",
         "label": "事件 ID",
         "type": "textbox",
@@ -126,7 +138,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}",
+              "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
               "targetBlank": false
             }
           ],
@@ -156,7 +168,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:raw,device_number=~\"${device:raw}\"}\"}",
+          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:raw}\",device_number=~\"${device:raw}\"}",
           "legendFormat": "{{node}} · {{device}}",
           "range": true,
           "datasource": {
@@ -189,7 +201,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}",
+              "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
               "targetBlank": false
             }
           ],
@@ -219,7 +231,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_node_device_busy_ratio{asset_id=~\"${asset:raw,device_number=~\"${device:raw}\"}\"}",
+          "expr": "dbsphere_container_node_device_busy_ratio{asset_id=~\"${asset:raw}\",device_number=~\"${device:raw}\"}",
           "legendFormat": "忙碌 {{device}}",
           "range": true,
           "datasource": {
@@ -229,7 +241,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:raw,device_number=~\"${device:raw}\"}\"}",
+          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:raw}\",device_number=~\"${device:raw}\"}",
           "legendFormat": "队列 {{device}}",
           "range": true,
           "datasource": {
@@ -262,7 +274,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}",
+              "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
               "targetBlank": false
             }
           ],
@@ -292,7 +304,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:raw,pvc=~\"${pvc:raw}\"}\"}",
+          "expr": "dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:raw}\",pvc=~\"${pvc:raw}\",pvc_uid=~\"${pvc_uid:raw}\"}",
           "legendFormat": "已用 {{pvc}}",
           "range": true,
           "datasource": {
@@ -302,7 +314,7 @@
         },
         {
           "refId": "B",
-          "expr": "dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:raw,pvc=~\"${pvc:raw}\"}\"}",
+          "expr": "dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:raw}\",pvc=~\"${pvc:raw}\",pvc_uid=~\"${pvc_uid:raw}\"}",
           "legendFormat": "容量 {{pvc}}",
           "range": true,
           "datasource": {
@@ -335,7 +347,7 @@
           "links": [
             {
               "title": "在 DbSphere 查看相同事件和时段",
-              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}",
+              "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
               "targetBlank": false
             }
           ],
@@ -365,7 +377,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "dbsphere_container_pvc_bound{asset_id=~\"${asset:raw,pvc=~\"${pvc:raw}\"}\"}",
+          "expr": "dbsphere_container_pvc_bound{asset_id=~\"${asset:raw}\",pvc=~\"${pvc:raw}\",pvc_uid=~\"${pvc_uid:raw}\"}",
           "legendFormat": "Bound {{pvc}}",
           "range": true,
           "datasource": {
@@ -377,6 +389,69 @@
           "refId": "B",
           "expr": "dbsphere_container_sample_available{asset_id=~\"${asset:raw}\",container=~\"${container:raw}\"}",
           "legendFormat": "采集正常 {{container}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "PVC 可用余量",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&topic=claims&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}&pvc=${pvc:percentencode}&pvcUid=${pvc_uid:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_min(dbsphere_container_pvc_capacity_bytes{asset_id=~\"${asset:raw}\",pvc=~\"${pvc:raw}\",pvc_uid=~\"${pvc_uid:raw}\"} - dbsphere_container_pvc_used_bytes{asset_id=~\"${asset:raw}\",pvc=~\"${pvc:raw}\",pvc_uid=~\"${pvc_uid:raw}\"}, 0)",
+          "legendFormat": "{{pvc}} {{pvc_uid}}",
           "range": true,
           "datasource": {
             "type": "prometheus",

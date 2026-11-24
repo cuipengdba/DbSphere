@@ -68,14 +68,26 @@ func TestContainerStorageHistoryPreservesPeakAndCoverageOnPG18(t *testing.T) {
 	}
 	defer store.DeleteAsset(ctx, asset.ID)
 	start := time.Now().UTC().Add(-time.Minute)
-	for index := 0; index < 3; index++ {
+	for index := 0; index < 4; index++ {
 		at := start.Add(time.Duration(index) * 10 * time.Second)
 		metrics := storageFixture(at, "one", float64(index*10000), float64(1024-index*20), 512, float64(index))
+		metrics["linux"] = map[string]any{"status": "ok", "cpu": map[string]any{"usedPercent": 20 + index}}
+		if index == 3 {
+			delete(metrics, "containerStorage")
+		} else {
+			claim := "current-claim"
+			if index == 2 {
+				claim = "replacement-claim"
+			}
+			object(metrics["containerStorage"])["pvcs"] = []any{map[string]any{"uid": claim, "name": "data",
+				"usage": map[string]any{"status": "ok", "usedBytes": 1234 + index, "capacityBytes": 2000}}}
+		}
 		if _, err := store.recordCheckAt(ctx, asset.ID, metrics, "", "", at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	value, err := store.ReadAssetSection(ctx, asset.ID, "container-storage", url.Values{"from": {start.Add(-time.Second).Format(time.RFC3339Nano)}, "to": {time.Now().UTC().Format(time.RFC3339Nano)}})
+	value, err := store.ReadAssetSection(ctx, asset.ID, "container-storage", url.Values{"from": {start.Add(-time.Second).Format(time.RFC3339Nano)},
+		"to": {time.Now().UTC().Format(time.RFC3339Nano)}, "pvcUid": {"current-claim"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,15 +97,17 @@ func TestContainerStorageHistoryPreservesPeakAndCoverageOnPG18(t *testing.T) {
 	}
 	var response struct {
 		Buckets []struct {
-			Available int
-			Series    map[string]struct{ Max float64 }
+			Available, Hosts, Claims int
+			Series                   map[string]struct{ Max float64 }
 		}
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Buckets) != 3 || response.Buckets[0].Available != 1 || response.Buckets[0].Series["active"].Max != 1024 ||
-		response.Buckets[1].Series["readBps"].Max != 1000 {
+	if len(response.Buckets) != 4 || response.Buckets[0].Available != 1 || response.Buckets[0].Series["active"].Max != 1024 ||
+		response.Buckets[1].Series["readBps"].Max != 1000 || response.Buckets[1].Series["pvcUsed"].Max != 1235 ||
+		response.Buckets[2].Claims != 0 || response.Buckets[3].Available != 0 || response.Buckets[3].Hosts != 1 ||
+		response.Buckets[3].Series["hostCpu"].Max != 23 {
 		t.Fatalf("missing historical coverage or peaks: %s", body)
 	}
 }
