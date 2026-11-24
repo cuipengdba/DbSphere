@@ -35,7 +35,8 @@ type logInvestigationSource struct {
 	Record, Batch, Instance, Organization string
 	Asset                                 *string
 	Kind, Severity, Engine, Version       string
-	Coverage, Shape, Code, Blocker        string
+	Coverage, Shape, Fingerprint          string
+	Code, Blocker                         string
 	Observed                              *time.Time
 	Duration                              *float64
 }
@@ -43,12 +44,12 @@ type logInvestigationSource struct {
 func investigationLogSource(ctx context.Context, tx pgx.Tx, record string) (logInvestigationSource, error) {
 	var source logInvestigationSource
 	err := tx.QueryRow(ctx, `SELECT r.id::text,b.id::text,i.id::text,p.organization_id::text,a.id::text,
-		r.kind,r.severity,i.engine,i.version,b.coverage,r.sql_shape,r.sqlstate,r.blocker_id,r.observed_at,r.duration_ms`+
+		r.kind,r.severity,i.engine,i.version,b.coverage,r.sql_shape,r.fingerprint,r.sqlstate,r.blocker_id,r.observed_at,r.duration_ms`+
 		logBatchScope+` JOIN log_records r ON r.batch_id=b.id
 		LEFT JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
 		WHERE r.id=$1 AND ($2='' OR p.organization_id::text=$2)`, record, OrganizationFromContext(ctx)).
 		Scan(&source.Record, &source.Batch, &source.Instance, &source.Organization, &source.Asset,
-			&source.Kind, &source.Severity, &source.Engine, &source.Version, &source.Coverage, &source.Shape, &source.Code,
+			&source.Kind, &source.Severity, &source.Engine, &source.Version, &source.Coverage, &source.Shape, &source.Fingerprint, &source.Code,
 			&source.Blocker, &source.Observed, &source.Duration)
 	return source, logWriteError(err)
 }
@@ -74,8 +75,8 @@ func diagnoseLog(source logInvestigationSource) LogDiagnosis {
 		"在同样的业务时段收集日志及资源指标，确认异常是否重现。", "记录检查结果。"}
 	result := LogDiagnosis{"P3", "保留该记录作为后续观察线索。", "日志记录", []LogRecommendation{defaultAction}}
 	switch {
-	case source.Severity == "PANIC" || source.Severity == "FATAL":
-		result.Priority, result.Reason = "P0", "日志记录了严重数据库错误。优先核对当前可用性和影响范围。"
+	case source.Severity == "PANIC":
+		result.Priority, result.Reason = "P0", "数据库进程报告 PANIC。立即核对可用性、重启记录及业务影响。"
 	case source.Kind == "deadlock" || source.Kind == "lock":
 		result.Priority, result.Reason = "P1", "已观测到死锁或锁等待。先检查阻塞事务与持锁时长。"
 		if source.Blocker != "" {
@@ -97,7 +98,7 @@ func diagnoseLog(source logInvestigationSource) LogDiagnosis {
 				fmt.Sprintf("核对列选择性和已有索引后，在测试环境验证 CREATE INDEX ON %s (%s)。", relation, column),
 				"比较执行计划、P95 和写入代价，记录试验索引名称。", "删除本次创建的试验索引。"})
 		}
-	case source.Kind == "error":
+	case source.Kind == "error" || source.Severity == "FATAL":
 		result.Priority, result.Reason = "P1", "日志记录了 SQL 错误。沿错误码、调用端与变更时间核实影响。"
 	}
 	return result
@@ -179,7 +180,8 @@ func linkInvestigationLog(ctx context.Context, tx pgx.Tx, caseID, event string, 
 	}
 	diagnosis := diagnoseLog(source)
 	payload, err := json.Marshal(map[string]any{"recordId": source.Record, "batchId": source.Batch, "source": source.Engine,
-		"code": diagnosis.Priority, "coverage": source.Coverage, "kind": source.Kind, "durationMs": source.Duration,
+		"engineVersion": source.Version, "code": diagnosis.Priority, "coverage": source.Coverage, "kind": source.Kind,
+		"durationMs": source.Duration, "sqlState": source.Code, "sqlShape": limitedLogText(source.Shape, 640), "fingerprint": source.Fingerprint,
 		"rootReason": diagnosis.Reason, "confidence": diagnosis.Confidence})
 	if err != nil {
 		return err
@@ -247,5 +249,6 @@ func (s *Postgres) LogInvestigation(ctx context.Context, id string) (any, error)
 		return nil, err
 	}
 	return map[string]any{"id": id, "eventId": event, "diagnosis": diagnoseLog(source),
-		"records": linked, "engine": source.Engine, "version": source.Version, "coverage": strings.TrimSpace(source.Coverage)}, nil
+		"records": linked, "observedAt": source.Observed, "engine": source.Engine, "version": source.Version,
+		"coverage": strings.TrimSpace(source.Coverage)}, nil
 }

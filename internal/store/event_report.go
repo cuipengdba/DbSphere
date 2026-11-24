@@ -592,6 +592,7 @@ func renderEventMarkdown(data eventReportData) string {
 		}
 		var log struct {
 			Kind, Source, Coverage, Code, RootReason, Confidence string
+			EngineVersion, SQLState, SQLShape, Fingerprint       string
 			DurationMS                                           *float64
 		}
 		if json.Unmarshal(evidence.Payload, &log) != nil {
@@ -603,6 +604,15 @@ func renderEventMarkdown(data eventReportData) string {
 			fmt.Fprintf(&out, " · %.2f ms", *log.DurationMS)
 		}
 		fmt.Fprintf(&out, " · %s\n", reportText(log.Confidence))
+		if log.EngineVersion != "" {
+			fmt.Fprintf(&out, "  - 数据库版本 %s\n", reportText(log.EngineVersion))
+		}
+		if log.SQLState != "" {
+			fmt.Fprintf(&out, "  - 错误码 %s\n", reportText(log.SQLState))
+		}
+		if log.SQLShape != "" {
+			fmt.Fprintf(&out, "  - SQL 指纹 %s · 脱敏模板 %s\n", reportText(log.Fingerprint), reportText(log.SQLShape))
+		}
 	}
 	if len(event.Evidence) >= 500 {
 		out.WriteString("\n时间线已达到 500 条显示上限，可能仍有其他证据。\n")

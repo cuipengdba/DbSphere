@@ -467,7 +467,13 @@
         link.href = '#incidents?event=' + data.eventId;
         link.addEventListener('click', event => {
           event.preventDefault();
-          openEvent(data.eventId, true, location.hash.slice(1));
+          const params = new URLSearchParams(location.hash.split('?')[1]);
+          const observed = Date.parse(data.observedAt);
+          if (Number.isFinite(observed)) {
+            params.set('from', new Date(observed - 900000).toISOString());
+            params.set('to', new Date(observed + 900000).toISOString());
+          }
+          openEvent(data.eventId, true, 'logs?' + params);
         });
         view.append(link);
       }
