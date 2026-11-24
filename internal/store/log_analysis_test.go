@@ -117,18 +117,35 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if retry := idOf(pg.StartLogInvestigation(ctx, id, "")); retry != caseID {
 		t.Fatalf("retry produced a different investigation: %s", retry)
 	}
-	linked, err := pg.LinkLogInvestigation(ctx, caseID, id)
+	retest := []byte(strings.Replace(line, "2100.5", "450.0", 1))
+	retestFile := idOf(pg.CreateLogFile(ctx, second, LogFileInput{Name: "retest.log", Format: "text", Size: int64(len(retest))}))
+	if _, err := pg.AppendLogBlock(ctx, retestFile, 0, retest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.QueueLogFile(ctx, retestFile, nil); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := pg.ProcessNextLogFile(ctx); err != nil || !done {
+		t.Fatalf("parse retest: %v %v", done, err)
+	}
+	retestRows, err := pg.LogRecords(ctx, second, LogRecordQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retestID := idOf(retestRows.(map[string]any)["records"].([]json.RawMessage)[0], nil)
+	linked, err := pg.LinkLogInvestigation(ctx, caseID, retestID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	investigation := linked.(map[string]any)
 	event := investigation["eventId"].(*string)
 	if event == nil || investigation["diagnosis"].(LogDiagnosis).Priority != "P2" ||
-		len(investigation["records"].([]json.RawMessage)) != 1 {
+		len(investigation["records"].([]json.RawMessage)) != 2 {
 		t.Fatalf("missing event or evidence: %+v", investigation)
 	}
 	reportText, evidence, err := pg.EventAIEvidence(ctx, *event)
-	if err != nil || len(evidence) == 0 || !strings.Contains(reportText, id) || strings.Contains(reportText, "fixture-private") {
+	if err != nil || len(evidence) < 2 || !strings.Contains(reportText, id) || !strings.Contains(reportText, retestID) ||
+		strings.Contains(reportText, "fixture-private") {
 		t.Fatalf("event failed to preserve sanitized log evidence: %s %v", reportText, err)
 	}
 	if _, err := pg.LogInvestigation(outOfScope, caseID); !errors.Is(err, ErrLogNotFound) {
