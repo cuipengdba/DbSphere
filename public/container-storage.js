@@ -4,6 +4,7 @@
   const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
   const hour = 3600000;
   const statusNames = { ok: '采样正常', unbound: '待绑定', unavailable: '采集中断', denied: '权限不足',
+    not_configured: '未配置采集源', error: '采集失败', forbidden: '权限不足',
     not_found: '容器暂未发现', unsupported: '指标不可用', stale: '数据已过期', ambiguous: '采集源重复' };
   const findings = { cache_reread: '缓存回收与重读', writeback: '写回压力', io_limit: '接近 I/O 限流', node_congestion: '节点设备忙碌' };
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
@@ -299,9 +300,9 @@
         if (route.device && route.device !== link.device) continue;
         volumeNodes.push(node('p', `${link.device} → 节点设备 ${link.nodeDevice} · 队列深度 ${fmt(link.queueDepth, 'count')} · ${formatTime(link.to)}`));
       }
-      const ranked = Object.entries(latest?.nodeRates || {}).sort(([, a], [, b]) => (b.ioSeconds || 0) - (a.ioSeconds || 0));
+      const ranked = Object.entries(latest?.nodeRates || {}).filter(([dev]) => !route.device || latest?.nodeNumbers?.[dev]?.number === route.device)
+        .sort(([, a], [, b]) => (b.ioSeconds || 0) - (a.ioSeconds || 0));
       for (const [dev, rates] of ranked.slice(0, 6)) {
-        if (route.device && latest?.nodeNumbers?.[dev]?.number !== route.device) continue;
         const io = (rates.reads || 0) + (rates.writes || 0);
         const ms = io && Number.isFinite(rates.readSeconds) && Number.isFinite(rates.writeSeconds) ? (rates.readSeconds + rates.writeSeconds) * 1000 / io : null;
         volumeNodes.push(node('p', `${dev} · 平均 ${fmt(ms, '')} ms · 忙碌 ${fmt(rates.ioSeconds * 100, 'percent')}`));
