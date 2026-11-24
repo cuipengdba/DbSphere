@@ -52,6 +52,7 @@ const growthMetric = 'pg.database_growth_bytes_per_day';
 const formatAlertValue = (metric, value) => value == null ? '信号缺失' :
   metric === growthMetric ? `${(Number(value) / (1024 ** 3)).toFixed(2)} GiB/日` : String(value);
 const views = {
+  wallboard: ['资产监控大屏', ''],
   overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
@@ -74,7 +75,8 @@ function setView(route, updateHash = true) {
       return;
     }
   }
-  const selected = Object.hasOwn(views, view) ? view : 'overview';
+  const selected = Object.hasOwn(views, view) && (view !== 'wallboard' || nativeOverview) ? view :
+    nativeOverview ? 'wallboard' : 'overview';
   const params = new URLSearchParams(query);
   if (document.body.dataset.activeView !== selected) notice('');
   document.body.dataset.activeView = selected;
@@ -92,6 +94,7 @@ function setView(route, updateHash = true) {
   $('view-description').textContent = views[selected][1];
   if (selected === 'monitoring' && !updateHash) monitoring.restore(params);
   if (selected === 'live' && !updateHash) live.restore(params);
+  if (selected === 'wallboard' && !updateHash) wallboard.restore(params);
   if (pageSections[selected]) {
     const section = params.get('section');
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
@@ -102,15 +105,17 @@ function setView(route, updateHash = true) {
   }
   monitoring.setVisible(selected === 'monitoring');
   live.setVisible(selected === 'live' && !!currentRole);
+  wallboard.setVisible(selected === 'wallboard' && !!currentRole);
   containerStorage.show(selected === 'storage' && !!currentRole, params);
   if (selected === 'overview' && (!updateHash || query)) operationsOverview.restore(params);
   showOverview(selected === 'overview');
   showGrafanaView(selected === 'grafana' ? params : null);
   if (updateHash) {
-    const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
+    const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() :
+      selected === 'wallboard' ? wallboard.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && !['overview', 'live', 'grafana'].includes(selected) && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'live', 'grafana', 'wallboard'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -530,6 +535,7 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 });
 
 const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
+const wallboard = window.DbSphereWallboard.create($('wallboard-workspace'), { api, openEvent, formatTime });
 const containerStorage = window.DbSphereContainerStorage.create($('container-storage'), { api, openEvent, formatTime });
 const operationsOverview = window.DbSphereOverview.create($('operations-board'), { api, openEvent, formatTime });
 
@@ -540,7 +546,7 @@ function showOverview(selected) {
 }
 
 function grafanaBack(route) {
-  return /^(?:live|storage|incidents)(?:\?|$)/.test(route || '') ? route : 'live';
+  return /^(?:live|storage|incidents|wallboard)(?:\?|$)/.test(route || '') ? route : 'live';
 }
 
 function grafanaUnavailable() {
@@ -620,6 +626,8 @@ function updateRuntime(runtime) {
     clockOffsetMs: Number.isFinite(serverTime) ? serverTime - Date.now() : 0
   };
   nativeOverview = assetServerPaging = eventServerPaging = runtime?.backend === 'go';
+  document.querySelector('[data-nav="wallboard"]').hidden = !nativeOverview;
+  wallboard.setVersion(runtime?.version);
   showOverview(document.body.dataset.activeView === 'overview');
 }
 
@@ -2506,7 +2514,7 @@ function investigationParams(eventId) {
 }
 
 function eventMonitoringReturn(value) {
-  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage)(?:\?|$)/.test(value)) return '';
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard)(?:\?|$)/.test(value)) return '';
   const [view, query] = value.split('?', 2);
   const params = new URLSearchParams(query);
   params.delete('incidentReturn');
@@ -3230,8 +3238,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (scope.length) summary.append(cell('small', scope.join(' · ')));
   const storageBack = /^storage(?:\?|$)/.test(back);
   const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));
-  if (typeof back === 'string' && /^(overview|monitoring|live|storage)(?:\?|$)/.test(back)) {
-    const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' : back.startsWith('overview') ? '返回全域总览' : '返回集群同窗', 'monitor-link incident-monitor-return');
+  if (back) {
+    const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' :
+      back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
@@ -3906,6 +3915,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
 async function boot() {
   const session = await api('/api/session');
   if (workspaceData.session !== (session.csrf || null)) {
+    wallboard.reset();
     workspaceData = { session: session.csrf || null, loaded: false, pending: null, runtime: undefined };
     organizations = [];
   }
@@ -3930,7 +3940,10 @@ async function boot() {
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
   $('workspace').hidden = !session.authenticated;
-  if (!session.authenticated) showOverview(false);
+  if (!session.authenticated) {
+    showOverview(false);
+    wallboard.setVisible(false);
+  }
   $('logout').hidden = !session.authenticated;
   const initialization = $('initial-admin-note');
   initialization.hidden = !session.setupRequired;
@@ -3949,7 +3962,7 @@ async function boot() {
     updateRuntime(runtime);
     setView(location.hash.slice(1), false);
     if (document.body.dataset.activeView !== 'grafana' &&
-        (!nativeOverview || !['overview', 'live'].includes(document.body.dataset.activeView))) await prepareWorkspace();
+        (!nativeOverview || !['overview', 'live', 'wallboard'].includes(document.body.dataset.activeView))) await prepareWorkspace();
   }
 }
 
@@ -4186,6 +4199,6 @@ boot().catch(e => { $('login-panel').hidden = false; $('login-error').textConten
 window.setTimeout(pollStorageAvailability, 5000);
 setInterval(() => {
   if (csrf && !longTermStoreUnavailable && !workspaceData.pending && document.body.dataset.activeView !== 'grafana' &&
-      (!nativeOverview || !['overview', 'live'].includes(document.body.dataset.activeView)))
+      (!nativeOverview || !['overview', 'live', 'wallboard'].includes(document.body.dataset.activeView)))
     refresh().catch(() => {});
 }, 30000);

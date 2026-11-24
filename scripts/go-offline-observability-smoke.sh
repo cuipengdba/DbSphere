@@ -133,4 +133,9 @@ if [[ -d deploy/observability/grafana/panels ]]; then
   test "$(curl -sS -b "$root/session.cookie" -o /dev/null -w '%{http_code}' "$base/grafana/api/health")" = 404
 fi
 api "$base/api/live/overview" | jq -e --arg id "$asset" '.assets|any(.id==$id)' >/dev/null
+api "$base/api/live/overview?board=wallboard&asset=$asset" |
+  jq -e --arg id "$asset" '(.total>=1) and (.assets[0].id==$id) and (.hostCount>=0)' >/dev/null
+api "$base/api/assets/$asset/wallboard-history" |
+  jq -e '.points|any(.sampleId!=null and .values.connections>=0)' >/dev/null
+curl --fail --silent "$base/wallboard.js" | grep 'DbSphereWallboard' >/dev/null
 echo 'Enhanced offline installation verified private Prometheus, current database data, dynamic exporter labels, and native degradation.'

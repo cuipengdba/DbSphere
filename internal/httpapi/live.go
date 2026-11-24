@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/store"
@@ -16,7 +17,7 @@ type liveObservationReader interface {
 
 const liveOverviewPath, liveStreamPath = "/api/live/overview", "/api/live/stream"
 
-func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore, auth *AuthConfig, ids []string, connections chan struct{}) {
+func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore, auth *AuthConfig, ids []string, connections chan struct{}, platformAdmin bool) {
 	reader, ok := db.(liveObservationReader)
 	if !ok {
 		respond(w, http.StatusNotImplemented, map[string]string{"error": "Live observation unavailable"})
@@ -25,8 +26,20 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 	params := r.URL.Query()
 	scope := store.LiveScope{Organization: params.Get("organization"), Environment: params.Get("environment"),
 		Cluster: params.Get("cluster"), Engine: params.Get("engine")}
+	if params.Get("board") == "wallboard" {
+		scope.Wallboard, scope.UnassignedHosts, scope.Focus = true, platformAdmin, params.Get("asset")
+		if params.Has("page") {
+			page, err := strconv.Atoi(params.Get("page"))
+			if err != nil || page < 0 || page > 10000 {
+				respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid wallboard page"})
+				return
+			}
+			scope.Page = page
+		}
+	}
 	if (scope.Organization != "" && !opsUUID.MatchString(scope.Organization)) || len(scope.Environment) > 80 || len(scope.Cluster) > 256 ||
-		(scope.Engine != "" && scope.Engine != "postgres" && scope.Engine != "mysql") {
+		(scope.Engine != "" && scope.Engine != "postgres" && scope.Engine != "mysql") ||
+		(scope.Focus != "" && !opsUUID.MatchString(scope.Focus)) {
 		respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid live observation scope"})
 		return
 	}

@@ -11,10 +11,12 @@
   <link rel="stylesheet" href="/console.css">
   <link rel="stylesheet" href="/live.css">
   <link rel="stylesheet" href="/overview.css">
+  <link rel="stylesheet" href="/wallboard.css">
   <script src="/observability.js" defer></script>
   <script src="/monitoring.js" defer></script>
   <script src="/live.js" defer></script>
   <script src="/overview.js" defer></script>
+  <script src="/wallboard.js" defer></script>
   <link rel="stylesheet" href="/container-storage.css">
   <script src="/container-storage.js" defer></script>
   <script src="/app.js" defer></script>
@@ -50,6 +52,7 @@
       <aside class="workspace-sidebar" aria-label="主导航">
         <div class="sidebar-brand">工作台</div>
         <nav class="workspace-nav">
+          <button type="button" data-nav="wallboard" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 4h18v13H3z M9 21h6 M12 17v4 M6 13l3-3 3 2 5-5"/></svg><span>监控大屏</span></button>
           <button type="button" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span>总览</span></button>
           <button type="button" data-nav="monitoring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3v18h18 M5 14h4l3-7 3 10 3-5h4"/></svg><span>监控工作台</span></button>
           <button type="button" data-nav="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 5h18v12H3z M8 21h8 M12 17v4 M6 11h3l2-3 3 5 2-2h2"/></svg><span>实时观测</span></button>
@@ -59,11 +62,47 @@
           <button type="button" data-nav="inspections"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z M9 10h7 M9 14h7 M9 17h5"/></svg><span>巡检与报告</span></button>
           <button type="button" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>系统状态</span></button>
         </nav>
-        <div class="sidebar-foot"><span id="workspace-version" class="workspace-version" hidden></span><span class="workspace-platform">PostgreSQL 14–19<br>Linux · Kubernetes</span></div>
+        <div class="sidebar-foot"><span id="workspace-version" class="workspace-version" hidden></span><span class="workspace-platform">Linux · Kubernetes</span></div>
       </aside>
       <div class="workspace-main">
       <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
+      <section id="wallboard-workspace" class="wallboard" data-view="wallboard" aria-label="资产监控大屏" hidden>
+        <header class="wallboard-header">
+          <div><h1>资产监控大屏</h1><div class="wallboard-status"><span class="wallboard-pulse" data-board="pulse"></span><span data-board="status" role="status">正在读取监控数据</span><span data-board="version"></span></div></div>
+          <div class="wallboard-tools">
+            <select data-board="organization" aria-label="组织"><option value="">全部组织</option></select>
+            <select data-board="environment" aria-label="环境"><option value="">全部环境</option></select>
+            <select data-board="cluster" aria-label="集群"><option value="">全部集群</option></select>
+            <select data-board="window" aria-label="时间范围"><option value="15">近 15 分钟</option><option value="60" selected>近 1 小时</option><option value="360">近 6 小时</option><option value="1440">近 24 小时</option><option value="fixed">固定时段</option></select>
+            <button class="ghost" type="button" data-board="pause" aria-pressed="false">暂停</button>
+            <button class="ghost" type="button" data-board="fullscreen" aria-pressed="false">全屏</button>
+          </div>
+        </header>
+        <form class="wallboard-dates" data-board="dates" hidden>
+          <label>起始<input type="datetime-local" data-board="from" required></label>
+          <label>结束<input type="datetime-local" data-board="to" required></label>
+          <button class="ghost" type="submit">应用</button>
+        </form>
+        <div class="wallboard-kpis" data-board="kpis"></div>
+        <div class="wallboard-overview">
+          <section class="wallboard-panel">
+            <header class="wallboard-panel-heading"><h2>主机与数据库</h2><div class="wallboard-page"><button class="ghost" type="button" data-board="prev" aria-label="上一页资产">‹</button><span data-board="page"></span><button class="ghost" type="button" data-board="next" aria-label="下一页资产">›</button></div></header>
+            <div class="wallboard-topology" data-board="assets"></div>
+          </section>
+          <section class="wallboard-panel">
+            <header class="wallboard-panel-heading"><h2>优先处理</h2><a href="#incidents">所有事件 ↗</a></header>
+            <div class="wallboard-events" data-board="events"></div>
+          </section>
+        </div>
+        <div class="wallboard-trends-heading">
+          <div><h2>关键指标趋势</h2><span data-board="focus"></span></div>
+          <div class="wallboard-tools"><button class="ghost" type="button" data-board="clear" hidden>清除游标</button><a data-board="raw" hidden>原始样本 ↗</a><a data-board="live" hidden>实时观测 ↗</a><a data-board="grafana" hidden>Grafana 专题 ↗</a></div>
+        </div>
+        <div class="wallboard-context" data-board="context"></div>
+        <div class="wallboard-charts" data-board="charts"></div>
+        <footer class="wallboard-fullscreen-foot" data-board="fullscreen-version"></footer>
+      </section>
       <section class="operations-board" id="operations-board" data-view="overview" aria-label="全域监控总览">
         <div class="operations-toolbar">
           <div class="operations-filters">

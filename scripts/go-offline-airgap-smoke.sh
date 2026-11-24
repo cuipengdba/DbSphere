@@ -48,7 +48,7 @@ docker run --rm --network none --name dbsphere-go-airgap-installer \
 curl --fail --silent --show-error http://127.0.0.1:18081/readyz |
   jq -e '.storage == "postgresql18"' >/dev/null
 base='http://127.0.0.1:18081'
-initial='{"username":"admin","password":"123456"}'
+initial='{"username":"admin","password":"1234567890123"}'
 curl --fail --silent "$base/api/session" | jq -e '.setupRequired and .setupLocal and (.authenticated | not)' >/dev/null
 test "$(curl --silent -o /dev/null -w '%{http_code}' "$base/api/assets")" = 401
 test "$(curl --silent -o /dev/null -w '%{http_code}' -H 'Host: ops.example.invalid' \
@@ -57,7 +57,7 @@ curl --fail --silent --show-error -c "$root/setup-cookie" -H 'Content-Type: appl
   jq -e '.setupRequired and (.authenticated | not)' >/dev/null
 test "$(curl --silent -b "$root/setup-cookie" -o /dev/null -w '%{http_code}' "$base/api/assets")" = 401
 new_password="$(openssl rand -hex 24)"
-jq -nc --arg password "$new_password" '{username:"admin",password:"123456",newPassword:$password}' |
+jq -nc --arg password "$new_password" '{username:"admin",password:"1234567890123",newPassword:$password}' |
   curl --fail --silent --show-error -c "$root/admin-cookie" -H 'Content-Type: application/json' --data-binary @- "$base/api/login" |
   jq -e '.authenticated and .role=="admin"' >/dev/null
 test "$(curl --silent -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data "$initial" "$base/api/login")" = 401

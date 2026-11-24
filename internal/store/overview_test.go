@@ -3,18 +3,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 )
 
 func TestMonitoringOverviewScopesTimelineAndCurrentAlerts(t *testing.T) {
-	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
-	if url == "" {
+	storeURL := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if storeURL == "" {
 		t.Skip("DBSPHERE_TEST_PG18_URL is not set")
 	}
 	ctx := context.Background()
-	pg, err := Open(ctx, url)
+	pg, err := Open(ctx, storeURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,5 +118,49 @@ func TestMonitoringOverviewScopesTimelineAndCurrentAlerts(t *testing.T) {
 	if live.Total != 1 || live.Unavailable != 1 || len(live.Assets) != 1 || live.Assets[0].ID != visible ||
 		len(live.Events) == 0 || live.Events[0].AssetID != visible || live.Events[0].Severity != "critical" {
 		t.Fatalf("live scope and severity mismatch: %+v", live)
+	}
+	if _, err := pg.pool.Exec(ctx, `UPDATE assets SET environment='production', linux_host='wallboard-fixture', linux_exporter_port=9100
+		WHERE id IN ($1,$2)`, visible, hidden); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = pg.LiveObservation(ctx, []string{visible, hidden}, 60, LiveScope{Wallboard: true, Focus: visible, Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var board struct {
+		Total, HostCount, MissingCount int
+		Assets                         []struct {
+			ID       string
+			WallHost struct{ ID, Name string }
+		}
+	}
+	if err := json.Unmarshal(raw, &board); err != nil {
+		t.Fatal(err)
+	}
+	if board.Total != 2 || board.HostCount != 1 || board.MissingCount != 2 || len(board.Assets) != 2 ||
+		board.Assets[0].WallHost.ID == "" {
+		t.Fatalf("incorrect wallboard summary: %s", raw)
+	}
+	if board.Assets[0].WallHost.ID != board.Assets[1].WallHost.ID || board.Assets[0].ID != visible {
+		t.Fatalf("wallboard lost shared host identity or focused asset: %s", raw)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+		SELECT gen_random_uuid(),$1,$2::timestamptz+step*interval '60 seconds','ok',
+		jsonb_build_object('connections',5,'max_connections',10,'xact_commit',20+120*step,'xact_rollback',0,
+		'role','primary','databaseName','postgres','postgresStartedAt','2020-01-01T00:00:00Z',
+		'postgresEndpoint',jsonb_build_object('address','127.0.0.1','port',5432))
+		FROM generate_series(0,1) step`, visible, from); err != nil {
+		t.Fatal(err)
+	}
+	params := url.Values{"from": {from.Add(30 * time.Second).Format(time.RFC3339)}, "to": {to.Format(time.RFC3339)}}
+	value, err := pg.ReadAssetSection(ctx, visible, "wallboard-history", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := value.(map[string]any)
+	points := history["points"].([]wallboardPoint)
+	if len(points) != 1 || points[0].SampleID == "" || points[0].Values["connections"] != 50 || points[0].Values["tps"] != 2 ||
+		len(history["events"].([]json.RawMessage)) != 2 || len(history["changes"].([]json.RawMessage)) != 1 {
+		t.Fatalf("wallboard did not preserve sample, pre-range counters and timeline: %+v", history)
 	}
 }

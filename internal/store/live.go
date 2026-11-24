@@ -3,11 +3,17 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"time"
 )
 
 type LiveScope struct {
 	Organization, Environment, Cluster, Engine string
+	Wallboard                                  bool
+	UnassignedHosts                            bool
+	Page                                       int
+	Focus                                      string
 }
 
 // LiveObservation applies the authorized scope before ranking or limiting assets.
@@ -16,14 +22,40 @@ func (s *Postgres) LiveObservation(ctx context.Context, ids []string, staleAfter
 	defer cancel()
 	var result json.RawMessage
 	err := s.pool.QueryRow(ctx, liveObservationSQL, ids, OrganizationFromContext(ctx), staleAfter,
-		scope.Organization, scope.Environment, scope.Cluster, scope.Engine).Scan(&result)
+		scope.Organization, scope.Environment, scope.Cluster, scope.Engine, scope.Wallboard,
+		scope.Page, scope.Focus).Scan(&result)
+	if err == nil && scope.Wallboard && scope.UnassignedHosts && ids == nil && scope.Organization == "" &&
+		scope.Environment == "" && scope.Cluster == "" && scope.Engine == "" && scope.Page == 0 {
+		return s.addUnassignedWallHosts(result)
+	}
 	return result, err
+}
+
+// Collector-only nodes have no tenant assignment. Only a platform administrator
+// viewing the unfiltered board can see these configured sources.
+func (s *Postgres) addUnassignedWallHosts(snapshot json.RawMessage) (json.RawMessage, error) {
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(snapshot, &result); err != nil {
+		return nil, err
+	}
+	var assigned []string
+	if err := json.Unmarshal(result["assignedNodes"], &assigned); err != nil {
+		return nil, err
+	}
+	unassigned := []map[string]string{}
+	for _, name := range slices.Sorted(maps.Keys(s.containerStorage.Nodes)) {
+		if !slices.Contains(assigned, name) {
+			unassigned = append(unassigned, map[string]string{"name": name, "source": "采集源"})
+		}
+	}
+	result["unassignedHosts"], _ = json.Marshal(unassigned)
+	return json.Marshal(result)
 }
 
 const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	SELECT a.id,a.name,a.cluster_name,a.runtime,a.environment,a.organization_id,o.name AS organization_name,
 		CASE WHEN a.runtime='mysql' THEN 'mysql' ELSE 'postgres' END AS engine,
-		a.role,a.k8s_cluster,a.k8s_namespace,a.k8s_pod,a.k8s_node,a.last_sample_at,a.last_status,
+		a.role,a.k8s_cluster,a.k8s_namespace,a.k8s_pod,a.k8s_node,a.last_sample_at,a.last_status,a.linux_host,a.linux_exporter_port,
 		CASE WHEN a.last_sample_at IS NULL THEN 'pending'
 			WHEN $3::int>0 AND a.last_sample_at<=now()-make_interval(secs=>$3) THEN 'stale'
 			ELSE a.last_status END AS freshness
@@ -47,12 +79,39 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	) priority ON true
 ), counts AS (
 	SELECT asset_id,count(*) AS total,bool_or(event_group='availability') AS unavailable FROM active GROUP BY asset_id
+), wall_hosts AS MATERIALIZED (
+	SELECT v.id,h.name,h.kind,h.assigned_node,
+		CASE WHEN h.identity IS NOT NULL THEN md5(concat_ws(chr(31),v.organization_id::text,v.environment,h.identity)) END AS host_key
+	FROM selected v
+	LEFT JOIN LATERAL (SELECT metrics_json AS sample FROM samples
+		WHERE asset_id=v.id AND collected_at=v.last_sample_at ORDER BY id DESC LIMIT 1) m ON true
+	LEFT JOIN LATERAL (SELECT
+		CASE WHEN v.runtime='k8s' AND m.sample#>>'{k8s,status}'='ok' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
+				AND nullif(v.k8s_cluster,'') IS NOT NULL THEN 'node/' || v.k8s_cluster || '/' || (m.sample#>>'{k8s,node,uid}')
+			WHEN v.runtime='linux' AND nullif(v.linux_host,'') IS NOT NULL AND v.linux_exporter_port>0
+				THEN 'linux/' || lower(v.linux_host) || '/' || v.linux_exporter_port
+			WHEN m.sample#>>'{containerStorage,runtime}'='docker' AND nullif(m.sample#>>'{containerStorage,node}','') IS NOT NULL
+				THEN 'docker/' || (m.sample#>>'{containerStorage,node}') END AS identity,
+		CASE WHEN v.runtime='k8s' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN m.sample#>>'{k8s,node,name}'
+			WHEN v.runtime='linux' AND v.linux_exporter_port>0 THEN v.linux_host
+			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN m.sample#>>'{containerStorage,node}' END AS name,
+		CASE WHEN v.runtime='k8s' THEN 'Kubernetes'
+			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN 'Docker' ELSE 'Linux' END AS kind,
+		CASE WHEN v.runtime='k8s' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
+			THEN v.k8s_cluster || '/' || (m.sample#>>'{k8s,node,name}')
+			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN m.sample#>>'{containerStorage,node}' END AS assigned_node
+	) h ON true
+	WHERE $8::boolean
 ), shown AS (
 	SELECT v.*,coalesce(c.total,0) AS open_events,coalesce(c.unavailable,false) AS unavailable
 	FROM selected v LEFT JOIN counts c ON c.asset_id=v.id
-	ORDER BY coalesce(c.unavailable,false) DESC,(c.total IS NOT NULL) DESC,(v.freshness='error') DESC,v.last_sample_at DESC NULLS LAST,v.id LIMIT 120
+	LEFT JOIN wall_hosts h ON h.id=v.id
+	ORDER BY ($8 AND $9=0 AND v.id::text=$10) DESC,coalesce(c.unavailable,false) DESC,(c.total IS NOT NULL) DESC,
+		(v.freshness='error') DESC,CASE WHEN $8 THEN h.host_key END NULLS LAST,v.last_sample_at DESC NULLS LAST,v.id
+	LIMIT CASE WHEN $8 THEN 24 ELSE 120 END OFFSET CASE WHEN $8 THEN $9::int*24 ELSE 0 END
 ), readings AS (
-	SELECT jsonb_build_object('id',a.id,'name',a.name,'cluster',a.cluster_name,'runtime',a.runtime,
+	SELECT a.id,a.unavailable,a.open_events,a.freshness,h.host_key,a.last_sample_at,
+		jsonb_build_object('id',a.id,'name',a.name,'cluster',a.cluster_name,'runtime',a.runtime,
 		'organizationId',a.organization_id,'organization',a.organization_name,'environment',a.environment,'engine',a.engine,
 		'role',a.role,'pod',a.k8s_pod,'namespace',a.k8s_namespace,'node',a.k8s_node,'k8sCluster',a.k8s_cluster,
 		'collectedAt',a.last_sample_at,'sampleId',m.id,'freshness',a.freshness,'openEvents',a.open_events,'unavailable',a.unavailable,
@@ -65,9 +124,17 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 		'ioPressure',m.metrics_json#>'{containerStorage,containers}'->(m.metrics_json#>>'{containerStorage,primary}')#>'{pressure,io_some_avg10}',
 		'blocked',CASE WHEN m.metrics_json#>>'{diagnostics,locks,status}'='ok'
 			THEN m.metrics_json#>'{diagnostics,locks,data,blockedSessions}' END,
-		'linux',m.metrics_json#>'{linux,status}','k8s',m.metrics_json#>'{k8s,status}') AS value
+		'linux',m.metrics_json#>'{linux,status}','k8s',m.metrics_json#>'{k8s,status}')
+		|| CASE WHEN $8 THEN jsonb_build_object('wallHost',CASE WHEN h.host_key IS NOT NULL THEN
+			jsonb_build_object('id',h.host_key,'name',h.name,'kind',h.kind,'cpu',m.metrics_json#>'{linux,cpu,usedPercent}',
+				'memory',m.metrics_json#>'{linux,memory,usedPercent}','diskRead',m.metrics_json#>'{linux,interval,diskReadBps}',
+				'diskWrite',m.metrics_json#>'{linux,interval,diskWriteBps}','source',m.metrics_json#>>'{linux,source}',
+				'status',m.metrics_json#>>'{linux,status}','observedAt',m.metrics_json#>>'{linux,observedAt}') END,
+			'container',m.metrics_json#>>'{containerStorage,primary}','containerRuntime',m.metrics_json#>>'{containerStorage,runtime}')
+		ELSE '{}'::jsonb END AS value
 	FROM shown a LEFT JOIN LATERAL (SELECT id,metrics_json FROM samples
 		WHERE asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) m ON true
+	LEFT JOIN wall_hosts h ON h.id=a.id
 ), recent AS (
 	SELECT *,CASE WHEN severity='critical' THEN 0 WHEN event_group='availability' THEN 1 WHEN severity='warning' THEN 2 ELSE 3 END AS priority FROM (
 		SELECT * FROM active
@@ -84,7 +151,12 @@ SELECT jsonb_build_object('observedAt',now(),'staleAfter',$3,
 	'filters',coalesce((SELECT jsonb_agg(to_jsonb(options)) FROM (SELECT DISTINCT organization_id AS "organizationId",
 		organization_name AS organization,environment,engine,cluster_key AS "clusterKey",coalesce(nullif(cluster_name,''),name) AS cluster
 		FROM inventory) options),'[]'::jsonb),
-	'assets',coalesce((SELECT jsonb_agg(value) FROM readings),'[]'::jsonb),
+	'assets',coalesce((SELECT jsonb_agg(value ORDER BY ($8 AND $9=0 AND id::text=$10) DESC,unavailable DESC,(open_events>0) DESC,
+		(freshness='error') DESC,host_key NULLS LAST,last_sample_at DESC NULLS LAST,id) FROM readings),'[]'::jsonb),
 	'events',coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'kind',kind,'title',title,
 		'status',status,'assetId',asset_id,'assetName',asset_name,'organizationId',organization_id,'severity',severity,'group',event_group,
-		'startedAt',started_at,'endedAt',ended_at) ORDER BY (status='open') DESC,priority,coalesce(ended_at,started_at) DESC,id) FROM recent),'[]'::jsonb))`
+		'startedAt',started_at,'endedAt',ended_at) ORDER BY (status='open') DESC,priority,coalesce(ended_at,started_at) DESC,id) FROM recent),'[]'::jsonb))
+	|| CASE WHEN $8 THEN jsonb_build_object('hostCount',(SELECT count(DISTINCT host_key) FROM wall_hosts),
+		'missingCount',(SELECT count(*) FROM selected WHERE freshness<>'ok'),
+		'assignedNodes',coalesce((SELECT jsonb_agg(DISTINCT assigned_node) FROM wall_hosts WHERE assigned_node IS NOT NULL),'[]'::jsonb))
+	ELSE '{}'::jsonb END`

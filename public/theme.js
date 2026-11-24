@@ -1,9 +1,9 @@
 (() => {
   const key = 'dbsphere.theme';
   const root = document.documentElement;
-  let theme = 'light';
+  let theme = 'dark';
   try {
-    if (localStorage.getItem(key) === 'dark') theme = 'dark';
+    if (localStorage.getItem(key) === 'light') theme = 'light';
   } catch {
     // The theme remains available for this page when storage is disabled.
   }
@@ -18,7 +18,7 @@
     });
     window.addEventListener('storage', event => {
       if (event.key !== key && event.key !== null) return;
-      theme = event.newValue === 'dark' ? 'dark' : 'light';
+      theme = event.newValue === 'light' ? 'light' : 'dark';
       root.dataset.theme = select.value = theme;
     });
   });

@@ -427,7 +427,7 @@ jobs:
           old_password="$(sed -n 's/^DBSPHERE_ADMIN_PASSWORD=//p' "$env_file" | head -n 1)"
           if [[ -z "$old_password" ]]; then
             old_password="$(openssl rand -hex 24)"
-            jq -nc --arg password "$old_password" '{username:"admin",password:"123456",newPassword:$password}' |
+            jq -nc --arg password "$old_password" '{username:"admin",password:"1234567890123",newPassword:$password}' |
               curl --fail --silent --show-error -H 'Content-Type: application/json' --data-binary @- \
                 http://127.0.0.1:8081/api/login | jq -e '.authenticated and .role=="admin"' >/dev/null
           fi
@@ -478,8 +478,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.12.0'
-          previous_sha='b26f73881611ea9eb7493faa3eefb487a11a838339576bff911fde64130028db'
+          previous_version='2.13.0'
+          previous_sha='601246285b5d150a0989023c660ea669fcb1d1d6feb50088d4feba503b4638ed'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -548,8 +548,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.12.0'
-          previous_arm_sha='bc3a649b317e9aacd681004e2e5b51a97bfbd4fedc2139ba5305c1bbf95d5aa5'
+          previous_version='2.13.0'
+          previous_arm_sha='a3f4bdb37b9a53a0ff33af35a04aee7be2e1f8a09cc0cd56450f09ab49d803e5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
