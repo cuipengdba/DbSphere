@@ -56,6 +56,7 @@ const views = {
   overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
+  logs: ['日志分析', '按项目、实例与批次查看日志和原始证据。'],
   grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
@@ -75,7 +76,8 @@ function setView(route, updateHash = true) {
       return;
     }
   }
-  const selected = Object.hasOwn(views, view) && (view !== 'wallboard' || nativeOverview) ? view :
+  const selected = Object.hasOwn(views, view) && (view !== 'wallboard' || nativeOverview) &&
+    (view !== 'logs' || nativeOverview && currentRole === 'admin') ? view :
     nativeOverview ? 'wallboard' : 'overview';
   const params = new URLSearchParams(query);
   if (document.body.dataset.activeView !== selected) notice('');
@@ -106,6 +108,7 @@ function setView(route, updateHash = true) {
   monitoring.setVisible(selected === 'monitoring');
   live.setVisible(selected === 'live' && !!currentRole);
   wallboard.setVisible(selected === 'wallboard' && !!currentRole);
+  logAnalysis.show(selected === 'logs', params);
   containerStorage.show(selected === 'storage' && !!currentRole, params);
   if (selected === 'overview' && (!updateHash || query)) operationsOverview.restore(params);
   showOverview(selected === 'overview');
@@ -115,7 +118,7 @@ function setView(route, updateHash = true) {
       selected === 'wallboard' ? wallboard.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && !['overview', 'live', 'grafana', 'wallboard'].includes(selected) && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'live', 'grafana', 'wallboard', 'logs'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -476,10 +479,11 @@ async function api(path, method = 'GET', payload, signal) {
   if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' &&
       !(method === 'POST' && /^\/api\/work-orders\/[0-9a-f-]+\/(approve|reject)$/.test(path)))
     throw new Error('审批账号只能审批事件工单。');
+  const binary = payload instanceof Blob;
   const response = await fetch(path, {
     method, signal, credentials: 'same-origin',
-    headers: { ...(payload ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
-    body: payload ? JSON.stringify(payload) : undefined
+    headers: { ...(payload ? { 'Content-Type': binary ? 'application/octet-stream' : 'application/json' } : {}), ...(method !== 'GET' && csrf ? { 'X-CSRF-Token': csrf } : {}) },
+    body: binary ? payload : payload ? JSON.stringify(payload) : undefined
   });
   if (response.headers.get('X-DbSphere-Storage') === 'unavailable') showStorageAvailability(false);
   const data = await response.json();
@@ -536,6 +540,7 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 
 const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
 const wallboard = window.DbSphereWallboard.create($('wallboard-workspace'), { api, openEvent, formatTime });
+const logAnalysis = window.DbSphereLogAnalysis.create($('log-workspace'), { api, formatTime, notice });
 const containerStorage = window.DbSphereContainerStorage.create($('container-storage'), { api, openEvent, formatTime });
 const operationsOverview = window.DbSphereOverview.create($('operations-board'), { api, openEvent, formatTime });
 
@@ -627,6 +632,7 @@ function updateRuntime(runtime) {
   };
   nativeOverview = assetServerPaging = eventServerPaging = runtime?.backend === 'go';
   document.querySelector('[data-nav="wallboard"]').hidden = !nativeOverview;
+  document.querySelector('[data-nav="logs"]').hidden = !nativeOverview || currentRole !== 'admin';
   wallboard.setVersion(runtime?.version);
   showOverview(document.body.dataset.activeView === 'overview');
 }
@@ -3943,6 +3949,7 @@ async function boot() {
   if (!session.authenticated) {
     showOverview(false);
     wallboard.setVisible(false);
+    logAnalysis.show(false);
   }
   $('logout').hidden = !session.authenticated;
   const initialization = $('initial-admin-note');
@@ -3962,7 +3969,7 @@ async function boot() {
     updateRuntime(runtime);
     setView(location.hash.slice(1), false);
     if (document.body.dataset.activeView !== 'grafana' &&
-        (!nativeOverview || !['overview', 'live', 'wallboard'].includes(document.body.dataset.activeView))) await prepareWorkspace();
+        (!nativeOverview || !['overview', 'live', 'wallboard', 'logs'].includes(document.body.dataset.activeView))) await prepareWorkspace();
   }
 }
 
@@ -4199,6 +4206,6 @@ boot().catch(e => { $('login-panel').hidden = false; $('login-error').textConten
 window.setTimeout(pollStorageAvailability, 5000);
 setInterval(() => {
   if (csrf && !longTermStoreUnavailable && !workspaceData.pending && document.body.dataset.activeView !== 'grafana' &&
-      (!nativeOverview || !['overview', 'live', 'wallboard'].includes(document.body.dataset.activeView)))
+      (!nativeOverview || !['overview', 'live', 'wallboard', 'logs'].includes(document.body.dataset.activeView)))
     refresh().catch(() => {});
 }, 30000);

@@ -12,11 +12,13 @@
   <link rel="stylesheet" href="/live.css">
   <link rel="stylesheet" href="/overview.css">
   <link rel="stylesheet" href="/wallboard.css">
+  <link rel="stylesheet" href="/log-analysis.css">
   <script src="/observability.js" defer></script>
   <script src="/monitoring.js" defer></script>
   <script src="/live.js" defer></script>
   <script src="/overview.js" defer></script>
   <script src="/wallboard.js" defer></script>
+  <script src="/log-analysis.js" defer></script>
   <link rel="stylesheet" href="/container-storage.css">
   <script src="/container-storage.js" defer></script>
   <script src="/app.js" defer></script>
@@ -56,6 +58,7 @@
           <button type="button" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z"/></svg><span>总览</span></button>
           <button type="button" data-nav="monitoring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 3v18h18 M5 14h4l3-7 3 10 3-5h4"/></svg><span>监控工作台</span></button>
           <button type="button" data-nav="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M3 5h18v12H3z M8 21h8 M12 17v4 M6 11h3l2-3 3 5 2-2h2"/></svg><span>实时观测</span></button>
+          <button type="button" data-nav="logs" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 3h10l4 4v14H5z M14 3v5h5 M8 12h8 M8 16h8"/></svg><span>日志分析</span></button>
           <button type="button" data-nav="incidents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M12 3 2.8 19.5h18.4L12 3z M12 9v5 M12 16.5v1"/></svg><span>问题事件</span></button>
           <button type="button" data-nav="assets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6 M4 12c0 4 16 4 16 0"/></svg><span>资产与实例</span></button>
           <button type="button" data-nav="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3z M10 20h4"/></svg><span>告警与通知</span></button>
@@ -67,6 +70,96 @@
       <div class="workspace-main">
       <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
+      <section id="log-workspace" class="log-workspace" data-view="logs" aria-label="日志分析工作台" hidden>
+        <div class="log-toolbar">
+          <label>项目<select data-logs="project"></select></label>
+          <label>环境<select data-logs="environment"></select></label>
+          <label>数据库实例<select data-logs="instance"></select></label>
+          <label>分析批次<select data-logs="batch"></select></label>
+        </div>
+        <div class="log-actions">
+          <button type="button" class="ghost" data-logs="new-project">新建项目</button>
+          <button type="button" class="ghost" data-logs="new-instance">登记实例</button>
+          <button type="button" class="ghost" data-logs="new-batch">新建批次</button>
+          <button type="button" data-logs="upload">上传日志</button>
+          <button type="button" class="ghost" data-logs="refresh">刷新</button>
+        </div>
+        <p data-logs="status" class="hint" role="status"></p>
+        <div data-logs="details" hidden>
+          <div data-logs="summary" class="log-metrics"></div>
+          <p data-logs="coverage" class="hint"></p>
+          <section class="panel log-section">
+            <h2>批次文件</h2><div data-logs="files" class="log-scroll"></div>
+          </section>
+          <section class="panel log-section">
+            <h2>日志明细</h2>
+            <form data-logs="record-filters" class="log-toolbar">
+              <label>记录类型<select name="kind"><option value="">全部</option><option value="statement">SQL</option>
+                <option value="error">错误</option><option value="lock">锁等待</option><option value="deadlock">死锁</option>
+                <option value="checkpoint">Checkpoint</option><option value="autovacuum">Autovacuum</option>
+                <option value="temp">临时文件</option><option value="unknown">未识别</option></select></label>
+              <label>应用<input name="application" maxlength="256"></label>
+              <label>开始<input name="from" type="datetime-local"></label>
+              <label>结束<input name="to" type="datetime-local"></label>
+              <button type="submit" class="ghost">筛选</button>
+            </form>
+            <div data-logs="records" class="log-scroll"></div>
+            <div class="log-actions" data-logs="record-paging">
+              <button type="button" class="ghost" data-logs="previous">上一页</button><span data-logs="page"></span>
+              <button type="button" class="ghost" data-logs="next">下一页</button>
+            </div>
+          </section>
+        </div>
+        <dialog data-logs="project-dialog" class="log-dialog">
+          <form data-logs="project-form" class="form-grid">
+            <h2 class="wide">新建项目</h2>
+            <label>组织<select name="organizationId"></select></label>
+            <label>项目名称<input name="name" maxlength="120" required></label>
+            <div class="log-actions wide"><button type="submit">保存项目</button><button type="button" class="ghost" data-log-close>取消</button></div>
+          </form>
+        </dialog>
+        <dialog data-logs="instance-dialog" class="log-dialog">
+          <form data-logs="instance-form" class="form-grid">
+            <h2 class="wide">登记数据库实例</h2>
+            <label>实例名称<input name="name" maxlength="120" required></label>
+            <label>环境<input name="environment" maxlength="80" required placeholder="生产"></label>
+            <label>数据库产品<select name="engine"><option value="postgres">PostgreSQL</option><option value="highgo">瀚高</option></select></label>
+            <label>版本<input name="version" maxlength="80" required placeholder="18"></label>
+            <label class="wide">纳管资产<select name="assetId"><option value="">仅离线日志分析</option></select></label>
+            <div class="log-actions wide"><button type="submit">保存实例</button><button type="button" class="ghost" data-log-close>取消</button></div>
+          </form>
+        </dialog>
+        <dialog data-logs="batch-dialog" class="log-dialog">
+          <form data-logs="batch-form" class="form-grid">
+            <h2 class="wide">新建分析批次</h2>
+            <label>批次名称<input name="name" maxlength="120" required></label>
+            <label>日志覆盖<select name="coverage"><option value="unknown">待确认</option><option value="slow">仅慢日志</option>
+              <option value="sampled">抽样日志</option><option value="full">全量语句</option></select></label>
+            <label class="wide">采集说明<input name="coverageNote" maxlength="360" placeholder="慢日志阈值、采集时段或变更说明"></label>
+            <div class="log-actions wide"><button type="submit">保存批次</button><button type="button" class="ghost" data-log-close>取消</button></div>
+          </form>
+        </dialog>
+        <dialog data-logs="upload-dialog" class="log-dialog">
+          <form data-logs="upload-form" class="form-grid">
+            <h2 class="wide" data-logs="upload-title">上传日志</h2>
+            <label class="wide" data-logs="file-label">日志文件<input name="files" type="file" multiple required></label>
+            <div data-logs="preview" class="hint wide"></div>
+            <label>格式<select name="format"><option value="auto">自动识别</option><option value="text">文本</option>
+              <option value="csvlog">CSV</option><option value="jsonlog">JSON Lines</option></select></label>
+            <label>日志时区<input name="zone" value="UTC" placeholder="Asia/Shanghai" maxlength="64"></label>
+            <label data-logs="node-label">来源节点<input name="node" maxlength="120"></label>
+            <label class="wide">文本前缀<input name="prefix" maxlength="400" placeholder="%m [%p] %a %d "></label>
+            <progress data-logs="progress" class="wide" max="1" value="0" hidden></progress>
+            <p data-logs="upload-status" class="hint wide" role="status"></p>
+            <div class="log-actions wide"><button type="submit" data-logs="submit-upload">提交解析</button>
+              <button type="button" class="ghost" data-log-close>关闭</button></div>
+          </form>
+        </dialog>
+        <dialog data-logs="raw-dialog" class="log-dialog log-raw">
+          <h2>原始日志上下文</h2><p data-logs="raw-info" class="hint"></p><pre data-logs="raw-text"></pre>
+          <button type="button" class="ghost" data-log-close>关闭</button>
+        </dialog>
+      </section>
       <section id="wallboard-workspace" class="wallboard" data-view="wallboard" aria-label="资产监控大屏" hidden>
         <header class="wallboard-header">
           <div><h1>资产监控大屏</h1><div class="wallboard-status"><span class="wallboard-pulse" data-board="pulse"></span><span data-board="status" role="status">正在读取监控数据</span><span data-board="version"></span></div></div>

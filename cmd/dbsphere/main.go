@@ -273,6 +273,11 @@ func run(log *slog.Logger) error {
 		_ = server.Shutdown(shutdown)
 	}()
 	var collectorDone <-chan struct{}
+	logAnalysisDone := make(chan struct{})
+	go func() {
+		defer close(logAnalysisDone)
+		runLogAnalysis(ctx, pg, log)
+	}()
 	maintenanceDone := make(chan struct{})
 	var autoModel *ai.Client
 	if autoAI == "true" {
@@ -301,10 +306,32 @@ func run(log *slog.Logger) error {
 		<-collectorDone
 	}
 	<-maintenanceDone
+	<-logAnalysisDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func runLogAnalysis(ctx context.Context, pg *store.Postgres, log *slog.Logger) {
+	tick := time.NewTicker(3 * time.Second)
+	defer tick.Stop()
+	for {
+		for ctx.Err() == nil {
+			processed, err := pg.ProcessNextLogFile(ctx)
+			if err != nil && ctx.Err() == nil {
+				log.Error("process queued log analysis", "error", err)
+			}
+			if err != nil || !processed {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 type autoAIStore interface {

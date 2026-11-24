@@ -574,6 +574,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				r = r.WithContext(storepkg.WithOrganization(r.Context(), principal.OrganizationID))
 			}
 		}
+		if strings.HasPrefix(r.URL.Path, logAnalysisPath) {
+			serveLogAnalysis(w, r, store, role)
+			return
+		}
 		viewerScope := map[string]bool(nil)
 		if scopeIDs != nil {
 			viewerScope = make(map[string]bool, len(scopeIDs))
@@ -1757,6 +1761,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			r.URL.Path != "/observability.js" &&
 			r.URL.Path != "/monitoring.js" && r.URL.Path != "/live.js" && r.URL.Path != "/live.css" && r.URL.Path != "/theme.js" &&
 			r.URL.Path != "/wallboard.js" && r.URL.Path != "/wallboard.css" &&
+			r.URL.Path != "/log-analysis.js" && r.URL.Path != "/log-analysis.css" &&
 			r.URL.Path != "/overview.js" && r.URL.Path != "/overview.css" &&
 			r.URL.Path != "/container-storage.js" && r.URL.Path != "/container-storage.css" &&
 			r.URL.Path != "/styles.css" && r.URL.Path != "/freshness.css" && r.URL.Path != "/console.css" && r.URL.Path != "/favicon.svg" {
