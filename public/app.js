@@ -3069,8 +3069,9 @@ function incidentImpactPanel(impact, event) {
   for (const member of members) {
     const row = cell('div', '', 'evidence impact-member');
     const prefix = member.eventId === impact.primaryEventId ? '主事件' : '子事件';
-    row.append(eventLink(member.eventId, `${prefix} · ${member.assetName} · ${member.title}`),
-      cell('span', `${member.cluster ? member.cluster + ' · ' : ''}${member.endedAt ? '结束 ' + formatTime(member.endedAt) : member.status === 'open' ? '处理中' : member.status}`, 'hint'));
+    const times = [member.cluster, member.startedAt && `开始 ${formatTime(member.startedAt)}`,
+      member.endedAt ? `结束 ${formatTime(member.endedAt)}` : member.status === 'open' ? '处理中' : member.status].filter(Boolean);
+    row.append(eventLink(member.eventId, `${prefix} · ${member.assetName} · ${member.title}`), cell('span', times.join(' · '), 'hint'));
     if (member.dependency) {
       const observed = cell('p', `${member.dependency.entry} · ${routingStatus[member.dependency.signal] || member.dependency.signal} · `, 'hint');
       observed.append(replaySampleLink(member.assetId, member.dependency.sampleId));
@@ -3223,7 +3224,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ` · ${recoveryLabel} ${formatTime(event.endedAt)}` : ''}`),
     cell('small', `事件 ID ${event.id}`));
   const memberCount = new Set(impact?.members?.map(member => member.assetId)).size;
-  const services = analysis.traceCoverage?.serviceImpact?.filter(service => service.failures > 0).length || 0;
+  const services = analysis.traceCoverage?.serviceImpact?.filter(service => service.errorTraces > 0).length || 0;
   const scope = [event.clusterName && `集群 ${event.clusterName}`, investigation?.database && `数据库 ${investigation.database}`,
     memberCount > 0 && `已观测 ${memberCount}${impact.truncated ? '+' : ''} 个关联实例`, services > 0 && `${services} 个服务有数据库调用失败`].filter(Boolean);
   if (scope.length) summary.append(cell('small', scope.join(' · ')));
