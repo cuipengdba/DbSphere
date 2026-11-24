@@ -48,3 +48,5 @@
   .log-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .log-table th, .log-table td { padding: 6px; }
 }
+.log-investigation-step{border-inline-start:2px solid var(--accent);padding:.45rem .85rem;margin:.65rem 0;background:var(--panel)}
+.log-investigation-step p{margin:.4rem 0}

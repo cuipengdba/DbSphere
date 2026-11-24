@@ -116,6 +116,7 @@
     let active = false, generation = 0, timer, page = 0, current = '', batches = [];
     let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
     let comparing = false, baseline = '', comparisonData, compareRequest = 0;
+    let caseId = '', sourceId = '';
     let reportCharts = [];
     const filters = get('record-filters');
     const repaint = () => { if (active) reportCharts.forEach(chart => chart.draw()); };
@@ -127,6 +128,8 @@
       if (current !== id) {
         baseline = '';
         comparing = false;
+        caseId = '';
+        sourceId = '';
       }
       current = safeId(id);
       page = 0;
@@ -139,6 +142,8 @@
       const query = new URLSearchParams();
       if (current) query.set('batch', current);
       if (comparing && baseline) query.set('baseline', baseline);
+      if (caseId) query.set('case', caseId);
+      if (sourceId) query.set('source', sourceId);
       history.replaceState(null, '', '#logs' + (query.size ? '?' + query : ''));
     }
 
@@ -302,6 +307,8 @@
         for (const [name, item] of [['基线', row.baseline], ['本次', row.current]]) {
           if (item) actions.append(button(name, () => run(() => openOriginal(item.evidenceId))));
         }
+        const primary = row.current || row.baseline;
+        if (primary) actions.append(button('调查', () => run(() => investigate(primary.evidenceId, row.current && row.baseline?.evidenceId))));
         return [state, (kinds[row.kind] || row.kind) + ' · ' + (row.application || '未标识'), label, values, delta, actions];
       }), '当前筛选暂无可对齐的问题。'));
     }
@@ -338,9 +345,11 @@
         if (row.sql) content.append(element('code', row.sql));
         content.append(element('small', row.file + ' · ' + row.offset));
         const type = [kinds[row.kind] || row.kind, row.sqlstate].filter(Boolean).join(' · ');
+        const actions = element('div', undefined, 'log-actions');
+        actions.append(button('查看原文', () => run(() => openOriginal(row.id))),
+          button('调查', () => run(() => investigate(row.id))));
         return [row.at ? formatTime(row.at) : '—', type, row.application || '未标识', content,
-          row.durationMs == null ? '—' : number.format(row.durationMs) + ' ms',
-          button('查看原文', () => run(() => openOriginal(row.id)))];
+          row.durationMs == null ? '—' : number.format(row.durationMs) + ' ms', actions];
       }), '这个范围暂无日志记录。'));
       get('previous').disabled = page === 0;
       get('next').disabled = !data.more;
@@ -418,6 +427,7 @@
           element('span', row.blocker || '阻塞者缺采'));
         const actions = element('div', undefined, 'log-actions');
         actions.append(button('查看原文', () => run(() => openOriginal(row.id))));
+        actions.append(button('调查', () => run(() => investigate(row.id, '', row.nearbyEvent))));
         if (safeId(row.nearbyEvent)) actions.append(button('同窗事件', () => openEvent(row.nearbyEvent)));
         return [formatTime(row.at), chain, [row.application, row.object].filter(Boolean).join(' · ') || '未标识',
           formatted(row.durationMs), actions];
@@ -432,6 +442,52 @@
       get('raw-info').textContent = result.file + ' · 偏移 ' + result.offset + (result.truncated ? ' · 已截取长记录' : '');
       get('raw-text').textContent = result.text;
       get('raw-dialog').showModal();
+    }
+
+    async function investigate(record, baselineRecord, event) {
+      const batch = current;
+      let data = await api(base + 'records/' + record + '/investigate', 'POST', { eventId: safeId(event) });
+      if (safeId(baselineRecord)) {
+        data = await api(base + 'investigations/' + data.id + '/records', 'POST', { recordId: baselineRecord });
+      }
+      if (active && current === batch) showInvestigation(data);
+    }
+
+    function showInvestigation(data) {
+      caseId = data.id;
+      saveSelection();
+      get('investigation-status').textContent = '';
+      const view = get('investigation');
+      const diagnosis = data.diagnosis;
+      view.replaceChildren(element('h2', diagnosis.priority + ' · 根因调查'),
+        element('p', diagnosis.reason),
+        element('p', [diagnosis.confidence, data.version, coverageLabels[data.coverage], '调查编号 ' + data.id].join(' · '), 'hint'));
+      if (safeId(data.eventId)) {
+        const link = element('a', '打开事件及 AI 证据问答', 'monitor-link');
+        link.href = '#incidents?event=' + data.eventId;
+        link.addEventListener('click', event => {
+          event.preventDefault();
+          openEvent(data.eventId, true, location.hash.slice(1));
+        });
+        view.append(link);
+      }
+      view.append(element('h3', '调优与复测'));
+      for (const item of diagnosis.recommendations) {
+        const section = element('section', undefined, 'log-investigation-step');
+        section.append(element('strong', item.title), element('p', item.action),
+          element('p', '复测 · ' + item.validation, 'hint'), element('p', '回退 · ' + item.rollback, 'hint'));
+        view.append(section);
+      }
+      view.append(element('h3', '同一调查的证据'));
+      const scroll = element('div', undefined, 'log-scroll');
+      scroll.append(table(['批次', '时间', '类型', 'SQL / 应用', '原文'], data.records.map(row => [
+        row.batchName, row.at ? formatTime(row.at) : '—', kinds[row.kind] || row.kind,
+        row.sql ? element('code', row.sql, 'log-record') : row.app || '—',
+        button('查看原文', () => run(() => openOriginal(row.id), get('investigation-status')))
+      ]), '暂无关联证据。'));
+      view.append(scroll);
+      const dialog = get('investigation-dialog');
+      if (!dialog.open) dialog.showModal();
     }
 
     function showUpload(file = '') {
@@ -581,6 +637,15 @@
     get('raw-dialog').addEventListener('close', () => {
       get('raw-info').textContent = '';
       get('raw-text').textContent = '';
+      if (active && sourceId) {
+        sourceId = '';
+        saveSelection();
+      }
+    });
+    get('investigation-dialog').addEventListener('close', () => {
+      if (!active) return;
+      caseId = '';
+      saveSelection();
     });
     return { show(visible, params) {
       active = visible;
@@ -593,7 +658,17 @@
       current = safeId(params?.get('batch')) || current;
       baseline = safeId(params?.get('baseline'));
       comparing = !!baseline;
-      run(loadDirectory);
+      caseId = safeId(params?.get('case'));
+      sourceId = safeId(params?.get('source'));
+      const requestedCase = caseId, requestedSource = sourceId;
+      run(async () => {
+        await loadDirectory();
+        if (active && requestedCase === caseId && caseId) {
+          const data = await api(base + 'investigations/' + caseId);
+          if (active && requestedCase === caseId) showInvestigation(data);
+        }
+        if (active && requestedSource === sourceId && sourceId) await openOriginal(sourceId);
+      });
     } };
   }
 

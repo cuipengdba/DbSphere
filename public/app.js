@@ -2520,7 +2520,7 @@ function investigationParams(eventId) {
 }
 
 function eventMonitoringReturn(value) {
-  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard)(?:\?|$)/.test(value)) return '';
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs)(?:\?|$)/.test(value)) return '';
   const [view, query] = value.split('?', 2);
   const params = new URLSearchParams(query);
   params.delete('incidentReturn');
@@ -3246,7 +3246,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));
   if (back) {
     const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' :
-      back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' : '返回集群同窗', 'monitor-link incident-monitor-return');
+      back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' :
+        back.startsWith('logs') ? '返回日志调查' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
@@ -3831,10 +3832,12 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   timelinePanel.append(timeline);
   let highlightCount = 0;
   let highlightedNoLeader = false;
+  const logEvidenceID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
   for (const evidence of event.evidence) {
     let text = evidence.payload.error || evidence.payload.sampleId || '';
     if (evidence.kind === 'k8s_state') text = k8sStateText(evidence.payload);
     if (evidence.kind === 'root_cause_candidate') text = `${evidence.payload.hypothesis} · 置信度 ${evidence.payload.confidence}。${evidence.payload.limitation}`;
+    if (evidence.kind === 'log_record') text = [evidence.payload.code, evidence.payload.rootReason, evidence.payload.confidence].filter(Boolean).join(' · ');
     if (evidence.kind === 'linux_state') text = evidence.payload.status === 'ok'
       ? `Linux 内存已用 ${evidence.payload.memory?.usedPercent ?? '未知'}%；负载 ${evidence.payload.cpu?.load1 ?? '未知'}`
       : evidence.payload.reason || evidence.payload.status;
@@ -3891,10 +3894,16 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
+    const label = evidence.kind === 'log_record' ? '日志原始证据' :
+      external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
     if (risk && evidence.payload.sampleId) row.append(document.createTextNode(' · '), replaySampleLink(event.assetId, evidence.payload.sampleId));
+    if (evidence.kind === 'log_record' && logEvidenceID.test(evidence.payload.batchId || '') && logEvidenceID.test(evidence.payload.recordId || '')) {
+      const link = cell('a', '查看原始记录', 'monitor-link');
+      link.href = '#logs?' + new URLSearchParams({ batch: evidence.payload.batchId, source: evidence.payload.recordId });
+      row.append(document.createTextNode(' · '), link);
+    }
     if (external && evidence.payload.url?.startsWith('https://')) {
       const link = cell('a', '打开外部记录', 'monitor-link');
       link.href = evidence.payload.url;
@@ -3906,7 +3915,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const noLeader = evidence.kind === 'patroni_state' && evidence.payload?.leaderCount === 0;
     if (condensedTimeline && highlightCount < 8 && (
       evidence.kind === 'alert_firing' || evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered' ||
-      evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' ||
+      evidence.kind === 'recovery_verified' || evidence.kind === 'root_cause_candidate' || evidence.kind === 'log_record' ||
       external || risk || (noLeader && !highlightedNoLeader))) {
       const highlight = row.cloneNode(true);
       highlight.removeAttribute('id');

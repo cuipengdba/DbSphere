@@ -134,6 +134,24 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			err = storepkg.ErrLogNotFound
 		}
 	case len(sections) == 3 && sections[0] == "records" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "investigate" && r.Method == http.MethodPost:
+		var input struct{ EventID string }
+		if readJSONLimit(w, r, &input, 2048) != nil || input.EventID != "" && !opsUUID.MatchString(input.EventID) {
+			err = storepkg.ErrLogInput
+			break
+		}
+		value, err = pg.StartLogInvestigation(ctx, sections[1], input.EventID)
+	case len(sections) == 2 && sections[0] == "investigations" && opsUUID.MatchString(sections[1]) && r.Method == http.MethodGet:
+		value, err = pg.LogInvestigation(ctx, sections[1])
+	case len(sections) == 3 && sections[0] == "investigations" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "records" && r.Method == http.MethodPost:
+		var input struct{ RecordID string }
+		if readJSONLimit(w, r, &input, 2048) != nil || !opsUUID.MatchString(input.RecordID) {
+			err = storepkg.ErrLogInput
+			break
+		}
+		value, err = pg.LinkLogInvestigation(ctx, sections[1], input.RecordID)
+	case len(sections) == 3 && sections[0] == "records" && opsUUID.MatchString(sections[1]) &&
 		sections[2] == "original" && r.Method == http.MethodPost:
 		var audit string
 		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)

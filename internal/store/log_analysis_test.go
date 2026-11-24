@@ -36,7 +36,15 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	}
 	project := idOf(pg.CreateLogProject(ctx, LogProjectInput{Name: "Log analysis " + time.Now().Format(time.RFC3339Nano)}))
 	defer pg.pool.Exec(ctx, "DELETE FROM log_projects WHERE id=$1", project)
-	instance := idOf(pg.CreateLogInstance(ctx, LogInstanceInput{ProjectID: project, Name: "Orders", Environment: "production", Engine: "postgres", Version: "18"}))
+	var asset string
+	err = pg.pool.QueryRow(ctx, `INSERT INTO assets(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,created_at,organization_id)
+		SELECT gen_random_uuid(),'Log investigation fixture','127.0.0.1',5432,'orders','fixture','','disable','linux',now(),organization_id
+		FROM log_projects WHERE id=$1 RETURNING id::text`, project).Scan(&asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.pool.Exec(ctx, "DELETE FROM assets WHERE id=$1", asset)
+	instance := idOf(pg.CreateLogInstance(ctx, LogInstanceInput{ProjectID: project, Name: "Orders", Environment: "production", Engine: "postgres", Version: "18", AssetID: asset}))
 	batch := idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Name: "Rotation 1", Coverage: "slow"}))
 	line := "2026-11-24 19:10:00.123 UTC [12] app=orders-api LOG: duration: 2100.5 ms statement: select a from orders where code='fixture-private'\n"
 	payload := []byte(strings.Repeat("x", LogArchiveBlockBytes-18) + "\n" + line)
@@ -104,5 +112,26 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	health, err := pg.LogProjectHealth(ctx, project)
 	if err != nil || len(health.(map[string]any)["history"].([]logBatchSummary)) != 2 {
 		t.Fatalf("project history: %v %v", health, err)
+	}
+	caseID := idOf(pg.StartLogInvestigation(ctx, id, ""))
+	if retry := idOf(pg.StartLogInvestigation(ctx, id, "")); retry != caseID {
+		t.Fatalf("retry produced a different investigation: %s", retry)
+	}
+	linked, err := pg.LinkLogInvestigation(ctx, caseID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	investigation := linked.(map[string]any)
+	event := investigation["eventId"].(*string)
+	if event == nil || investigation["diagnosis"].(LogDiagnosis).Priority != "P2" ||
+		len(investigation["records"].([]json.RawMessage)) != 1 {
+		t.Fatalf("missing event or evidence: %+v", investigation)
+	}
+	reportText, evidence, err := pg.EventAIEvidence(ctx, *event)
+	if err != nil || len(evidence) == 0 || !strings.Contains(reportText, id) || strings.Contains(reportText, "fixture-private") {
+		t.Fatalf("event failed to preserve sanitized log evidence: %s %v", reportText, err)
+	}
+	if _, err := pg.LogInvestigation(outOfScope, caseID); !errors.Is(err, ErrLogNotFound) {
+		t.Fatalf("cross-organization investigation exposed: %v", err)
 	}
 }

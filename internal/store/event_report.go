@@ -578,13 +578,31 @@ func renderEventMarkdown(data eventReportData) string {
 		var payload map[string]any
 		_ = json.Unmarshal(evidence.Payload, &payload)
 		ids := []string{}
-		for _, key := range []string{"sampleId", "ruleId", "code"} {
+		for _, key := range []string{"sampleId", "ruleId", "code", "recordId", "batchId"} {
 			if id, ok := payload[key].(string); ok && id != "" {
 				ids = append(ids, id)
 			}
 		}
 		fmt.Fprintf(&out, "| %s | %s | %s | %s |\n", evidence.ObservedAt.UTC().Format(time.RFC3339),
 			evidence.ID, reportText(evidence.Kind), reportText(strings.Join(ids, "、")))
+	}
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "log_record" {
+			continue
+		}
+		var log struct {
+			Kind, Source, Coverage, Code, RootReason, Confidence string
+			DurationMS                                           *float64
+		}
+		if json.Unmarshal(evidence.Payload, &log) != nil {
+			continue
+		}
+		fmt.Fprintf(&out, "\n- 日志证据 %s · %s / %s · %s · %s · %s",
+			evidence.ID, reportText(log.Source), reportText(log.Kind), reportText(log.Coverage), reportText(log.Code), reportText(log.RootReason))
+		if log.DurationMS != nil {
+			fmt.Fprintf(&out, " · %.2f ms", *log.DurationMS)
+		}
+		fmt.Fprintf(&out, " · %s\n", reportText(log.Confidence))
 	}
 	if len(event.Evidence) >= 500 {
 		out.WriteString("\n时间线已达到 500 条显示上限，可能仍有其他证据。\n")
