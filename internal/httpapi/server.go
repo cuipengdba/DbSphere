@@ -575,7 +575,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if strings.HasPrefix(r.URL.Path, logAnalysisPath) {
-			serveLogAnalysis(w, r, store, role)
+			serveLogAnalysis(w, r, store, role, actor)
 			return
 		}
 		viewerScope := map[string]bool(nil)

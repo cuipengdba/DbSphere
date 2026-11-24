@@ -178,7 +178,7 @@
 
     async function openOriginal(id) {
       const selected = current;
-      const result = await api(base + 'records/' + id + '/original');
+      const result = await api(base + 'records/' + id + '/original', 'POST');
       if (!active || current !== selected) return;
       get('raw-info').textContent = result.file + ' · 偏移 ' + result.offset + (result.truncated ? ' · 已截取长记录' : '');
       get('raw-text').textContent = result.text;

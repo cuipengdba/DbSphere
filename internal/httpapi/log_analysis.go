@@ -14,7 +14,7 @@ import (
 
 const logAnalysisPath = "/api/log-analysis/"
 
-func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, role string) {
+func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, role, actor string) {
 	w.Header().Set("Cache-Control", "no-store")
 	if role != "admin" {
 		respond(w, http.StatusForbidden, map[string]string{"error": "日志分析需要管理员权限"})
@@ -116,9 +116,9 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			err = storepkg.ErrLogNotFound
 		}
 	case len(sections) == 3 && sections[0] == "records" && opsUUID.MatchString(sections[1]) &&
-		sections[2] == "original" && r.Method == http.MethodGet:
+		sections[2] == "original" && r.Method == http.MethodPost:
 		var audit string
-		audit, err = pg.StartAdminAudit(ctx, r.Method, r.URL.Path)
+		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
 		if err == nil {
 			value, err = pg.LogOriginal(ctx, sections[1])
 			if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(http.StatusOK, err)); auditErr != nil {
