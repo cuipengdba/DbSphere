@@ -1,0 +1,53 @@
+name: v2.24.0 DM8 native log acceptance
+
+on:
+  push:
+    branches: [verify/v2.24-dm8-acceptance]
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 23
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-browser-fixture
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Import real DM8 SQL trace into the exact v2.24.0 release
+        shell: bash
+        env:
+          DBSPHERE_HOST: 127.0.0.1
+          DBSPHERE_PORT: 18080
+          DBSPHERE_ADMIN_PASSWORD: dbsphere-browser-admin-fixture
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-browser-fixture@127.0.0.1:15434/postgres?sslmode=disable
+          DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+        run: |
+          git diff --exit-code refs/tags/v2.24.0 HEAD -- cmd internal public deploy assets.go go.mod go.sum
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
+          go build -o "$RUNNER_TEMP/dbsphere" ./cmd/dbsphere
+          "$RUNNER_TEMP/dbsphere" >"$RUNNER_TEMP/dbsphere.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:18080/readyz
+          bash .github/qa/v224-dm8.sh | tee "$RUNNER_TEMP/native-results.json"
+          grep -q 'V224_NATIVE_LOG_PASS' "$RUNNER_TEMP/native-results.json"
