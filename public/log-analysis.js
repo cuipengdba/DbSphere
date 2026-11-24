@@ -394,7 +394,13 @@
       const report = await api(base + 'batches/' + id + '/report?' + query);
       if (id !== current || !active || request !== reportRequest) return;
       const panel = get('report');
-      panel.replaceChildren(element('h2', '全景分析'));
+      const scope = [query.get('application'), query.get('fingerprint'), kinds[query.get('kind')]].filter(Boolean);
+      panel.replaceChildren(element('h2', scope.length ? '性能下钻' : '全景分析'));
+      if (scope.length) {
+        const currentScope = element('div', undefined, 'log-actions');
+        currentScope.append(element('span', scope.join(' · ')), button('清除下钻', () => focusReport({ application: '', fingerprint: '', kind: '' })));
+        panel.append(currentScope);
+      }
       reportCharts = [];
       if (!report.series.length) {
         panel.append(element('p', '当前范围暂无带时间的采样记录。', 'empty'));
@@ -405,7 +411,9 @@
       const monitoring = report.monitoringCounters?.databaseTps;
       panel.append(element('p', [
         rateWord + ' ' + formatted(totals.statements) + ' 条',
+        '覆盖 ' + coverageLabels[report.coverage],
         '延迟样本 ' + formatted(totals.timed) + ' 条',
+        '缺少耗时 ' + formatted(totals.statements - totals.timed) + ' 条',
         'P95 ' + formatted(totals.p95) + ' ms', 'P99 ' + formatted(totals.p99) + ' ms',
         monitoring == null ? '显式事务记录 ' + formatted(totals.explicitTransactions) : '同期监控 TPS ' + formatted(monitoring)
       ].join(' · '), 'hint'));
@@ -435,16 +443,40 @@
         section.append(element('h3', title), scroll);
         panel.append(section);
       };
+      if (totals.timed > 0) {
+        const intervals = ['< 10 ms', '10–<50 ms', '50–<100 ms', '100–<500 ms',
+          '500–<1,000 ms', '1–<5 s', '≥ 5 s'];
+        const ranges = element('div', undefined, 'log-latency-profile');
+        const counts = totals.latencyBuckets;
+        intervals.forEach((label, index) => {
+          const item = element('div');
+          const meter = element('meter');
+          meter.max = totals.timed;
+          meter.value = counts[index];
+          meter.setAttribute('aria-label', label + ' · ' + formatted(counts[index]) + ' 条');
+          item.append(element('span', label), meter, element('strong', formatted(counts[index])));
+          ranges.append(item);
+        });
+        panel.append(element('h3', 'SQL 延迟分布'), ranges);
+      }
+      if (report.examples.length) {
+        block('代表 SQL 记录', ['时间', '应用', 'SQL', '耗时 ms', '证据'], report.examples.map(row => {
+          const actions = element('div', undefined, 'log-actions');
+          if (row.retained) actions.append(button('查看原文', () => run(() => openOriginal(row.id))));
+          else actions.append(element('small', '原文已到期'));
+          actions.append(button('调查', () => run(() => investigate(row.id))));
+          return [row.at ? formatTime(row.at) : '—', row.application || '未标识',
+            element('code', row.sql, 'log-record'), formatted(row.durationMs), actions];
+        }), '当前窗口没有计时样本。');
+      }
       block('Application 流量与资源矩阵', ['应用', '已记录 SQL', 'SQL 累计 ms', 'P95 ms', '锁等待 ms', '临时文件', '错误'],
-        report.applications.map(app => [app.application ? button(app.application, () => {
-          filters.elements.application.value = app.application;
-          page = 0;
-          run(async () => { await loadRecords(); await loadReport(); });
-        }) : '未标识', formatted(app.statements), formatted(app.sqlMs), formatted(app.p95), formatted(app.waitMs),
+        report.applications.map(app => [app.application ? button(app.application, () => focusReport({ application: app.application })) :
+          '未标识', formatted(app.statements), formatted(app.sqlMs), formatted(app.p95), formatted(app.waitMs),
           app.tempBytes > 0 ? bytes(app.tempBytes) : '—', formatted(app.errors)]), '无可归属的应用记录。');
-      block('Top 慢 SQL', ['归一化 SQL', '次数', '≥1 秒', '累计 ms', '最大 ms', 'P95 ms'], report.slowSQL.map(row =>
+      block('Top 慢 SQL', ['归一化 SQL', '次数', '≥1 秒', '累计 ms', '最大 ms', 'P95 ms', '分析'], report.slowSQL.map(row =>
         [element('code', row.sql, 'log-record'), formatted(row.calls), formatted(row.slowCalls),
-          formatted(row.totalMs), formatted(row.maxMs), formatted(row.p95)]), '当前日志缺少可比较的带耗时 SQL。');
+          formatted(row.totalMs), formatted(row.maxMs), formatted(row.p95),
+          button('分析 SQL', () => focusReport({ fingerprint: row.fingerprint, kind: '' }))]), '当前日志缺少可比较的带耗时 SQL。');
       block('锁阻塞证据', ['时间', '等待者 → 阻塞者', '应用与锁对象', '等待 ms', '证据'], report.locks.map(row => {
         const chain = element('div', undefined, 'log-chain');
         chain.append(element('span', row.waiter || '未知会话'), element('strong', '→'),
@@ -457,6 +489,15 @@
           formatted(row.durationMs), actions];
       }), '当前范围未记录锁阻塞。');
       requestAnimationFrame(repaint);
+    }
+
+    function focusReport(selection) {
+      for (const [key, value] of Object.entries(selection)) filters.elements[key].value = value;
+      page = 0;
+      run(async () => {
+        await Promise.all([loadRecords(), loadReport()]);
+        if (active) get('report').scrollIntoView({ block: 'start' });
+      });
     }
 
     async function openOriginal(id) {

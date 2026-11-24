@@ -20,10 +20,11 @@ func migrateLogReport(ctx context.Context, tx pgx.Tx) error {
 
 const logReportFilter = `r.batch_id=$1 AND ($2='' OR r.application=$2)
 	AND ($3::timestamptz IS NULL OR r.observed_at >= $3)
-	AND ($4::timestamptz IS NULL OR r.observed_at < $4)`
+	AND ($4::timestamptz IS NULL OR r.observed_at < $4)
+	AND ($5='' OR r.fingerprint=$5) AND ($6='' OR r.kind=$6)`
 
 func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecordQuery) (any, error) {
-	if len(filters.Application) > 256 {
+	if len(filters.Application) > 256 || len(filters.Fingerprint) > 64 || len(filters.Kind) > 32 {
 		return nil, ErrLogInput
 	}
 	var coverage, engine string
@@ -36,25 +37,34 @@ func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecor
 	}
 	var summary json.RawMessage
 	var from, to *time.Time
+	args := []any{batch, filters.Application, filters.From, filters.To, filters.Fingerprint, filters.Kind}
 	err = s.pool.QueryRow(ctx, `SELECT min(observed_at),max(observed_at),jsonb_build_object(
 		'records',count(*),'valid',count(observed_at),
 		'statements',count(*) FILTER(WHERE kind='statement'),
 		'timed',count(duration_ms) FILTER(WHERE kind='statement'),
 		'explicitTransactions',count(*) FILTER(WHERE kind='statement' AND command IN ('COMMIT','ROLLBACK','END')),
 		'errors',count(*) FILTER(WHERE kind IN ('error','deadlock')),
+		'latencyBuckets',jsonb_build_array(
+			count(*) FILTER(WHERE kind='statement' AND duration_ms < 10),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 10 AND duration_ms < 50),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 50 AND duration_ms < 100),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 100 AND duration_ms < 500),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 500 AND duration_ms < 1000),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 1000 AND duration_ms < 5000),
+			count(*) FILTER(WHERE kind='statement' AND duration_ms >= 5000)),
 		'p95',percentile_cont(0.95) WITHIN GROUP(ORDER BY duration_ms) FILTER(WHERE kind='statement'),
 		'p99',percentile_cont(0.99) WITHIN GROUP(ORDER BY duration_ms) FILTER(WHERE kind='statement'))
-		FROM log_records r WHERE `+logReportFilter, batch, filters.Application, filters.From, filters.To).
+		FROM log_records r WHERE `+logReportFilter, args...).
 		Scan(&from, &to, &summary)
 	if err != nil {
 		return nil, err
 	}
 	report := map[string]any{"engine": engine, "coverage": coverage, "summary": summary, "assetId": asset,
-		"series": []any{}, "applications": []any{}, "slowSQL": []any{}, "locks": []any{}, "bucketSeconds": 60}
+		"series": []any{}, "applications": []any{}, "slowSQL": []any{}, "locks": []any{}, "bucketSeconds": 60,
+		"examples": []any{}}
 	if from == nil || to == nil {
 		return report, nil
 	}
-	args := []any{batch, filters.Application, filters.From, filters.To}
 	seconds := max(60, int((to.Sub(*from)+120*time.Second-1)/(120*time.Second)))
 	anchor := from.Truncate(time.Minute)
 	series, err := s.queryJSON(ctx, `SELECT jsonb_build_object('at',bucket,
@@ -69,7 +79,7 @@ func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecor
 		'tempBytes',sum(temp_bytes),'temp',count(*) FILTER(WHERE kind='temp'),
 		'p95',percentile_cont(0.95) WITHIN GROUP(ORDER BY duration_ms) FILTER(WHERE kind='statement'),
 		'p99',percentile_cont(0.99) WITHIN GROUP(ORDER BY duration_ms) FILTER(WHERE kind='statement'))
-		FROM (SELECT r.*,date_bin(make_interval(secs=>$5),r.observed_at,$6::timestamptz) AS bucket
+		FROM (SELECT r.*,date_bin(make_interval(secs=>$7),r.observed_at,$8::timestamptz) AS bucket
 			FROM log_records r WHERE r.observed_at IS NOT NULL AND `+logReportFilter+`) points
 		GROUP BY bucket ORDER BY bucket`, append(args, seconds, anchor)...)
 	if err != nil {
@@ -98,7 +108,7 @@ func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecor
 		'application',application,'waiter',process_id,'blocker',blocker_id,'database',database_name,
 		'durationMs',duration_ms,'kind',r.kind,'sql',sql_shape,'object',object_key,'nearbyEvent',nearby.id)
 		FROM log_records r LEFT JOIN LATERAL (
-			SELECT e.id FROM events e WHERE e.asset_id=$5
+			SELECT e.id FROM events e WHERE e.asset_id=$7
 				AND e.started_at BETWEEN r.observed_at-interval '2 minutes' AND r.observed_at+interval '1 minute'
 				AND (e.kind LIKE '%lock%' OR e.kind LIKE '%wait%')
 			ORDER BY abs(extract(epoch FROM e.started_at-r.observed_at)),e.id LIMIT 1
@@ -108,7 +118,7 @@ func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecor
 		return nil, err
 	}
 	var counters json.RawMessage
-	if asset != nil {
+	if asset != nil && filters.Application == "" && filters.Fingerprint == "" && filters.Kind == "" {
 		// A whole-instance TPS is only returned when the same database counter
 		// and restart identity can be verified across samples in the log window.
 		err = s.pool.QueryRow(ctx, `WITH observed AS (
@@ -131,6 +141,17 @@ func (s *Postgres) LogReport(ctx context.Context, batch string, filters LogRecor
 			return nil, err
 		}
 		report["monitoringCounters"] = counters
+	}
+	if filters.Application != "" || filters.Fingerprint != "" {
+		examples, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',r.id,'at',r.observed_at,'application',r.application,
+			'sql',r.sql_shape,'durationMs',r.duration_ms,'retained',f.archive_expired_at IS NULL AND f.stored_size>0)
+			FROM log_records r JOIN log_files f ON f.id=r.file_id WHERE r.kind='statement'
+				AND r.duration_ms IS NOT NULL AND `+logReportFilter+
+			` ORDER BY r.duration_ms DESC,r.observed_at DESC NULLS LAST,r.id LIMIT 3`, args...)
+		if err != nil {
+			return nil, err
+		}
+		report["examples"] = examples
 	}
 	report["series"], report["bucketSeconds"], report["from"], report["to"] = series, seconds, from, to
 	report["applications"], report["slowSQL"], report["locks"] = apps, slow, locks

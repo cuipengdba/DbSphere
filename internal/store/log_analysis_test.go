@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -229,6 +231,48 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	updatedReport, _, err := pg.EventAIEvidence(ctx, *event)
 	if err != nil || !strings.Contains(updatedReport, candidate) {
 		t.Fatalf("adopted record missing from original event: %v", err)
+	}
+	hotspot := idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Name: "Application latency", Coverage: "sampled"}))
+	var sample strings.Builder
+	for index, message := range []string{
+		"alpha LOG: duration: 9 ms statement: select a from hotspot where code='a'",
+		"alpha LOG: duration: 50 ms statement: select a from hotspot where code='b'",
+		"alpha LOG: duration: 1200 ms statement: select a from hotspot where code='c'",
+		"alpha LOG: statement: select a from hotspot where code='d'",
+		"beta LOG: duration: 30000 ms statement: select a from hotspot where code='e'",
+	} {
+		fmt.Fprintf(&sample, "2026-11-24 19:20:%02d UTC [13] app=%s\n", index, message)
+	}
+	trace := idOf(pg.CreateLogFile(ctx, hotspot, LogFileInput{Name: "latency.log", Format: "text", Size: int64(sample.Len())}))
+	if _, err := pg.AppendLogBlock(ctx, trace, 0, []byte(sample.String())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.QueueLogFile(ctx, trace, nil); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := pg.ProcessNextLogFile(ctx); err != nil || !done {
+		t.Fatalf("prepare latency samples: %v %v", done, err)
+	}
+	full, err := pg.LogReport(ctx, hotspot, LogRecordQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target struct{ Fingerprint string }
+	if err := json.Unmarshal(full.(map[string]any)["slowSQL"].([]json.RawMessage)[0], &target); err != nil || target.Fingerprint == "" {
+		t.Fatalf("fingerprint for hotspot: %v", err)
+	}
+	filtered, err := pg.LogReport(ctx, hotspot, LogRecordQuery{Application: "alpha", Fingerprint: target.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var latency struct {
+		Statements, Timed int
+		LatencyBuckets    []int
+	}
+	rel := filtered.(map[string]any)
+	if err := json.Unmarshal(rel["summary"].(json.RawMessage), &latency); err != nil || latency.Statements != 4 || latency.Timed != 3 ||
+		!slices.Equal(latency.LatencyBuckets, []int{1, 0, 1, 0, 0, 1, 0}) || len(rel["examples"].([]json.RawMessage)) != 3 {
+		t.Fatalf("filtered latency profile: %+v %v", latency, err)
 	}
 	if result, err := pg.VerifyLogFile(ctx, file); err != nil || result.(map[string]any)["rawSize"] != int64(len(payload)) {
 		t.Fatalf("archive validation: %v %v", result, err)
