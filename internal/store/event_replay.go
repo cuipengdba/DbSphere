@@ -121,6 +121,7 @@ type replayPoint struct {
 	Stage      string     `json:"stage"`
 	Kind       string     `json:"kind"`
 	Signal     string     `json:"signal,omitempty"`
+	Value      *float64   `json:"value,omitempty"`
 	Source     string     `json:"source,omitempty"`
 	Strength   string     `json:"strength"`
 	Phase      string     `json:"phase,omitempty"`
@@ -142,6 +143,9 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		}
 		point := replayPoint{EvidenceID: item.ID, At: item.ObservedAt, Kind: item.Kind, Stage: "observation", Strength: "insufficient"}
 		point.Signal, point.Source = stringValue(payload["metric"]), stringValue(payload["source"])
+		if value, ok := numeric(payload["value"]); ok {
+			point.Value = &value
+		}
 		point.Layer = incidentLayer(item.Kind, point.Signal)
 		if item.Kind == mysqlLockGroup || point.Source == "go_mysql_collector" ||
 			(event.Kind == mysqlLockGroup && item.Kind == "collection_recovered") {
@@ -159,7 +163,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			layers[point.Layer] = true
 		}
 		switch item.Kind {
-		case "collection_error", "alert_firing", mysqlLockGroup:
+		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup:
 			point.Stage = "detection"
 			if detection == nil || (detection.SampleID == "" && point.SampleID != "") {
 				value := point
@@ -283,6 +287,19 @@ func (s *Postgres) enrichIncidentReplay(ctx context.Context, event *eventRecord,
 	replay["comparison"] = []replayComparison{compareReplaySample("before", baseline),
 		compareReplaySample("during", reference(replay["detection"].(*replayPoint))),
 		compareReplaySample("after", reference(replay["recovery"].(*replayPoint)))}
+	for _, point := range points {
+		if point.Stage != "detection" || point.SampleID == "" {
+			continue
+		}
+		peak, err := s.incidentPeak(ctx, event, &point, samples[point.SampleID])
+		if err != nil {
+			return err
+		}
+		if peak != nil {
+			replay["peak"] = peak
+			break
+		}
+	}
 	return nil
 }
 
@@ -333,6 +350,10 @@ func incidentLayer(kind, metric string) string {
 		return "notification"
 	case kind == "operator_response" || kind == "event_acknowledged" || kind == "rca_decision" || kind == "event_handoff" || strings.HasPrefix(kind, "work_order_"):
 		return "response"
+	case strings.HasPrefix(metric, "container.") || metric == "k8s.pvc_used_percent" || metric == "linux.disk_used_percent":
+		return "storage"
+	case kind == "routing_observed" || strings.HasPrefix(metric, "routing."):
+		return "entry"
 	case strings.HasPrefix(kind, "k8s_") || strings.HasPrefix(metric, "k8s."):
 		return "k8s"
 	case strings.HasPrefix(kind, "linux_") || strings.HasPrefix(metric, "linux."):

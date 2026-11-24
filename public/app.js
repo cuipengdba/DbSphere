@@ -604,6 +604,10 @@ function updateRuntime(runtime) {
   workspaceData.runtime = runtime;
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
+  const version = $('workspace-version');
+  version.hidden = !runtime?.version;
+  version.textContent = runtime?.version ? `v${runtime.version}` : '';
+  version.title = version.hidden ? '' : `DbSphere ${version.textContent}`;
   if (runtime?.version) {
     const preview = runtime.version.includes('-');
     $('release-label').textContent = `V${runtime.version} · ${runtime.backend === 'go' ? 'Go' : 'Node.js'} ${preview ? '开发预览' : '正式版'}`;
@@ -2423,7 +2427,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', postgres: 'PostgreSQL', mysql: 'MySQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -2537,6 +2541,32 @@ function openEventStorage(event, range) {
   setView('storage?' + query);
 }
 
+const investigationMetrics = {
+  'pg.blocked_sessions': ['阻塞会话', ''],
+  'pgbouncer.waiting_clients': ['PgBouncer 等待客户端', ''],
+  'pg.replication_lag_bytes': ['主库记录的最大回放差距', ' B'],
+  'k8s.pvc_used_percent': ['同一 PVC 已用容量', '%'],
+  'container.io_pressure': ['同一容器 I/O PSI avg10', '%']
+};
+
+function incidentPointKey(point) {
+  return point.evidenceId || (point.traceId && point.spanId ? `${point.traceId}:${point.spanId}` : '');
+}
+
+function incidentPointSource(event, point, title) {
+  if (point.sampleId) {
+    const link = replaySampleLink(event.assetId, point.sampleId);
+    if (title) link.textContent = title;
+    return link;
+  }
+  if (!point.traceId) return null;
+  const link = cell('a', title || '原始 Trace', 'monitor-link');
+  link.href = `/api/assets/${event.assetId}/traces/${point.traceId}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  return link;
+}
+
 function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   const panel = cell('section', '', 'investigation');
   panel.setAttribute('aria-label', '事件调查工作台');
@@ -2545,43 +2575,64 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   const diagnosis = cell('section', '', 'investigation-pane');
   grid.append(timeline, diagnosis);
   panel.append(grid);
-  const phases = [['before', '故障前'], ['during', '触发时'], ['after', '恢复后']];
-  const layers = [['all', '全部'], ['postgres', '数据库'], ['pooler', '连接池'], ['app', '应用'], ['infra', '基础设施']];
-  const layerKeys = {postgres: ['postgres', 'mysql', 'sql', 'replication'], pooler: ['pooler'], app: ['app'], infra: ['linux', 'k8s']};
+  const phases = [['before', '故障前'], ['during', '触发时'], ['peak', '峰值'], ['after', '恢复后']];
+  const layers = [['all', '全部'], ['app', '应用'], ['pooler', '入口与连接池'], ['postgres', '数据库'], ['infra', 'Linux / Kubernetes'], ['storage', '容器 / 磁盘 / PVC']];
+  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
+  if (replay.peak) comparisons.set('peak', replay.peak);
   const params = investigationParams(event.id);
   let phase = phases.some(([key]) => key === params.get('focusPhase')) ? params.get('focusPhase') : 'during';
   let layer = layers.some(([key]) => key === params.get('focusLayer')) ? params.get('focusLayer') : 'all';
+  let focused = replay.points.find(point => incidentPointKey(point) && incidentPointKey(point) === params.get('focusPoint'));
   const anchor = cell('p', '', 'investigation-anchor');
   const list = cell('div', '', 'investigation-signals');
-  const phaseBar = cell('div', '', 'section-nav investigation-controls');
-  const layerBar = cell('div', '', 'section-nav investigation-controls');
+  const lanes = cell('div', '', 'investigation-lanes');
+  const selection = cell('div', '', 'investigation-selection');
+  const phaseBar = cell('div', '', 'investigation-stages');
   phaseBar.setAttribute('aria-label', '故障阶段');
-  layerBar.setAttribute('aria-label', '调查证据层');
+  lanes.setAttribute('aria-label', '同窗分层证据');
   const phaseControls = phases.map(([key, label]) => {
-    const button = cell('button', label);
+    const button = cell('button', '', 'investigation-stage');
     button.type = 'button';
-    button.addEventListener('click', () => { phase = key; render(true); });
+    const stage = stagePoint(key);
+    const at = stage?.sampleAt || stage?.at;
+    button.append(cell('strong', label), cell('small', at ? formatTime(at) : key === 'after' && event.status === 'open' ? '待恢复' : '缺采样'));
+    button.addEventListener('click', () => { phase = key; focused = undefined; render(true); });
+    button.dataset.phase = key;
     phaseBar.append(button);
     return button;
   });
-  const layerControls = layers.map(([key, label]) => {
-    const button = cell('button', label);
-    button.type = 'button';
-    button.addEventListener('click', () => { layer = key; render(true); });
-    layerBar.append(button);
-    return button;
-  });
-  timeline.append(cell('h4', '同一时间窗'), phaseBar, anchor, layerBar, list);
+  timeline.append(cell('h4', '同一时间窗'), phaseBar, anchor, lanes, selection, list);
   const exportButton = cell('button', '下载当前证据复盘', 'ghost small-button');
   exportButton.type = 'button';
-  const candidates = (analysis.candidates || []).slice().sort((a, b) =>
-    Number(b.evidenceStrength === 'direct') - Number(a.evidenceStrength === 'direct'));
+  const rank = candidate => Number(candidate.review?.status !== 'rejected') * 4 + Number(candidate.evidenceStrength === 'direct');
+  const candidates = (analysis.candidates || []).slice().sort((a, b) => rank(b) - rank(a));
   const primary = candidates[0];
-  diagnosis.append(cell('h4', '下一步核查'));
+  const supportNodes = new Set((primary?.supports || []).map(id => id.includes(':') ? id : `evidence:${id}`));
+  const supportingPoint = replay.points.find(point => point.sampleId && point.strength === 'direct' &&
+    supportNodes.has(`sample:${point.sampleId}`) && supportNodes.has(`evidence:${point.evidenceId}`));
+  const sampleOnly = (analysis.graph?.nodes || []).find(node => node.type === 'sample' && supportNodes.has(node.id));
+  const explainsLock = scope?.locks && (!primary || supportNodes.has(`sample:${scope.locks.sampleId}`));
+  const strongestSource = (explainsLock ? scope.locks : null) || supportingPoint ||
+    (sampleOnly ? {sampleId: sampleOnly.id.slice(7), at: sampleOnly.at} : null);
+  diagnosis.append(cell('h4', '根因与关键证据'));
+  if (primary) {
+    diagnosis.append(cell('div', replayStrength[primary.evidenceStrength] || '待核验', `investigation-confidence is-${primary.evidenceStrength}`),
+      cell('strong', primary.hypothesis || primary.title, 'investigation-hypothesis'));
+  } else diagnosis.append(cell('p', '当前还缺少可核验的根因候选。', 'hint'));
+  if (strongestSource) {
+    const title = explainsLock ? '查看阻塞者原始采样' : primary?.evidenceStrength === 'direct' ? '查看关键原始采样' : '核对候选原始采样';
+    const link = incidentPointSource(event, strongestSource, title);
+    link.classList.add('investigation-primary');
+    diagnosis.append(link);
+    const at = strongestSource.sampleAt || strongestSource.at;
+    if (at) diagnosis.append(cell('small', formatTime(at)));
+  } else if (replay.detection?.sampleId) {
+    diagnosis.append(incidentPointSource(event, replay.detection, '查看触发原始采样'));
+  }
   if (scope?.locks) {
     const locks = scope.locks;
-    diagnosis.append(cell('p', '触发样本中的实际阻塞关系', 'hint'));
+    if (!explainsLock) diagnosis.append(incidentPointSource(event, locks, '触发锁链采样'));
     const pairs = cell('ul', '', 'investigation-locks');
     for (const pair of locks.pairs) {
       const line = cell('li', `等待 PID ${pair.waitingPid} → 阻塞 PID ${pair.blockerPid}`);
@@ -2589,32 +2640,39 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
       line.append(cell('small', ids.join(' · ') || '当前样本未提供会话 Query ID'));
       pairs.append(line);
     }
-    const link = replaySampleLink(event.assetId, locks.sampleId);
-    link.textContent = '查看阻塞者原始采样';
-    diagnosis.append(pairs, link);
+    diagnosis.append(pairs);
   }
-  if (primary) {
-    diagnosis.append(cell('strong', primary.hypothesis),
-      cell('p', replayStrength[primary.evidenceStrength] || '待核验', 'hint'));
-    const feedback = [primary.limitation, primary.review?.status && `人工结论 ${primary.review.status}`].filter(Boolean);
-    if (feedback.length) diagnosis.append(cell('p', feedback.join(' · '), 'hint'));
-    if (primary.against?.length) diagnosis.append(cell('p', `反证 ${primary.against.length} 条，见下方根因候选。`, 'warning'));
-  } else diagnosis.append(cell('p', '缺少可核验的根因候选。', 'hint'));
+  const conflicts = replay.points.filter(point => point.strength === 'conflict');
+  const reasons = [...(primary?.missing || []), primary?.limitation].filter(Boolean);
+  const cautions = cell('div', '', 'investigation-cautions');
+  if (primary?.review?.status) cautions.append(cell('p', primary.review.status === 'rejected' ? '人工复核已驳回' : '已记录人工复核'));
+  if (primary?.against?.length || conflicts.length) {
+    const counterEvidence = primary?.against?.[0];
+    cautions.append(cell('strong', '反证与标识冲突'),
+      cell('p', conflicts[0]?.limitation || (typeof counterEvidence === 'string' ? counterEvidence : '详见根因候选中的反证。')));
+  }
+  if (reasons.length || analysis.missingSignals?.length) {
+    cautions.append(cell('strong', '待核对'), cell('p', reasons[0] || analysis.missingSignals[0]));
+  }
+  if (cautions.childElementCount) diagnosis.append(cautions);
   diagnosis.append(exportButton);
 
-  function focus() {
-    const row = comparisons.get(phase);
-    const observation = phase === 'during' ? replay.detection : phase === 'after' ? replay.recovery : null;
+  function stagePoint(key) {
+    const row = comparisons.get(key);
+    const observation = key === 'during' ? replay.detection : key === 'after' ? replay.recovery : null;
     return row?.sampleId ? row : observation || null;
   }
+  function focus() { return focused || stagePoint(phase); }
   function selectedPoints(at) {
     if (!Number.isFinite(at)) return [];
     return replay.points.filter(point => (layer === 'all' || layerKeys[layer].includes(point.layer)) &&
-      Math.abs(Date.parse(point.at) - at) <= 300000).slice(0, 16);
+      Math.abs(Date.parse(point.at) - at) <= 300000)
+      .sort((a, b) => Math.abs(Date.parse(a.at) - at) - Math.abs(Date.parse(b.at) - at)).slice(0, 16);
   }
   function pointStrength(point) {
-    if (point.strength === 'direct' && ['linux', 'k8s'].includes(point.layer) &&
-        !primary?.supports?.includes(`evidence:${point.evidenceId}`)) return '同期基础设施观测';
+    if (point.strength === 'direct' && (point.stage === 'recovery' || point.stage === 'detection')) return '原始观测';
+    if (point.strength === 'direct' && ['linux', 'k8s', 'storage'].includes(point.layer) &&
+        !supportNodes.has(`evidence:${point.evidenceId}`)) return '同期基础设施观测';
     return replayStrength[point.strength] || '待核验';
   }
   function openFocusedMonitoring(topic, point, at) {
@@ -2622,14 +2680,22 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   }
   function phaseWindow(at) {
     const source = eventMonitoringRange(event.id);
-    return source && at >= source.from && at < source.to ? source : { from: at - 300000, to: Math.min(Date.now(), at + 300000) };
+    return source && at >= source.from && at < source.to ? source : { from: at - 300000, to: Math.max(at + 1, Math.min(Date.now(), at + 300000)) };
+  }
+  function selectPoint(point, key) {
+    focused = point;
+    layer = key;
+    render(true);
+    selection.focus({preventScroll: true});
   }
   function render(save) {
     phaseControls.forEach((button, i) => button.setAttribute('aria-pressed', String(phases[i][0] === phase)));
-    layerControls.forEach((button, i) => button.setAttribute('aria-pressed', String(layers[i][0] === layer)));
     if (save) {
       const query = investigationParams(event.id);
       query.set('focusPhase', phase); query.set('focusLayer', layer);
+      const key = focused && incidentPointKey(focused);
+      if (key) query.set('focusPoint', key);
+      else query.delete('focusPoint');
       history.replaceState(history.state, '', `#incidents?${query}`);
     }
     const point = focus();
@@ -2638,15 +2704,74 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     anchor.replaceChildren(document.createTextNode(viewport
       ? `${formatTime(at)} · ${formatTime(viewport.from)} 至 ${formatTime(viewport.to)}${point.sampleId ? '' : ' · 无对应原始采样'}`
       : phase === 'after' && event.status === 'open' ? '等待恢复观测' : '缺少可比采样'));
-    if (point?.sampleId) anchor.append(' · ', replaySampleLink(event.assetId, point.sampleId));
-    if (grafanaLink && viewport) {
+    if (grafanaLink) {
+      const range = viewport || phaseWindow(Date.parse(event.startedAt));
       const params = new URLSearchParams(grafanaLink.hash.split('?')[1]);
       const source = `incidents?${investigationParams(event.id)}`;
-      params.set('from', String(viewport.from));
-      params.set('to', String(viewport.to));
+      params.set('from', String(range.from));
+      params.set('to', String(range.to));
       params.set('var-dbsphere_context', source);
       params.set('back', source);
       grafanaLink.href = '#grafana?' + params;
+    }
+    lanes.replaceChildren();
+    const all = cell('button', '所有证据层', 'investigation-lane-filter');
+    all.type = 'button';
+    all.setAttribute('aria-pressed', String(layer === 'all'));
+    all.addEventListener('click', () => { layer = 'all'; render(true); lanes.firstElementChild.focus(); });
+    lanes.append(all);
+    for (const [key, label] of layers.slice(1)) {
+      const row = cell('div', '', 'investigation-lane');
+      const filter = cell('button', label, 'investigation-lane-filter');
+      filter.type = 'button';
+      filter.setAttribute('aria-pressed', String(layer === key));
+      filter.addEventListener('click', () => { layer = key; render(true); lanes.querySelector(`[data-lane="${key}"]`).focus(); });
+      filter.dataset.lane = key;
+      row.append(filter);
+      const track = cell('div', '', 'investigation-track');
+      const points = viewport ? replay.points.filter(item => {
+        const time = Date.parse(item.at);
+        return layerKeys[key].includes(item.layer) && time >= viewport.from && time <= viewport.to;
+      }) : [];
+      if (!points.length) track.append(cell('small', '当前选区缺采样', 'investigation-track-empty'));
+      else {
+        const position = time => 4 + 92 * (time - viewport.from) / (viewport.to - viewport.from);
+        const marker = cell('span', '', 'investigation-cursor');
+        marker.style.left = `${position(at)}%`;
+        marker.setAttribute('aria-hidden', 'true');
+        track.append(marker);
+        const nextByPosition = new Map();
+        for (const item of points) {
+          const bucket = Math.round(position(Date.parse(item.at)) / 7);
+          const previous = nextByPosition.get(bucket);
+          if (!previous || item === focused || (previous !== focused && item.strength === 'conflict')) nextByPosition.set(bucket, item);
+        }
+        for (const item of nextByPosition.values()) {
+          const button = cell('button', '', `investigation-dot is-${item.strength}`);
+          button.type = 'button';
+          button.style.left = `${position(Date.parse(item.at))}%`;
+          button.title = `${replayKinds[item.kind] || item.kind} · ${formatTime(item.at)} · ${pointStrength(item)}`;
+          button.setAttribute('aria-label', button.title);
+          button.setAttribute('aria-pressed', String(item === focused));
+          button.addEventListener('click', () => selectPoint(item, key));
+          track.append(button);
+        }
+      }
+      row.append(track, cell('small', points.length ? String(points.length) : '—', 'investigation-lane-count'));
+      lanes.append(row);
+    }
+    selection.replaceChildren();
+    selection.hidden = !point;
+    selection.tabIndex = -1;
+    if (point) {
+      const [label, unit] = investigationMetrics[point.signal] || [point.signal, ''];
+      const value = Number.isFinite(point.value) && label ? `${label} ${new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 2}).format(point.value)}${unit}` : '';
+      const peak = point === replay.peak;
+      selection.append(cell('strong', value || (point.kind ? replayKinds[point.kind] || point.kind : '阶段采样')));
+      if (peak) selection.append(cell('small', `${point.identity ? point.identity + ' · ' : ''}${point.observed} 个可比较样本${point.limited ? ` · 扫描截至 ${formatTime(point.scannedTo)}` : ''}`));
+      else if (point.limitation) selection.append(cell('small', point.limitation));
+      const raw = incidentPointSource(event, point);
+      if (raw) selection.append(raw);
     }
     list.replaceChildren();
     if (assetServerPaging && Number.isFinite(at)) {
@@ -2657,7 +2782,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
         button.addEventListener('click', () => openFocusedMonitoring(topic, point, at));
         actions.append(button);
       }
-      if (layer === 'infra' && ['linux', 'k8s'].includes(allAssets.find(asset => asset.id === event.assetId)?.runtime)) {
+      if ((layer === 'infra' || layer === 'storage') && ['linux', 'k8s'].includes(allAssets.find(asset => asset.id === event.assetId)?.runtime)) {
         const disk = cell('button', '存储与容器趋势', 'ghost small-button');
         disk.type = 'button';
         disk.addEventListener('click', () => openEventStorage(event, viewport));
@@ -2670,9 +2795,13 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     for (const item of points) {
       const row = cell('div', '', 'investigation-signal');
       const label = [replayLayers[item.layer], replayKinds[item.kind] || item.kind].filter(Boolean).join(' · ');
-      row.append(cell('strong', label), cell('small', `${formatTime(item.at)} · ${pointStrength(item)}`));
+      const pick = cell('button', label, 'investigation-pick');
+      pick.type = 'button';
+      pick.addEventListener('click', () => selectPoint(item, layer));
+      row.append(pick, cell('small', `${formatTime(item.at)} · ${pointStrength(item)}`));
       if (item.limitation) row.append(cell('small', item.limitation));
-      if (item.sampleId) row.append(replaySampleLink(event.assetId, item.sampleId));
+      const raw = incidentPointSource(event, item);
+      if (raw) row.append(raw);
       list.append(row);
     }
   }
@@ -2688,10 +2817,16 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
       const viewport = phaseWindow(at);
       lines.push(`调查时间窗 ${formatTime(viewport.from)} — ${formatTime(viewport.to)}`, '');
     }
-    if (scope?.locks) lines.push(`阻塞证据样本 ${scope.locks.sampleId}`, '');
-    if (primary) lines.push(`候选 ${clean(primary.hypothesis)}`, `核查范围 ${clean(primary.limitation)}`,
+    const reference = item => {
+      const source = item && incidentPointSource(event, item);
+      return source ? `[${clean(item.sampleId || item.traceId)}](${source.href})` : '缺少原始样本';
+    };
+    lines.push(`调查链接 <${location.href}>`, '',
+      `关键证据 ${reference(strongestSource || replay.detection)}`,
+      `恢复 ${replay.recovery?.at ? formatTime(replay.recovery.at) : '待观察'} · ${reference(replay.recovery)}`, '');
+    if (primary) lines.push(`候选 ${clean(primary.hypothesis || primary.title)}`, `核查范围 ${clean(primary.limitation)}`,
       `人工结论 ${clean(primary.review?.status || '待复核')} ${clean(primary.review?.reason)}`, '');
-    for (const item of selectedPoints(at)) lines.push(`- ${formatTime(item.at)} · ${clean(replayLayers[item.layer])} · ${clean(pointStrength(item))} · 证据 ${clean(item.evidenceId)} · 样本 ${clean(item.sampleId)}`);
+    for (const item of selectedPoints(at)) lines.push(`- ${formatTime(item.at)} · ${clean(replayLayers[item.layer])} · ${clean(pointStrength(item))} · 证据 ${clean(item.evidenceId)} · ${reference(item)}`);
     const uri = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/markdown;charset=utf-8'}));
     const download = document.createElement('a'); download.href = uri; download.download = `dbsphere-investigation-${event.id}.md`;
     download.click(); setTimeout(() => URL.revokeObjectURL(uri), 1000);
@@ -2739,13 +2874,14 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   milestones.append(milestone('首次发现', replay.detection, '待确认'), scope, milestone('恢复观测', replay.recovery, '仍在处理中'));
   panel.append(milestones);
 
-  const phases = { before: '故障前', during: '故障期间', after: '恢复后' };
+  const phases = { before: '故障前', during: '故障期间', peak: '已观测峰值', after: '恢复后' };
   if (replay.comparison?.length) {
     const values = [ ['connections', '连接'], ['blockedSessions', '阻塞会话'], ['poolWaiting', '连接池等待'],
       ['replicationLagBytes', '回放差距（字节）'], ['podUnready', 'Pod 就绪'] ];
     const comparison = cell('div', '', 'monitor-table');
-    comparison.append(cell('h5', '故障前、触发与恢复采样对照'), importTable(['阶段', '记录时间', ...values.map(item => item[1]), '证据'],
-      replay.comparison.map(row => [phases[row.phase], row.at ? formatTime(row.at) : '缺少可比采样',
+    const rows = replay.peak ? [...replay.comparison.slice(0, 2), replay.peak, ...replay.comparison.slice(2)] : replay.comparison;
+    comparison.append(cell('h5', '阶段采样对照'), importTable(['阶段', '记录时间', ...values.map(item => item[1]), '证据'],
+      rows.map(row => [phases[row.phase], row.at ? formatTime(row.at) : '缺少可比采样',
         ...values.map(([key]) => key === 'podUnready' && row.metrics?.[key] != null
           ? (row.metrics[key] ? '未就绪' : '就绪') : row.metrics?.[key] ?? '—'),
         row.sampleId ? replaySampleLink(event.assetId, row.sampleId) : '—'])));
@@ -2934,7 +3070,7 @@ function incidentImpactPanel(impact, event) {
     const row = cell('div', '', 'evidence impact-member');
     const prefix = member.eventId === impact.primaryEventId ? '主事件' : '子事件';
     row.append(eventLink(member.eventId, `${prefix} · ${member.assetName} · ${member.title}`),
-      cell('span', `${member.cluster ? member.cluster + ' · ' : ''}${member.status === 'resolved' ? '已恢复' : member.status === 'open' ? '处理中' : member.status}`, 'hint'));
+      cell('span', `${member.cluster ? member.cluster + ' · ' : ''}${member.endedAt ? '结束 ' + formatTime(member.endedAt) : member.status === 'open' ? '处理中' : member.status}`, 'hint'));
     if (member.dependency) {
       const observed = cell('p', `${member.dependency.entry} · ${routingStatus[member.dependency.signal] || member.dependency.signal} · `, 'hint');
       observed.append(replaySampleLink(member.assetId, member.dependency.sampleId));
@@ -3086,7 +3222,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   header.append(status, cell('span', event.assetName || allAssets.find(asset => asset.id === event.assetId)?.name || event.assetId));
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ` · ${recoveryLabel} ${formatTime(event.endedAt)}` : ''}`),
     cell('small', `事件 ID ${event.id}`));
-  const scope = [event.clusterName && `集群 ${event.clusterName}`, investigation?.database && `数据库 ${investigation.database}`].filter(Boolean);
+  const memberCount = new Set(impact?.members?.map(member => member.assetId)).size;
+  const services = analysis.traceCoverage?.serviceImpact?.filter(service => service.failures > 0).length || 0;
+  const scope = [event.clusterName && `集群 ${event.clusterName}`, investigation?.database && `数据库 ${investigation.database}`,
+    memberCount > 0 && `已观测 ${memberCount}${impact.truncated ? '+' : ''} 个关联实例`, services > 0 && `${services} 个服务有数据库调用失败`].filter(Boolean);
   if (scope.length) summary.append(cell('small', scope.join(' · ')));
   const storageBack = /^storage(?:\?|$)/.test(back);
   const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));

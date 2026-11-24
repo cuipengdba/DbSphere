@@ -1,9 +1,127 @@
 package store
 
 import (
+	"context"
+	"encoding/json"
 	"math"
+	"strings"
 	"time"
 )
+
+type investigationPeak struct {
+	replayComparison
+	Signal    string    `json:"signal"`
+	Value     float64   `json:"value"`
+	Identity  string    `json:"identity,omitempty"`
+	Observed  int       `json:"observed"`
+	ScannedTo time.Time `json:"scannedTo"`
+	Limited   bool      `json:"limited"`
+}
+
+// Compare a bounded interval of raw samples for the triggering signal. Claim
+// and container names can be reused, so these comparisons require their IDs.
+func investigationPeakSignal(metric string, anchor sampleObservation) (string, func(sampleObservation) (float64, bool)) {
+	switch metric {
+	case "pg.blocked_sessions", "pg.replication_lag_bytes", "pgbouncer.waiting_clients":
+		return "", func(sample sampleObservation) (float64, bool) {
+			signal := readGoSignal(metric, sample.Metrics, sample.At)
+			return signal.Value, signal.Available
+		}
+	case "k8s.pvc_used_percent":
+		signal := readGoSignal(metric, anchor.Metrics, anchor.At)
+		name := stringValue(object(signal.Detail)["pvc"])
+		var uid string
+		for _, raw := range list(object(anchor.Metrics["k8s"])["pvcs"]) {
+			claim := object(raw)
+			if claim["name"] == name {
+				uid = stringValue(claim["uid"])
+				break
+			}
+		}
+		if signal.Available && uid != "" {
+			return "PVC " + name + " · " + uid, func(sample sampleObservation) (float64, bool) {
+				kube := object(sample.Metrics["k8s"])
+				if kube["status"] != "ok" || kube["pvcError"] != nil {
+					return 0, false
+				}
+				for _, raw := range list(kube["pvcs"]) {
+					claim := object(raw)
+					if claim["uid"] != uid || claim["name"] != name {
+						continue
+					}
+					usage := object(claim["usage"])
+					used, usedOK := numeric(usage["usedBytes"])
+					capacity, capacityOK := numeric(usage["capacityBytes"])
+					if usage["status"] == "ok" && usedOK && capacityOK && used >= 0 && capacity > 0 {
+						return 100 * used / capacity, true
+					}
+				}
+				return 0, false
+			}
+		}
+	}
+	if code, ok := strings.CutPrefix(metric, "container."); ok && storageFindings[code] != "" {
+		detail := object(containerStorageAlert(anchor.Metrics, code).Detail)
+		if id := stringValue(detail["containerId"]); id != "" {
+			return "容器 " + id, func(sample sampleObservation) (float64, bool) {
+				finding := object(containerStorageAlert(sample.Metrics, code).Detail)
+				value, ok := numeric(finding["ioPressure"])
+				return value, ok && finding["containerId"] == id
+			}
+		}
+	}
+	return "", nil
+}
+
+func (s *Postgres) incidentPeak(ctx context.Context, event *eventRecord, detection *replayPoint, anchor sampleObservation) (*investigationPeak, error) {
+	if detection.Strength != "direct" {
+		return nil, nil
+	}
+	identity, measurement := investigationPeakSignal(detection.Signal, anchor)
+	if measurement == nil {
+		return nil, nil
+	}
+	const limit = 120
+	rows, err := s.pool.Query(ctx, `SELECT id::text,collected_at,status,metrics_json FROM samples
+		WHERE asset_id=$1 AND collected_at >= $2 AND collected_at < coalesce($3::timestamptz, now())
+		ORDER BY collected_at,id LIMIT $4`, event.AssetID, anchor.At, event.EndedAt, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	peak := &investigationPeak{Identity: identity, Signal: detection.Signal}
+	if strings.HasPrefix(detection.Signal, "container.") {
+		peak.Signal = "container.io_pressure"
+	}
+	for i := 0; rows.Next(); i++ {
+		if i == limit {
+			peak.Limited = true
+			break
+		}
+		var sample sampleObservation
+		var raw []byte
+		if err := rows.Scan(&sample.ID, &sample.At, &sample.Status, &raw); err != nil {
+			return nil, err
+		}
+		peak.ScannedTo = sample.At
+		if json.Unmarshal(raw, &sample.Metrics) != nil {
+			continue
+		}
+		if value, ok := measurement(sample); ok {
+			peak.Observed++
+			if peak.SampleID == "" || value > peak.Value {
+				peak.Value, peak.replayComparison = value, compareReplaySample("peak", sample)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if peak.SampleID == "" {
+		return nil, nil
+	}
+	return peak, nil
+}
 
 type investigationBlocker struct {
 	WaitingPID     int    `json:"waitingPid"`

@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+func TestInvestigationPeakKeepsPVCIdentity(t *testing.T) {
+	claim := func(name, uid string, used float64) map[string]any {
+		return map[string]any{"name": name, "uid": uid,
+			"usage": map[string]any{"status": "ok", "usedBytes": used, "capacityBytes": float64(100)}}
+	}
+	sample := func(claims ...any) sampleObservation {
+		return sampleObservation{Metrics: map[string]any{"k8s": map[string]any{"status": "ok", "pvcs": claims}}}
+	}
+	anchor := sample(claim("data", "initial-uid", 87), claim("other", "other-uid", 80))
+	_, measure := investigationPeakSignal("k8s.pvc_used_percent", anchor)
+	if measure == nil {
+		t.Fatal("expected a PVC-scoped measurement")
+	}
+	if value, ok := measure(sample(claim("data", "initial-uid", 91), claim("other", "other-uid", 99))); !ok || value != 91 {
+		t.Fatalf("different claim changed the result: %v %v", value, ok)
+	}
+	if _, ok := measure(sample(claim("data", "replacement-uid", 99))); ok {
+		t.Fatal("replacement PVC with reused name was counted")
+	}
+}
+
 func TestInvestigationUsesOnlyTheFiringLockSample(t *testing.T) {
 	at := time.Now()
 	s := func(id string, waiting, blocker int) sampleObservation {

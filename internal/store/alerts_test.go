@@ -462,14 +462,32 @@ func TestGoLockWaitAndPoolerWaitShareIncident(t *testing.T) {
 		t.Fatalf("lock and pooler alerts did not share event ID: %d %v", eventCount, err)
 	}
 	metrics["diagnostics"] = map[string]any{"locks": map[string]any{"status": "ok",
+		"data": map[string]any{"blockedSessions": 4}}}
+	metrics["pgbouncer"] = map[string]any{"status": "ok", "pools": []any{map[string]any{"clientWaiting": 4}}}
+	peakSample, err := pg.recordCheckAt(context.Background(), asset.ID, metrics, "", "", now.Add(61500*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics["diagnostics"] = map[string]any{"locks": map[string]any{"status": "ok",
 		"data": map[string]any{"blockedSessions": 0}}}
 	metrics["pgbouncer"] = map[string]any{"status": "ok", "pools": []any{map[string]any{"clientWaiting": 0}}}
-	if _, err := pg.recordCheckAt(context.Background(), asset.ID, metrics, "", "", now.Add(62*time.Second)); err != nil {
+	recovered, err := pg.recordCheckAt(context.Background(), asset.ID, metrics, "", "", now.Add(62*time.Second))
+	if err != nil {
 		t.Fatal(err)
 	}
 	var status string
 	if err := pg.pool.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, eventID).Scan(&status); err != nil || status != "resolved" {
 		t.Fatalf("lock/pooler incident did not resolve under original ID: %s %v", status, err)
+	}
+	detail, err := pg.EventByID(context.Background(), eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := object(object(detail)["replay"])
+	peak, ok := replay["peak"].(*investigationPeak)
+	recovery, recoveryOK := replay["recovery"].(*replayPoint)
+	if !ok || peak.SampleID != peakSample.SampleID || peak.Value != 4 || !recoveryOK || recovery.SampleID != recovered.SampleID {
+		t.Fatalf("incident did not preserve the observed peak and recovery: %v", replay)
 	}
 }
 

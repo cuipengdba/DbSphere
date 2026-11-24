@@ -18,6 +18,7 @@ const grafanaPrefix, grafanaReturnPath = "/grafana", "/grafana/dbsphere-return"
 
 var storageDeviceID = regexp.MustCompile(`^\d{1,10}:\d{1,10}$`)
 var storageClaimName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+var investigationSpan = regexp.MustCompile(`^[a-f0-9]{32}:[a-f0-9]{16}$`)
 
 func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string, int) {
 	cookie, err := r.Cookie("dbsphere_session")
@@ -146,6 +147,9 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 						if value := selected.Get(key); value != "" {
 							output.Set(key, value)
 						}
+					}
+					if point := selected.Get("focusPoint"); opsUUID.MatchString(point) || investigationSpan.MatchString(point) {
+						output.Set("focusPoint", point)
 					}
 				}
 			}

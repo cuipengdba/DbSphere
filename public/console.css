@@ -101,17 +101,51 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .incident-content > .evidence > h4 { margin: 0 0 6px; }
 #event-detail, #detail { scroll-margin-top: 72px; }
 .investigation { margin-block: 12px; }
-.investigation-grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1.55fr) minmax(195px, 1fr); }
-.investigation-pane { display: grid; gap: 8px; align-content: start; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.investigation-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1.7fr) minmax(200px, 1fr); }
+.investigation-pane { display: grid; gap: 10px; align-content: start; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .investigation-pane > :is(h4, p, ul) { margin: 0; }
-.investigation-controls { margin-bottom: 0; }
+.investigation-pane h4 { font-size: 15px; }
+.investigation-pane:last-child { border-top: 3px solid var(--brand-fill); background: linear-gradient(151deg, var(--selected), var(--surface) 58%); }
+.investigation-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.investigation-stage { display: grid; gap: 3px; min-width: 0; padding: 7px 5px; text-align: left; color: var(--text); background: var(--soft); border: 1px solid var(--border); border-radius: 7px; }
+.investigation-stage[aria-pressed="true"] { color: var(--accent); background: var(--selected); border-color: var(--brand-fill); box-shadow: inset 0 -2px var(--brand-fill); }
+.investigation-stage small { color: var(--muted); font-size: 10px; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .investigation-anchor { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.investigation-lanes { display: grid; gap: 1px; padding: 5px; background: var(--soft); border: 1px solid var(--border); border-radius: 8px; }
+.investigation-lane { display: grid; grid-template-columns: minmax(101px, max-content) minmax(0, 1fr) 21px; gap: 4px; align-items: center; min-height: 29px; border-top: 1px solid var(--border); }
+.investigation-lane-filter, .investigation-pick { justify-self: start; padding: 4px; text-align: left; background: transparent; color: var(--text); font-size: 11px; }
+.investigation-lane-filter[aria-pressed="true"], .investigation-pick { color: var(--accent); }
+.investigation-lane-filter[aria-pressed="true"] { background: var(--selected); }
+.investigation-lane-count { text-align: right; padding-right: 3px; }
+.investigation-track { position: relative; isolation: isolate; min-width: 0; height: 25px; display: grid; align-items: center; background: linear-gradient(var(--border), var(--border)) center / 100% 1px no-repeat; }
+.investigation-track-empty { justify-self: center; padding: 0 5px; color: var(--muted); background: var(--soft); font-size: 10px; }
+.investigation-cursor { position: absolute; inset-block: 0; border-left: 2px solid var(--brand-fill); opacity: .55; }
+.investigation-dot { position: absolute; top: 50%; translate: -50% -50%; width: 14px; height: 14px; padding: 0; border: 2px solid var(--surface); border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 1px var(--control-border); }
+.investigation-dot.is-direct { background: var(--brand-fill); }
+.investigation-dot.is-correlated { background: #d89929; }
+.investigation-dot.is-conflict { background: #df5d6c; border-radius: 4px; }
+.investigation-dot[aria-pressed="true"] { z-index: 1; box-shadow: 0 0 0 3px var(--focus); }
+.investigation-selection { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; min-width: 0; padding: 7px 9px; border-inline-start: 3px solid var(--brand-fill); background: var(--selected); overflow-wrap: anywhere; }
+.investigation-selection[hidden] { display: none; }
+.investigation-selection small { min-width: 0; color: var(--muted); }
+.investigation-hypothesis { color: var(--text); line-height: 1.4; overflow-wrap: anywhere; }
+.investigation-confidence { justify-self: start; padding: 3px 7px; font-size: 11px; font-weight: 700; color: var(--text); background: var(--soft); border: 1px solid var(--border); border-radius: 5px; }
+.investigation-confidence.is-direct { color: var(--accent); border-color: var(--brand-fill); }
+.investigation-primary { display: inline-block; justify-self: start; padding: 7px 11px; border-radius: 7px; color: white; background: var(--brand-fill); font-weight: 700; }
+.investigation-primary:hover { color: white; text-decoration: underline; }
+.investigation-cautions { display: grid; gap: 4px; padding-top: 9px; border-top: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.investigation-cautions p { margin: 0 0 3px; color: var(--muted); }
 .investigation-signals { display: grid; gap: 6px; }
 .investigation-signal { padding: 7px 0; border-bottom: 1px solid var(--border); display: grid; gap: 3px; overflow-wrap: anywhere; }
+.investigation-pick { padding: 0; font-size: inherit; }
 .investigation-locks { display: grid; gap: 6px; padding-inline-start: 20px; }
 .investigation-locks small { display: block; overflow-wrap: anywhere; }
 .investigation-pane > button { justify-self: start; }
-@media (max-width: 880px) { .investigation-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 1081px) { .incident-grid:has(.investigation) { grid-template-columns: minmax(185px, .39fr) minmax(0, 1.61fr); } }
+@media (max-width: 1210px) and (min-width: 1081px), (max-width: 655px) {
+  .investigation-grid { grid-template-columns: minmax(0, 1fr); }
+  .investigation-pane:last-child { grid-row: 1; }
+}
 #notice:not(:empty) { margin: 0 0 14px; }
 
 /* Monitoring uses the same surfaces as the other workflows. */
