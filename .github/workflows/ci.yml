@@ -6,6 +6,54 @@ on:
   workflow_dispatch:
 
 jobs:
+  log-archive-capacity:
+    if: github.ref == 'refs/heads/release/v2.19.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    services:
+      pg18:
+        image: postgres:18-bookworm
+        ports:
+          - 15434:5432
+        env:
+          POSTGRES_PASSWORD: dbsphere-archive-ci
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Import 10 GiB of mixed records and measure indexed comparison
+        env:
+          DBSPHERE_TEST_PG18_URL: postgres://postgres:dbsphere-archive-ci@127.0.0.1:15434/postgres
+          DBSPHERE_TEST_LOG_CAPACITY_MIB: "10240"
+          DBSPHERE_LOG_CAPACITY_KEEP_FIXTURE: "1"
+        run: |
+          set -euo pipefail
+          nproc
+          free -m
+          df -h .
+          /usr/bin/time -v go test ./internal/store -run '^TestLogArchiveCapacity$' -count=1 -timeout 42m -v | tee "$RUNNER_TEMP/dbsphere-archive-capacity.log"
+          awk '/raw=.*comparisonP95=/{print $0}' "$RUNNER_TEMP/dbsphere-archive-capacity.log" >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore the archive and verify the original incident and evidence
+        env:
+          PG18_CONTAINER: ${{ job.services.pg18.id }}
+          DBSPHERE_TEST_LOG_RESTORED_URL: postgres://postgres:dbsphere-archive-ci@127.0.0.1:15434/restore_acceptance
+        run: |
+          set -euo pipefail
+          docker exec "$PG18_CONTAINER" pg_dump -U postgres -Fc postgres > "$RUNNER_TEMP/dbsphere-archive-test.dump"
+          docker exec "$PG18_CONTAINER" createdb -U postgres restore_acceptance
+          docker exec -i "$PG18_CONTAINER" pg_restore -U postgres --exit-on-error -d restore_acceptance < "$RUNNER_TEMP/dbsphere-archive-test.dump"
+          identities() {
+            docker exec "$PG18_CONTAINER" psql -X -A -t -U postgres -d "$1" -c 'SELECT id,primary_record,event_id FROM log_investigations ORDER BY id'
+          }
+          expected="$(identities postgres)"
+          restored="$(identities restore_acceptance)"
+          test -n "$expected" && test "$expected" = "$restored"
+          go test ./internal/store -run '^TestLogArchiveRestore$' -count=1 -v
+
   go-foundation:
     runs-on: ubuntu-latest
     services:

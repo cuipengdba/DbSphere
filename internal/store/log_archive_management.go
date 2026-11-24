@@ -16,7 +16,7 @@ var ErrLogQuota = errors.New("log upload quota exceeded")
 
 func (s *Postgres) LogUploadStatus(ctx context.Context, file string) (any, error) {
 	var value json.RawMessage
-	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('id',f.id,'batchId',b.id,'state',f.state,
+	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object('id',f.id,'batchId',b.id,'state',f.state,'name',f.filename,
 		'parts',f.parts,'rawSize',f.raw_size,'chunkBytes',$3::int,'size',f.expected_size,
 		'digests',coalesce((SELECT jsonb_agg(digest ORDER BY part) FROM log_archive_blocks WHERE file_id=f.id),'[]'::jsonb))`+
 		logFileScope+`WHERE f.id=$1 AND ($2='' OR p.organization_id::text=$2)`,

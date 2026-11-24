@@ -164,8 +164,19 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexed, err := pg.LogComparison(ctx, batch, second)
-	expected, _ := json.Marshal(comparison)
-	actual, _ := json.Marshal(indexed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := indexed.(map[string]any)["rows"].([]*logCompareRow)
+	if len(pairs) != 1 || pairs[0].Current == nil || pairs[0].Current.EvidenceID != retestID {
+		t.Fatal("indexed comparison did not see the newly parsed retest")
+	}
+	if _, err := pg.RebuildLogBatchRollup(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	reindexed, err := pg.LogComparison(ctx, batch, second)
+	expected, _ := json.Marshal(indexed)
+	actual, _ := json.Marshal(reindexed)
 	if err != nil || string(expected) != string(actual) {
 		t.Fatalf("rebuilt index changed comparison: %s %v", actual, err)
 	}

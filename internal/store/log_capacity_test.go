@@ -44,8 +44,23 @@ func TestLogArchiveCapacity(t *testing.T) {
 	}
 	name := "Archive capacity " + time.Now().Format(time.RFC3339Nano)
 	project := idOf(pg.CreateLogProject(ctx, LogProjectInput{Name: name}))
-	defer pg.pool.Exec(ctx, "DELETE FROM log_projects WHERE id=$1", project)
-	instance := idOf(pg.CreateLogInstance(ctx, LogInstanceInput{ProjectID: project, Name: "Capacity fixture", Environment: "qa", Engine: "postgres", Version: "18"}))
+	retain := os.Getenv("DBSPHERE_LOG_CAPACITY_KEEP_FIXTURE") != ""
+	if !retain {
+		defer pg.pool.Exec(ctx, "DELETE FROM log_projects WHERE id=$1", project)
+	}
+	var asset string
+	err = pg.pool.QueryRow(ctx, `INSERT INTO assets(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,created_at,organization_id)
+		SELECT gen_random_uuid(),'Archive capacity asset','127.0.0.1',5432,'postgres','fixture','','disable','linux',now(),organization_id
+		FROM log_projects WHERE id=$1 RETURNING id::text`, project).Scan(&asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retain {
+		defer pg.pool.Exec(ctx, "DELETE FROM assets WHERE id=$1", asset)
+	}
+	instance := idOf(pg.CreateLogInstance(ctx, LogInstanceInput{
+		ProjectID: project, AssetID: asset, Name: "Capacity fixture", Environment: "qa", Engine: "postgres", Version: "18",
+	}))
 	var batches [2]string
 	var bytesInput int64
 	started := time.Now()
@@ -53,6 +68,7 @@ func TestLogArchiveCapacity(t *testing.T) {
 	for side := range batches {
 		batches[side] = idOf(pg.CreateLogBatch(ctx, LogBatchInput{InstanceID: instance, Coverage: "full", Name: strconv.Itoa(side)}))
 		fileMiB := totalMiB/2 + side*(totalMiB%2)
+		step := 30 * 24 * time.Hour / time.Duration(max(1, fileMiB-1))
 		partIndex := 0
 		for pending := fileMiB; pending > 0; {
 			blocks := min(LogFileLimit/LogArchiveBlockBytes, pending)
@@ -60,7 +76,7 @@ func TestLogArchiveCapacity(t *testing.T) {
 				Name: fmt.Sprintf("fixture-%d-%d.log", side, partIndex), Format: "text", Size: int64(blocks) * LogArchiveBlockBytes,
 			}))
 			for part := range blocks {
-				dayOffset := time.Duration(partIndex) * (30 * 24 * time.Hour) / time.Duration(max(1, fileMiB-1))
+				dayOffset := time.Duration(partIndex) * step
 				at := baseAt.Add(time.Duration(side)*30*24*time.Hour + dayOffset)
 				block := capacityLogBlock(at, side, partIndex)
 				if _, err := pg.AppendLogBlock(ctx, file, part, block); err != nil {
@@ -105,6 +121,9 @@ func TestLogArchiveCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := time.Since(now)
+	if _, err := pg.StartLogInvestigation(ctx, anchor, ""); err != nil {
+		t.Fatal(err)
+	}
 	var compressed int64
 	if err := pg.pool.QueryRow(ctx, "SELECT sum(stored_size) FROM log_files WHERE batch_id IN ($1,$2)", batches[0], batches[1]).Scan(&compressed); err != nil {
 		t.Fatal(err)
@@ -114,6 +133,43 @@ func TestLogArchiveCapacity(t *testing.T) {
 	t.Logf("raw=%d compressed=%d ratio=%.4f%% ingest=%s ingestMiBps=%.2f rollupBuild=%s comparisonP95=%s original=%s goHeapMiB=%.2f",
 		bytesInput, compressed, float64(compressed)/float64(bytesInput)*100, ingest, float64(totalMiB)/ingest.Seconds(),
 		initialDuration, runs[18], original, float64(mem.HeapInuse)/(1<<20))
+	if runs[18] > 2*time.Second {
+		t.Errorf("indexed comparisons exceeded the 2 second P95 target: %s", runs[18])
+	}
+}
+
+func TestLogArchiveRestore(t *testing.T) {
+	url := os.Getenv("DBSPHERE_TEST_LOG_RESTORED_URL")
+	if url == "" {
+		t.Skip("requires a restored PostgreSQL 18 archive test database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pg, err := Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	var original, file, investigation, event string
+	err = pg.pool.QueryRow(ctx, `SELECT r.id::text,r.file_id::text,i.id::text,i.event_id::text FROM log_investigations i
+		JOIN log_records r ON r.id=i.primary_record ORDER BY i.created_at DESC LIMIT 1`).Scan(&original, &file, &investigation, &event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.LogInvestigation(ctx, investigation); err != nil {
+		t.Fatal(err)
+	}
+	report, ids, err := pg.EventAIEvidence(ctx, event)
+	if err != nil || len(ids) == 0 || !strings.Contains(report, original) {
+		t.Fatalf("restored event must preserve the original record reference: %v", err)
+	}
+	if _, err := pg.LogOriginal(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.VerifyLogFile(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("restored event, investigation, original log and compressed-block digests")
 }
 
 func capacityLogBlock(at time.Time, side, part int) []byte {

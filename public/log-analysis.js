@@ -114,7 +114,7 @@
     });
     let directory = { projects: [], instances: [] };
     let active = false, generation = 0, timer, page = 0, current = '', batches = [];
-    let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
+    let retryFile = '', resumeFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
     const pendingUploads = new Map();
     let comparing = false, baseline = '', comparisonData, compareRequest = 0;
     let caseId = '', sourceId = '';
@@ -229,7 +229,7 @@
         if (file.archiveExpiredAt) state.append(element('small', '原文归档已到期'));
         if (file.verifiedAt) state.append(element('small', '已通过完整性校验 · ' + formatTime(file.verifiedAt)));
         if (file.state === 'failed' && !file.archiveExpiredAt) action.append(button('重新解析', () => showUpload(file.id)));
-        if (file.state === 'uploading') action.append(button('继续上传', () => showUpload()));
+        if (file.state === 'uploading') action.append(button('继续上传', () => showUpload('', file)));
         if (file.storedSize > 0 && ['complete', 'partial', 'failed'].includes(file.state)) {
           action.append(button('校验归档', () => run(async () => {
             await api(base + 'files/' + file.id + '/verify', 'POST');
@@ -314,6 +314,15 @@
             values.append(meter);
           }
         }
+        const breakdown = element('details');
+        breakdown.append(element('summary', '统计明细'));
+        for (const [name, sample] of [['基线', row.baseline], ['本次', row.current]]) {
+          if (!sample) continue;
+          breakdown.append(element('p', [name + ' ' + formatted(sample.count) + ' 次',
+            formatted(sample.perHour) + ' 次/小时', sample.totalMs == null ? '' : '累计 ' + formatted(sample.totalMs) + ' ms',
+            sample.p95Ms == null ? '' : 'P95 ' + formatted(sample.p95Ms) + ' ms'].filter(Boolean).join(' · '), 'hint'));
+        }
+        values.append(breakdown);
         const delta = baseValue > 0 && currentValue != null ? formatted((currentValue / baseValue - 1) * 100) + '%' : '—';
         const actions = element('div', undefined, 'log-actions');
         for (const [name, item] of [['基线', row.baseline], ['本次', row.current]]) {
@@ -509,18 +518,21 @@
       if (!dialog.open) dialog.showModal();
     }
 
-    function showUpload(file = '') {
+    function showUpload(file = '', resume) {
       if (uploading || !current) return;
       retryFile = file;
+      resumeFile = resume?.id || '';
       const form = get('upload-form');
       form.reset();
       form.elements.files.required = !file;
+      form.elements.files.multiple = !resumeFile;
+      form.elements.node.value = resume?.node || '';
       get('file-label').hidden = !!file;
       get('node-label').hidden = !!file;
       get('preview').textContent = '';
-      get('upload-status').textContent = '';
+      get('upload-status').textContent = resumeFile ? '请选择原文件 ' + resume.filename : '';
       get('progress').hidden = true;
-      get('upload-title').textContent = file ? '重新解析文件' : '上传日志';
+      get('upload-title').textContent = file ? '重新解析文件' : resumeFile ? '继续上传' : '上传日志';
       get('upload-dialog').showModal();
     }
 
@@ -534,7 +546,7 @@
     }
 
     async function savedUpload(key, batch, file) {
-      let id = pendingUploads.get(key);
+      let id = resumeFile || pendingUploads.get(key);
       try { id ||= localStorage.getItem(key); } catch {}
       if (!safeId(id)) return null;
       let status;
@@ -543,7 +555,7 @@
         if (!String(error.message).includes('找不到该日志分析资源')) throw error;
         return null;
       }
-      return status.batchId === batch && status.size === file.size ? status : null;
+      return status.batchId === batch && status.size === file.size && status.name === file.name ? status : null;
     }
 
     async function upload(form) {
@@ -560,6 +572,7 @@
           get('upload-status').textContent = file.name;
           const key = 'dbsphere:log-upload:' + JSON.stringify([batch, file.name, file.size, file.lastModified, node]);
           const resumed = await savedUpload(key, batch, file);
+          if (!resumed && resumeFile) throw new Error('请选择原来的文件。已过期的上传需要重新提交。');
           const created = resumed || await api(base + 'batches/' + batch + '/files', 'POST',
             { name: file.name, size: file.size, format, prefix, zone, node });
           saveUpload(key, created.id);
