@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
+	"html"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -67,11 +69,18 @@ func registerGrafana(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 			p.SetXForwarded()
 			p.Out.Header.Del("Authorization")
 			p.Out.Header.Del("Cookie")
+			for name := range p.Out.Header {
+				if strings.HasPrefix(http.CanonicalHeaderKey(name), "X-Webauth-") {
+					p.Out.Header.Del(name)
+				}
+			}
 			p.Out.Header.Set("X-WEBAUTH-USER", p.In.Context().Value(accountKey{}).(string))
 		},
 		ModifyResponse: func(response *http.Response) error {
 			// Viewer identity is derived from the current DbSphere session on each request.
 			response.Header.Del("Set-Cookie")
+			response.Header.Del("X-Frame-Options")
+			response.Header.Add("Content-Security-Policy", "frame-ancestors 'self'")
 			if location, err := url.Parse(response.Header.Get("Location")); err == nil &&
 				(location.Path == grafanaPrefix || strings.HasPrefix(location.Path, grafanaPrefix+"/")) {
 				response.Header.Set("Location", location.RequestURI())
@@ -99,6 +108,7 @@ func registerGrafana(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 			http.Redirect(w, r, grafanaPrefix+"/", http.StatusTemporaryRedirect)
 			return
 		}
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		if r.URL.Path == grafanaReturnPath && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			returnFromGrafana(w, r)
 			return
@@ -176,5 +186,11 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 		location += "?" + encoded
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if r.Header.Get("Sec-Fetch-Dest") == "iframe" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; base-uri 'none'")
+		fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>返回 DbSphere</title><a id="dbsphere-grafana-return" href="%s" target="_top">返回 DbSphere</a></html>`, html.EscapeString(location))
+		return
+	}
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }

@@ -128,7 +128,7 @@
         <header class="live-hero">
           <div><div class="live-indicator"><span aria-hidden="true"></span><strong data-live="connection" role="status">正在连接</strong></div>
             <h2>实时观测大盘</h2><p data-live="recency">等待读取采样</p></div>
-          <div class="live-actions"><span data-live="prometheus" class="live-integration" role="status" hidden></span><a href="/grafana/d/dbsphere-overview" data-live="grafana" class="live-specialty" hidden>打开专题面板</a><button type="button" data-live="night" aria-pressed="false">夜览模式</button><button type="button" data-live="fullscreen" aria-pressed="false">全屏</button></div>
+          <div class="live-actions"><span data-live="prometheus" class="live-integration" role="status" hidden></span><a href="#grafana?panel=dbsphere-overview" data-live="grafana" class="live-specialty" hidden>打开专题面板</a><button type="button" data-live="night" aria-pressed="false">夜览模式</button><button type="button" data-live="fullscreen" aria-pressed="false">全屏</button></div>
         </header>
         <div class="live-filters">
           <label>组织<select data-live="organization"></select></label>
@@ -150,6 +150,14 @@
           <section class="live-panel live-sql"><header><h3>Top SQL</h3><small data-live="sql-source"></small></header><div data-live="sql"></div></section>
           <section class="live-panel live-context"><header><h3>采集覆盖</h3><small>最近一次采样</small></header><div data-live="coverage"></div></section>
         </div>
+      </section>
+      <section class="grafana-workspace" data-view="grafana" aria-label="观测专题" hidden>
+        <div class="grafana-toolbar">
+          <a id="grafana-back" class="monitor-link" href="#live">返回原页面</a>
+          <button id="grafana-retry" type="button" class="ghost small-button" hidden>重试</button>
+        </div>
+        <p id="grafana-status" class="hint" role="status" hidden></p>
+        <iframe id="grafana-frame" title="Grafana 观测专题" referrerpolicy="same-origin" hidden></iframe>
       </section>
       <section id="container-storage" class="live-board storage-board" data-view="storage" hidden>
         <header class="storage-hero">

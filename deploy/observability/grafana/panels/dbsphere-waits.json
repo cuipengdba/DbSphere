@@ -21,14 +21,14 @@
       "type": "link",
       "url": "/grafana/dbsphere-return?view=live&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
       "icon": "external link",
-      "targetBlank": true
+      "targetBlank": false
     },
     {
       "title": "回到原事件",
       "type": "link",
       "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
       "icon": "bolt",
-      "targetBlank": true
+      "targetBlank": false
     },
     {
       "title": "DbSphere 专题",
@@ -166,7 +166,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本"
@@ -241,7 +241,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本"
@@ -312,7 +312,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本"
@@ -387,7 +387,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本"
@@ -470,7 +470,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本",
@@ -554,7 +554,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本",
@@ -638,7 +638,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本",
@@ -722,7 +722,7 @@
             {
               "title": "核对 DbSphere 原事件",
               "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
-              "targetBlank": true
+              "targetBlank": false
             }
           ],
           "noValue": "暂无样本",

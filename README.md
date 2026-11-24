@@ -12,7 +12,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 |---|---|
 | 监控工作台 | 集群首屏显示故障成员、主备角色、异常起点及可用性时间带。连接压力、锁等待、WAL 和复制曲线共用游标，可查看当时的原始采样。分享地址保留成员和时间窗。实例等待分析按类型、事件和 Query ID 下钻，并可核对锁链、SQL 增量排名、慢日志及计划证据。 |
 | 实时观测大盘 | 支持全屏值班、夜览模式和组织、集群、引擎筛选。同步显示采样新鲜度、主备与 Pod 拓扑、连接使用率、TPS、活跃等待、阻塞、复制延迟及 Top SQL。趋势标注异常时段，进入同一事件 ID 查看检测、根因与恢复证据。 |
-| 增强可观测性 | 增强离线包内置 Prometheus 和 Grafana OSS，自动发现已登记的 Linux Exporter。内置环境总览、PostgreSQL 集群、等待与 SQL、主备复制、Linux/Kubernetes 和 MySQL 8.4 专题。平台管理员可从实时大盘或原事件进入专页，保留资产和时间窗。原生监控、根因证据和长期数据继续使用 PostgreSQL 18。 |
+| 增强可观测性 | 增强离线包内置 Prometheus 和 Grafana OSS，自动发现已登记的 Linux Exporter。内置环境总览、PostgreSQL 集群、等待与 SQL、主备复制、Linux/Kubernetes 和 MySQL 8.4 专题。平台管理员登录 DbSphere 后可在同一工作区直接查看只读专题，保留资产和时间窗。原生监控、根因证据和长期数据继续使用 PostgreSQL 18。 |
 | 基础设施观测 | Linux 主机、Docker 容器和 Kubernetes 工作负载的 CPU、内存、网络、磁盘吞吐、IOPS、I/O PSI 与文件缓存。节点、容器和 PVC 按已观测身份关联同窗 PostgreSQL 等待、原始采样和 Grafana 面板。[部署与指标口径](docs/CONTAINER_STORAGE.md) |
 | 首次初始化 | 全新安装从本机完成管理员首登改密，也可在安装前预设管理员密码。旧版升级沿用已有账号、凭据与事件。 |
 | 资产纳管 | 浏览器登记与管理 Linux、Kubernetes 及托管 PostgreSQL。支持 YAML、CSV 和集群清单批量预览、导入、使用凭据引用导出及分批连接权限检查。重试和重复导入保留资产 ID。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni、备份信息和应用 Trace。 |

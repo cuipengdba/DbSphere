@@ -210,7 +210,7 @@
       nav.replaceChildren(node('strong', 'Grafana 专项'), ...sections.map(([section, title]) => {
         const link = node('a', title);
         link.href = window.DbSphereLive.grafanaPath({ section, asset: route.asset, container: route.container,
-          device: route.device, pvc: route.pvc, pvcUid: route.pvcUid,
+          device: route.device, pvc: route.pvc, pvcUid: route.pvcUid, back: routeHash(),
           event: route.event || result?.events?.[0]?.id, from: Date.parse(result?.from), to: Date.parse(result?.to) });
         return link;
       }));

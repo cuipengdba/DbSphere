@@ -16,12 +16,13 @@
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-  function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night }) {
-    const pages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
-      replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
-      containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
-    const page = pages[section] || pages.overview;
-    const params = new URLSearchParams();
+  const grafanaPages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
+    replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
+    containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
+
+  function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night, back }) {
+    const params = new URLSearchParams({ panel: grafanaPages[section] || grafanaPages.overview });
+    if (back) params.set('back', back);
     for (const [key, value] of Object.entries({ asset, organization, cluster, engine, event, container })) {
       if (value) params.set('var-' + key, key === 'cluster' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value);
     }
@@ -36,7 +37,20 @@
     if (finite(from) && from > 0) params.set('from', String(Math.trunc(from)));
     if (finite(to) && to > 0) params.set('to', String(Math.trunc(to)));
     if (night || document.documentElement.dataset.theme === 'dark') params.set('theme', 'dark');
-    return '/grafana/d/' + page + '?' + params;
+    return '#grafana?' + params;
+  }
+
+  function grafanaFrameURL(route) {
+    const panel = route.get('panel');
+    if (!Object.values(grafanaPages).includes(panel)) return '';
+    const params = new URLSearchParams({ kiosk: '' });
+    for (const [key, value] of route) {
+      if (/^(?:from|to|theme|var-(?:asset|organization|cluster|engine|event|container|device|pvc|pvc_uid|dbsphere_context))$/.test(key)) {
+        params.set(key, value);
+      }
+    }
+    if (!params.has('theme')) params.set('theme', document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+    return '/grafana/d/' + panel + '?' + params;
   }
 
   function element(tag, text, className) {
@@ -162,6 +176,7 @@
       get('storage').href = '#storage?' + new URLSearchParams(asset?.id ? { asset: asset.id } : {});
       get('grafana').href = grafanaPath({ asset: asset?.id, organization: asset?.organizationId || selection.organization,
         cluster: asset?.cluster, engine: asset?.engine, event: incident?.id, from, to, night: root.dataset.night === 'true',
+        back: route(true),
         section: asset?.engine === 'mysql' ? 'mysql' : asset ? 'postgres' : 'overview' });
     }
 
@@ -635,5 +650,5 @@
     return { route, restore, setVisible };
   }
 
-  window.DbSphereLive = { create, grafanaPath };
+  window.DbSphereLive = { create, grafanaPath, grafanaFrameURL };
 })();

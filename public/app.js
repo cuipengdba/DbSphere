@@ -5,6 +5,7 @@ let currentUsername = '';
 let currentOrganization = '';
 let nativeOverview = false;
 let workspaceData = { session: null, loaded: false, pending: null, runtime: undefined };
+let grafanaRequest;
 let oidcEnabled = false;
 let organizations = [];
 let approvalEnabled = false;
@@ -54,6 +55,7 @@ const views = {
   overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
+  grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
   incidents: ['问题事件', '一个问题，一个事件 ID，一条可追溯的证据链。'],
   assets: ['资产与实例', '纳管 PostgreSQL 14–19、瀚高安全版 4.5.9，并试用 MySQL 8.4 只读监控。'],
@@ -103,11 +105,12 @@ function setView(route, updateHash = true) {
   containerStorage.show(selected === 'storage' && !!currentRole, params);
   if (selected === 'overview' && (!updateHash || query)) operationsOverview.restore(params);
   showOverview(selected === 'overview');
+  showGrafanaView(selected === 'grafana' ? params : null);
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && selected !== 'overview' && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'grafana'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -535,6 +538,67 @@ function showOverview(selected) {
   $('legacy-overview').hidden = !selected || nativeOverview;
   operationsOverview.show(selected && !!currentRole, nativeOverview);
 }
+
+function grafanaBack(route) {
+  return /^(?:live|storage|incidents)(?:\?|$)/.test(route || '') ? route : 'live';
+}
+
+function grafanaUnavailable() {
+  $('grafana-frame').hidden = true;
+  $('grafana-status').hidden = false;
+  $('grafana-status').textContent = '观测专题暂不可用，可返回原页面继续查看。';
+  $('grafana-retry').hidden = false;
+}
+
+function showGrafanaView(params) {
+  const frame = $('grafana-frame');
+  grafanaRequest?.abort();
+  frame.hidden = true;
+  if (frame.hasAttribute('src')) frame.removeAttribute('src');
+  if (!params) return;
+  $('grafana-back').href = '#' + grafanaBack(params.get('back'));
+  const status = $('grafana-status');
+  const retry = $('grafana-retry');
+  retry.hidden = true;
+  status.hidden = false;
+  if (currentRole !== 'admin' || currentOrganization) {
+    status.textContent = '平台管理员可访问观测专题。';
+    return;
+  }
+  const path = window.DbSphereLive.grafanaFrameURL(params);
+  if (!path) {
+    status.textContent = '找不到此专题。';
+    return;
+  }
+  status.textContent = '正在打开专题…';
+  const request = new AbortController();
+  grafanaRequest = request;
+  api('/grafana/api/user', 'GET', undefined, request.signal).then(identity => {
+    if (request.signal.aborted) return;
+    if (!/^dbsphere-(?:local-admin|admin-[a-z0-9-]+)$/.test(identity.login || '') || identity.isGrafanaAdmin) {
+      throw new Error('Grafana 会话不可用');
+    }
+    frame.src = path;
+    frame.hidden = false;
+  }).catch(() => {
+    if (!request.signal.aborted) grafanaUnavailable();
+  });
+}
+
+$('grafana-frame').addEventListener('load', event => {
+  if (document.body.dataset.activeView !== 'grafana') return;
+  const frame = event.currentTarget;
+  const page = frame.contentDocument;
+  const path = page?.location?.pathname;
+  if (path === '/grafana/dbsphere-return') {
+    const anchor = page.getElementById('dbsphere-grafana-return');
+    if (anchor) location.hash = grafanaBack(anchor.hash.slice(1));
+  } else if (path?.startsWith('/grafana/')) {
+    if (path === '/grafana/login' || page.contentType !== 'text/html') grafanaUnavailable();
+    else $('grafana-status').hidden = true;
+  }
+});
+$('grafana-retry').addEventListener('click', () => showGrafanaView(new URLSearchParams(location.hash.split('?')[1])));
 
 function updateRuntime(runtime) {
   workspaceData.runtime = runtime;
@@ -2576,11 +2640,13 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
       : phase === 'after' && event.status === 'open' ? '等待恢复观测' : '缺少可比采样'));
     if (point?.sampleId) anchor.append(' · ', replaySampleLink(event.assetId, point.sampleId));
     if (grafanaLink && viewport) {
-      const href = new URL(grafanaLink.href);
-      href.searchParams.set('from', String(viewport.from));
-      href.searchParams.set('to', String(viewport.to));
-      href.searchParams.set('var-dbsphere_context', `incidents?${investigationParams(event.id)}`);
-      grafanaLink.href = href;
+      const params = new URLSearchParams(grafanaLink.hash.split('?')[1]);
+      const source = `incidents?${investigationParams(event.id)}`;
+      params.set('from', String(viewport.from));
+      params.set('to', String(viewport.to));
+      params.set('var-dbsphere_context', source);
+      params.set('back', source);
+      grafanaLink.href = '#grafana?' + params;
     }
     list.replaceChildren();
     if (assetServerPaging && Number.isFinite(at)) {
@@ -3042,6 +3108,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     link.href = window.DbSphereLive.grafanaPath({ asset: event.assetId, organization: asset?.organizationId,
       cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id,
       eventContext: `incidents?${investigationParams(event.id)}`, container: anchor?.get('container'),
+      back: `incidents?${investigationParams(event.id)}`,
       from: Number.isFinite(anchorStart) ? anchorStart : Number.isFinite(end) && windowMinutes > 0 ? end - windowMinutes * 60000 : start - 5 * 60000,
       to: Number.isFinite(end) ? end : Math.min(Date.now(), (Date.parse(event.endedAt) || Date.now()) + 5 * 60000),
       section: mysql ? 'mysql' : storageIncident ? 'containerRCA' : 'waits' });
@@ -3741,7 +3808,7 @@ async function boot() {
     const runtime = await api('/api/version').catch(() => null);
     updateRuntime(runtime);
     setView(location.hash.slice(1), false);
-    if (!nativeOverview || document.body.dataset.activeView !== 'overview') await prepareWorkspace();
+    if (document.body.dataset.activeView !== 'grafana' && (!nativeOverview || document.body.dataset.activeView !== 'overview')) await prepareWorkspace();
   }
 }
 
@@ -3977,6 +4044,7 @@ $('organization-form').addEventListener('submit', async event => {
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
 window.setTimeout(pollStorageAvailability, 5000);
 setInterval(() => {
-  if (csrf && !longTermStoreUnavailable && !workspaceData.pending && (!nativeOverview || document.body.dataset.activeView !== 'overview'))
+  if (csrf && !longTermStoreUnavailable && !workspaceData.pending && document.body.dataset.activeView !== 'grafana' &&
+      (!nativeOverview || document.body.dataset.activeView !== 'overview'))
     refresh().catch(() => {});
 }, 30000);

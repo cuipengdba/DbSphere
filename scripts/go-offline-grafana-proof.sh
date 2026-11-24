@@ -30,6 +30,12 @@ jq -nc --arg password "$viewer" '{username:"viewer",password:$password}' |
 test "$(curl -sS -b "$scratch/viewer.cookie" -o /dev/null -w '%{http_code}' "$base/grafana/api/user")" = 403
 api -H 'X-WEBAUTH-USER: admin' "$base/grafana/api/user" |
   jq -e '.login=="dbsphere-local-admin" and (.isGrafanaAdmin|not)' >/dev/null
+api -D "$scratch/frame.headers" -o "$scratch/frame.html" -H 'Sec-Fetch-Dest: iframe' \
+  "$base/grafana/d/dbsphere-overview?kiosk"
+tr -d '\r' < "$scratch/frame.headers" | grep -Fxi 'X-Frame-Options: SAMEORIGIN' >/dev/null
+grep -Fqi "frame-ancestors 'self'" "$scratch/frame.headers"
+grep -q 'grafanaBootData' "$scratch/frame.html"
+if grep -Eqi '^(Location:.*login|Set-Cookie:)' "$scratch/frame.headers"; then exit 1; fi
 echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql; do
@@ -113,6 +119,10 @@ api "$base/api/events/$event" |
     '.event.id==$id and (.analysis|tostring|(contains($root) and contains($waiting)))' >/dev/null
 api "$base/grafana/d/dbsphere-waits?var-event=$event&var-asset=$asset&from=now-15m&to=now" > "$scratch/grafana-waits.html"
 grep -Eq 'grafanaBootData|Grafana' "$scratch/grafana-waits.html"
+api -H 'Sec-Fetch-Dest: iframe' -G --data-urlencode 'view=event' --data-urlencode "event=$event" \
+  --data-urlencode "context=incidents?event=$event&focusPhase=after" "$base/grafana/dbsphere-return" > "$scratch/frame-return.html"
+grep -Fq 'id="dbsphere-grafana-return"' "$scratch/frame-return.html"
+grep -Fq "href=\"/#incidents?event=$event&amp;focusPhase=after\"" "$scratch/frame-return.html"
 redirect="$(api -D - -o /dev/null "$base/grafana/dbsphere-return?view=event&event=$event&asset=$asset&from=2026-01-01T00:00:00Z&to=2026-01-01T00:15:00Z" |
   tr -d '\r' | sed -n 's/^Location: //p')"
 test "$redirect" = "/#incidents?asset=$asset&event=$event&from=2026-01-01T00%3A00%3A00Z&to=2026-01-01T00%3A15%3A00Z"

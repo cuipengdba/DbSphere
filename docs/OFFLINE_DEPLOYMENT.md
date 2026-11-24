@@ -20,7 +20,7 @@ sha256sum --check DbSphere-go-observability-1.50.0-linux-amd64.run.sha256
 bash DbSphere-go-observability-1.50.0-linux-amd64.run
 ```
 
-增强实例使用已有配置目录和 PG18 数据卷。Prometheus 和 Grafana 只在 Compose 私有网络中监听。平台管理员从实时大盘的「打开专题面板」或事件详情的「打开 Grafana 专题」进入。Grafana 使用当前 DbSphere 会话，预设面板以只读身份打开，事件链接可返回原事件。
+增强实例使用已有配置目录和 PG18 数据卷。Prometheus 和 Grafana 只在 Compose 私有网络中监听。平台管理员登录 DbSphere 后，从实时大盘、基础设施监控或事件详情打开观测专题。专题在 DbSphere 工作区中以只读身份显示，无需单独登录 Grafana。返回时保留所选资产、时间窗和事件阶段。
 
 PG18 保存既有采样、事件和根因证据。Prometheus 的高频数据初始保留 7 天并设置 2 GB 上限，可在部署配置中通过 `DBSPHERE_PROMETHEUS_RETENTION_SIZE` 调整大小。已明确登记 Linux Exporter 地址和端口的资产会自动生成抓取目标。随包提供镜像摘要、组件清单和许可。发布页同时提供对应的 Grafana OSS 源码归档和 SHA-256 文件。
 
