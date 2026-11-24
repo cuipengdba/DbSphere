@@ -9,6 +9,7 @@
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
   const safeId = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value || '') ? value : '';
   const bytes = value => value >= 1048576 ? number.format(value / 1048576) + ' MiB' : number.format(value / 1024) + ' KiB';
+  const formatted = value => typeof value === 'number' ? number.format(value) : '—';
 
   function element(tag, value, className) {
     const item = document.createElement(tag);
@@ -47,15 +48,77 @@
     if ([...select.options].some(option => option.value === value)) select.value = value;
   }
 
-  function create(root, { api, formatTime, notice }) {
+  function logChart(title, points, lines, chartTime) {
+    const figure = element('figure', undefined, 'log-report-chart');
+    const legend = element('div', undefined, 'log-chart-labels');
+    const canvas = element('canvas');
+    canvas.setAttribute('aria-label', title);
+    const axis = element('div', undefined, 'log-chart-time');
+    axis.append(element('span', chartTime(points[0]?.at)), element('span', chartTime(points.at(-1)?.at)));
+    lines.forEach(([name, read]) => {
+      const latest = points.map(read).findLast(value => value != null);
+      legend.append(element('span', name + ' ' + formatted(latest)));
+    });
+    figure.append(element('strong', title), legend, canvas, axis);
+    return { figure, draw() {
+      const width = canvas.clientWidth, height = canvas.clientHeight;
+      if (!width || !height) return;
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(ratio, ratio);
+      const css = getComputedStyle(figure);
+      ctx.strokeStyle = css.getPropertyValue('--border').trim();
+      for (const y of [4, height / 2, height - 4]) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+      let peak = 1;
+      for (const point of points) for (const [, read] of lines) peak = Math.max(peak, read(point) ?? 0);
+      const span = Math.max(60000, new Date(points.at(-1)?.at) - new Date(points[0]?.at));
+      lines.forEach(([, read], index) => {
+        ctx.strokeStyle = index === 0 ? css.getPropertyValue('--accent').trim() :
+          document.documentElement.dataset.theme === 'dark' ? '#f0a82f' : '#a25c06';
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.lineWidth = 1.6;
+        let previous = null;
+        for (const row of points) {
+          const value = read(row);
+          if (value == null) { previous = null; continue; }
+          const x = 4 + (new Date(row.at) - new Date(points[0].at)) / span * (width - 8);
+          const y = height - 4 - value / peak * (height - 8);
+          ctx.beginPath();
+          if (previous) {
+            ctx.moveTo(previous[0], previous[1]);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+          } else {
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          previous = [x, y];
+        }
+      });
+    } };
+  }
+
+  function create(root, { api, formatTime, notice, openEvent }) {
     const get = name => root.querySelector('[data-logs="' + name + '"]');
     const run = (job, target = get('status')) => void job().catch(error => {
       if (active) target.textContent = error.message;
     });
     let directory = { projects: [], instances: [] };
     let active = false, generation = 0, timer, page = 0, current = '', batches = [];
-    let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0;
+    let retryFile = '', uploading = false, previewRequest = 0, recordRequest = 0, reportRequest = 0;
+    let reportCharts = [];
     const filters = get('record-filters');
+    const repaint = () => { if (active) reportCharts.forEach(chart => chart.draw()); };
+    const resize = new ResizeObserver(repaint);
+    new MutationObserver(repaint).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    resize.observe(get('report'));
 
     function selectBatch(id) {
       current = safeId(id);
@@ -145,6 +208,7 @@
           state, file.parsedCount + ' / ' + file.recordCount, bytes(file.rawSize) + ' / ' + bytes(file.storedSize), action];
       }), '等待上传日志文件。'));
       await loadRecords();
+      await loadReport();
       if (active && id === current && files.some(file => file.state === 'queued')) timer = setTimeout(() => run(loadBatch), 3200);
     }
 
@@ -174,6 +238,83 @@
       get('next').disabled = !data.more;
       get('page').textContent = '第 ' + (page + 1) + ' 页';
       get('record-paging').hidden = page === 0 && !data.more;
+    }
+
+    async function loadReport() {
+      const id = current;
+      if (!id) return;
+      const request = ++reportRequest;
+      const query = new URLSearchParams(new FormData(filters));
+      for (const field of ['from', 'to']) {
+        const value = query.get(field);
+        if (value) query.set(field, new Date(value).toISOString());
+        else query.delete(field);
+      }
+      const report = await api(base + 'batches/' + id + '/report?' + query);
+      if (id !== current || !active || request !== reportRequest) return;
+      const panel = get('report');
+      panel.replaceChildren(element('h2', '全景分析'));
+      reportCharts = [];
+      if (!report.series.length) {
+        panel.append(element('p', '当前范围暂无带时间的采样记录。', 'empty'));
+        return;
+      }
+      const totals = report.summary;
+      const rateWord = report.coverage === 'full' && totals.valid === totals.records ? '全量日志 SQL' : '已记录 SQL';
+      const monitoring = report.monitoringCounters?.databaseTps;
+      panel.append(element('p', [
+        rateWord + ' ' + formatted(totals.statements) + ' 条',
+        '延迟样本 ' + formatted(totals.timed) + ' 条',
+        'P95 ' + formatted(totals.p95) + ' ms', 'P99 ' + formatted(totals.p99) + ' ms',
+        monitoring == null ? '显式事务记录 ' + formatted(totals.explicitTransactions) : '同期监控 TPS ' + formatted(monitoring)
+      ].join(' · '), 'hint'));
+      const rate = key => point => point[key] / report.bucketSeconds;
+      const point = key => row => row[key];
+      const definitions = [
+        [rateWord + '读写速率', [['读 次/s', rate('read')], ['写 次/s', rate('write')]]],
+        ['SQL 耗时', [['P95 ms', point('p95')], ['P99 ms', point('p99')]]],
+        ['锁等待与死锁', [['锁等待', point('lock')], ['死锁', point('deadlock')]]],
+        ['错误与显式事务速率', [['错误 次/s', rate('error')], ['显式事务 次/s', rate('transactions')]]]
+      ];
+      if (report.series.some(row => row.checkpoint || row.autovacuum)) definitions.push(
+        ['Checkpoint 与 Autovacuum', [['Checkpoint', point('checkpoint')], ['Autovacuum', point('autovacuum')]]]);
+      if (report.series.some(row => row.checkpointBuffers != null)) definitions.push(
+        ['Checkpoint 刷脏', [['已写缓冲页', point('checkpointBuffers')]]]);
+      if (report.series.some(row => row.temp)) definitions.push(
+        ['临时文件', [['临时文件 MiB', row => row.tempBytes / 1048576], ['溢出记录', point('temp')]]]);
+      const chartGrid = element('div', undefined, 'log-report-charts');
+      reportCharts = definitions.map(([title, lines]) => logChart(title, report.series, lines,
+        at => at ? new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''));
+      chartGrid.append(...reportCharts.map(chart => chart.figure));
+      panel.append(chartGrid);
+      const block = (title, labels, rows, empty) => {
+        const section = element('section', undefined, 'log-report-section');
+        const scroll = element('div', undefined, 'log-scroll');
+        scroll.append(table(labels, rows, empty));
+        section.append(element('h3', title), scroll);
+        panel.append(section);
+      };
+      block('Application 流量与资源矩阵', ['应用', '已记录 SQL', 'SQL 累计 ms', 'P95 ms', '锁等待 ms', '临时文件', '错误'],
+        report.applications.map(app => [app.application ? button(app.application, () => {
+          filters.elements.application.value = app.application;
+          page = 0;
+          run(async () => { await loadRecords(); await loadReport(); });
+        }) : '未标识', formatted(app.statements), formatted(app.sqlMs), formatted(app.p95), formatted(app.waitMs),
+          app.tempBytes > 0 ? bytes(app.tempBytes) : '—', formatted(app.errors)]), '无可归属的应用记录。');
+      block('Top 慢 SQL', ['归一化 SQL', '次数', '≥1 秒', '累计 ms', '最大 ms', 'P95 ms'], report.slowSQL.map(row =>
+        [element('code', row.sql, 'log-record'), formatted(row.calls), formatted(row.slowCalls),
+          formatted(row.totalMs), formatted(row.maxMs), formatted(row.p95)]), '当前日志缺少可比较的带耗时 SQL。');
+      block('锁阻塞证据', ['时间', '等待者 → 阻塞者', '应用与锁对象', '等待 ms', '证据'], report.locks.map(row => {
+        const chain = element('div', undefined, 'log-chain');
+        chain.append(element('span', row.waiter || '未知会话'), element('strong', '→'),
+          element('span', row.blocker || '阻塞者缺采'));
+        const actions = element('div', undefined, 'log-actions');
+        actions.append(button('查看原文', () => run(() => openOriginal(row.id))));
+        if (safeId(row.nearbyEvent)) actions.append(button('同窗事件', () => openEvent(row.nearbyEvent)));
+        return [formatTime(row.at), chain, [row.application, row.object].filter(Boolean).join(' · ') || '未标识',
+          formatted(row.durationMs), actions];
+      }), '当前范围未记录锁阻塞。');
+      requestAnimationFrame(repaint);
     }
 
     async function openOriginal(id) {
@@ -320,7 +461,7 @@
     filters.addEventListener('submit', event => {
       event.preventDefault();
       page = 0;
-      run(loadRecords);
+      run(async () => { await loadRecords(); await loadReport(); });
     });
     get('previous').addEventListener('click', () => { page = Math.max(0, page - 1); run(loadRecords); });
     get('next').addEventListener('click', () => { page++; run(loadRecords); });

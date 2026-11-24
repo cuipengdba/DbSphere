@@ -60,7 +60,14 @@ func SQLShape(engine, sql string) (string, string) {
 			}
 			token := strings.ToLower(sql[:end])
 			sql = sql[end:]
-			if (token == "e" || token == "n" || token == "x" || token == "b") && strings.HasPrefix(sql, "'") {
+			if engine == "dm8" && token == "q" && len(sql) >= 3 && sql[0] == '\'' {
+				shape.WriteByte('?')
+				closing := map[byte]byte{'[': ']', '{': '}', '(': ')', '<': '>'}[sql[1]]
+				if closing == 0 {
+					closing = sql[1]
+				}
+				_, sql, _ = strings.Cut(sql[2:], string([]byte{closing, '\''}))
+			} else if (token == "e" || token == "n" || token == "x" || token == "b") && strings.HasPrefix(sql, "'") {
 				shape.WriteByte('?')
 				sql = afterQuoted(sql, '\'')
 			} else {

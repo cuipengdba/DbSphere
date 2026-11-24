@@ -74,6 +74,15 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 	if err != nil || !strings.Contains(raw.(map[string]any)["text"].(string), line) {
 		t.Fatalf("original crossed block boundary: %v", err)
 	}
+	report, err := pg.LogReport(ctx, batch, LogRecordQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportJSON, _ := json.Marshal(report)
+	if !strings.Contains(string(reportJSON), "orders-api") || !strings.Contains(string(reportJSON), "\"p95\": 2100.5") &&
+		!strings.Contains(string(reportJSON), "\"p95\":2100.5") {
+		t.Fatalf("report did not reflect the timed SQL: %s", reportJSON)
+	}
 	outOfScope := WithOrganization(ctx, "00000000-0000-4000-8000-000000000002")
 	if _, err := pg.LogOriginal(outOfScope, id); !errors.Is(err, ErrLogNotFound) {
 		t.Fatalf("cross-organization log origin exposed: %v", err)

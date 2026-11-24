@@ -254,7 +254,7 @@ func (r *logArchiveReader) Read(out []byte) (int, error) {
 
 var logRecordColumns = []string{"batch_id", "file_id", "record_key", "raw_offset", "raw_length", "observed_at",
 	"kind", "severity", "database_name", "application", "session_key", "process_id", "blocker_id", "sqlstate",
-	"sql_shape", "fingerprint", "command", "duration_ms", "temp_bytes"}
+	"sql_shape", "fingerprint", "command", "duration_ms", "temp_bytes", "object_key", "checkpoint_buffers"}
 
 func (s *Postgres) ProcessNextLogFile(ctx context.Context) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -314,7 +314,8 @@ func (s *Postgres) ProcessNextLogFile(ctx context.Context) (bool, error) {
 			limitedLogText(record.Severity, 40), limitedLogText(record.Database, 256), limitedLogText(record.Application, 256),
 			limitedLogText(record.Session, 128), limitedLogText(record.Process, 40), limitedLogText(record.Blocker, 40),
 			limitedLogText(record.SQLState, 40), limitedLogText(record.Shape, 8192), record.Fingerprint,
-			limitedLogText(record.Command, 40), record.DurationMS, record.TempBytes})
+			limitedLogText(record.Command, 40), record.DurationMS, record.TempBytes,
+			limitedLogText(record.ObjectKey, 180), record.CheckpointBuffers})
 		if len(rows) == cap(rows) {
 			return flush()
 		}

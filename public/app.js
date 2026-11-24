@@ -540,7 +540,7 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
 
 const live = window.DbSphereLive.create($('live-workspace'), { api, openEvent, formatTime, assetRuntimeLabel });
 const wallboard = window.DbSphereWallboard.create($('wallboard-workspace'), { api, openEvent, formatTime });
-const logAnalysis = window.DbSphereLogAnalysis.create($('log-workspace'), { api, formatTime, notice });
+const logAnalysis = window.DbSphereLogAnalysis.create($('log-workspace'), { api, formatTime, notice, openEvent });
 const containerStorage = window.DbSphereContainerStorage.create($('container-storage'), { api, openEvent, formatTime });
 const operationsOverview = window.DbSphereOverview.create($('operations-board'), { api, openEvent, formatTime });
 

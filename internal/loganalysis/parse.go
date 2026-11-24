@@ -18,19 +18,21 @@ import (
 const MaxRecordBytes = 1 << 20
 
 var (
-	ErrFormat     = errors.New("unknown log format")
-	pgTimestamp   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?: ?(?:Z|[+-]\d\d(?::?\d\d)?|[A-Z]{2,6}))?`)
-	pgSeverity    = regexp.MustCompile(`\b(DEBUG[1-5]?|INFO|NOTICE|WARNING|ERROR|LOG|FATAL|PANIC):\s*`)
-	pgDuration    = regexp.MustCompile(`(?i)^duration:\s*(\d+(?:\.\d+)?)\s*ms\b(?:\s+(?:statement|execute[^:]*):\s*)?`)
-	pgStatement   = regexp.MustCompile(`(?i)^(?:statement|execute[^:]*):\s*`)
-	pgProcess     = regexp.MustCompile(`\[(\d+)\]`)
-	pgBlocker     = regexp.MustCompile(`(?i)\bprocess(?:es)? holding the lock:\s*(\d+)\b`)
-	pgWaitTime    = regexp.MustCompile(`(?i)\bafter\s+(\d+(?:\.\d+)?)\s*ms`)
-	pgDetailLine  = regexp.MustCompile(`(?m)^\s*(?:DETAIL|CONTEXT|HINT|LOCATION|STATEMENT):\s`)
-	pgTemp        = regexp.MustCompile(`(?i)\btemporary file:.*\bsize\s+(\d+)\b`)
-	pgApplication = regexp.MustCompile(`(?:^|[ ,])app(?:lication_name)?=([^,\[\]\s]+)`)
-	pgDatabase    = regexp.MustCompile(`(?:^|[ ,])db(?:name)?=([^,\[\]\s]+)`)
-	pgField       = regexp.MustCompile(`%[a-zA-Z%]`)
+	ErrFormat           = errors.New("unknown log format")
+	pgTimestamp         = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?: ?(?:Z|[+-]\d\d(?::?\d\d)?|[A-Z]{2,6}))?`)
+	pgSeverity          = regexp.MustCompile(`\b(DEBUG[1-5]?|INFO|NOTICE|WARNING|ERROR|LOG|FATAL|PANIC):\s*`)
+	pgDuration          = regexp.MustCompile(`(?i)^duration:\s*(\d+(?:\.\d+)?)\s*ms\b(?:\s+(?:statement|execute[^:]*):\s*)?`)
+	pgStatement         = regexp.MustCompile(`(?i)^(?:statement|execute[^:]*):\s*`)
+	pgProcess           = regexp.MustCompile(`\[(\d+)\]`)
+	pgBlocker           = regexp.MustCompile(`(?i)\bprocess(?:es)? holding the lock:\s*(\d+)\b`)
+	pgWaitTime          = regexp.MustCompile(`(?i)\bafter\s+(\d+(?:\.\d+)?)\s*ms`)
+	pgLockObject        = regexp.MustCompile(`(?i)\b([A-Za-z]+Lock) on (relation|tuple|transaction|page) ([0-9(),]+)(?: of database ([0-9]+))?`)
+	pgCheckpointBuffers = regexp.MustCompile(`(?i)checkpoint complete: wrote (\d+) buffers`)
+	pgDetailLine        = regexp.MustCompile(`(?m)^\s*(?:DETAIL|CONTEXT|HINT|LOCATION|STATEMENT):\s`)
+	pgTemp              = regexp.MustCompile(`(?i)\btemporary file:.*\bsize\s+(\d+)\b`)
+	pgApplication       = regexp.MustCompile(`(?:^|[ ,])app(?:lication_name)?=([^,\[\]\s]+)`)
+	pgDatabase          = regexp.MustCompile(`(?:^|[ ,])db(?:name)?=([^,\[\]\s]+)`)
+	pgField             = regexp.MustCompile(`%[a-zA-Z%]`)
 )
 
 type Options struct {
@@ -46,6 +48,8 @@ type Record struct {
 	Session, Line, Process, Blocker, SQLState string
 	Shape, Fingerprint, Command, Identity     string
 	DurationMS                                *float64
+	ObjectKey                                 string
+	CheckpointBuffers                         *int64
 	TempBytes                                 int64
 }
 
@@ -55,6 +59,9 @@ type Preview struct {
 
 func Detect(sample []byte) Preview {
 	first := strings.TrimSpace(strings.SplitN(strings.TrimPrefix(string(sample), "\ufeff"), "\n", 2)[0])
+	if looksLikeDMTrace(first) {
+		return Preview{"dmtrace", "达梦会话头和跟踪字段"}
+	}
 	if strings.HasPrefix(first, "{") {
 		var obj map[string]json.RawMessage
 		if json.Unmarshal([]byte(first), &obj) == nil && obj["timestamp"] != nil && obj["message"] != nil {
@@ -83,11 +90,14 @@ func Parse(reader io.Reader, opts Options, accept func(Record) error) (string, e
 			return "", err
 		}
 		format = Detect(sample).Format
+		if opts.Engine == "dm8" && format == "text" {
+			format = "dmtrace"
+		}
 		if format == "" && prefix != nil && prefix.Match(sample) {
 			format = "text"
 		}
 	}
-	if format != "csvlog" && format != "jsonlog" && format != "text" {
+	if format != "csvlog" && format != "jsonlog" && format != "text" && format != "dmtrace" {
 		return "", ErrFormat
 	}
 	if opts.Zone == nil {
@@ -103,7 +113,7 @@ func Parse(reader io.Reader, opts Options, accept func(Record) error) (string, e
 		if length == 0 {
 			break
 		}
-		if format == "text" && current.length > 0 && line != "" && !pgStartsRecord(line, prefix) {
+		if (format == "text" || format == "dmtrace") && current.length > 0 && line != "" && !pgStartsRecord(line, prefix) {
 			if current.length+length <= MaxRecordBytes {
 				current.text += line
 			}
@@ -198,6 +208,9 @@ func decodeRecord(raw rawRecord, format string, opts Options, prefix *regexp.Reg
 		return record
 	}
 	text := strings.TrimPrefix(strings.ToValidUTF8(raw.text, "�"), "\ufeff")
+	if opts.Engine == "dm8" && (format == "dmtrace" || format == "text") {
+		return decodeDM8(record, text, opts)
+	}
 	var timestamp, message, query, detail, command string
 	switch format {
 	case "csvlog":
@@ -282,11 +295,17 @@ func classify(record *Record, message, detail, query, command, engine string) {
 	case strings.Contains(lower, "still waiting for") || strings.Contains(lower, "acquired") && strings.Contains(lower, "lock") && strings.Contains(lower, "after"):
 		record.Kind = "lock"
 		record.Blocker = match(pgBlocker, detail+"\n"+message)
+		if groups := pgLockObject.FindStringSubmatch(message); len(groups) > 1 {
+			record.ObjectKey = strings.Join(groups[1:], " ")
+		}
 		if ms := pgWaitTime.FindStringSubmatch(message); len(ms) == 2 {
 			record.DurationMS = duration(ms[1])
 		}
 	case strings.HasPrefix(lower, "checkpoint "), strings.HasPrefix(lower, "restartpoint "):
 		record.Kind = "checkpoint"
+		if written, err := strconv.ParseInt(match(pgCheckpointBuffers, message), 10, 64); err == nil {
+			record.CheckpointBuffers = &written
+		}
 	case strings.HasPrefix(lower, "automatic vacuum"), strings.HasPrefix(lower, "automatic analyze"):
 		record.Kind = "autovacuum"
 	case pgTemp.MatchString(message):
@@ -370,7 +389,8 @@ func digest(value string) string {
 }
 
 func ValidateOptions(opts Options) error {
-	if opts.Format != "" && opts.Format != "auto" && opts.Format != "text" && opts.Format != "csvlog" && opts.Format != "jsonlog" {
+	if opts.Format != "" && opts.Format != "auto" && opts.Format != "text" && opts.Format != "csvlog" &&
+		opts.Format != "jsonlog" && opts.Format != "dmtrace" {
 		return ErrFormat
 	}
 	if len(opts.Prefix) > 400 {

@@ -85,6 +85,12 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			if err == nil {
 				value, err = pg.LogRecords(ctx, sections[1], filters)
 			}
+		case len(sections) == 3 && sections[2] == "report" && r.Method == http.MethodGet:
+			var filters storepkg.LogRecordQuery
+			filters, err = parseLogRecordFilters(r)
+			if err == nil {
+				value, err = pg.LogReport(ctx, sections[1], filters)
+			}
 		default:
 			err = storepkg.ErrLogNotFound
 		}
