@@ -117,7 +117,7 @@ const finishCollectionSQL = `UPDATE collection_jobs SET
 	last_outcome=$3,last_finished_at=statement_timestamp(),last_sample_id=coalesce($4,last_sample_id),
 	last_success_at=CASE WHEN $3='ok' THEN $10 ELSE last_success_at END,
 	last_queue_ms=$6,last_query_ms=$7,last_store_ms=$8,last_replica_id=nullif($9,''),
-	isolated=CASE WHEN $3='ok' THEN coalesce($11::bigint>=5000,false)
+	isolated=CASE WHEN $3='ok' THEN coalesce($11::bigint>=5000 AND (isolated OR last_query_ms>=5000),false)
 		ELSE isolated OR failures>=1 OR coalesce($11::bigint>=5000,false) END,
 	due_at=CASE WHEN $3='ok'
 		THEN date_bin(make_interval(secs=>$5::int),statement_timestamp(),due_at)+make_interval(secs=>$5::int)

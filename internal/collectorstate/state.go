@@ -72,6 +72,18 @@ func (t *Tracker) Finish(at time.Time, cycle Cycle) {
 	t.cycles++
 }
 
+// FinishBatch records one completed claim while other claims continue running.
+func (t *Tracker) FinishBatch(started, finished, activeSince time.Time, cycle Cycle) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.running = !activeSince.IsZero()
+	t.activeAt = activeSince
+	t.cycleAt = started
+	t.endedAt = finished
+	t.last = cycle
+	t.cycles++
+}
+
 func (t *Tracker) Snapshot(now time.Time) Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

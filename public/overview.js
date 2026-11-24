@@ -23,12 +23,16 @@
     const filterNames = ['organization', 'environment', 'cluster'];
     let visible = false, enabled = false, paused = false, custom = null, lastWindow = null;
     let minutes = 60, offset = 0, timer, request, brush = null, selection = null;
+    let timelineSnapshot, renderedScope;
     let filters = {};
 
     function window() {
       if (custom) return custom;
       const to = paused && lastWindow ? lastWindow.to : Date.now();
       return { from: to - minutes * minute, to };
+    }
+    function scope() {
+      return JSON.stringify([filterNames.map(name => filters[name] || ''), minutes, custom]);
     }
     function route(fixed = false) {
       const params = new URLSearchParams();
@@ -167,6 +171,9 @@
       get('inspection-list').replaceChildren(...(rows.length ? rows : [element('p', '此选区没有事件或维护记录。', 'empty')]));
     }
     function drawTimeline(rows) {
+      const snapshot = JSON.stringify([rows, lastWindow.to, selection]);
+      if (snapshot === timelineSnapshot) return;
+      timelineSnapshot = snapshot;
       const chart = get('timeline');
       chart.dataset.series = JSON.stringify(rows.map(row => row.start));
       const maximum = Math.max(1, ...rows.flatMap(row => [row.opened, row.recovered, row.availability, row.maintenance]));
@@ -190,6 +197,7 @@
         element('span', timeLabel(lastWindow.to)));
     }
     function selectRange(first, last) {
+      if (renderedScope !== scope()) return;
       const starts = JSON.parse(get('timeline').dataset.series || '[]');
       const from = Date.parse(starts[Math.min(first, last)]);
       const to = Date.parse(starts[Math.max(first, last) + 1]) || lastWindow?.to;
@@ -205,12 +213,19 @@
       request?.abort();
       const current = new AbortController();
       request = current;
+      const currentScope = scope();
+      const timeline = get('timeline');
+      timeline.setAttribute('aria-busy', String(renderedScope !== currentScope));
       const { from, to } = window();
       const params = new URLSearchParams({ ...filters, from: iso(from), to: iso(to), offset });
       if (selection) { params.set('inspectFrom', iso(selection.from)); params.set('inspectTo', iso(selection.to)); }
       try {
         const data = await api('/api/monitoring/overview?' + params, 'GET', undefined, current.signal);
-        if (request === current && visible) render(data);
+        if (request === current && visible) {
+          render(data);
+          renderedScope = currentScope;
+          timeline.setAttribute('aria-busy', 'false');
+        }
       } catch (error) {
         if (request === current && visible && error.name !== 'AbortError') get('status').textContent = error.message;
       } finally {

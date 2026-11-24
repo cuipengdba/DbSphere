@@ -50,20 +50,23 @@ async function api(path, body) {
   return response.json();
 }
 
-const marker = 'collector-load-' + Date.now();
+const marker = config.marker ?? 'collector-load-' + Date.now();
+if (!/^collector-load-\d{13}$/.test(marker)) throw new Error('Invalid load-test batch marker');
+const prepared = await storeSQL("SELECT coalesce(jsonb_object_agg(name,id),'{}') FROM assets WHERE name LIKE '" + marker + "-%'");
 const assets = [];
-for (let first = 0; first < assetCount; first += 5) {
-  const batch = await Promise.all(Array.from({ length: Math.min(5, assetCount - first) }, async (_, index) => {
-    const number = first + index;
+for (let number = 0; number < assetCount; number++) {
+  const name = marker + '-' + number;
+  let id = prepared[name];
+  if (!id) {
     const target = config.targets[number % config.targets.length];
     const { asset } = await api('/api/assets', {
-      name: marker + '-' + number, host: target.host, port: target.port ?? 5432, database: target.database ?? 'postgres',
+      name, host: target.host, port: target.port ?? 5432, database: target.database ?? 'postgres',
       username: monitor, password: monitorPassword, sslMode: 'disable', runtime: 'managed',
     });
-    if (!/^[0-9a-f-]{36}$/.test(asset.id)) throw new Error('Invalid asset ID from API');
-    return asset.id;
-  }));
-  assets.push(...batch);
+    id = asset.id;
+  }
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid asset ID from API');
+  assets.push(id);
 }
 await writeFile(config.report + '.assets.json', JSON.stringify(assets, null, 2));
 const assetIDs = 'ARRAY[' + assets.map(id => "'" + id + "'").join(',') + ']::uuid[]';
@@ -84,7 +87,7 @@ const before = { targetSQL: await targetCounters(), storageBytes: await storageB
 const window = await storeSQL("SELECT jsonb_build_object('from',now(),'to',now()+make_interval(secs=>" + duration +
   "),'due',(SELECT jsonb_object_agg(asset_id,date_bin(make_interval(secs=>" + interval + "),now(),due_at)+" +
   "make_interval(secs=>" + interval + ")) FROM collection_jobs WHERE asset_id=ANY(" + assetIDs + ')))');
-await writeFile(config.report + '.window.json', JSON.stringify({ from: window.from, to: window.to, marker }, null, 2));
+await writeFile(config.report + '.window.json', JSON.stringify({ ...window, marker, before }, null, 2));
 console.log('Warmup complete, measuring ' + assetCount + ' assets from ' + window.from + ' through ' + window.to);
 await sleep(duration * 1000 + interval * 1000);
 const from = new Date(window.from).toISOString();
@@ -104,6 +107,10 @@ const observed = await storeSQL([
   "'queueP95Ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY queue),",
   "'queryP95Ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY query)) FROM scheduled",
 ].join('\n'));
+const coverage = 100 * observed.ok / expected;
+const pass = coverage >= 99 && observed.duplicates === 0 && observed.timed > 0 && observed.queueP95Ms <= interval * 1000;
+const report = { marker, assetCount, interval, duration, from, to, expected, observed, coverage, pass };
+await writeFile(config.report, JSON.stringify(report, null, 2) + '\n');
 const after = { targetSQL: await targetCounters(), storageBytes: await storageBytes() };
 const timings = { coverage: [], hourlySeries: [] };
 session = await authenticate();
@@ -119,12 +126,11 @@ for (let index = 0; index < 5; index++) {
     timings[metric].push(Number((performance.now() - start).toFixed(1)));
   }
 }
-const coverage = 100 * observed.ok / expected;
-const pass = coverage >= 99 && observed.duplicates === 0 && observed.timed > 0 && observed.queueP95Ms <= interval * 1000;
-const report = { marker, assetCount, interval, duration, from, to, expected, observed, coverage, pass,
+Object.assign(report, {
   targetSQL: after.targetSQL.map((item, i) => ({ target: item.target, version: item.version,
     calls: item.calls - before.targetSQL[i].calls, executionMs: item.executionMs - before.targetSQL[i].executionMs })),
-  storeBytesBefore: before.storageBytes, storeBytesAfter: after.storageBytes, apiMs: timings };
+  storeBytesBefore: before.storageBytes, storeBytesAfter: after.storageBytes, apiMs: timings,
+});
 await writeFile(config.report, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report, null, 2));
 if (!pass) process.exitCode = 1;

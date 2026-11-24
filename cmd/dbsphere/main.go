@@ -10,8 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -634,93 +632,110 @@ func runCollector(ctx context.Context, pg collectorStore, key []byte, interval t
 	<-isolatedDone
 }
 
+type collectionBatch struct {
+	started time.Time
+	left    int
+	cycle   collectorstate.Cycle
+}
+
+type collectionCompletion struct {
+	batch             *collectionBatch
+	targetFailed      bool
+	persistenceFailed bool
+}
+
 func runCollectorLane(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
 	lane store.CollectionLane, tracker *collectorstate.Tracker, log *slog.Logger) {
+	workers = max(1, workers)
 	ticker := time.NewTicker(min(interval, 3*time.Second))
 	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
+	done := make(chan collectionCompletion, workers)
+	batches := make(map[*collectionBatch]struct{})
+	running := 0
+	claim, full := true, false
+	record := func(batch *collectionBatch) {
+		if tracker == nil {
 			return
 		}
-		if tracker != nil {
-			tracker.Begin(time.Now())
+		var earliest time.Time
+		for active := range batches {
+			if earliest.IsZero() || active.started.Before(earliest) {
+				earliest = active.started
+			}
 		}
-		cycle := collectorstate.Cycle{}
-		claimCtx, stopClaim := context.WithTimeout(ctx, 5*time.Second)
-		jobs, err := pg.ClaimCollectionJobs(claimCtx, interval, workers, lane)
-		stopClaim()
-		if err != nil {
-			cycle.DueScanFailed = true
-			log.Error("Go collector could not list due assets", "error", err)
-		} else {
-			cycle.Selected = len(jobs)
-			cycle.AtBatchLimit = len(jobs) == workers
-			var processed, targetFailures, collectorErrors atomic.Int64
-			runBoundedBatch(ctx, jobs, workers, func(job store.CollectionLease) {
-				checkCtx, cancel := context.WithTimeout(ctx, store.CollectionBudget)
-				result, err := pg.CheckCollectionLease(checkCtx, job, interval, key)
-				cancel()
-				processed.Add(1)
-				if err != nil {
-					collectorErrors.Add(1)
-					log.Error("Go collector failed to persist asset sample", "assetId", job.AssetID, "error", err)
-					releaseCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-					defer stop()
-					if retryErr := pg.RetryCollectionLease(releaseCtx, job); retryErr != nil {
-						log.Error("Go collector could not reschedule lease", "assetId", job.AssetID, "error", retryErr)
-					}
-				} else if result.Status == "error" {
-					targetFailures.Add(1)
-					log.Warn("Go collector observed asset failure", "assetId", job.AssetID, "sampleId", result.SampleID)
+		tracker.FinishBatch(batch.started, time.Now(), earliest, batch.cycle)
+	}
+	complete := func(result collectionCompletion) {
+		running--
+		batch := result.batch
+		batch.left--
+		batch.cycle.Processed++
+		if result.targetFailed {
+			batch.cycle.TargetFailures++
+		}
+		if result.persistenceFailed {
+			batch.cycle.CollectorErrors++
+		}
+		if batch.left == 0 {
+			delete(batches, batch)
+			record(batch)
+		}
+	}
+	for ctx.Err() == nil {
+		if free := workers - running; claim && free > 0 {
+			claim = false
+			started := time.Now()
+			if tracker != nil && running == 0 {
+				tracker.Begin(started)
+			}
+			claimCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+			jobs, err := pg.ClaimCollectionJobs(claimCtx, interval, free, lane)
+			stop()
+			full = err == nil && len(jobs) == free
+			batch := &collectionBatch{started: started, left: len(jobs),
+				cycle: collectorstate.Cycle{Selected: len(jobs), AtBatchLimit: full, DueScanFailed: err != nil}}
+			if err != nil {
+				batch.cycle.Selected = 0
+				log.Error("Go collector could not list due assets", "error", err)
+				record(batch)
+			} else if len(jobs) == 0 {
+				record(batch)
+			} else {
+				batches[batch] = struct{}{}
+				running += len(jobs)
+				for _, job := range jobs {
+					go collectScheduledJob(ctx, pg, key, interval, job, batch, done, log)
 				}
-			})
-			cycle.Processed = int(processed.Load())
-			cycle.TargetFailures = int(targetFailures.Load())
-			cycle.CollectorErrors = int(collectorErrors.Load())
-		}
-		if tracker != nil {
-			tracker.Finish(time.Now(), cycle)
-		}
-		if cycle.AtBatchLimit {
-			continue
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-ticker.C:
+			claim = true
+		case result := <-done:
+			complete(result)
+			claim = claim || full
 		}
+	}
+	for running > 0 {
+		complete(<-done)
 	}
 }
 
-func runBoundedBatch[T any](ctx context.Context, ids []T, workers int, check func(T)) {
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(ids) {
-		workers = len(ids)
-	}
-	jobs := make(chan T)
-	var active sync.WaitGroup
-	for range workers {
-		active.Add(1)
-		go func() {
-			defer active.Done()
-			for id := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				check(id)
-			}
-		}()
-	}
-feed:
-	for _, id := range ids {
-		select {
-		case <-ctx.Done():
-			break feed
-		case jobs <- id:
+func collectScheduledJob(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, job store.CollectionLease,
+	batch *collectionBatch, done chan<- collectionCompletion, log *slog.Logger) {
+	checkCtx, stop := context.WithTimeout(ctx, store.CollectionBudget)
+	result, err := pg.CheckCollectionLease(checkCtx, job, interval, key)
+	stop()
+	if err != nil {
+		log.Error("Go collector failed to persist asset sample", "assetId", job.AssetID, "error", err)
+		releaseCtx, stopRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		if retryErr := pg.RetryCollectionLease(releaseCtx, job); retryErr != nil {
+			log.Error("Go collector could not reschedule lease", "assetId", job.AssetID, "error", retryErr)
 		}
+		stopRelease()
+	} else if result.Status == "error" {
+		log.Warn("Go collector observed asset failure", "assetId", job.AssetID, "sampleId", result.SampleID)
 	}
-	close(jobs)
-	active.Wait()
+	done <- collectionCompletion{batch: batch, targetFailed: err == nil && result.Status == "error", persistenceFailed: err != nil}
 }

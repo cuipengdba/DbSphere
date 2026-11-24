@@ -4,6 +4,7 @@ let initialAdminLogin = null;
 let currentUsername = '';
 let currentOrganization = '';
 let nativeOverview = false;
+let workspaceData = { session: null, loaded: false, pending: null, runtime: undefined };
 let oidcEnabled = false;
 let organizations = [];
 let approvalEnabled = false;
@@ -106,6 +107,8 @@ function setView(route, updateHash = true) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
+  if (currentRole && nativeOverview && selected !== 'overview' && !workspaceData.loaded)
+    void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
     const id = params.get('event');
@@ -202,9 +205,11 @@ const organizationOptions = () => organizations.map(organization => [organizatio
 const organizationName = id => organizations.find(organization => organization.id === (id || defaultOrganizationID))?.name || '默认组织';
 
 async function loadOrganizations(render = true) {
+  const state = workspaceData;
   const target = $('organization-list');
   try {
     const response = await api('/api/admin/organizations');
+    if (workspaceData !== state) return;
     organizations = response.organizations || [];
     if (render) target.replaceChildren(...organizations.map(item => cell('p', `${item.name} · ${item.id}`, 'evidence')));
   } catch (error) {
@@ -531,17 +536,8 @@ function showOverview(selected) {
   operationsOverview.show(selected && !!currentRole, nativeOverview);
 }
 
-async function refresh() {
-  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
-    { templates }, { schedules }, { runs }, audit, runtime, collector, workbench] = await Promise.all([
-    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
-    api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
-    api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
-    currentRole === 'admin' && !currentOrganization ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
-    api('/api/version').catch(() => null),
-    currentRole === 'admin' && !currentOrganization ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null),
-    api('/api/alert-workbench').catch(() => null)
-  ]);
+function updateRuntime(runtime) {
+  workspaceData.runtime = runtime;
   const interval = Number(runtime?.collectionIntervalSeconds);
   const serverTime = Date.parse(runtime?.serverTime);
   if (runtime?.version) {
@@ -555,9 +551,38 @@ async function refresh() {
     intervalMs: Number.isFinite(interval) && interval > 0 ? interval * 1000 : 60000,
     clockOffsetMs: Number.isFinite(serverTime) ? serverTime - Date.now() : 0
   };
-  const eventOverview = runtime?.backend === 'go' ? await api('/api/events/overview') :
+  nativeOverview = assetServerPaging = eventServerPaging = runtime?.backend === 'go';
+  showOverview(document.body.dataset.activeView === 'overview');
+}
+
+function prepareWorkspace() {
+  const state = workspaceData;
+  state.pending ??= (async () => {
+    if (currentRole === 'admin') await loadOrganizations(false);
+    if (workspaceData === state) await refresh(state.runtime);
+    state.loaded = true;
+  })().finally(() => { state.pending = null; });
+  return state.pending;
+}
+
+async function refresh(runtimeOverride) {
+  const state = workspaceData;
+  const [{ assets }, { events }, { alerts }, { rules }, { silences }, { notifications }, { storage },
+    { templates }, { schedules }, { runs }, audit, runtime, collector, workbench] = await Promise.all([
+    api('/api/assets'), api('/api/events'), api('/api/alerts'), api('/api/alert-rules'),
+    api('/api/silences'), api('/api/notifications'), viewerScoped ? Promise.resolve({ storage: { mode: 'scoped' } }) : api('/api/storage'),
+    api('/api/inspection-templates'), api('/api/inspection-schedules'), api('/api/inspection-runs'),
+    currentRole === 'admin' && !currentOrganization ? api('/api/admin/audit').catch(() => null) : Promise.resolve(null),
+    runtimeOverride === undefined ? api('/api/version').catch(() => null) : runtimeOverride,
+    currentRole === 'admin' && !currentOrganization ? api('/api/admin/collector').catch(() => null) : Promise.resolve(null),
+    api('/api/alert-workbench').catch(() => null)
+  ]);
+  if (workspaceData !== state || !currentRole) return;
+  if (runtime) updateRuntime(runtime);
+  const eventOverview = eventServerPaging ? await api('/api/events/overview') :
     { openCount: events.filter(event => event.status === 'open').length,
       latestOpen: events.filter(event => event.status === 'open').slice(0, 5) };
+  if (workspaceData !== state || !currentRole) return;
   $('asset-count').textContent = assets.length;
   $('healthy-label').textContent = collectorSchedule.known && !collectorSchedule.enabled ? '最近一次成功' : '采集正常';
   $('healthy-count').textContent = assets.filter(a => assetHealth(a).kind === (collectorSchedule.known && !collectorSchedule.enabled ? 'manual' : 'ok')).length;
@@ -565,16 +590,12 @@ async function refresh() {
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
   allAssets = assets;
   containerStorage.setAssets(assets);
-  assetServerPaging = runtime?.backend === 'go';
-  nativeOverview = assetServerPaging;
-  showOverview(document.body.dataset.activeView === 'overview');
   monitoring.sync(assets.filter(asset => asset.runtime !== 'mysql'), assetServerPaging,
     [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
   if (!nativeOverview) renderOverview(assets, eventOverview.latestOpen);
   $('asset-page-controls').hidden = !assetServerPaging;
   if (assetServerPaging) await loadAssetPage();
   else renderLegacyAssets();
-  eventServerPaging = runtime?.backend === 'go';
   $('event-page-controls').hidden = !eventServerPaging;
   if (eventServerPaging) await loadEventPage();
   else renderLegacyEvents(events);
@@ -2432,11 +2453,15 @@ function eventMonitoringRange(eventId) {
   return Number.isFinite(from) && Number.isFinite(to) && to - from >= 60000 ? { from, to } : null;
 }
 
-function openEventMonitoring(event, topic, point) {
-  const current = `incidents?${investigationParams(event.id)}`;
-  const scope = eventMonitoringRange(event.id);
-  monitoring.openIncident(event, topic, { ...scope, ...point, return: current });
-  setView('monitoring');
+async function openEventMonitoring(event, topic, point) {
+  try {
+    if (!workspaceData.loaded) await prepareWorkspace();
+    if (selectedEvent !== event.id) return;
+    const current = `incidents?${investigationParams(event.id)}`;
+    const scope = eventMonitoringRange(event.id);
+    monitoring.openIncident(event, topic, { ...scope, ...point, return: current });
+    setView('monitoring');
+  } catch (error) { notice(error.message, true); }
 }
 
 function openEventStorage(event, range) {
@@ -3673,6 +3698,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
 
 async function boot() {
   const session = await api('/api/session');
+  if (workspaceData.session !== (session.csrf || null)) {
+    workspaceData = { session: session.csrf || null, loaded: false, pending: null, runtime: undefined };
+    organizations = [];
+  }
   if (session.csrf !== csrf) {
     readinessRetry = [];
     readinessSelection.clear();
@@ -3709,9 +3738,10 @@ async function boot() {
       ssoError === 'unavailable' ? '企业身份源暂不可用，可使用本地账号登录。' : '单点登录未通过验证。';
   }
   if (session.authenticated) {
-    if (currentRole === 'admin') await loadOrganizations(false);
+    const runtime = await api('/api/version').catch(() => null);
+    updateRuntime(runtime);
     setView(location.hash.slice(1), false);
-    await refresh();
+    if (!nativeOverview || document.body.dataset.activeView !== 'overview') await prepareWorkspace();
   }
 }
 
@@ -3722,7 +3752,12 @@ for (const bar of document.querySelectorAll('.section-nav')) {
     button.addEventListener('click', () => showSection(bar.dataset.view, button.dataset.section));
   }
 }
-$('asset-add').addEventListener('click', () => {
+$('asset-add').addEventListener('click', async () => {
+  if (!workspaceData.loaded) {
+    try { await prepareWorkspace(); }
+    catch (error) { notice(error.message, true); return; }
+    if (document.body.dataset.activeView !== 'assets') return;
+  }
   resetEdit();
   const field = $('asset-organization-field');
   const select = field.querySelector('select');
@@ -3941,4 +3976,7 @@ $('organization-form').addEventListener('submit', async event => {
 
 boot().catch(e => { $('login-panel').hidden = false; $('login-error').textContent = e.message; });
 window.setTimeout(pollStorageAvailability, 5000);
-setInterval(() => { if (csrf && !longTermStoreUnavailable) refresh().catch(() => {}); }, 30000);
+setInterval(() => {
+  if (csrf && !longTermStoreUnavailable && !workspaceData.pending && (!nativeOverview || document.body.dataset.activeView !== 'overview'))
+    refresh().catch(() => {});
+}, 30000);

@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,43 +38,79 @@ func TestContainerReadinessProbe(t *testing.T) {
 	}
 }
 
-func TestCollectorBatchRunsInParallelWithinConfiguredLimit(t *testing.T) {
-	started := make(chan string, 6)
-	release := make(chan struct{})
+func TestCollectorReusesFreeSlotWhileSlowJobIsRunning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan string, 4)
+	fast := make(chan struct{})
+	slow := make(chan struct{})
 	finished := make(chan struct{})
-	var active, peak, completed atomic.Int32
+	stub := &collectorLaneStub{jobs: []store.CollectionLease{
+		{AssetID: "slow"}, {AssetID: "fast-1"}, {AssetID: "fast-2"}, {AssetID: "next"},
+	}, started: started, fast: fast, slow: slow}
 	go func() {
-		runBoundedBatch(context.Background(), []string{"a", "b", "c", "d", "e", "f"}, 3,
-			func(id string) {
-				current := active.Add(1)
-				for old := peak.Load(); current > old; old = peak.Load() {
-					if peak.CompareAndSwap(old, current) {
-						break
-					}
-				}
-				started <- id
-				<-release
-				active.Add(-1)
-				completed.Add(1)
-			})
-		close(finished)
+		defer close(finished)
+		runCollectorLane(ctx, stub, nil, 30*time.Second, 3, store.CollectionRegular, nil,
+			slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 	for range 3 {
 		select {
-		case <-started:
+		case id := <-started:
+			if id == "next" {
+				t.Fatal("worker limit exceeded before any slot was released")
+			}
 		case <-time.After(2 * time.Second):
-			close(release)
 			t.Fatal("independent assets did not start in parallel")
 		}
 	}
-	close(release)
+	fast <- struct{}{}
+	select {
+	case id := <-started:
+		if id != "next" {
+			t.Fatalf("started %q, want next", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first free slot waited for the slow job")
+	}
+	close(slow)
+	close(fast)
+	cancel()
 	select {
 	case <-finished:
 	case <-time.After(2 * time.Second):
-		t.Fatal("collector batch did not finish")
+		t.Fatal("collector lane did not finish")
 	}
-	if completed.Load() != 6 || peak.Load() != 3 {
-		t.Fatalf("collector worker limit was not honored: completed=%d peak=%d", completed.Load(), peak.Load())
+}
+
+type collectorLaneStub struct {
+	jobs    []store.CollectionLease
+	started chan<- string
+	fast    <-chan struct{}
+	slow    <-chan struct{}
+}
+
+func (stub *collectorLaneStub) ClaimCollectionJobs(_ context.Context, _ time.Duration, limit int, _ store.CollectionLane) ([]store.CollectionLease, error) {
+	count := min(limit, len(stub.jobs))
+	claimed := stub.jobs[:count]
+	stub.jobs = stub.jobs[count:]
+	return claimed, nil
+}
+
+func (*collectorLaneStub) RetryCollectionLease(context.Context, store.CollectionLease) error {
+	return nil
+}
+
+func (stub *collectorLaneStub) CheckCollectionLease(ctx context.Context, lease store.CollectionLease, _ time.Duration, _ []byte) (store.CheckResult, error) {
+	stub.started <- lease.AssetID
+	release := stub.fast
+	if lease.AssetID == "slow" {
+		release = stub.slow
+	}
+	select {
+	case <-release:
+		return store.CheckResult{Status: "ok"}, nil
+	case <-ctx.Done():
+		return store.CheckResult{}, ctx.Err()
 	}
 }
 
