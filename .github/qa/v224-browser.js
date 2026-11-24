@@ -1,4 +1,4 @@
-async (page) => {
+const runAcceptance = async (page) => {
   const root = 'http://127.0.0.1:18080';
   const base = '/api/log-analysis/';
   const results = [];
@@ -174,4 +174,20 @@ async (page) => {
   results.push('v2.24 previewed and saved retention, and listed investigation-protected originals');
 
   return { result: 'V224_BROWSER_PASS', event: investigation.eventId, adoptedRecord: inventory.id, checks: results };
-}
+};
+
+(async () => {
+  const { chromium } = require('playwright');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto('http://127.0.0.1:18080');
+    const results = await runAcceptance(page);
+    console.log(JSON.stringify(results, null, 2));
+  } finally {
+    await browser.close();
+  }
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

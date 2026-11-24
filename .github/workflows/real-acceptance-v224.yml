@@ -53,14 +53,13 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/browser" --no-save --no-package-lock @playwright/cli@0.1.22
           export PATH="$RUNNER_TEMP/browser/node_modules/.bin:$PATH"
           playwright-cli install-browser chromium
-          playwright-cli -s=v224 open http://127.0.0.1:18080
-          playwright-cli -s=v224 run-code --filename .github/qa/v224-browser.js | tee "$RUNNER_TEMP/browser-results.txt"
-          grep -q 'V224_BROWSER_PASS' "$RUNNER_TEMP/browser-results.txt"
-          playwright-cli -s=v224 close
+          cp .github/qa/v224-browser.js "$RUNNER_TEMP/browser/qa.cjs"
+          node "$RUNNER_TEMP/browser/qa.cjs" | tee "$RUNNER_TEMP/browser-results.json"
+          node -e 'const r = require(process.argv[1]); if (r.result !== "V224_BROWSER_PASS" || r.checks.length !== 7) process.exit(1)' "$RUNNER_TEMP/browser-results.json"
       - name: Upload browser test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: v224-browser-acceptance
-          path: ${{ runner.temp }}/browser-results.txt
+          path: ${{ runner.temp }}/browser-results.json
           if-no-files-found: ignore
