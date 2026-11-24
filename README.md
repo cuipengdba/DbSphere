@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v2.22.0](https://img.shields.io/badge/当前版本-v2.22.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v2.22.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v2.23.0](https://img.shields.io/badge/当前版本-v2.23.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v2.23.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。监控目标支持 PostgreSQL 14–19，长期监控存储使用独立 PostgreSQL 18。
 
@@ -22,7 +22,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 | MySQL 8.4 只读预览 | 浏览器纳管与定时采集，展示连接、InnoDB 锁等待、Top SQL 指纹和基础复制状态。阻塞线程关系、原始样本和恢复证据归入同一事件 ID。[MySQL 预览接入](docs/MYSQL_PREVIEW.md) |
 | 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。管理员可查看当前 Go 进程的自动采集批次、耗时和错误。 |
 | 瀚高数据库 | 支持瀚高安全版 4.5.9（兼容内核 12.7），沿用 PostgreSQL 资产接入和只读采集，提供等待、阻塞链、SQL 指纹和历史样本。[瀚高接入指南](docs/HIGHGO.md) |
-| 日志分析 | 按项目、环境、实例和批次导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。提供 SQL 延迟、应用负载、锁阻塞与运维活动全景报告，支持轮转去重、原文回看、跨批次优化对比、项目健康趋势、事件根因调查、断点续传、导入任务中心、同一事件的日志采纳、SQL 延迟分布下钻和 Zstd 归档管理。原始文件以 Zstd 分块保存，结构化分析使用 PostgreSQL 18。[日志分析操作说明](docs/LOG_ANALYSIS.md) |
+| 日志分析 | 按项目、环境、实例和批次导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。提供 SQL 延迟、应用负载、锁阻塞与运维活动全景报告，支持轮转去重、原文回看、跨批次优化对比、项目健康趋势、事件根因调查、断点续传、导入任务中心、同一事件的日志采纳、SQL 延迟分布下钻、调优复测和 Zstd 归档管理。原始文件以 Zstd 分块保存，结构化分析使用 PostgreSQL 18。[日志分析操作说明](docs/LOG_ANALYSIS.md) |
 | 图形可观测性 | 登录进入资产监控大屏，按组织、环境和集群查看主机、数据库、优先事件和十二张趋势图。监控工作台支持最多五实例同窗比较、30 天小时汇总和原始采样下钻。事件内的关系图和时间轴关联应用 Trace、数据库、复制、连接池和环境证据。控制台默认深色，支持记忆用户的浅色主题选择。 |
 | 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；唯一资产匹配时还可沿服务 → PgBouncer → PG 等待 PID → 阻塞会话定位，PgBouncer 的应用业务地址可与只读统计管理地址分开配置。可选 Query ID 唯一匹配时从请求下钻到 SQL；K8S 应用 Pod UID 经只读 API 核对后，可在事件图连接应用 Pod、Node 与 PVC 引用及单独核对的 PVC 阶段。按服务区分同期 Trace 与故障线索，显示可选采样声明与时间异常，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
 | 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |
@@ -56,7 +56,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V2.22.0** 为 Linux amd64 和 arm64 提供 Go 静态服务端、标准与增强一键离线容器包和原生 systemd 安装包。原生安装可连接已有独立 PostgreSQL 18，预检覆盖数据库版本、写入状态和架构迁移权限。资产大屏可对照主机资源、I/O、PG 连接、事务、SQL 延迟、锁等待、复制、连接池及容器文件缓存。打开异常能继续调查同一个事件，查看根因证据并返回同一资产和时间窗。监控工作台支持集群、实例、数据库和 SQL 层级下钻。管理员可短时高频采样并回放历史阻塞树。增强包提供站内 Grafana 专题，可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v2.22.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [连接阶段与等待](docs/CONNECTION_STAGES.md) · [规模采集与历史验收](docs/COLLECTOR_LOAD_ACCEPTANCE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
+当前正式版 **V2.23.0** 为 Linux amd64 和 arm64 提供 Go 静态服务端、标准与增强一键离线容器包和原生 systemd 安装包。原生安装可连接已有独立 PostgreSQL 18，预检覆盖数据库版本、写入状态和架构迁移权限。资产大屏可对照主机资源、I/O、PG 连接、事务、SQL 延迟、锁等待、复制、连接池及容器文件缓存。打开异常能继续调查同一个事件，查看根因证据并返回同一资产和时间窗。监控工作台支持集群、实例、数据库和 SQL 层级下钻。管理员可短时高频采样并回放历史阻塞树。增强包提供站内 Grafana 专题，可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v2.23.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [连接阶段与等待](docs/CONNECTION_STAGES.md) · [规模采集与历史验收](docs/COLLECTOR_LOAD_ACCEPTANCE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
 
 慢日志支持分批增量导入和重复记录检测。SQL 诊断按纳管数据库和 Query ID 回放计划，呈现扫描、连接方式、估算偏差与临时 I/O 的前后对照。[SQL 证据与前后计划](docs/MONITORING_WORKSPACE.md#sql-证据与前后计划)
 
