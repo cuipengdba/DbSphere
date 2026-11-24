@@ -1756,6 +1756,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" &&
 			r.URL.Path != "/observability.js" &&
 			r.URL.Path != "/monitoring.js" && r.URL.Path != "/live.js" && r.URL.Path != "/live.css" && r.URL.Path != "/theme.js" &&
+			r.URL.Path != "/overview.js" && r.URL.Path != "/overview.css" &&
 			r.URL.Path != "/container-storage.js" && r.URL.Path != "/container-storage.css" &&
 			r.URL.Path != "/styles.css" && r.URL.Path != "/freshness.css" && r.URL.Path != "/console.css" && r.URL.Path != "/favicon.svg" {
 			http.NotFound(w, r)
