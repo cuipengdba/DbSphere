@@ -26,11 +26,12 @@ const runAcceptance = async (page) => {
   }
 
   const org = (await api('/api/admin/organizations')).organizations[0];
-  const asset = await api('/api/assets', 'POST', {
+  const { asset } = await api('/api/assets', 'POST', {
     organizationId: org.id, name: 'Browser PostgreSQL 18', host: '127.0.0.1',
     port: 15434, database: 'postgres', username: 'postgres', password: 'dbsphere-browser-fixture',
     sslMode: 'disable', runtime: 'managed'
   });
+  assert(asset?.id, 'Asset creation did not return an asset ID');
   const project = await api(base + 'projects', 'POST', { organizationId: org.id, name: 'Browser acceptance' });
   const instance = await api(base + 'instances', 'POST', {
     projectId: project.id, assetId: asset.id, environment: 'Acceptance', name: 'PostgreSQL 18',
