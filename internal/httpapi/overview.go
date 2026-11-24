@@ -39,6 +39,15 @@ func readMonitoringOverview(w http.ResponseWriter, r *http.Request, db HealthSto
 	if offset := values.Get("offset"); offset != "" && err == nil {
 		query.Offset, err = strconv.Atoi(offset)
 	}
+	if err == nil && (values.Get("inspectFrom") != "" || values.Get("inspectTo") != "") {
+		begin, firstErr := time.Parse(time.RFC3339, values.Get("inspectFrom"))
+		end, secondErr := time.Parse(time.RFC3339, values.Get("inspectTo"))
+		if firstErr != nil || secondErr != nil || begin.Before(query.From) || end.After(query.To) || !begin.Before(end) {
+			respond(w, http.StatusBadRequest, map[string]string{"error": "事件选区须位于总览时间窗内"})
+			return
+		}
+		query.InspectFrom, query.InspectTo = &begin, &end
+	}
 	span := query.To.Sub(query.From)
 	if err != nil || span < time.Minute || span > 7*24*time.Hour || query.To.After(now.Add(time.Minute)) ||
 		query.Offset < 0 || query.Offset > 36000 || len(query.Organization) > 36 || len(query.Environment) > 80 || len(query.Cluster) > 256 {

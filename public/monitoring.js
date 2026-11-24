@@ -408,7 +408,7 @@
     let assets = [], summaries = new Map(), recent = [], ready = false, enabled = false, visible = false;
     let cluster = '', instance = '', database = '', period = defaultPeriod, fixed = null, mode = 'metrics', eventAnchor = '';
     let group = 'type', waitType = '', waitEvent = '', queryId = '', request = 0, fleetRequest = 0;
-    let focusAt = null, focusSample = '', overviewReturn = '';
+    let focusAt = null, focusSample = '', overviewReturn = '', incidentReturn = '';
     let changePick = '';
     let waitCapturePick = '', waitCaptureRunning = false;
     let sqlOrder = 'time', baseline = '', lockPick = '', lockAt = null, replicaAt = null;
@@ -520,7 +520,8 @@
         ['replicaAt', replicaAt == null ? '' : new Date(replicaAt).toISOString(), ''], ['change', mode === 'changes' ? changePick : '', ''],
         ['deviceType', deviceType, ''], ['device', deviceName, ''],
         ['compare', compare ? [...compare].join(',') || 'none' : '', ''],
-        ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), ''], ['return', overviewReturn, '']
+        ['fleetAt', fleetAt == null ? '' : new Date(fleetAt).toISOString(), ''], ['return', overviewReturn, ''],
+        ['incidentReturn', eventAnchor ? incidentReturn : '', '']
       ]) if (value && value !== fallback) params.set(key, value);
       if (window) {
         params.set('from', new Date(window.from).toISOString());
@@ -545,6 +546,7 @@
       waitEvent = (params.get('waitEvent') || '').slice(0, 128);
       queryId = /^-?\d{1,20}$/.test(params.get('queryId') || '') ? params.get('queryId') : '';
       eventAnchor = /^[0-9a-f-]{36}$/.test(params.get('event') || '') ? params.get('event') : '';
+      incidentReturn = eventReturnRoute(params.get('incidentReturn'), eventAnchor);
       const evidenceTime = Date.parse(params.get('at'));
       changePick = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.get('change') || '') ? params.get('change') : '';
       focusAt = eventAnchor && Number.isFinite(evidenceTime) ? evidenceTime : null;
@@ -617,6 +619,17 @@
     function resetFleet() { compare = null; abnormalOnly = false; fleetAt = null; rangeEvents = []; memberSeries = new Map(); }
     function resetCatalog() { dbOid = ''; objectOid = ''; objectKind = ''; catalogFrom = ''; }
     function resetWaitFilters() { group = 'type'; waitType = ''; waitEvent = ''; queryId = ''; lockPick = ''; lockAt = null; waitCapturePick = ''; }
+
+    function eventReturnRoute(value, id) {
+      return id && typeof value === 'string' && value.length <= 5200 && value.startsWith('incidents?') &&
+        new URLSearchParams(value.slice(10)).get('event') === id ? value : '';
+    }
+
+    function returnToEvent(label) {
+      const link = el('a', label, 'monitor-link');
+      link.href = '#' + (incidentReturn || 'incidents?' + new URLSearchParams({ event: eventAnchor }));
+      return link;
+    }
 
     function freezeWindow() {
       if (fixed || !activeWindow) return;
@@ -691,7 +704,7 @@
 
     function eventList(events, title, navigate = id => openEvent(id, true, route(activeWindow || fixed))) {
       const card = panel(title);
-      if (eventAnchor) card.append(button('返回事件证据', () => openEvent(eventAnchor)));
+      if (eventAnchor) card.append(returnToEvent('返回事件证据'));
       if (!events.length) card.append(el('p', '当前范围内没有关联事件。', 'monitor-empty'));
       for (const event of events) {
         const item = button(event.title, () => navigate(event.id), 'monitor-event');
@@ -2426,7 +2439,7 @@
         const fragment = document.createDocumentFragment();
         if (eventAnchor) {
           const context = el('div', null, 'monitor-wait-controls');
-          context.append(button('返回原事件', () => openEvent(eventAnchor), 'monitor-link'));
+          context.append(returnToEvent('返回原事件'));
           if (focusAt != null) context.append(el('span', `证据时刻 ${formatTime(focusAt)}`, 'monitor-note'));
           if (focusSample) context.append(sampleLink(asset.id, focusSample));
           fragment.append(context);
@@ -2610,6 +2623,7 @@
         instance = asset.id;
         mode = tabs.some(([name]) => name === topic) ? topic : 'waits';
         eventAnchor = event.id;
+        incidentReturn = eventReturnRoute(point?.return, event.id);
         changePick = point?.changeId || '';
         resetWaitFilters();
         resetCatalog();

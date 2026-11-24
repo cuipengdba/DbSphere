@@ -51,11 +51,23 @@ func TestMonitoringOverviewScopesTimelineAndCurrentAlerts(t *testing.T) {
 	insert(visible, from.Add(-time.Minute), &ended)
 	insert(visible, from.Add(2*time.Minute), nil)
 	insert(hidden, from.Add(3*time.Minute), nil)
-	q := OverviewQuery{From: from, To: to}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		SELECT gen_random_uuid(),event_id,'alert_firing',$2,'{"severity":"critical"}' FROM open_event_groups WHERE asset_id=$1`, visible, from.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.pool.Exec(ctx, `INSERT INTO asset_changes(asset_id,kind,label,source,occurred_at)
+		VALUES($1,'maintenance','Test maintenance','operator',$2)`, visible, from.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	selectionEnd := from.Add(4 * time.Minute)
+	q := OverviewQuery{From: from, To: to, InspectFrom: &ended, InspectTo: &selectionEnd}
 	read := func(ids []string) (result struct {
 		Summary        struct{ Assets, Unavailable, Events int }
 		Assets, Alerts []json.RawMessage
-		Timeline       []struct{ Opened, Recovered, Availability int }
+		Timeline       []struct{ Opened, Recovered, Availability, Maintenance int }
+		Inspection     struct {
+			Rows []struct{ ID, AssetID, Phase, Severity string }
+		}
 	}) {
 		t.Helper()
 		raw, err := pg.MonitoringOverview(ctx, ids, q)
@@ -74,11 +86,16 @@ func TestMonitoringOverviewScopesTimelineAndCurrentAlerts(t *testing.T) {
 	}
 	bins := result.Timeline
 	if bins[0].Availability != 1 || bins[1].Recovered != 1 || bins[1].Availability != 0 ||
-		bins[2].Opened != 1 || bins[2].Availability != 1 || bins[3].Opened != 0 || bins[3].Availability != 1 {
+		bins[2].Opened != 1 || bins[2].Availability != 1 || bins[3].Opened != 0 || bins[3].Availability != 1 || bins[3].Maintenance != 1 {
 		t.Fatalf("unexpected bin boundaries: %+v", bins[:4])
 	}
+	rows := result.Inspection.Rows
+	if len(rows) != 3 || rows[0].Phase != "maintenance" || rows[1].Phase != "opened" || rows[1].Severity != "critical" ||
+		rows[2].Phase != "recovered" || rows[0].AssetID != visible || rows[1].AssetID != visible || rows[2].AssetID != visible {
+		t.Fatalf("invalid event inspection: %+v", rows)
+	}
 	empty := read([]string{})
-	if empty.Summary.Assets != 0 || len(empty.Alerts) != 0 || empty.Timeline[2].Opened != 0 {
+	if empty.Summary.Assets != 0 || len(empty.Alerts) != 0 || empty.Timeline[2].Opened != 0 || len(empty.Inspection.Rows) != 0 {
 		t.Fatal("empty authorization scope included assets or events")
 	}
 }

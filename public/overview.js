@@ -6,6 +6,8 @@
   const timeLabel = value => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   const localInput = value => iso(value - new Date(value).getTimezoneOffset() * minute).slice(0, 16);
   const phases = { down: '不可用', alert: '有告警', stale: '数据过期', pending: '等待采样', error: '采集失败', ok: '采集正常' };
+  const eventPhases = { opened: '发现', confirmed: '确认', recovered: '恢复', ongoing: '持续', maintenance: '维护' };
+  const severity = { critical: '严重', warning: '警告', info: '信息' };
   const roles = { primary: '主库', replica: '副本', standby: '副本', leader: '主库' };
   const runtimes = { linux: 'Linux', k8s: 'Kubernetes', managed: '托管 PG', mysql: 'MySQL' };
   const element = (tag, text, cls) => {
@@ -20,7 +22,7 @@
     const get = key => root.querySelector(`[data-overview="${key}"]`);
     const filterNames = ['organization', 'environment', 'cluster'];
     let visible = false, enabled = false, paused = false, custom = null, lastWindow = null;
-    let minutes = 60, offset = 0, timer, request, brush = null;
+    let minutes = 60, offset = 0, timer, request, brush = null, selection = null;
     let filters = {};
 
     function window() {
@@ -36,6 +38,7 @@
       if (offset) params.set('offset', String(offset));
       const time = fixed ? lastWindow || window() : custom;
       if (time) { params.set('from', iso(time.from)); params.set('to', iso(time.to)); }
+      if (selection) { params.set('inspectFrom', iso(selection.from)); params.set('inspectTo', iso(selection.to)); }
       return params.size ? `overview?${params}` : 'overview';
     }
     function save() {
@@ -49,6 +52,8 @@
       offset = /^\d{1,5}$/.test(params.get('offset') || '') ? Math.min(36000, Number(params.get('offset'))) : 0;
       const from = Date.parse(params.get('from')), to = Date.parse(params.get('to'));
       custom = validWindow(from, to) ? { from, to } : null;
+      const insFrom = Date.parse(params.get('inspectFrom')), insTo = Date.parse(params.get('inspectTo'));
+      selection = custom && insFrom >= from && insTo <= to && insFrom < insTo ? { from: insFrom, to: insTo } : null;
       get('range').value = custom ? 'custom' : String(minutes);
       get('dates').hidden = true;
       if (visible) void load();
@@ -139,35 +144,59 @@
         link('实时观测', `#live?${new URLSearchParams({ from: data.from, end: data.to, organization: filters.organization || '', cluster: filters.cluster || '' })}`),
         link(`主机与容器 · Linux ${s.linux} / K8S ${s.kubernetes}`, '#storage?' + history), link('采集系统', '#settings?section=collector'));
       drawTimeline(data.timeline);
+      renderInspection(data.inspection);
+    }
+    function renderInspection(data) {
+      get('inspection').hidden = !data;
+      if (!data) return;
+      get('inspection-window').textContent = `${formatTime(data.from)} — ${formatTime(data.to)}${data.limited ? ' · 显示最近 24 条' : ''}`;
+      const rows = data.rows.slice(0, 24).map(item => {
+        const button = element('button', '', 'operations-alert operations-mark');
+        button.type = 'button'; button.dataset.severity = item.severity || item.kind; button.dataset.phase = item.phase;
+        button.append(element('strong', `${eventPhases[item.phase]} · ${item.title}`),
+          element('small', [item.assetName, formatTime(item.at), severity[item.severity], item.phase !== 'maintenance' && `事件 ${item.id.slice(0, 8)}`].filter(Boolean).join(' · ')));
+        button.addEventListener('click', () => {
+          if (item.phase === 'maintenance') {
+            const time = lastWindow || window();
+            location.hash = '#monitoring?' + new URLSearchParams({ instance: item.assetId, tab: 'changes', change: item.id,
+              from: iso(time.from), to: iso(time.to), return: route(true) });
+          } else openEvent(item.id, true, route(true));
+        });
+        return button;
+      });
+      get('inspection-list').replaceChildren(...(rows.length ? rows : [element('p', '此选区没有事件或维护记录。', 'empty')]));
     }
     function drawTimeline(rows) {
       const chart = get('timeline');
       chart.dataset.series = JSON.stringify(rows.map(row => row.start));
-      const maximum = Math.max(1, ...rows.flatMap(row => [row.opened, row.recovered, row.availability]));
+      const maximum = Math.max(1, ...rows.flatMap(row => [row.opened, row.recovered, row.availability, row.maintenance]));
       chart.replaceChildren(...rows.map((row, i) => {
         const button = element('button', '', 'operations-bin');
         button.type = 'button'; button.dataset.bin = String(i);
-        button.title = `${timeLabel(row.start)} · 新开 ${row.opened} · 恢复 ${row.recovered} · 可用性告警 ${row.availability}`;
+        button.title = `${timeLabel(row.start)} · 新开 ${row.opened} · 恢复 ${row.recovered} · 可用性告警 ${row.availability} · 维护 ${row.maintenance}`;
         button.setAttribute('aria-label', button.title);
-        for (const name of ['opened', 'recovered', 'availability']) {
+        button.setAttribute('aria-pressed', String(!!selection && Date.parse(row.start) >= selection.from && Date.parse(row.start) < selection.to));
+        for (const name of ['opened', 'recovered', 'availability', 'maintenance']) {
           const bar = element('span', '', `bin-${name}`);
           bar.style.setProperty('--height', (row[name] / maximum * 100) + '%');
           button.append(bar);
         }
         button.addEventListener('focus', () => { get('bucket').textContent = button.title; });
         button.addEventListener('pointerenter', () => { get('bucket').textContent = button.title; });
-        button.addEventListener('click', event => { if (event.detail === 0) selectRange(i, i, 3); });
+        button.addEventListener('click', () => selectRange(i, i));
         return button;
       }));
       get('axis').replaceChildren(...[0, 9, 18, 27].filter(i => rows[i]).map(i => element('span', timeLabel(rows[i].start))),
         element('span', timeLabel(lastWindow.to)));
     }
-    function selectRange(first, last, padding = 0) {
+    function selectRange(first, last) {
       const starts = JSON.parse(get('timeline').dataset.series || '[]');
-      const from = Date.parse(starts[Math.max(0, Math.min(first, last) - padding)]);
-      const to = Date.parse(starts[Math.max(first, last) + 1 + padding]) || lastWindow?.to;
-      if (!validWindow(from, to)) return;
-      custom = { from, to }; get('range').value = 'custom';
+      const from = Date.parse(starts[Math.min(first, last)]);
+      const to = Date.parse(starts[Math.max(first, last) + 1]) || lastWindow?.to;
+      if (!lastWindow || !Number.isFinite(from) || !Number.isFinite(to) || from >= to) return;
+      selection = { from, to };
+      custom = first !== last && validWindow(from, to) ? { from, to } : { ...lastWindow };
+      get('range').value = 'custom';
       save(); void load();
     }
     async function load() {
@@ -178,6 +207,7 @@
       request = current;
       const { from, to } = window();
       const params = new URLSearchParams({ ...filters, from: iso(from), to: iso(to), offset });
+      if (selection) { params.set('inspectFrom', iso(selection.from)); params.set('inspectTo', iso(selection.to)); }
       try {
         const data = await api('/api/monitoring/overview?' + params, 'GET', undefined, current.signal);
         if (request === current && visible) render(data);
@@ -199,14 +229,14 @@
         get('from').value = localInput(from); get('to').value = localInput(to);
         get('dates').hidden = false; get('from').focus(); return;
       }
-      minutes = Number(get('range').value); custom = null; lastWindow = null; get('dates').hidden = true;
+      minutes = Number(get('range').value); custom = null; selection = null; lastWindow = null; get('dates').hidden = true;
       save(); void load();
     });
     get('dates').addEventListener('submit', event => {
       event.preventDefault();
       const from = Date.parse(get('from').value), to = Date.parse(get('to').value);
       if (!validWindow(from, to)) { get('status').textContent = '选择 1 分钟至 7 天内的有效历史时段。'; return; }
-      custom = { from, to }; get('dates').hidden = true; save(); void load();
+      custom = { from, to }; selection = null; get('dates').hidden = true; save(); void load();
     });
     get('interval').addEventListener('change', () => { save(); void load(); });
     get('pause').addEventListener('click', () => {
@@ -222,6 +252,7 @@
     document.addEventListener('fullscreenchange', () => get('fullscreen').setAttribute('aria-pressed', String(document.fullscreenElement === root)));
     get('prev').addEventListener('click', () => { offset = Math.max(0, offset - pageSize); save(); void load(); });
     get('next').addEventListener('click', () => { offset += pageSize; save(); void load(); });
+    get('inspection-close').addEventListener('click', () => { selection = null; renderInspection(null); save(); void load(); });
     get('timeline').addEventListener('pointerdown', event => { brush = event.target.closest('[data-bin]')?.dataset.bin ?? null; });
     document.addEventListener('pointerup', event => {
       if (brush === null) return;

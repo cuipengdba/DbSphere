@@ -129,7 +129,8 @@
         container: (params.get('container') || '').slice(0, 63), device: (params.get('device') || '').slice(0, 128),
         pvc: (params.get('pvc') || '').slice(0, 253),
         pvcUid: (params.get('pvcUid') || '').slice(0, 128),
-        return: back.length <= 3500 && /^(overview|monitoring|live)(?:\?|$)/.test(back) ? back : '',
+        return: back.length <= 5200 && (/^(overview|monitoring|live)(?:\?|$)/.test(back) ||
+          back.startsWith('incidents?') && uuid.test(params.get('event') || '') && new URLSearchParams(back.slice(10)).get('event') === params.get('event')) ? back : '',
         event: uuid.test(params.get('event') || '') ? params.get('event') : '',
         from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '' };
       result = comparison = undefined;
@@ -234,7 +235,8 @@
       get('context').textContent = asset ? [asset.name, source, storage?.namespace, storage?.pod, storage?.node || asset.linuxHost].filter(Boolean).join(' / ') : '选择要查看的数据库资产。';
       const back = get('back');
       back.href = '#' + (route.return || 'overview');
-      back.textContent = route.return?.startsWith('monitoring') ? '返回 PostgreSQL 同窗' : route.return?.startsWith('live') ? '返回实时观测' : '返回全域总览';
+      back.textContent = route.return?.startsWith('incidents') ? '返回事件证据' : route.return?.startsWith('monitoring') ? '返回 PostgreSQL 同窗' :
+        route.return?.startsWith('live') ? '返回实时观测' : '返回全域总览';
       for (const view of views) view.card.hidden = !!view.topic && (view.topic !== route.topic ||
         (view.fields[0][0].startsWith('pod') && source !== 'Kubernetes') || (view.topic === 'claims' && !route.pvcUid));
       renderIdentity(asset, latest, sample);

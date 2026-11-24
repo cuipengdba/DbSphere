@@ -99,11 +99,15 @@
           </section>
         </div>
         <section class="operations-panel operations-history">
-          <header><h2>告警与可用性时间线</h2><small>拖动框选时段</small></header>
-          <div class="operations-legend"><span class="legend-opened">新开事件</span><span class="legend-recovered">恢复事件</span><span class="legend-availability">可用性告警</span></div>
+          <header><h2>告警与可用性时间线</h2><small>单击时段或拖动框选</small></header>
+          <div class="operations-legend"><span class="legend-opened">新开事件</span><span class="legend-recovered">恢复事件</span><span class="legend-availability">可用性告警</span><span class="legend-maintenance">维护记录</span></div>
           <div class="operations-chart" data-overview="timeline" aria-label="告警与可用性活动分布"></div>
           <div class="operations-axis" data-overview="axis"></div>
           <p class="operations-chart-note" data-overview="bucket" aria-live="polite"></p>
+          <section class="operations-inspection" data-overview="inspection" aria-label="选区事件" hidden>
+            <header><div><h3>选区事件</h3><small data-overview="inspection-window"></small></div><button type="button" class="ghost small-button" data-overview="inspection-close">清除选区</button></header>
+            <div data-overview="inspection-list" class="operations-alerts"></div>
+          </section>
         </section>
       </section>
       <section id="legacy-overview" data-view="overview" hidden>

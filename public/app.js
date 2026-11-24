@@ -114,8 +114,8 @@ function setView(route, updateHash = true) {
       const asset = params.get('asset');
       const from = Date.parse(params.get('from'));
       const to = Date.parse(params.get('to'));
-      let back = '';
-      if (uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from) {
+      let back = eventMonitoringReturn(params.get('return'));
+      if (!back && uuid.test(asset || '') && Number.isFinite(from) && Number.isFinite(to) && to > from) {
         if (params.get('origin') === 'storage') {
           const query = new URLSearchParams({asset, event: id, mode: 'history', from: new Date(from).toISOString(), to: new Date(to).toISOString()});
           for (const key of ['container', 'device', 'pvc', 'pvcUid']) if (params.get(key)) query.set(key, params.get(key));
@@ -2416,6 +2416,38 @@ function investigationParams(eventId) {
   return params.get('event') === eventId ? params : new URLSearchParams({event: eventId});
 }
 
+function eventMonitoringReturn(value) {
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage)(?:\?|$)/.test(value)) return '';
+  const [view, query] = value.split('?', 2);
+  const params = new URLSearchParams(query);
+  params.delete('incidentReturn');
+  if (params.get('return')?.startsWith('incidents?')) params.delete('return');
+  return params.size ? `${view}?${params}` : view;
+}
+
+function eventMonitoringRange(eventId) {
+  const source = eventMonitoringReturn(investigationParams(eventId).get('return'));
+  const params = new URLSearchParams(source.split('?')[1]);
+  const from = Date.parse(params.get('from')), to = Date.parse(params.get('to') || params.get('end'));
+  return Number.isFinite(from) && Number.isFinite(to) && to - from >= 60000 ? { from, to } : null;
+}
+
+function openEventMonitoring(event, topic, point) {
+  const current = `incidents?${investigationParams(event.id)}`;
+  const scope = eventMonitoringRange(event.id);
+  monitoring.openIncident(event, topic, { ...scope, ...point, return: current });
+  setView('monitoring');
+}
+
+function openEventStorage(event, range) {
+  const anchor = eventMonitoringRange(event.id);
+  const to = Math.min(Date.now(), range?.to || anchor?.to || (Date.parse(event.endedAt) || Date.now()) + 900000);
+  const from = range?.from || anchor?.from || Math.max(to - 7 * 86400000, Date.parse(event.startedAt) - 900000);
+  const query = new URLSearchParams({ mode: 'history', topic: 'containers', asset: event.assetId, event: event.id,
+    from: new Date(Math.min(from, to - 60000)).toISOString(), to: new Date(to).toISOString(), return: `incidents?${investigationParams(event.id)}` });
+  setView('storage?' + query);
+}
+
 function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   const panel = cell('section', '', 'investigation');
   panel.setAttribute('aria-label', '事件调查工作台');
@@ -2497,10 +2529,11 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     return replayStrength[point.strength] || '待核验';
   }
   function openFocusedMonitoring(topic, point, at) {
-    const currentRoute = `incidents?${investigationParams(event.id)}`;
-    monitoring.openIncident(event, topic, {...point, from: at - 300000, to: Math.min(Date.now(), at + 300000)});
-    setView('monitoring');
-    history.replaceState({...history.state, investigationReturn: currentRoute}, '', location.href);
+    openEventMonitoring(event, topic, { ...point, ...phaseWindow(at) });
+  }
+  function phaseWindow(at) {
+    const source = eventMonitoringRange(event.id);
+    return source && at >= source.from && at < source.to ? source : { from: at - 300000, to: Math.min(Date.now(), at + 300000) };
   }
   function render(save) {
     phaseControls.forEach((button, i) => button.setAttribute('aria-pressed', String(phases[i][0] === phase)));
@@ -2512,14 +2545,15 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     }
     const point = focus();
     const at = Date.parse(point?.sampleAt || point?.at);
-    anchor.replaceChildren(document.createTextNode(Number.isFinite(at)
-      ? `${formatTime(at)} · 前后 5 分钟${point.sampleId ? '' : ' · 无对应原始采样'}`
+    const viewport = Number.isFinite(at) ? phaseWindow(at) : null;
+    anchor.replaceChildren(document.createTextNode(viewport
+      ? `${formatTime(at)} · ${formatTime(viewport.from)} 至 ${formatTime(viewport.to)}${point.sampleId ? '' : ' · 无对应原始采样'}`
       : phase === 'after' && event.status === 'open' ? '等待恢复观测' : '缺少可比采样'));
     if (point?.sampleId) anchor.append(' · ', replaySampleLink(event.assetId, point.sampleId));
-    if (grafanaLink && Number.isFinite(at)) {
+    if (grafanaLink && viewport) {
       const href = new URL(grafanaLink.href);
-      href.searchParams.set('from', String(at - 300000));
-      href.searchParams.set('to', String(Math.min(Date.now(), at + 300000)));
+      href.searchParams.set('from', String(viewport.from));
+      href.searchParams.set('to', String(viewport.to));
       grafanaLink.href = href;
     }
     list.replaceChildren();
@@ -2530,6 +2564,12 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
         button.type = 'button';
         button.addEventListener('click', () => openFocusedMonitoring(topic, point, at));
         actions.append(button);
+      }
+      if (layer === 'infra' && ['linux', 'k8s'].includes(allAssets.find(asset => asset.id === event.assetId)?.runtime)) {
+        const disk = cell('button', '存储与容器趋势', 'ghost small-button');
+        disk.type = 'button';
+        disk.addEventListener('click', () => openEventStorage(event, viewport));
+        actions.append(disk);
       }
       list.append(actions);
     }
@@ -2552,6 +2592,10 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     const lines = ['# DbSphere 事件调查', '', clean(event.title), '',
       `事件 ID ${event.id}`, `资产 ID ${event.assetId}`,
       `阶段 ${phases.find(([key]) => key === phase)[1]} · ${Number.isFinite(at) ? formatTime(at) : '缺少可比采样'}`, ''];
+    if (Number.isFinite(at)) {
+      const viewport = phaseWindow(at);
+      lines.push(`调查时间窗 ${formatTime(viewport.from)} — ${formatTime(viewport.to)}`, '');
+    }
     if (scope?.locks) lines.push(`阻塞证据样本 ${scope.locks.sampleId}`, '');
     if (primary) lines.push(`候选 ${clean(primary.hypothesis)}`, `核查范围 ${clean(primary.limitation)}`,
       `人工结论 ${clean(primary.review?.status || '待复核')} ${clean(primary.review?.reason)}`, '');
@@ -2570,8 +2614,7 @@ function incidentReplayPanel(event, replay, analysis, aiEnabled) {
   const jump = point => {
     const topic = point.signal === 'pg.blocked_sessions' ? 'locks' : point.signal === 'pg.archive_fail_delta' ? 'backup' : { k8s: 'infra', linux: 'infra', replication: 'replication',
       pooler: 'replication', sql: 'sql' }[point.layer] || 'metrics';
-    monitoring.openIncident(event, topic, point);
-    setView('monitoring');
+    openEventMonitoring(event, topic, point);
   };
   const pointActions = point => {
     const actions = cell('div', '', 'incident-replay-actions');
@@ -2918,13 +2961,11 @@ function eventSharingPanel(eventId) {
 
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
-  const savedRoute = history.state?.investigationReturn;
-  if (updateHash) {
-    const route = typeof savedRoute === 'string' && new URLSearchParams(savedRoute.split('?')[1]).get('event') === id
-      ? savedRoute : `incidents?${investigationParams(id)}`;
-    setView(route);
-  }
-  if (monitoringReturn) history.replaceState({...history.state, monitoringReturn}, '', location.href);
+  const params = investigationParams(id);
+  const back = eventMonitoringReturn(monitoringReturn) || eventMonitoringReturn(params.get('return'));
+  if (back) params.set('return', back);
+  if (updateHash) setView(`incidents?${params}`);
+  else if (back && location.hash !== `#incidents?${params}`) history.replaceState(history.state, '', `#incidents?${params}`);
   const target = $('event-detail');
   target.replaceChildren(cell('p', '正在读取事件证据…', 'hint'));
   const { event, analysis, replay, investigation, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
@@ -2955,8 +2996,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     cell('small', `事件 ID ${event.id}`));
   const scope = [event.clusterName && `集群 ${event.clusterName}`, investigation?.database && `数据库 ${investigation.database}`].filter(Boolean);
   if (scope.length) summary.append(cell('small', scope.join(' · ')));
-  const back = history.state?.monitoringReturn;
-  const storageBack = typeof back === 'string' && /^storage(?:\?|$)/.test(back);
+  const storageBack = /^storage(?:\?|$)/.test(back);
   const storageIncident = storageBack || analysis?.candidates?.some(item => item.code?.startsWith('container.'));
   if (typeof back === 'string' && /^(overview|monitoring|live|storage)(?:\?|$)/.test(back)) {
     const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' : back.startsWith('overview') ? '返回全域总览' : '返回集群同窗', 'monitor-link incident-monitor-return');
@@ -2969,7 +3009,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
-    const anchor = typeof back === 'string' && (back.startsWith('live') || storageBack) ? new URLSearchParams(back.split('?')[1]) : null;
+    const anchor = back ? new URLSearchParams(back.split('?')[1]) : null;
     const anchorStart = Date.parse(anchor?.get('from'));
     const end = Date.parse(anchor?.get('end') || anchor?.get('to'));
     const windowMinutes = Number(anchor?.get('window'));
@@ -3029,8 +3069,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       const jump = cell('button', `${formatTime(capture.startedAt)} · ${capture.observed}/${capture.expected} 帧`, 'ghost small-button');
       jump.type = 'button';
       jump.addEventListener('click', () => {
-        monitoring.openIncident(event, 'waits', { at: capture.startedAt, waitCaptureId: capture.id });
-        setView('monitoring');
+        openEventMonitoring(event, 'waits', { at: capture.startedAt, waitCaptureId: capture.id });
       });
       row.append(jump);
       captures.append(row);
@@ -3042,8 +3081,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       try {
         if (!assetServerPaging) await refresh();
         if (selectedEvent !== event.id) return;
-        monitoring.openIncident(event, topic, point);
-        setView('monitoring');
+        openEventMonitoring(event, topic, point);
       } catch (error) {
         notice(error.message, true);
       }
@@ -3056,6 +3094,12 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     changes.addEventListener('click', () => { void openWindow('changes'); });
     const actions = cell('div', '', 'actions monitor-event-jump');
     actions.append(jump, changes);
+    if (['linux', 'k8s'].includes(allAssets.find(asset => asset.id === event.assetId)?.runtime)) {
+      const storage = cell('button', '查看同窗存储与容器', 'ghost small-button');
+      storage.type = 'button';
+      storage.addEventListener('click', () => openEventStorage(event));
+      actions.append(storage);
+    }
     if (analysis.candidates.some(item => item.code === 'patroni_leader_anomaly')) {
       const failover = cell('button', '查看切换前后', 'ghost small-button');
       failover.type = 'button';
