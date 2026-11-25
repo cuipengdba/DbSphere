@@ -276,6 +276,7 @@ async function monitoring(page, asset) {
   const overview = name => page.locator(`[data-overview="${name}"]`);
   const live = name => page.locator(`[data-live="${name}"]`);
   const storage = name => page.locator(`[data-storage="${name}"]`);
+  if (await live('pause').isHidden()) await navigate(page, 'live');
   await live('pause').click();
   assert.equal(await live('pause').getAttribute('aria-pressed'), 'true');
   await live('night').click();
