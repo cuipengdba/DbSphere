@@ -94,9 +94,9 @@ function seedSamples(asset) {
       } } },
       diagnostics: { instanceSessions: { status: 'ok', data: { waiting: index, active: index + 1, usedPercent: 42 } },
         activeWaits: { status: 'ok', data: { groups: [
-          { depth: 1, waitType: 'Lock', sessions: index },
-          { depth: 2, waitType: 'Lock', waitEvent: 'transactionid', sessions: index },
-          { depth: 3, waitType: 'Lock', waitEvent: 'transactionid', queryId: '163', sessions: index }
+          { depth: 3, waitType: 'Lock', sessions: index },
+          { depth: 1, waitType: 'Lock', waitEvent: 'transactionid', sessions: index },
+          { depth: 0, waitType: 'Lock', waitEvent: 'transactionid', queryId: '163', sessions: index }
         ] } },
         locks: { status: 'ok', data: { blockedSessions: index } },
         transactions: { status: 'ok', data: { longTransactions: index, idleInTransaction: index } } },
