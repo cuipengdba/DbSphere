@@ -1177,6 +1177,7 @@ async function kingbaseMonitoring(page) {
     jsonb_build_object('sampleId',id,'waits',metrics_json#>'{kingbase,waits}') FROM samples WHERE id='${sample}';`);
   await page.goto(origin+'/#live?engine=kingbase&asset='+asset);
   await page.locator('[data-live=metrics]').getByRole('button',{name:'阻塞关系',exact:true}).click();
+  await page.locator('[data-live=sql-panel] > summary').click();
   await page.getByRole('button',{name:'查看金仓 SQL 指纹与锁链',exact:true}).click();
   await visible(page.locator('#detail'),'金仓锁阻塞链');
   await visible(page.locator('#detail'),'SQL 统计已关闭');
