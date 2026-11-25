@@ -15,3 +15,9 @@
 应用上报 `db.system.name`、`server.address`、`server.port` 和可用的 `db.namespace`。当前接受 `postgresql`、`mysql`、`redis`、`etcd`、`dm8`、`kingbase`。使用前须核对地址、端口和数据库与平台资产唯一对应。Trace 只保留已列入允许范围的身份和时间字段。读取同一 Trace 的其他实例仍需要该资产的访问权限。[OpenTelemetry 数据库客户端规范](https://opentelemetry.io/docs/specs/semconv/db/database-spans/)
 
 如已为 etcd 配置 Kubernetes Context 和 Linux node_exporter，etcd 事件会显示 API Server 侧 etcd 调用耗时、当前成员的 WAL fsync 和后端提交耗时，以及对应的原始采样。根据配置核对成员和主机身份，结合时序和原始记录复核原因。
+
+## 按时段评估风险
+
+在资产详情打开「风险与历史回测」。可配置 IANA 时区和工作日业务开始、结束小时，起止相同时按全天评估。达梦表空间使用率和回放差距、金仓数据库容量和回放差距、Redis 淘汰速率和未命中率、etcd 配额使用率和后端提交耗时使用同角色、同时段的历史基线。近期角色切换或有效小时不足会保留待核对状态。
+
+影子预警先供人工确认或标记误报。确认后管理员可启用通知。修改基线时段后，新的影子预警需要重新复核。持续异常与复测回落分别保留原始采样，同一事件显示触发值、基线值、阈值和恢复读数。计划变更与维护窗口继续使用值班静默。可选模型停用或达到预算后，采集、规则预警和事件回放继续可用。

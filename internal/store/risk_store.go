@@ -51,17 +51,25 @@ func migrateRiskBaseline(ctx context.Context, tx pgx.Tx) error {
 
 func (s *Postgres) RiskForecasts(ctx context.Context, asset string) (any, error) {
 	var enabled, reviewed bool
+	profile := RiskProfile{TimeZone: "UTC"}
+	var profileJSON []byte
 	if err := s.pool.QueryRow(ctx, `SELECT coalesce((SELECT enabled FROM asset_risk_mode WHERE asset_id=$1),false), EXISTS(
 		SELECT 1 FROM risk_observations WHERE asset_id=$1 AND mode='shadow' AND review='confirmed'
-			AND reviewed_at>=now()-interval '14 days')`, asset).Scan(&enabled, &reviewed); err != nil {
+			AND reviewed_at>=now()-interval '14 days' AND evaluated_at>=coalesce((SELECT profile_changed_at
+			FROM asset_risk_mode WHERE asset_id=$1),'-infinity'::timestamptz)),
+		coalesce((SELECT profile FROM asset_risk_mode WHERE asset_id=$1),'{}'::jsonb)`, asset).Scan(&enabled, &reviewed, &profileJSON); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(profileJSON, &profile); err != nil {
 		return nil, err
 	}
 	items, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',id,'evaluatedAt',evaluated_at,'mode',mode,
-		'forecast',forecast,'eventId',event_id,'review',review,'reviewer',reviewer,'reviewedAt',reviewed_at)
+		'forecast',forecast,'eventId',event_id,'review',review,'reviewer',reviewer,'reviewedAt',reviewed_at,
+		'profileCurrent',evaluated_at>=coalesce((SELECT profile_changed_at FROM asset_risk_mode WHERE asset_id=$1),'-infinity'::timestamptz))
 		FROM risk_observations WHERE asset_id=$1 AND (evaluated_at=(SELECT max(evaluated_at) FROM risk_observations WHERE asset_id=$1)
 		OR (status='risk' AND evaluated_at>=now()-interval '7 days'))
 		ORDER BY evaluated_at DESC,metric LIMIT 32`, asset)
-	return map[string]any{"enabled": enabled, "reviewed": reviewed, "assessments": items}, err
+	return map[string]any{"enabled": enabled, "reviewed": reviewed, "assessments": items, "profile": profile}, err
 }
 
 func (s *Postgres) BacktestRiskForecast(ctx context.Context, asset string) (any, error) {
@@ -78,7 +86,7 @@ func (s *Postgres) BacktestRiskForecast(ctx context.Context, asset string) (any,
 		return nil, err
 	}
 	metrics := make([]RiskQuality, 0, len(forecastSpecs))
-	for _, spec := range forecastSpecs {
+	for _, spec := range nativeRiskSpecs(signals.Engine) {
 		metrics = append(metrics, assessRiskQuality(spec, signals, hour, 7))
 	}
 	return map[string]any{"days": 7, "through": hour, "metrics": metrics}, nil
@@ -90,7 +98,8 @@ func (s *Postgres) ReviewRiskForecast(ctx context.Context, asset, id, verdict st
 	}
 	actor := accessActor(ctx, "admin")
 	result, err := s.pool.Exec(ctx, `UPDATE risk_observations SET review=$3,reviewer=$4,reviewed_at=now()
-		WHERE id=$1 AND asset_id=$2 AND status='risk' AND mode='shadow' AND evaluated_at>=now()-interval '14 days'`,
+		WHERE id=$1 AND asset_id=$2 AND status='risk' AND mode='shadow' AND evaluated_at>=now()-interval '14 days'
+		AND evaluated_at>=coalesce((SELECT profile_changed_at FROM asset_risk_mode WHERE asset_id=$2),'-infinity'::timestamptz)`,
 		id, asset, verdict, actor)
 	if err != nil {
 		return err
@@ -105,7 +114,8 @@ func (s *Postgres) SetRiskMode(ctx context.Context, asset string, enabled bool) 
 	result, err := s.pool.Exec(ctx, `INSERT INTO asset_risk_mode(asset_id,enabled)
 		SELECT id,$2 FROM assets WHERE id=$1 AND (NOT $2 OR EXISTS(
 			SELECT 1 FROM risk_observations WHERE asset_id=$1 AND mode='shadow' AND review='confirmed'
-			AND reviewed_at>=now()-interval '14 days'))
+			AND reviewed_at>=now()-interval '14 days' AND evaluated_at>=coalesce((SELECT profile_changed_at
+			FROM asset_risk_mode WHERE asset_id=$1),'-infinity'::timestamptz)))
 		ON CONFLICT(asset_id) DO UPDATE SET enabled=excluded.enabled`, asset, enabled)
 	if err != nil {
 		return err
@@ -117,8 +127,26 @@ func (s *Postgres) SetRiskMode(ctx context.Context, asset string, enabled bool) 
 }
 
 func (s *Postgres) forecastRiskSignals(ctx context.Context, tx pgx.Tx, asset string, hour time.Time) (riskSignals, error) {
-	var signals riskSignals
-	rows, err := tx.Query(ctx, `SELECT b.bucket,coalesce(b.value->>'latestSampleId',''),
+	signals := riskSignals{Profile: RiskProfile{TimeZone: "UTC"}}
+	var profile []byte
+	if err := tx.QueryRow(ctx, `SELECT CASE WHEN a.runtime IN ('linux','k8s','managed') THEN 'postgres' ELSE a.runtime END,
+		coalesce(m.profile,'{}'::jsonb) FROM assets a LEFT JOIN asset_risk_mode m ON m.asset_id=a.id WHERE a.id=$1`,
+		asset).Scan(&signals.Engine, &profile); err != nil {
+		return signals, err
+	}
+	if err := json.Unmarshal(profile, &signals.Profile); err != nil {
+		return signals, err
+	}
+	location, err := time.LoadLocation(signals.Profile.TimeZone)
+	if err != nil {
+		return signals, err
+	}
+	signals.Location = location
+	if isNativeRiskEngine(signals.Engine) {
+		signals.Hours, err = readNativeRiskHours(ctx, tx, asset, signals.Engine, hour)
+	} else if signals.Engine == "postgres" {
+		var rows pgx.Rows
+		rows, err = tx.Query(ctx, `SELECT b.bucket,coalesce(b.value->>'latestSampleId',''),
 		(b.value->>'averageConnectionUsagePercent')::float8,(b.value->>'averageDatabaseBytes')::float8,
 		(b.value->>'walBytesPerSecond')::float8,
 		EXISTS(SELECT 1 FROM silences w WHERE w.kind='maintenance' AND w.revoked_at IS NULL
@@ -128,10 +156,14 @@ func (s *Postgres) forecastRiskSignals(ctx context.Context, tx pgx.Tx, asset str
 			AND c.occurred_at>=b.bucket-interval '2 hours' AND c.occurred_at<b.bucket+interval '1 hour')
 		FROM monitoring_hourly_buckets b WHERE b.asset_id=$1 AND b.bucket >= $2::timestamptz-interval '21 days'
 			AND b.bucket<$2 ORDER BY b.bucket`, asset, hour)
-	if err != nil {
-		return signals, err
+		if err == nil {
+			signals.Hours, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (riskHour, error) {
+				var b riskHour
+				err := row.Scan(&b.At, &b.SampleID, &b.Connections, &b.DatabaseBytes, &b.WALRate, &b.Planned)
+				return b, err
+			})
+		}
 	}
-	signals.Hours, err = pgx.CollectRows(rows, pgx.RowToStructByPos[riskHour])
 	if err != nil {
 		return signals, err
 	}
@@ -227,7 +259,7 @@ func (s *Postgres) evaluateAssetRisk(ctx context.Context, asset string, hour tim
 		if enabled && forecast.Status == "risk" {
 			eventID, err = s.publishRiskForecast(ctx, tx, asset, hour, forecast)
 		} else if forecast.Status == "clear" || !enabled {
-			err = s.closeRiskForecast(ctx, tx, asset, forecast.Metric, hour)
+			err = s.closeRiskForecast(ctx, tx, asset, forecast, hour)
 		}
 		if err != nil {
 			return err
@@ -255,7 +287,7 @@ func (s *Postgres) publishRiskForecast(ctx context.Context, tx pgx.Tx, asset str
 	if forecast.Metric == "recurrence" {
 		eventID = forecast.SourceEventID
 	} else {
-		for _, spec := range forecastSpecs {
+		for _, spec := range nativeRiskSpecs(forecast.Engine) {
 			if spec.name != forecast.Metric {
 				continue
 			}
@@ -285,7 +317,7 @@ func (s *Postgres) publishRiskForecast(ctx context.Context, tx pgx.Tx, asset str
 		return "", nil
 	}
 	var evidenceID string
-	payload, err := json.Marshal(map[string]any{"source": "seasonal_baseline", "ruleId": "risk_" + forecast.Metric, "severity": "warning",
+	payload, err := json.Marshal(map[string]any{"source": "seasonal_baseline", "ruleId": "risk_" + forecast.Metric, "metric": forecast.Metric, "severity": "warning",
 		"title": title, "value": forecast.Observed, "sampleId": forecast.SampleID, "leadMinutes": forecast.LeadMinutes, "forecast": forecast})
 	if err != nil {
 		return "", err
@@ -304,18 +336,25 @@ func (s *Postgres) publishRiskForecast(ctx context.Context, tx pgx.Tx, asset str
 	return eventID, nil
 }
 
-func (s *Postgres) closeRiskForecast(ctx context.Context, tx pgx.Tx, asset, metric string, hour time.Time) error {
+func (s *Postgres) closeRiskForecast(ctx context.Context, tx pgx.Tx, asset string, forecast RiskForecast, hour time.Time) error {
 	var eventID string
-	err := tx.QueryRow(ctx, `DELETE FROM risk_active WHERE asset_id=$1 AND metric=$2 RETURNING event_id::text`, asset, metric).Scan(&eventID)
+	err := tx.QueryRow(ctx, `DELETE FROM risk_active WHERE asset_id=$1 AND metric=$2 RETURNING event_id::text`, asset, forecast.Metric).Scan(&eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	payload := map[string]any{"metric": forecast.Metric, "source": "seasonal_baseline", "forecast": forecast}
+	if forecast.Status == "clear" && forecast.SampleID != "" {
+		payload["sampleId"], payload["value"] = forecast.SampleID, forecast.Observed
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,'risk_forecast_cleared',$2,jsonb_build_object('metric',$3::text,'source','seasonal_baseline'))`,
-		eventID, hour, metric); err != nil {
+		VALUES(gen_random_uuid(),$1,'risk_forecast_cleared',$2,$3)`, eventID, hour, raw); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `WITH closed AS (UPDATE events e SET status='resolved',ended_at=$2 FROM event_keys k

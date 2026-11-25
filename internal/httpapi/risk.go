@@ -9,13 +9,14 @@ import (
 	storepkg "github.com/cuipengdba/dbsphere/internal/store"
 )
 
-var assetRiskPath = regexp.MustCompile("^/api/assets/(" + accessUUID + ")/risk(?:/(review|mode|backtest))?$")
+var assetRiskPath = regexp.MustCompile("^/api/assets/(" + accessUUID + ")/risk(?:/(review|mode|backtest|profile))?$")
 
 type assetRiskStore interface {
 	RiskForecasts(context.Context, string) (any, error)
 	BacktestRiskForecast(context.Context, string) (any, error)
 	ReviewRiskForecast(context.Context, string, string, string) error
 	SetRiskMode(context.Context, string, bool) error
+	SetRiskProfile(context.Context, string, storepkg.RiskProfile) error
 }
 
 func handleAssetRisk(w http.ResponseWriter, r *http.Request, db HealthStore, role string) bool {
@@ -54,6 +55,13 @@ func handleAssetRisk(w http.ResponseWriter, r *http.Request, db HealthStore, rol
 			err = storepkg.ErrRiskInput
 		} else {
 			err = risk.SetRiskMode(r.Context(), id, *input.Enabled)
+		}
+	case r.Method == http.MethodPut && action == "profile" && role == "admin":
+		var input storepkg.RiskProfile
+		if readJSONLimit(w, r, &input, 4096) != nil {
+			err = storepkg.ErrRiskInput
+		} else {
+			err = risk.SetRiskProfile(r.Context(), id, input)
 		}
 	default:
 		respond(w, http.StatusForbidden, map[string]string{"error": "Risk action unavailable to this role"})

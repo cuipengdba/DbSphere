@@ -100,7 +100,7 @@ jobs:
           PG18_CONTAINER: ${{ job.services.pg18.id }}
         run: |
           docker exec "$PG18_CONTAINER" createdb -U postgres risk_acceptance
-          go test ./internal/store -run '^Test(RiskBaselineLabeledScenarios|PG18RiskShadowReviewAndSameEvent)$' -count=1 -v
+          go test ./internal/store -run '^Test(RiskBaselineLabeledScenarios|NativeRiskUsesSameRoleAndSustainedReadings|PG18RiskShadowReviewAndSameEvent|PG18NativeRiskShadowAndRecovery)$' -count=1 -v
       - name: Verify per-claim model references, request budgets and organization scope
         env:
           DBSPHERE_TEST_AI_EVIDENCE_PG18_URL: postgres://postgres:dbsphere-store-test@127.0.0.1:15434/ai_evidence_acceptance
@@ -527,8 +527,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='3.7.0'
-          previous_sha='f451e7834feee0f1ce85c1f1d69f1bf6cfd732a30d541e52a4e426308325c504'
+          previous_version='3.8.0'
+          previous_sha='7f8d5e1d166c2e3c4eb8cf9e441c34ea652ca5a4fbf6c10474d6132e521df8a1'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -612,8 +612,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='3.7.0'
-          previous_arm_sha='757cd87e82f5a9cbfc7adc6af84a46def44fcd34a46e55138ccff126b81d80df'
+          previous_version='3.8.0'
+          previous_arm_sha='61512ef24ef6af227978d4752d63dc5e5a495be17b6876169f8b5d11ae279d43'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -703,11 +703,11 @@ jobs:
           if [[ "$CHECK_BASELINE" == true ]]; then
             dir="$RUNNER_TEMP/previous-enhanced"
             mkdir -p "$dir"
-            old=3.7.0
+            old=3.8.0
             if [[ "$ARCH" == amd64 ]]; then
-              digest=a15c50472984d13ac56ed2ea60523961200595887773b1eea8e0615b616878fc
+              digest=3205ab32fb3e3d325ca979e341de839224f65cb77000189f44a08fd1b93d61e0
             else
-              digest=8d1eef6078e88d7ed4e61eca5bdf6281eb0af3a2353e6643fe4b6d52b2fec764
+              digest=8125ed6e4bc15bee86c806af35a6fedc46e5ee75761559e4dad6ce2576be6b34
             fi
             name="DbSphere-go-observability-$old-linux-$ARCH.run"
             curl -fL --retry 3 -o "$dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v$old/$name"

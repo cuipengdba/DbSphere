@@ -147,6 +147,12 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			point.Value = &value
 		}
 		point.Layer = incidentLayer(item.Kind, point.Signal)
+		if item.Kind == "risk_forecast" || item.Kind == "risk_forecast_cleared" {
+			point.Layer = stringValue(object(payload["forecast"])["engine"])
+			if point.Layer == "" {
+				point.Layer = "postgres"
+			}
+		}
 		engine, _ := nativeHAEvent(item.Kind)
 		if item.Kind == "collection_recovered" && engine == "" {
 			engine, _ = nativeHAEvent(event.Kind)
@@ -188,7 +194,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		}
 		switch kind {
 		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup, dm8LockGroup, kingbaseLockGroup,
-			redisEvictionGroup, redisSentinelGroup, redisSlotsGroup, etcdLeaderGroup, etcdHealthGroup, etcdDiskGroup:
+			redisEvictionGroup, redisSentinelGroup, redisSlotsGroup, etcdLeaderGroup, etcdHealthGroup, etcdDiskGroup, "risk_forecast":
 			point.Stage = "detection"
 			if detection == nil || (detection.SampleID == "" && point.SampleID != "") {
 				value := point
@@ -197,6 +203,12 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		case "collection_recovered", "alert_recovered", "recovery_verified":
 			point.Stage = "recovery"
 			if point.SampleID != "" || recovery == nil {
+				value := point
+				recovery = &value
+			}
+		case "risk_forecast_cleared":
+			if point.SampleID != "" {
+				point.Stage = "recovery"
 				value := point
 				recovery = &value
 			}

@@ -176,6 +176,13 @@ func recordEngineObservationEvent(ctx context.Context, tx pgx.Tx, assetID, sampl
 		if eventID == "" {
 			return nil
 		}
+		var forecastActive bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM risk_active WHERE event_id=$1)`, eventID).Scan(&forecastActive); err != nil {
+			return err
+		}
+		if forecastActive {
+			return nil
+		}
 		if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2`, now, eventID); err != nil {
 			return err
 		}
@@ -189,7 +196,12 @@ func recordEngineObservationEvent(ctx context.Context, tx pgx.Tx, assetID, sampl
 		return err
 	}
 	if eventID != "" {
-		return nil
+		occurrence["sampleId"], occurrence["source"] = sampleID, source
+		payload, _ := json.Marshal(occurrence)
+		_, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+			SELECT gen_random_uuid(),$1,$2,$3,$4 WHERE EXISTS(SELECT 1 FROM risk_active WHERE event_id=$1)
+			AND NOT EXISTS(SELECT 1 FROM evidence WHERE event_id=$1 AND kind=$2)`, eventID, group, now, payload)
+		return err
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at) VALUES(gen_random_uuid(),$1,$2)
 		RETURNING id::text`, assetID, now).Scan(&eventID); err != nil {

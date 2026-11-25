@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.8.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.9.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.8.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.8.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.9.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.9.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -46,7 +46,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | 主备与服务入口 | 查看 PostgreSQL、达梦 Data Watch 和金仓流复制的角色、归档、位点和切换证据。支持 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的入口监控。 |
 | 事件与根因 | 以同一个事件 ID 查看应用对 Redis 和数据库的调用、PG 等待会话、Kubernetes API Server 与 etcd 同窗指标，以及 Linux、容器、PVC 和原始日志证据。按服务、引擎与实例筛选，可分派、确认接班、验证恢复并导出复盘。 |
 | 日志分析 | 导入 PostgreSQL、瀚高、金仓 V9、达梦 DM8 和 MySQL 慢日志。支持项目和批次、断点续传、应用负载矩阵、延迟分布、原文回链、跨批次对比、调优复测、Zstd 归档及保留策略。 |
-| 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递、风险回测、手动及定时巡检、变更时间线和 Markdown／HTML 报告。 |
+| 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递。支持 PostgreSQL、达梦、金仓、Redis 和 etcd 的业务时段风险基线、影子预警和历史回测，以及巡检、变更时间线和 Markdown／HTML 报告。 |
 | 权限与作业 | 按组织、项目团队和资产划分访问权限，支持本地账号、OIDC、凭据轮换和签名审计。受控采样、巡检或已配置作业支持预演、独立审批和结果回写。 |
 | 增强可观测性 | 增强包内置 Prometheus 与 Grafana OSS，提供环境、PostgreSQL 集群、等待、SQL、复制、Linux、Kubernetes 及各引擎专题。平台管理员在 DbSphere 内打开面板，沿用当前资产和时段。 |
 | 可选 AI | 在系统状态中配置和测试模型、设置预算及超时。提交前可预览同事件证据和填写追问。模型停用时仍可使用采集、告警、巡检和规则根因分析。 |

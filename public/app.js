@@ -1201,21 +1201,25 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'dm8') {
     renderDM8Asset(detail, asset, samples);
+    if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'kingbase') {
     renderKingbaseAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
+    if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'redis') {
     renderRedisAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
+    if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'etcd') {
     renderEtcdAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
+    if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   const [{ performance }, { entries: slowLogs }, { plans }, settings, capacity] = await Promise.all([
@@ -2630,14 +2634,26 @@ function historyTierChart(assetId) {
   return panel;
 }
 
-const riskMetricLabels = {connections: '连接使用率', capacity: '数据库容量增长', wal: 'WAL 生成速率', recurrence: '重复故障'};
-const riskStatusLabels = {risk: '达到预警条件', clear: '基线内', planned: '计划变更窗口', insufficient: '采样不足'};
+const riskMetricLabels = {connections: '连接使用率', capacity: '数据库容量增长', wal: 'WAL 生成速率', recurrence: '重复故障',
+  dm8_utilization: '达梦表空间使用率', dm8_replay: '达梦回放差距', kingbase_capacity: '金仓数据库容量', kingbase_replay: '金仓回放差距',
+  redis_eviction_rate: 'Redis 淘汰速率', redis_hit_loss: 'Redis 未命中率', etcd_quota: 'etcd 配额使用率', etcd_commit: 'etcd 后端提交延迟'};
+const riskStatusLabels = {risk: '达到预警条件', clear: '基线内', planned: '计划变更窗口', insufficient: '采样不足', pending: '待下个窗口核对'};
 const riskReasonLabels = {
   threshold_already_reached: '当前值达到预警阈值', rising_towards_threshold: '趋势预计触及预警阈值',
   within_baseline: '当前走势在基线范围内', maintenance_window: '计划变更或维护窗口内暂停判定',
   recent_samples_missing: '近期有效采样不足', seasonal_baseline_missing: '同周期历史样本不足',
-  continuous_samples_missing: '相邻时段有效采样不足', similar_failures_this_week: '近七天同类可用性故障达到三次'
+  continuous_samples_missing: '相邻时段有效采样不足', similar_failures_this_week: '近七天同类可用性故障达到三次',
+  role_changed: '观测期内节点角色变化', single_period_change: '目前只出现一个变化窗口'
 };
+
+function riskMetricValue(metric, value) {
+  if (!Number.isFinite(value)) return '未采集';
+  const units = {capacity:[1024 ** 3,'GiB'],kingbase_capacity:[1024 ** 3,'GiB'],kingbase_replay:[1024 ** 2,'MiB'],
+    wal:[1024 ** 2,'MiB/s'],connections:[1,'%'],dm8_utilization:[1,'%'],dm8_replay:[1,'LSN'],
+    redis_eviction_rate:[1,'次/s'],redis_hit_loss:[1,'%'],etcd_quota:[1,'%'],etcd_commit:[1,'ms']};
+  const unit = units[metric];
+  return unit ? `${(value / unit[0]).toFixed(2)} ${unit[1]}` : String(value);
+}
 
 function assetRiskPanel(assetId) {
   const panel = cell('details', '', 'settings-details risk-panel');
@@ -2646,9 +2662,6 @@ function assetRiskPanel(assetId) {
   panel.append(output);
   let loaded = false;
   const path = '/api/assets/' + assetId + '/risk';
-  const format = (metric, value) => metric === 'capacity' ? (value / (1024 ** 3)).toFixed(2) + ' GiB' :
-    metric === 'wal' ? (value / (1024 ** 2)).toFixed(2) + ' MiB/s' :
-    metric === 'connections' ? value.toFixed(1) + '%' : String(value);
   const load = async () => {
     loaded = true;
     try {
@@ -2662,6 +2675,28 @@ function assetRiskPanel(assetId) {
           catch (error) { notice(error.message, true); }
         });
         output.append(control);
+        const settings = cell('form', '', 'incident-dependency-filters');
+        const field = (name, type, value) => {
+          const label = cell('label', name);
+          const input = cell('input', ''); input.type = type; input.value = value; input.required = true;
+          if (type === 'number') { input.min = 0; input.max = 23; input.step = 1; }
+          label.append(input); settings.append(label);
+          return input;
+        };
+        const timezone = field('基线时区', 'text', state.profile.timeZone);
+        const start = field('业务开始小时', 'number', state.profile.businessStartHour);
+        const end = field('业务结束小时', 'number', state.profile.businessEndHour);
+        const save = cell('button', '保存基线时段', 'ghost small-button'); save.type = 'submit';
+        settings.append(save);
+        settings.addEventListener('submit', async event => {
+          event.preventDefault(); save.disabled = true;
+          try {
+            await api(path + '/profile', 'PUT', {timeZone:timezone.value.trim(), businessStartHour:Number(start.value), businessEndHour:Number(end.value)});
+            await load();
+          } catch (error) { notice(error.message, true); }
+          finally { save.disabled = false; }
+        });
+        output.append(settings, cell('small', '业务时段按工作日计算。起止小时相同表示全天。修改后恢复影子预警，待新基线复核。'));
       }
       if (!state.assessments.length) output.append(cell('p', '等待收集风险基线的历史采样。', 'empty'));
       const latest = state.assessments[0]?.evaluatedAt;
@@ -2671,9 +2706,13 @@ function assetRiskPanel(assetId) {
         const row = cell('article', '', 'evidence');
         row.append(cell('strong', riskMetricLabels[forecast.metric] + ' · ' + riskStatusLabels[forecast.status]),
           cell('p', formatTime(item.evaluatedAt) + ' · ' + riskReasonLabels[forecast.reason]));
-        if (forecast.status === 'risk' || forecast.status === 'clear') {
-          const values = ['观测 ' + format(forecast.metric, forecast.observed), '阈值 ' + format(forecast.metric, forecast.threshold)];
-          if (forecast.horizonHours) values.push(forecast.horizonHours + ' 小时内预计 ' + format(forecast.metric, forecast.projected));
+        const role = {primary:'主库',standby:'备库',standalone:'单实例',master:'主节点',replica:'副本',leader:'Leader',follower:'Follower'}[forecast.role];
+        const period = {business:'业务时段',off_hours:'非业务时段',weekend:'周末'}[forecast.period];
+        const context = [role,period,forecast.timeZone,forecast.baselineHours > 0 && `${forecast.baselineHours} 个基线小时`].filter(Boolean);
+        if (context.length) row.append(cell('small', context.join(' · ')));
+        if (['risk','clear','pending'].includes(forecast.status)) {
+          const values = ['观测 ' + riskMetricValue(forecast.metric, forecast.observed), '阈值 ' + riskMetricValue(forecast.metric, forecast.threshold)];
+          if (forecast.horizonHours) values.push(forecast.horizonHours + ' 小时内预计 ' + riskMetricValue(forecast.metric, forecast.projected));
           if (forecast.leadMinutes > 0) values.push('预计提前 ' + forecast.leadMinutes + ' 分钟');
           row.append(cell('p', values.join(' · ')));
         }
@@ -2684,7 +2723,7 @@ function assetRiskPanel(assetId) {
           row.append(document.createTextNode(' · '), event);
         }
         if (item.review) row.append(cell('p', item.reviewer + ' · ' + (item.review === 'confirmed' ? '确认预警' : '标记误报'), 'hint'));
-        if (item.mode === 'shadow' && forecast.status === 'risk' && !item.review && ['admin', 'operator'].includes(currentRole)) {
+        if (item.profileCurrent !== false && item.mode === 'shadow' && forecast.status === 'risk' && !item.review && ['admin', 'operator'].includes(currentRole)) {
           const actions = cell('div', '', 'actions');
           for (const [verdict,label] of [['confirmed','确认影子预警'],['false_positive','标记为误报']]) {
             const button = cell('button', label, 'ghost small-button'); button.type = 'button';
@@ -4217,6 +4256,33 @@ function incidentDependencyPanel(data, event) {
   return panel;
 }
 
+function riskEventComparison(event) {
+  const evaluations = new Map();
+  for (const entry of event.evidence || []) {
+    const forecast = entry.payload?.forecast;
+    if (!forecast?.metric) continue;
+    if (entry.kind === 'risk_forecast') {
+      evaluations.set(forecast.metric, {before: forecast});
+    } else if (entry.kind === 'risk_forecast_cleared' && entry.payload.sampleId && evaluations.has(forecast.metric)) {
+      evaluations.get(forecast.metric).after = forecast;
+    }
+  }
+  if (!evaluations.size) return null;
+  const panel = cell('section', '', 'incident-dependency');
+  panel.append(cell('h4', '基线预警与恢复复测'));
+  const evidence = reading => {
+    if (!reading) return '等待恢复样本';
+    const item = cell('div', riskMetricValue(reading.metric, reading.observed));
+    if (reading.sampleId) item.append(document.createTextNode(' · '), replaySampleLink(event.assetId, reading.sampleId));
+    return item;
+  };
+  panel.append(importTable(['指标','同周期中位','预警阈值','触发观测','恢复复测'], [...evaluations.entries()].map(([metric, pair]) => [
+    riskMetricLabels[metric] || metric, riskMetricValue(metric, pair.before.baseline),
+    riskMetricValue(metric, pair.before.threshold), evidence(pair.before), evidence(pair.after)
+  ])));
+  return panel;
+}
+
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   const params = investigationParams(id);
@@ -4468,6 +4534,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (analysis.dependencies?.calls?.length || analysis.dependencies?.controlPlane) {
     diagnosis.append(incidentDependencyPanel(analysis.dependencies, event));
   }
+  const riskComparison = riskEventComparison(event);
+  if (riskComparison) diagnosis.append(riskComparison);
   if (analysis.traceCoverage?.serviceImpact?.length) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
     for (const service of analysis.traceCoverage.serviceImpact) {
