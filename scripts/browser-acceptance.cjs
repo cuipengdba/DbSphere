@@ -362,6 +362,7 @@ async function monitoring(page, asset) {
   await workbench.getByRole('button', { name: '等待分析', exact: true }).click();
   const heat = workbench.getByRole('table', { name: '每桶平均活跃会话' });
   await heat.waitFor();
+  assert.notEqual(await heat.locator('.heat-4').first().evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');
   const heatCell = heat.getByRole('button', { name: /合计.*3 会话/ }).first();
   await heatCell.click();
   assert.equal(await heatCell.getAttribute('aria-pressed'), 'true');
@@ -678,7 +679,7 @@ async function pagination(page, asset) {
 async function dutyMatrix(page) {
   const states = ['healthy', 'affected', 'maintenance', 'recovered', 'missing'];
   const assets = Object.fromEntries(states.map(state => [state, randomUUID()]));
-  const opened = randomUUID(), recovered = randomUUID();
+  const opened = randomUUID(), recovered = randomUUID(), originSample = randomUUID();
   const rows = states.map((state, index) => `('${assets[state]}','Matrix ${state}','127.0.0.1',15434,'postgres','postgres','','disable','managed',
     'matrix-acceptance','Matrix ${index < 2 ? 'A' : 'B'}',now(),${state === 'missing' ? 'NULL' : 'now()'},
     '${state === 'missing' ? 'pending' : 'ok'}','${index === 0 || index === 3 ? 'replica' : 'primary'}')`);
@@ -689,6 +690,12 @@ async function dutyMatrix(page) {
     SELECT id,asset_id,'collection_failure','Matrix ' || CASE WHEN id='${opened}' THEN 'unavailable' ELSE 'recovery' END,
       CASE WHEN id='${opened}' THEN 'open' ELSE 'resolved' END,started_at,CASE WHEN id='${recovered}' THEN now() END,'availability'
     FROM event_keys WHERE id IN ('${opened}','${recovered}');
+    INSERT INTO samples(id,asset_id,collected_at,status,metrics_json,error)
+    SELECT '${originSample}',asset_id,started_at,'error','{"collector":{"pgStatus":"error"}}','Browser capture at incident start'
+    FROM event_keys WHERE id='${recovered}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT gen_random_uuid(),id,'collection_error',started_at,jsonb_build_object('sampleId','${originSample}'::text,'source','go_collector')
+    FROM event_keys WHERE id='${recovered}';
     INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES ('${assets.affected}','availability','${opened}');
     INSERT INTO silences(id,kind,asset_id,starts_at,ends_at,reason,created_at)
     VALUES (gen_random_uuid(),'maintenance','${assets.maintenance}',now()-interval '1 minute',now()+interval '5 minutes','Browser maintenance',now());`);
@@ -714,6 +721,12 @@ async function dutyMatrix(page) {
   await board('layout').selectOption('cluster');
   await board('event-list').selectOption('resolved');
   await board('events').locator(`[data-event="${recovered}"]`).click();
+  await visible(page.locator('#event-detail'), recovered);
+  const evidenceRoute = route(page);
+  await page.locator(`#event-detail a[href="/api/assets/${assets.recovered}/samples/${originSample}"]:visible`).first().click();
+  await visible(page.locator('#sample-details'), 'Browser capture at incident start');
+  await page.locator('#sample-return').click();
+  await page.waitForURL(url => url.hash === evidenceRoute);
   await visible(page.locator('#event-detail'), recovered);
   await page.getByText('返回监控大屏', { exact: true }).click();
   await visible(board('focus'), 'Matrix recovered');

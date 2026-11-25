@@ -179,15 +179,17 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .monitor-graph-dialog::backdrop { background: rgb(0 0 0 / 65%); }
 dialog.monitor-graph-dialog .monitor-plot svg { height: clamp(220px, 54dvh, 720px); }
 .monitor-graph-dialog .cluster-track svg { height: 35px; }
+.monitor-heatmap { --heat-fill: #146a84; --heat-ink: #fff; }
+:root[data-theme="dark"] .monitor-heatmap { --heat-fill: #83e4df; --heat-ink: #092432; }
 .monitor-heatmap table { width: max-content; min-width: 100%; }
 .monitor-heatmap td { padding: 2px; }
 .monitor-heatmap td:first-child { padding-inline: 8px; white-space: nowrap; }
 .monitor-heat-cell { display: block; min-width: 38px; width: 100%; min-height: 32px; padding: 4px; border: 1px solid transparent; border-radius: 4px; background: var(--soft); color: var(--text); font: inherit; }
 .monitor-heat-cell.heat-gap { border-style: dashed; border-color: var(--control-border); color: var(--muted); }
-.monitor-heat-cell.heat-1 { background: color-mix(in srgb, var(--plot-cyan) 20%, var(--surface)); }
-.monitor-heat-cell.heat-2 { background: color-mix(in srgb, var(--plot-cyan) 35%, var(--surface)); }
-.monitor-heat-cell.heat-3 { background: color-mix(in srgb, var(--plot-cyan) 52%, var(--surface)); }
-.monitor-heat-cell.heat-4 { background: var(--plot-cyan); color: #091c25; font-weight: 700; }
+.monitor-heat-cell.heat-1 { background: color-mix(in srgb, var(--heat-fill) 14%, var(--surface)); }
+.monitor-heat-cell.heat-2 { background: color-mix(in srgb, var(--heat-fill) 26%, var(--surface)); }
+.monitor-heat-cell.heat-3 { background: color-mix(in srgb, var(--heat-fill) 40%, var(--surface)); }
+.monitor-heat-cell.heat-4 { background: var(--heat-fill); color: var(--heat-ink); font-weight: 700; }
 .monitor-heat-cell[aria-pressed="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
 .sample-workspace { min-width: 0; }
 .sample-workspace details, .sample-fields { margin: 10px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
