@@ -776,7 +776,8 @@
       if (historyData?.changes?.length) {
         const changes = node('select');
         changes.setAttribute('aria-label', '选择变更前后对比');
-        changes.append(new Option('变更前后对比', ''), ...historyData.changes.map(item => new Option(`${short(item.at)} · ${item.label}`, item.at)));
+        changes.append(new Option('变更前后对比', ''), ...historyData.changes.map(item =>
+          new Option(`${short(item.at)} · ${item.label}`, iso(Date.parse(item.at)))));
         changes.addEventListener('change', () => {
           const from = Date.parse(changes.value);
           if (!finite(from)) return;
