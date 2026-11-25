@@ -1276,6 +1276,44 @@ async function etcdMonitoring(page) {
   proof.push('etcd admission, member visibility, same-window Kubernetes API Server metrics, and same-event original sample');
 }
 
+async function mixedEngineWallboard(page) {
+  runFixtureSQL(`INSERT INTO open_event_groups(asset_id,event_group,event_id)
+    SELECT e.asset_id,e.event_group,e.id FROM events e JOIN assets a ON a.id=e.asset_id
+    WHERE a.name='Browser QA Redis' AND e.kind='redis_eviction'
+    ON CONFLICT(asset_id,event_group) DO UPDATE SET event_id=excluded.event_id;`);
+  await page.goto(origin+'/#wallboard?window=60');
+  const board=key=>page.locator(`[data-board="${key}"]`);
+  const strip=board('engines');
+  await strip.getByRole('button',{name:'Redis',exact:true}).waitFor();
+  for(const name of ['PostgreSQL','Redis','etcd','达梦 DM8','金仓 V9']){
+    await strip.getByRole('button',{name,exact:true}).waitFor();
+  }
+  await board('theme-toggle').click();
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
+  await board('theme-toggle').click();
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await strip.getByRole('button',{name:'etcd',exact:true}).click();
+  await visible(board('focus'),'Browser QA etcd');
+  assert.equal(parameters(page).get('engine'),'etcd');
+  await board('charts').getByRole('button',{name:'放大WAL fsync',exact:true}).click();
+  await board('chart-dialog').getByRole('heading',{name:'WAL fsync',exact:true}).waitFor();
+  await board('chart-close').click();
+  await strip.getByRole('button',{name:'Redis',exact:true}).click();
+  await visible(board('focus'),'Browser QA Redis');
+  assert.equal(parameters(page).get('engine'),'redis');
+  await board('events').getByRole('button',{name:/Redis QA 缓存淘汰/}).click();
+  await visible(page.locator('#event-detail'),'Redis 在采样间淘汰 62 个键');
+  const event=parameters(page).get('event');
+  assert(event);
+  const link=page.locator('#event-detail a[href*="/samples/"]:visible').first();
+  const sample=(await link.getAttribute('href')).split('/').at(-1);
+  await link.click();
+  await visible(page.locator('#sample-details'),sample);
+  await page.locator('#sample-return').click();
+  await visible(page.locator('#event-detail'),event);
+  proof.push('Mixed-engine wallboard, light and dark themes, an enlarged native chart, and Redis event evidence in three clicks');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -1301,6 +1339,7 @@ async function etcdMonitoring(page) {
     await kingbaseMonitoring(page);
     await redisMonitoring(page);
     await etcdMonitoring(page);
+    await mixedEngineWallboard(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

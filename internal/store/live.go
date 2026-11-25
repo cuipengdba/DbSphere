@@ -17,6 +17,15 @@ type LiveScope struct {
 	BoardState                                 string
 }
 
+func IsLiveEngine(engine string) bool {
+	switch engine {
+	case "postgres", "mysql", "dm8", "kingbase", "redis", "etcd":
+		return true
+	default:
+		return false
+	}
+}
+
 // LiveObservation applies the authorized scope before ranking or limiting assets.
 func (s *Postgres) LiveObservation(ctx context.Context, ids []string, staleAfter int, scope LiveScope) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -65,9 +74,19 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 ), inventory AS MATERIALIZED (
 	SELECT *,CASE WHEN cluster_name IS NULL OR cluster_name='' THEN id::text
 		ELSE organization_id::text || '/' || engine || '/' || cluster_name END AS cluster_key FROM visible
-), selected AS MATERIALIZED (
+), filtered_inventory AS MATERIALIZED (
 	SELECT * FROM inventory WHERE ($4='' OR organization_id::text=$4) AND ($5='' OR environment=$5)
-		AND ($6='' OR cluster_key=$6) AND ($7='' OR engine=$7)
+		AND ($6='' OR cluster_key=$6)
+), selected AS MATERIALIZED (
+	SELECT * FROM filtered_inventory WHERE $7='' OR engine=$7
+), engine_counts AS (
+	SELECT i.engine,count(*) AS total,
+		count(*) FILTER (WHERE i.freshness='ok') AS fresh,
+		count(*) FILTER (WHERE i.freshness NOT IN ('ok','error')) AS missing,
+		count(*) FILTER (WHERE i.freshness='error') AS failed,
+		count(*) FILTER (WHERE EXISTS(SELECT 1 FROM open_event_groups g WHERE g.asset_id=i.id AND g.event_group='availability')) AS unavailable,
+		count(*) FILTER (WHERE i.freshness='error' OR EXISTS(SELECT 1 FROM open_event_groups g WHERE g.asset_id=i.id)) AS affected
+	FROM filtered_inventory i WHERE $8 GROUP BY i.engine
 ), active AS MATERIALIZED (
 	SELECT e.id,e.kind,e.event_group,e.title,e.status,v.id AS asset_id,v.name AS asset_name,v.organization_id,e.started_at,e.ended_at,
 		priority.severity
@@ -143,7 +162,7 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 		'ioPressure',m.metrics_json#>'{containerStorage,containers}'->(m.metrics_json#>>'{containerStorage,primary}')#>'{pressure,io_some_avg10}',
 		'blocked',CASE WHEN m.metrics_json#>>'{diagnostics,locks,status}'='ok'
 			THEN m.metrics_json#>'{diagnostics,locks,data,blockedSessions}' END,
-			'engineMetrics',CASE WHEN a.engine='etcd' THEN jsonb_build_object(
+		'engineMetrics',CASE WHEN a.engine='etcd' THEN jsonb_build_object(
 				'health',m.metrics_json#>'{etcd,health}','leaderId',m.metrics_json#>'{etcd,leaderId}',
 				'pending',m.metrics_json#>'{etcd,proposalsPending}','size',m.metrics_json#>'{etcd,sizeBytes}',
 				'wal',m.metrics_json#>'{etcdInterval,wal,meanMs}','commit',m.metrics_json#>'{etcdInterval,backend,meanMs}',
@@ -192,6 +211,8 @@ SELECT jsonb_build_object('observedAt',now(),'staleAfter',$3,
 		'status',status,'assetId',asset_id,'assetName',asset_name,'organizationId',organization_id,'severity',severity,'group',event_group,
 		'startedAt',started_at,'endedAt',ended_at) ORDER BY (status='open') DESC,priority,coalesce(ended_at,started_at) DESC,id) FROM recent),'[]'::jsonb))
 	|| CASE WHEN $8 THEN jsonb_build_object('hostCount',(SELECT count(DISTINCT host_key) FROM wall_hosts),
+		'engines',coalesce((SELECT jsonb_agg(to_jsonb(engine_counts) ORDER BY engine) FROM engine_counts),'[]'::jsonb),
+		'failedCount',(SELECT count(*) FROM selected WHERE freshness='error'),
 		'filteredTotal',(SELECT count(*) FROM filtered),
 		'affectedCount',(SELECT count(*) FROM board_assets WHERE open_events>0 OR freshness='error'),
 		'missingCount',(SELECT count(*) FROM board_assets WHERE freshness NOT IN ('ok','error')),

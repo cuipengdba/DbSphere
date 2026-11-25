@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.4.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.5.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
-DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看数据库、Linux 和 Kubernetes 指标，从一张异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
+DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.4.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.4.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.5.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.5.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -14,7 +14,7 @@ DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看�
 
 ### 资产监控大屏
 
-按组织、环境或集群查看实例、主机、优先事件和 12 张关键趋势图。点击图片可看原尺寸。
+按组织、环境或集群查看各引擎的采集覆盖、实例健康和优先事件。切换资产后可放大对应引擎的趋势图。点击图片可看原尺寸。
 
 [![资产监控大屏和多指标趋势](docs/images/wallboard.png)](docs/images/wallboard.png)
 
@@ -40,7 +40,7 @@ DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看�
 | --- | --- |
 | 资产纳管 | 支持 PostgreSQL 14–19、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis OSS 7.2 与 8.4、etcd 3.5 与 3.6，以及 MySQL 8.4 只读预览。支持 Linux、Docker、Kubernetes 和托管数据库，提供批量清单预览与导入、授权资产导出、连接及权限体检。 |
 | 监控工作台 | 从集群下钻到实例、数据库和 SQL。对照连接、事务、等待、锁、WAL、复制、检查点和容量，支持同窗多实例对比、短时等待采样、历史阻塞树回放和原始样本。 |
-| 监控大屏 | 按资产查看 12 张可放大趋势图。个人和团队值班视图可跨浏览器恢复，团队成员按各自的资产权限查看。支持同步游标、固定时段、历史基线和基线采样下钻。 |
+| 监控大屏 | 按引擎查看资产数、影响范围、近期采样、缺采、失败和端点失联。趋势图随资产引擎切换，支持放大、同步游标、固定时段、历史基线和原始采样。个人和团队值班视图可跨浏览器恢复。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |
 | SQL 与对象 | 分析 Top SQL 指纹、锁链、慢日志和执行计划，核对对象大小、死元组、冻结、Vacuum、Analyze、分区与索引状态。 |
 | 主备与服务入口 | 查看 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的可用信号，分析逻辑复制槽、回放延迟、积压和切换。核对入口探测与实际后端。 |
@@ -48,7 +48,7 @@ DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看�
 | 日志分析 | 导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。支持项目和批次、断点续传、应用负载矩阵、延迟分布、原文回链、跨批次对比、调优复测、Zstd 归档及保留策略。 |
 | 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递、风险回测、手动及定时巡检、变更时间线和 Markdown／HTML 报告。 |
 | 权限与作业 | 按组织、项目团队和资产划分访问权限，支持本地账号、OIDC、凭据轮换和签名审计。受控采样、巡检或已配置作业支持预演、独立审批和结果回写。 |
-| 增强可观测性 | 增强包内置 Prometheus 与 Grafana OSS，提供环境、PostgreSQL 集群、等待、SQL、复制、Linux、Kubernetes 和 MySQL 专题。平台管理员在 DbSphere 内打开面板，沿用当前资产和时段。 |
+| 增强可观测性 | 增强包内置 Prometheus 与 Grafana OSS，提供环境、PostgreSQL 集群、等待、SQL、复制、Linux、Kubernetes 及各引擎专题。平台管理员在 DbSphere 内打开面板，沿用当前资产和时段。 |
 | 可选 AI | 在系统状态中配置和测试模型、设置预算及超时。提交前可预览同事件证据和填写追问。模型停用时仍可使用采集、告警、巡检和规则根因分析。 |
 | 存储与交付 | Go 后端内嵌静态前端，独立 PostgreSQL 18 保存长期指标、证据和采集队列。支持指标分层留存、监控库备份、平台副本及共享采集租约。提供 Linux amd64／arm64 标准和增强一键离线包、静态程序和 systemd 安装包。 |
 

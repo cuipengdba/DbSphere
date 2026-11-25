@@ -171,6 +171,9 @@ func readWallboardPoint(sample, previous wallboardSample, host, containerID stri
 			}
 		}
 	}
+	if sample.status == "ok" && wallboardNativeValues(values, metrics) {
+		return point
+	}
 	if !wallboardPGAvailable(sample) {
 		return point
 	}
@@ -217,6 +220,83 @@ func readWallboardPoint(sample, previous wallboardSample, host, containerID stri
 		}
 	}
 	return point
+}
+
+func wallboardNativeValues(values map[string]float64, metrics map[string]any) bool {
+	copyValues := func(source map[string]any, fields map[string]string) {
+		for series, key := range fields {
+			wallboardValue(values, series, source[key])
+		}
+	}
+	signalOK := func(key string) bool {
+		for _, raw := range list(object(metrics["adapter"])["signals"]) {
+			signal := object(raw)
+			if signal["key"] == key {
+				return signal["status"] == "ok"
+			}
+		}
+		return false
+	}
+	putWaits := func(series string, raw any) {
+		if waits, ok := raw.([]any); ok && signalOK("lockWaits") {
+			values[series] = float64(len(waits))
+		}
+	}
+	switch {
+	case metrics["mysql"] != nil:
+		m := object(metrics["mysql"])
+		copyValues(m, map[string]string{"mysqlClients": "connections", "mysqlRunning": "running"})
+		putWaits("mysqlWaits", m["lockWaits"])
+		if channels, ok := m["replication"].([]any); ok && signalOK("replication") {
+			values["mysqlChannels"] = float64(len(channels))
+		}
+	case metrics["dm8"] != nil:
+		m := object(metrics["dm8"])
+		copyValues(m, map[string]string{"dm8Sessions": "sessions", "dm8Active": "activeSessions", "dm8Transactions": "transactions"})
+		putWaits("dm8Waits", m["waits"])
+		files, ok := m["files"].([]any)
+		if ok && m["filesTruncated"] != true && signalOK("datafiles") {
+			var allocated, free float64
+			for _, raw := range files {
+				file := object(raw)
+				allocated += number(file["allocatedBytes"])
+				free += number(file["freeBytes"])
+			}
+			wallboardValue(values, "dm8Allocated", allocated)
+			wallboardValue(values, "dm8Used", allocated-free)
+		}
+	case metrics["kingbase"] != nil:
+		m := object(metrics["kingbase"])
+		copyValues(m, map[string]string{"kingbaseSessions": "sessions", "kingbaseActive": "activeSessions",
+			"kingbaseTransactions": "transactions", "kingbaseSize": "databaseBytes"})
+		putWaits("kingbaseWaits", m["waits"])
+		copyValues(object(m["replication"]), map[string]string{"kingbaseLag": "maxReplayLagBytes"})
+	case metrics["redis"] != nil:
+		m := object(metrics["redis"])
+		copyValues(m, map[string]string{"redisOps": "ops", "redisClients": "clients", "redisMemory": "memoryBytes",
+			"redisLatency": "latencyMs", "redisSlots": "slotsOk", "redisSlotsFail": "slotsFail"})
+		copyValues(object(metrics["redisInterval"]), map[string]string{"redisHit": "hitPercent", "redisEvicted": "evicted", "redisRejected": "rejected"})
+		if sentinel := object(m["sentinel"]); sentinel != nil {
+			copyValues(sentinel, map[string]string{"redisPeers": "peers", "redisReplicas": "replicas"})
+			switch sentinel["state"] {
+			case "ok":
+				values["redisMaster"] = 1
+			case "unavailable":
+				values["redisMaster"] = 0
+			}
+		}
+	case metrics["etcd"] != nil:
+		m := object(metrics["etcd"])
+		copyValues(m, map[string]string{"etcdLeader": "hasLeader", "etcdPending": "proposalsPending", "etcdSize": "sizeBytes",
+			"etcdQuota": "quotaBytes", "etcdInUse": "inUseBytes"})
+		interval := object(metrics["etcdInterval"])
+		copyValues(object(interval["wal"]), map[string]string{"etcdWAL": "meanMs", "etcdWALP95": "p95UpperMs"})
+		copyValues(object(interval["backend"]), map[string]string{"etcdCommit": "meanMs", "etcdCommitP95": "p95UpperMs"})
+		copyValues(object(interval["kubernetes"]), map[string]string{"etcdAPI": "meanMs", "etcdAPIP95": "p95UpperMs"})
+	default:
+		return false
+	}
+	return true
 }
 
 func wallboardPGAvailable(sample wallboardSample) bool {

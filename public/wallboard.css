@@ -67,7 +67,7 @@ body[data-active-view="wallboard"] .workspace-main { max-width: 2880px; padding:
 .wallboard button:disabled { opacity: .45; cursor: default; }
 .wallboard-dates { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; }
 .wallboard-dates label { display: grid; gap: 3px; font-size: 11px; color: var(--wall-muted); }
-.wallboard-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
+.wallboard-kpis { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
 .wallboard-kpi, .wallboard-panel, .wallboard-chart { border: 1px solid var(--wall-line); border-radius: 9px; background: var(--wall-panel); }
 .wallboard-kpi {
   position: relative; display: flex; align-items: center; gap: 8px; overflow: hidden;
@@ -77,8 +77,55 @@ body[data-active-view="wallboard"] .workspace-main { max-width: 2880px; padding:
 .wallboard-kpi strong { margin-left: auto; color: var(--wall-a); font-size: clamp(17px, 1.7vw, 29px); font-variant-numeric: tabular-nums; }
 .wallboard-kpi:is(:hover, :focus-visible)[data-filter], .wallboard-kpi[aria-pressed="true"] { border-color: var(--wall-a); background: var(--wall-cell); }
 .wallboard-kpi[data-filter="affected"] strong { color: var(--wall-error); }
+.wallboard-kpi[data-kpi="unavailable"] strong { color: var(--wall-error); }
+.wallboard-kpi[data-kpi="fresh"] strong { color: var(--wall-ok); }
 .wallboard-kpi[data-filter="recovered"] strong { color: var(--wall-ok); }
 .wallboard-kpi[data-filter="missing"] strong, .wallboard-kpi[data-filter="maintenance"] strong { color: var(--wall-change); }
+.wallboard-engine-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
+  gap: 8px;
+  margin-bottom: 11px;
+}
+.wallboard-engine {
+  --engine-accent: var(--wall-a);
+  appearance: none;
+  display: grid;
+  min-width: 0;
+  min-height: 74px;
+  align-content: start;
+  gap: 7px;
+  padding: 9px 8px 7px;
+  border: 1px solid var(--wall-line);
+  border-top-color: color-mix(in srgb, var(--engine-accent) 55%, var(--wall-line));
+  border-radius: 9px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--engine-accent) 9%, var(--wall-panel)), var(--wall-panel) 70%);
+  text-align: start;
+  color: var(--wall-text);
+}
+.wallboard-engine[hidden] { display: none; }
+.wallboard-engine:is(:hover,:focus-visible,[aria-pressed="true"]) {
+  border-color: var(--engine-accent);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--engine-accent) 20%, var(--wall-panel)), var(--wall-panel) 85%);
+}
+.wallboard-engine[aria-pressed="true"] { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--engine-accent) 45%, transparent); }
+.wallboard-engine[data-engine="dm8"], .wallboard-engine[data-engine="redis"] { --engine-accent: var(--wall-b); }
+.wallboard-engine[data-engine="kingbase"], .wallboard-engine[data-engine="etcd"] { --engine-accent: var(--wall-ok); }
+.wallboard-engine-title { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; }
+.wallboard-engine-title .wallboard-icon { color: var(--engine-accent); width: 14px; height: 14px; }
+.wallboard-engine-title strong {
+  margin-inline-start: auto;
+  color: var(--engine-accent);
+  font-size: clamp(17px, 1.6vw, 27px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wallboard-engine-meter { display: flex; height: 4px; overflow: hidden; border-radius: 20px; background: var(--wall-grid); }
+.wallboard-engine-meter span { display: block; height: 100%; }
+.wallboard-engine-meter [data-segment="fresh"] { background: var(--wall-ok); }
+.wallboard-engine-meter [data-segment="missing"] { background: var(--wall-change); }
+.wallboard-engine-meter [data-segment="failed"] { background: var(--wall-error); }
+.wallboard-engine-summary { color: var(--wall-muted); font-size: 10px; line-height: 1.3; }
 .wallboard-icon { position: relative; flex: 0 0 auto; width: 17px; height: 17px; color: var(--wall-a); }
 .wallboard-icon::before, .wallboard-icon::after { position: absolute; content: ""; }
 .wallboard-icon.is-host::before { inset: 1px 0 4px; border: 1.5px solid currentColor; border-radius: 3px; }

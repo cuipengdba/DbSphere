@@ -21,8 +21,50 @@
     ['PgBouncer 排队', '关联连接池 · 客户端', [['poolWaiting', '排队']]],
     ['容器文件缓存', '数据库容器 · MiB', [['activeFile', 'Active file'], ['inactiveFile', 'Inactive file']]]
   ];
-  const mebi = new Set(['diskReadBps', 'diskWriteBps', 'networkReceiveBps', 'networkTransmitBps', 'lag', 'activeFile', 'inactiveFile']);
-  const statuses = { ok: '正常', stale: '陈旧', error: '失联', pending: '待首采', degraded: '部分缺采' };
+  const engineLabels = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'};
+  const nativeCharts = {
+    mysql: [
+      ['客户端连接', 'MySQL 连接状态 · 个', [['mysqlClients','连接'],['mysqlRunning','活动']]],
+      ['InnoDB 锁等待', 'performance_schema · 组', [['mysqlWaits','阻塞']]],
+      ['复制通道', '可见入站复制通道 · 个', [['mysqlChannels','通道']]]
+    ],
+    dm8: [
+      ['会话', 'V$SESSIONS · 个', [['dm8Sessions','会话'],['dm8Active','活动']]],
+      ['事务与锁等待', 'V$TRX / V$TRXWAIT · 个', [['dm8Transactions','事务'],['dm8Waits','等待']]],
+      ['数据文件容量', '可见数据文件 · MiB', [['dm8Allocated','已分配'],['dm8Used','已使用']]]
+    ],
+    kingbase: [
+      ['会话', 'sys_stat_activity · 个', [['kingbaseSessions','会话'],['kingbaseActive','活动']]],
+      ['事务与锁等待', 'sys_stat_activity / sys_locks · 个', [['kingbaseTransactions','事务'],['kingbaseWaits','等待']]],
+      ['数据库容量', 'sys_database_size · MiB', [['kingbaseSize','容量']]],
+      ['复制回放差距', 'sys_stat_replication · MiB', [['kingbaseLag','回放差距']]]
+    ],
+    redis: [
+      ['每秒操作', 'INFO stats · OPS', [['redisOps','操作']]],
+      ['客户端连接', 'INFO clients · 个', [['redisClients','连接']]],
+      ['内存', 'INFO memory · MiB', [['redisMemory','已用']]],
+      ['窗口命中率', '相邻采样 · %', [['redisHit','命中率']], 100],
+      ['淘汰与拒绝', '相邻采样 · 次', [['redisEvicted','淘汰'],['redisRejected','拒绝']]],
+      ['Redis 观测往返', '连接与 INFO server · ms', [['redisLatency','耗时']]]
+    ],
+    'redis-cluster': [['Redis Cluster 槽位', 'CLUSTER INFO · 个', [['redisSlots','可用'],['redisSlotsFail','故障']]]],
+    'redis-sentinel': [
+      ['Sentinel 主节点', 'SENTINEL MASTER · 状态', [['redisMaster','可用']], 1],
+      ['Sentinel 组成员', 'SENTINEL MASTER · 个', [['redisPeers','其他 Sentinel'],['redisReplicas','副本']]],
+      ['Redis 观测往返', '连接与 INFO server · ms', [['redisLatency','耗时']]]
+    ],
+    etcd: [
+      ['Leader 可见状态', 'etcd_server_has_leader · 状态', [['etcdLeader','有 Leader']], 1],
+      ['提案积压', 'etcd_server_proposals_pending · 个', [['etcdPending','提案']]],
+      ['后端容量与配额', 'etcd 后端 · MiB', [['etcdSize','容量'],['etcdQuota','配额']]],
+      ['WAL fsync', '相邻直方图 · ms', [['etcdWAL','平均'],['etcdWALP95','P95 上界']]],
+      ['后端提交', '相邻直方图 · ms', [['etcdCommit','平均'],['etcdCommitP95','P95 上界']]],
+      ['API Server → etcd', 'Kubernetes /metrics · ms', [['etcdAPI','平均'],['etcdAPIP95','P95 上界']]]
+    ]
+  };
+  const mebi = new Set(['diskReadBps','diskWriteBps','networkReceiveBps','networkTransmitBps','lag','activeFile','inactiveFile',
+    'dm8Allocated','dm8Used','kingbaseSize','kingbaseLag','redisMemory','etcdSize','etcdQuota']);
+  const statuses = { ok: '正常', stale: '陈旧', error: '采集失败', pending: '待首采', degraded: '部分缺采' };
   const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例', leader:'Leader', follower:'Follower', 'no-leader':'暂无 Leader' };
   const boardStates = new Set(['affected', 'missing', 'maintenance', 'recovered', 'healthy']);
   const baselineModes = new Set(['previous', 'day', 'week']);
@@ -34,7 +76,7 @@
   const metric = (key, raw) => !finite(raw) ? null : mebi.has(key) ? raw / 1048576 : raw;
   const countLabel = v => finite(v) ? number.format(v) : '—';
   const id = v => uuid.test(v || '') ? v : '';
-  const currentState = () => ({ organization: '', environment: '', cluster: '', state: '', window: 60, page: 0,
+  const currentState = () => ({ organization: '', environment: '', cluster: '', engine: '', state: '', window: 60, page: 0,
     asset: '', event: '', cursor: null, fixed: null, layout: 'cluster', metrics: 'all', compare: '', change: '' });
   const historyPath = asset => '/api/assets/' + asset + '/wallboard-history';
 
@@ -77,46 +119,57 @@
       source: get('chart-source'), scale: get('chart-scale')
     };
 
-    const charts = chartSpecs.map(([title, source, series, maximum], index) => {
-      const card = node('section', 'wallboard-chart');
-      card.dataset.group = index <= 3 || index === chartSpecs.length - 1 ? 'infra' : 'pg';
-      const caption = node('header', 'wallboard-chart-title');
-      const info = node('div');
-      info.append(node('h3', '', title), node('span', 'wallboard-chart-source', source));
-      const values = node('div', 'wallboard-chart-values');
-      caption.append(info, values);
-      const plot = node('button', 'wallboard-plot');
-      plot.type = 'button';
-      plot.setAttribute('aria-label', '放大' + title);
-      plot.setAttribute('aria-haspopup', 'dialog');
-      const canvas = node('canvas');
-      canvas.setAttribute('aria-hidden', 'true');
-      const empty = node('span', 'wallboard-chart-empty');
-      const axis = node('div', 'wallboard-axis');
-      axis.setAttribute('aria-hidden', 'true');
-      const start = node('span'), end = node('span');
-      axis.append(start, end);
-      const expand = node('span', 'wallboard-expand-icon', '⤢');
-      expand.setAttribute('aria-hidden', 'true');
-      plot.append(canvas, empty, expand);
-      card.append(caption, plot, axis);
-      get('charts').append(card);
-      plot.addEventListener('click', () => {
-        get('chart-heading').textContent = title;
-        largeChart.source.textContent = source;
-        largeChart.source.removeAttribute('title');
-        Object.assign(largeChart, { series, maximum });
-        chartDialog.showModal();
-        drawAll();
+    let charts = [], chartProfile = '';
+    function configureCharts(asset) {
+      const engine = asset?.engine || selection.engine || 'postgres';
+      const profile = engine === 'redis' && ['cluster','sentinel'].includes(asset?.engineMetrics?.mode) ?
+        'redis-' + asset.engineMetrics.mode : engine;
+      if (profile === chartProfile) return;
+      chartProfile = profile;
+      if (chartDialog.open) chartDialog.close();
+      get('charts').replaceChildren();
+      const specs = profile === 'redis-cluster' ? [...nativeCharts.redis,...nativeCharts[profile]] : nativeCharts[profile] || chartSpecs;
+      charts = specs.map(([title, source, series, maximum], index) => {
+        const card = node('section', 'wallboard-chart');
+        card.dataset.group = specs === chartSpecs && (index <= 3 || index === specs.length - 1) ? 'infra' : 'pg';
+        const caption = node('header', 'wallboard-chart-title');
+        const info = node('div');
+        info.append(node('h3', '', title), node('span', 'wallboard-chart-source', source));
+        const values = node('div', 'wallboard-chart-values');
+        caption.append(info, values);
+        const plot = node('button', 'wallboard-plot');
+        plot.type = 'button';
+        plot.setAttribute('aria-label', '放大' + title);
+        plot.setAttribute('aria-haspopup', 'dialog');
+        const canvas = node('canvas');
+        canvas.setAttribute('aria-hidden', 'true');
+        const empty = node('span', 'wallboard-chart-empty');
+        const axis = node('div', 'wallboard-axis');
+        axis.setAttribute('aria-hidden', 'true');
+        const start = node('span'), end = node('span');
+        axis.append(start, end);
+        const expand = node('span', 'wallboard-expand-icon', '⤢');
+        expand.setAttribute('aria-hidden', 'true');
+        plot.append(canvas, empty, expand);
+        card.append(caption, plot, axis);
+        get('charts').append(card);
+        plot.addEventListener('click', () => {
+          get('chart-heading').textContent = title;
+          largeChart.source.textContent = source;
+          largeChart.source.removeAttribute('title');
+          Object.assign(largeChart, { series, maximum });
+          chartDialog.showModal();
+          drawAll();
+        });
+        plot.addEventListener('keydown', ev => {
+          if (ev.key === 'Escape' && selection.cursor != null) {
+            ev.preventDefault();
+            setCursor(null);
+          } else moveCursor(ev);
+        });
+        return { card, canvas, values, empty, start, end, source: info.lastChild, series, maximum };
       });
-      plot.addEventListener('keydown', ev => {
-        if (ev.key === 'Escape' && selection.cursor != null) {
-          ev.preventDefault();
-          setCursor(null);
-        } else moveCursor(ev);
-      });
-      return { card, canvas, values, empty, start, end, source: info.lastChild, series, maximum };
-    });
+    }
 
     get('chart-close').addEventListener('click', () => chartDialog.close());
     largePlot.addEventListener('keydown', moveCursor);
@@ -130,12 +183,24 @@
     const resize = new ResizeObserver(() => { if (active) drawAll(); });
     resize.observe(get('charts'));
     resize.observe(largePlot);
-    const theme = new MutationObserver(() => { if (active) drawAll(); });
+    const themeButton = get('theme-toggle');
+    function syncTheme() {
+      themeButton.textContent = document.documentElement.dataset.theme === 'dark' ? '浅色主题' : '深色主题';
+      if (active) drawAll();
+    }
+    themeButton.addEventListener('click', () => {
+      const select = document.getElementById('theme-select');
+      select.value = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      select.dispatchEvent(new Event('change'));
+    });
+    const theme = new MutationObserver(syncTheme);
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    syncTheme();
 
     function scope() {
       const params = new URLSearchParams();
       for (const key of Object.keys(scopeFields)) if (selection[key]) params.set(key, selection[key]);
+      if (selection.engine) params.set('engine', selection.engine);
       if (selection.state) params.set('state', selection.state);
       return params;
     }
@@ -238,6 +303,7 @@
       }
       const next = currentState();
       for (const [key, limit] of Object.entries(scopeFields)) next[key] = (params.get(key) || '').slice(0, limit);
+      if (Object.hasOwn(engineLabels, params.get('engine'))) next.engine = params.get('engine');
       if (boardStates.has(params.get('state'))) next.state = params.get('state');
       const window = Number(params.get('window'));
       if (windows.includes(window)) next.window = window;
@@ -533,12 +599,13 @@
         const region = node('section', 'wallboard-cluster');
         const first = group[0];
         region.append(node('h3', '', first.cluster || first.name), node('small', '',
-          [first.organization, first.environment, group.length + ' 个实例'].filter(Boolean).join(' · ')));
+          [engineLabels[first.engine], first.organization, first.environment, group.length + ' 个实例'].filter(Boolean).join(' · ')));
         const grid = node('div', 'wallboard-cluster-grid');
         for (const asset of group) {
           const state = matrixState(asset);
           const card = node('div', 'wallboard-tile');
           card.dataset.state = state;
+          card.dataset.engine = asset.engine;
           if (renderedHealth.has(asset.id) && renderedHealth.get(asset.id) !== state) card.dataset.transition = 'true';
           renderedHealth.set(asset.id, state);
           const button = node('button', 'wallboard-database');
@@ -546,7 +613,8 @@
           button.dataset.asset = asset.id;
           button.setAttribute('aria-pressed', String(asset.id === selection.asset));
           const text = node('span', 'wallboard-database-text');
-          const reason = state === 'missing' ? statuses[asset.freshness] || '缺采' : labels[state];
+          const reason = asset.unavailable ? '端点失联' : asset.freshness === 'error' ? '采集失败' :
+            state === 'missing' ? statuses[asset.freshness] || '缺采' : labels[state];
           text.append(node('strong', '', asset.name), node('span', '',
             [reason, roles[asset.role], asset.collectedAt ? '采样 ' + short(asset.collectedAt) : '待首采'].filter(Boolean).join(' · ')));
           button.append(makeIcon('database'), text);
@@ -656,6 +724,7 @@
         const range = currentRange && currentRange.to - currentRange.from <= 360 * minute ? currentRange : null;
         const query = new URLSearchParams(route(true, asset.id, range).split('?')[1]);
         query.delete('page');
+        if (asset.engine) query.set('engine', asset.engine);
         if (!range) query.set('window', '360');
         live.href = '#live?' + query;
       }
@@ -668,15 +737,68 @@
       }
     }
 
+    const engineCards = new Map([['', '全部引擎'], ...Object.entries(engineLabels)].map(([engine, label]) => {
+      const card = node('button', 'wallboard-engine');
+      card.type = 'button';
+      card.dataset.engine = engine;
+      card.setAttribute('aria-label', label);
+      const title = node('span', 'wallboard-engine-title');
+      const count = node('strong');
+      title.append(makeIcon('database'), node('span', '', label), count);
+      const meter = node('span', 'wallboard-engine-meter');
+      const bars = ['fresh', 'missing', 'failed'].map(key => {
+        const bar = node('span');
+        bar.dataset.segment = key;
+        return bar;
+      });
+      meter.append(...bars);
+      meter.setAttribute('aria-hidden', 'true');
+      const summary = node('span', 'wallboard-engine-summary');
+      card.append(title, meter, summary);
+      card.addEventListener('click', () => {
+        const next = selection.engine === engine ? '' : engine;
+        if (next === selection.engine) return;
+        Object.assign(selection, { engine: next, cluster: '', page: 0, asset: '', event: '', cursor: null });
+        saveRoute();
+        refreshSelection();
+      });
+      get('engines').append(card);
+      return [engine,{card,count,bars,summary}];
+    }));
+
+    function renderEngines() {
+      const counts = new Map((snapshot?.engines || []).map(item => [item.engine,item]));
+      const total = {total:0,fresh:0,missing:0,failed:0,unavailable:0,affected:0};
+      for (const count of counts.values()) {
+        for (const key of Object.keys(total)) total[key] += count[key] || 0;
+      }
+      counts.set('',total);
+      for (const [engine, info] of engineCards) {
+        const row = counts.get(engine);
+        info.card.hidden = !!engine && !row && selection.engine !== engine;
+        info.card.setAttribute('aria-pressed', String(selection.engine === engine));
+        info.count.textContent = countLabel(snapshot && row?.total);
+        info.summary.textContent = !snapshot ? '等待采样' : row?.total ?
+          `${row.fresh} 正常 · ${row.missing} 缺采 · ${row.unavailable} 失联 · ${row.affected} 受影响` : '当前范围无实例';
+        for (const bar of info.bars) {
+          bar.style.width = row?.total ? ((row[bar.dataset.segment] || 0) / row.total * 100) + '%' : '0%';
+        }
+      }
+    }
+
     function render() {
       const assets = snapshot?.assets || [];
+      const selected = assets.find(asset => asset.id === selection.asset);
+      configureCharts(selected);
       const options = snapshot?.filters || [];
       const sorted = entries => [...new Map(entries)].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'));
       const orgOptions = options.filter(item => !selection.organization || item.organizationId === selection.organization);
       const envOptions = orgOptions.filter(item => !selection.environment || item.environment === selection.environment);
       fillOptions('organization', [['', '全部组织'], ...sorted(options.map(item => [item.organizationId, item.organization]))]);
       fillOptions('environment', [['', '全部环境'], ...sorted(orgOptions.filter(item => item.environment).map(item => [item.environment, item.environment]))]);
-      fillOptions('cluster', [['', '全部集群'], ...sorted(envOptions.map(item => [item.clusterKey, item.cluster]))]);
+      fillOptions('cluster', [['', '全部集群'], ...sorted(envOptions.filter(item => !selection.engine || item.engine === selection.engine)
+        .map(item => [item.clusterKey, item.cluster]))]);
+      renderEngines();
       get('window').value = selection.fixed ? 'fixed' : String(selection.window);
       get('layout').value = selection.layout;
       get('metric-group').value = selection.metrics;
@@ -694,7 +816,6 @@
       get('next').disabled = selection.page + 1 >= pages;
       renderAssets(assets);
       renderEvents(snapshot?.events || []);
-      const selected = assets.find(asset => asset.id === selection.asset);
       get('focus').textContent = selected ? selected.name : '';
       renderContext();
       renderLinks();
@@ -702,7 +823,8 @@
       drawAll();
     }
 
-    const kpis = [['全部实例', 'total', 'database', ''], ['处理中事件', 'openEvents', 'incident', null],
+    const kpis = [['范围内实例', 'total', 'database', ''], ['采样正常', 'fresh', 'database', null],
+      ['端点失联', 'unavailable', 'incident', null], ['处理中事件', 'openEvents', 'incident', null],
       ['受影响实例', 'affectedCount', 'incident', 'affected'], ['已恢复 · 6 小时', 'recoveredCount', 'database', 'recovered'],
       ['陈旧或缺采', 'missingCount', 'missing', 'missing'], ['维护中实例', 'maintenanceCount', 'host', 'maintenance']];
     get('kpis').append(...kpis.map(([name, key, icon, state]) => {

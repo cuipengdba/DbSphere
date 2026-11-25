@@ -94,6 +94,9 @@ func DutyViewRoute(path string, allowed []string) (string, error) {
 	if org := source.Get("organization"); evidenceUUID.MatchString(org) {
 		q.Set("organization", org)
 	}
+	if engine := source.Get("engine"); IsLiveEngine(engine) {
+		q.Set("engine", engine)
+	}
 	canRead := func(id string) bool {
 		return evidenceUUID.MatchString(id) && (allowed == nil || slices.Contains(allowed, id))
 	}

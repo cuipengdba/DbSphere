@@ -255,6 +255,7 @@
             <select data-board="cluster" aria-label="集群"><option value="">全部集群</option></select>
             <select data-board="window" aria-label="时间范围"><option value="15">近 15 分钟</option><option value="60" selected>近 1 小时</option><option value="360">近 6 小时</option><option value="1440">近 24 小时</option><option value="fixed">固定时段</option></select>
             <button class="ghost" type="button" data-board="pause" aria-pressed="false">暂停</button>
+            <button class="ghost" type="button" data-board="theme-toggle">浅色主题</button>
             <button class="ghost" type="button" data-board="fullscreen" aria-pressed="false">全屏</button>
           </div>
         </header>
@@ -278,6 +279,7 @@
           <small data-board="view-status" role="status"></small>
         </div>
         <div class="wallboard-kpis" data-board="kpis"></div>
+        <div class="wallboard-engine-strip" data-board="engines" role="group" aria-label="引擎覆盖与健康"></div>
         <div class="wallboard-overview">
           <section class="wallboard-panel">
             <header class="wallboard-panel-heading"><h2>集群与实例</h2><div class="wallboard-page"><select data-board="layout" aria-label="资产布局"><option value="cluster">集群矩阵</option><option value="host">主机分组</option></select><button class="ghost" type="button" data-board="prev" aria-label="上一页资产">‹</button><span data-board="page"></span><button class="ghost" type="button" data-board="next" aria-label="下一页资产">›</button></div></header>
