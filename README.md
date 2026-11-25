@@ -1,87 +1,59 @@
 # DbSphere
 
-**全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
+**全域数据库智能运维管理平台**
 
-[![当前版本 v2.25.0](https://img.shields.io/badge/当前版本-v2.25.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v2.25.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
-DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。监控目标支持 PostgreSQL 14–19，长期监控存储使用独立 PostgreSQL 18。
+DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看数据库、Linux 和 Kubernetes 指标，从一张异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
+
+**[快速开始](docs/QUICK_START.md)** · [下载一键离线包](https://github.com/cuipengdba/DbSphere/releases/latest) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+
+## 界面预览
+
+以下为 v2.25.0 在隔离测试环境中的实际界面，使用演示数据。
+
+### 资产监控大屏
+
+按组织、环境或集群查看实例、主机、优先事件和 12 张关键趋势图。点击图片可看原尺寸。
+
+[![资产监控大屏和多指标趋势](docs/images/wallboard.png)](docs/images/wallboard.png)
+
+| 放大趋势 | 同一事件查看日志 |
+| --- | --- |
+| 放大后保留当前实例、时间窗和同步游标。 | 已采纳的慢 SQL 与原始记录保留在当前事件中。 |
+| [![CPU 与内存趋势放大窗口](docs/images/chart-zoom.png)](docs/images/chart-zoom.png) | [![事件内的同窗日志与原文入口](docs/images/incident-evidence.png)](docs/images/incident-evidence.png) |
+
+### 同一事件的根因与证据
+
+按故障阶段核对数据库、应用和基础设施信号。可从证据时间线打开原始采样或日志，再回到同一个事件记录处置结果。
+
+[![问题事件的全链路证据图](docs/images/evidence-graph.png)](docs/images/evidence-graph.png)
 
 ## 功能说明
 
 | 领域 | 功能 |
-|---|---|
-| 监控工作台 | 集群首屏显示故障成员、主备角色、异常起点及可用性时间带。连接压力、锁等待、WAL 和复制曲线共用游标，可查看当时的原始采样。分享地址保留成员和时间窗。实例等待分析按类型、事件和 Query ID 下钻，并可核对锁链、SQL 增量排名、慢日志及计划证据。 |
-| 实时观测大盘 | 支持全屏值班、夜览模式和组织、环境、集群、引擎筛选。首屏按严重度显示待处理事件和可用性、连接池、活跃会话、复制及存储压力。等待堆叠、前段对比、故障及变更标记共享游标，支持暂停刷新、进入同一事件和查看依赖原始采样。 |
-| 增强可观测性 | 增强离线包内置 Prometheus 和 Grafana OSS，自动发现已登记的 Linux Exporter。内置环境总览、PostgreSQL 集群、等待与 SQL、主备复制、Linux/Kubernetes 和 MySQL 8.4 专题。平台管理员登录 DbSphere 后可在同一工作区直接查看只读专题，保留资产和时间窗。原生监控、根因证据和长期数据继续使用 PostgreSQL 18。 |
-| 基础设施观测 | Linux 主机、Docker 容器和 Kubernetes 工作负载的 CPU、内存、网络、磁盘吞吐、IOPS、I/O PSI 与文件缓存。文件页缓存专题可单独查看或并排比较容器的 `active_file` 和 `inactive_file`。节点、容器和 PVC 按已观测身份关联同窗 PostgreSQL 等待、原始采样和 Grafana 面板。[部署与指标口径](docs/CONTAINER_STORAGE.md) |
-| 首次初始化 | 全新安装从本机完成管理员首登改密，也可在安装前预设管理员密码。旧版升级沿用已有账号、凭据与事件。 |
-| 资产纳管 | 浏览器登记与管理 Linux、Kubernetes 及托管 PostgreSQL。支持 YAML、CSV 和集群清单批量预览、导入、使用凭据引用导出及分批连接权限检查。重试和重复导入保留资产 ID。可选接入 node_exporter、Kubernetes 只读 API、PgBouncer、Patroni、备份信息和应用 Trace。 |
-| 纳管体检 | 对照本次与上一次采样的数据库连接、TLS、只读状态、统计权限及主机和 K8S 资源覆盖。管理员可从资产列表批量复检并按处理原因查看结果。[体检口径](docs/ASSET_READINESS.md) |
-| 事件调查工作台 | 按同一时间窗查看故障前、触发和恢复证据，直接打开阻塞会话原始采样，联动数据库、连接池、应用、环境趋势及 Grafana。[事件调查](docs/INCIDENT_INVESTIGATION.md) |
-| 托管数据库采集 | 通过统一 Go 采集契约记录 PostgreSQL 主库、只读副本、TLS 证书与主机名校验、会话只读状态及权限缺口。支持配置独立 CA。[托管 PostgreSQL 接入](docs/MANAGED_POSTGRESQL.md) |
-| MySQL 8.4 只读预览 | 浏览器纳管与定时采集，展示连接、InnoDB 锁等待、Top SQL 指纹和基础复制状态。阻塞线程关系、原始样本和恢复证据归入同一事件 ID。[MySQL 预览接入](docs/MYSQL_PREVIEW.md) |
-| 连续监控 | 采集连接、会话、等待、锁链、长事务、复制/WAL、检查点、autovacuum、表与索引容量；从长期样本估计数据库容量增长，并用约 24 小时的 PG18 历史样本触发无模型增长速率告警。可结合 Linux CPU/内存/磁盘、K8S Pod/Node/PVC/事件、连接池状态和 Patroni 主备拓扑。缺失或无权限的数据明确标为未知。管理员可查看当前 Go 进程的自动采集批次、耗时和错误。 |
-| 瀚高数据库 | 支持瀚高安全版 4.5.9（兼容内核 12.7），沿用 PostgreSQL 资产接入和只读采集，提供等待、阻塞链、SQL 指纹和历史样本。[瀚高接入指南](docs/HIGHGO.md) |
-| 日志分析 | 按项目、环境、实例和批次导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。提供 SQL 延迟、应用负载、锁阻塞与运维活动全景报告，支持轮转去重、原文回看、跨批次优化对比、项目健康趋势、事件根因调查、断点续传、导入任务中心、同一事件的日志采纳、SQL 延迟分布下钻、调优复测、归档保留影响预览和 Zstd 归档管理。原始文件以 Zstd 分块保存，结构化分析使用 PostgreSQL 18。[日志分析操作说明](docs/LOG_ANALYSIS.md) |
-| 图形可观测性 | 登录进入资产监控大屏，按组织、环境和集群查看主机、数据库、优先事件和十二张趋势图。监控工作台支持最多五实例同窗比较、30 天小时汇总和原始采样下钻。事件内的关系图和时间轴关联应用 Trace、数据库、复制、连接池和环境证据。控制台默认深色，支持记忆用户的浅色主题选择。 |
-| 问题与根因 | 采集错误、阈值告警和恢复归入事件；事件详情展示时间线、原始脱敏证据、跨层关联及可解释的根因候选，并记录人工确认或驳回。应用 Span、SQL 指纹、锁阻塞和基础设施信号可关联到同一事件 ID；唯一资产匹配时还可沿服务 → PgBouncer → PG 等待 PID → 阻塞会话定位，PgBouncer 的应用业务地址可与只读统计管理地址分开配置。可选 Query ID 唯一匹配时从请求下钻到 SQL；K8S 应用 Pod UID 经只读 API 核对后，可在事件图连接应用 Pod、Node 与 PVC 引用及单独核对的 PVC 阶段。按服务区分同期 Trace 与故障线索，显示可选采样声明与时间异常，证据不足时显示“未定位”。可导出同一事件 ID 的脱敏复盘报告。 |
-| 告警与值班 | 受控规则、阈值、持续时间和严重度；告警去重、维护静默、确认、恢复、升级与持久化 Webhook/邮件投递。采集器失联、权限错误和样本陈旧有独立状态，不因指标缺失推断健康。 |
-| 无模型风险预警 | 使用周期基线和计划变更识别连接、容量和 WAL 趋势，并提示同类故障重复出现。支持影子复核、可选通知和历史回测，沿用原事件 ID 及采样证据。 |
-| 事件证据助手 | 可选本地或 HTTPS 模型逐条引用原事件证据，给出候选解释、反证与核查建议。组织授权、输入上限和审计适用于每次审核；关闭模型时可继续用规则核查。 |
-| 运维系统对接 | 提供组织级版本化资产和事件 API、签名 Webhook、接收端限流重试与 Prometheus 平台指标。外部告警和工单回执与同一事件 ID 及证据时间线关联。 |
-| 巡检与报告 | PostgreSQL、Linux、Kubernetes 和备份模板；手动与定时巡检、阈值版本、异常与未知项、历史差异、Markdown/HTML 报告及关联事件 ID。 |
-| 组织与审计 | 支持组织级资产和账号隔离，按项目团队授予资产访问范围。事件分享、时序、原始证据和 AI 分析沿用资产授权。支持 OIDC 与本地账号、按组织轮换凭据和撤销会话，并可导出签名审计进行离线核验。 |
-| 受控运维作业 | 在事件内预检、预演、申请、独立审批和执行一次只读采样或巡检。支持幂等键、审批有效期、执行期限和结果回写。管理员可配置隔离恢复核验或试点单表 ANALYZE，使用单独的目标数据库账号。 |
-| 平台高可用 | 支持一键离线启动两个控制台和采集副本。采集任务共享 PG18 租约，维护任务由选出的主节点运行。副本切换后可沿用会话和事件链接。存储不可用时显示状态，恢复后自动刷新。 |
-| SQL 性能 | Top SQL 指纹与趋势、退化线索、慢日志和执行计划安全导入。采集能力表显示系统视图来源、扩展安装状态与当前权限，采集仅保存 SQL 指纹与统计。 |
-| 复制与服务 | 核对主备、回放积压和历史切换。独立探测 PgBouncer、HAProxy 和 Kubernetes Service 的实际入口，对照实际后端、期望角色、连接池队列、Service 端口与 EndpointSlice。告警可回查原始采样和恢复证据。 |
-| 变更时间线 | 在同一实例时间窗查看配置、容器镜像、路由和拓扑的实测变化，登记发布、维护及其他运维变更。区分发生、首次观测和入库时间，关联前后采样，并通过分享链接定位变更或返回原事件。 |
-| 跨实例影响 | 同一代理或 Kubernetes Service 的共同入口故障可关联多个实例事件。按主子事件核对恢复范围、原始探测证据及同窗失败服务，支持人工关联、拆分及查看历史。 |
-| PostgreSQL 高可用 | 查看 Patroni 成员、DCS 最近可见时间、心跳、同步资格和切换时间线。独立探测主、备库入口，并在同一事件中对照切换前后的角色、后端及回放差距。 |
-| 逻辑复制 | 按纳管数据库查看 publication、subscription 和逻辑槽。独立显示 WAL 保留、消费者确认位置、订阅同步和应用位置。积压告警可定位到原事件和具体槽的采样。 |
-| 根因规则工作台 | 维护支持引用下限与首次观测条件，记录每次规则发布。按事件开始时版本与当前版本回放同一组证据，查看候选、反证、缺失项及恢复后复盘。 |
-| 容量与恢复 | 按数据库、Schema、表、索引和分区核对容量、增长与维护压力。接入 pgBackRest，核对恢复链与 WAL 逐段缺口。分别显示业务库 PITR 和监控 PG18 隔离还原的实测 RPO、RTO 与验收证据。 |
-| 对象维护 | 核对表的主分叉死元组估算、XID 与 MultiXact 冻结、有效维护阈值、分区覆盖和索引状态。按同一对象和采样证据对照 Vacuum、Analyze 前后变化。 |
-| Linux 与 Kubernetes | 主机指标可下钻块设备、网卡和文件系统。Kubernetes 核对对象身份、就绪和卷绑定历史。CloudNativePG 可预览纳管候选，核对主备角色、服务入口、切换与备份状态。 |
-| 数据与部署 | 独立 PostgreSQL 18 保存长期监控数据与采集队列，采集进程重启可接续未完成任务。B/S 架构，提供容器化一键部署、离线部署和随包 PG18 备份。目标机无需安装 Node.js 或 Go 编译器。 |
-| 历史数据分层 | 按组织和指标设置原始保留周期与小时汇总周期。资产历史趋势支持 90 天查询，并显示原始、归档和混合来源。事件或巡检引用的原始采样可继续下钻。 |
-| AI 增强 | Go 版可选接入兼容 Chat Completions 的本地或 HTTPS 模型，管理员可在事件页请求脱敏证据摘要或围绕同一事件提问；回答需引用实际证据 ID 并说明不确定性。可显式开启严重告警后的自动摘要，每日预算和同事件审计受 PG18 约束。提前预测故障的 AI 预警尚未验证。**不接模型时**，采集、告警、巡检和规则分析独立可用；模型不执行生产变更。 |
+| --- | --- |
+| 资产纳管 | 支持 PostgreSQL 14–19、瀚高安全版 4.5.9，以及 MySQL 8.4 只读预览。支持 Linux、Docker、Kubernetes 和托管数据库，提供批量清单预览与导入、授权资产导出、连接及权限体检。 |
+| 监控工作台 | 从集群下钻到实例、数据库和 SQL。对照连接、事务、等待、锁、WAL、复制、检查点和容量，支持同窗多实例对比、短时等待采样、历史阻塞树回放和原始样本。 |
+| 监控大屏 | 按资产查看 12 张可放大趋势图。支持同步游标、暂停刷新、固定时段、全屏、深浅主题和异常跳转。实时观测可对比前一时段。 |
+| 基础设施 | 监控 Linux 主机资源、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。磁盘 I/O、IOPS、压力和文件缓存为独立专题，支持并排比较容器的 `active_file` 和 `inactive_file`。 |
+| SQL 与对象 | 分析 Top SQL 指纹、锁链、慢日志和执行计划，核对对象大小、死元组、冻结、Vacuum、Analyze、分区与索引状态。 |
+| 主备与服务入口 | 查看 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的可用信号，分析逻辑复制槽、回放延迟、积压和切换。核对入口探测与实际后端。 |
+| 事件与根因 | 以同一个事件 ID 关联应用 Trace、PG 会话、连接池、主机、K8S 和原始日志。对照故障前、触发和恢复证据。支持规则版本回放、人工复核、跨实例影响、事件分享、交接和报告。 |
+| 日志分析 | 导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。支持项目和批次、断点续传、应用负载矩阵、延迟分布、原文回链、跨批次对比、调优复测、Zstd 归档及保留策略。 |
+| 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递、风险回测、手动及定时巡检、变更时间线和 Markdown／HTML 报告。 |
+| 权限与作业 | 按组织、项目团队和资产划分访问权限，支持本地账号、OIDC、凭据轮换和签名审计。受控采样、巡检或已配置作业支持预演、独立审批和结果回写。 |
+| 增强可观测性 | 增强包内置 Prometheus 与 Grafana OSS，提供环境、PostgreSQL 集群、等待、SQL、复制、Linux、Kubernetes 和 MySQL 专题。平台管理员在 DbSphere 内打开面板，沿用当前资产和时段。 |
+| 可选 AI | 可接入本地或 HTTPS 模型，基于同一事件的脱敏证据问答。采集、告警、巡检和规则根因分析可独立运行。 |
+| 存储与交付 | Go 后端内嵌静态前端，独立 PostgreSQL 18 保存长期指标、证据和采集队列。支持指标分层留存、监控库备份、平台副本及共享采集租约。提供 Linux amd64／arm64 标准和增强一键离线包、静态程序和 systemd 安装包。 |
 
-### 一个问题的全链路定位
+有数据源和权限时才显示对应信号。缺采和证据不足会显示在页面中，便于继续核对。[查看数据库与部署支持范围](docs/SUPPORT_MATRIX.md)
 
-1. 从异常告警或资产进入问题事件，先确认影响范围与事件 ID。
-2. 按时间查看应用 Trace、PostgreSQL 会话/等待/SQL、PgBouncer、Patroni、Linux 与 Kubernetes 的同窗证据。
-3. 按故障阶段与证据判断筛选。对照故障前、触发及恢复快照，区分直接证据、同窗线索、标识不符和证据不足。
-4. 记录人工结论与处置，再以新样本和恢复证据关闭同一个事件。
+## 使用手册
 
-## 当前交付状态
+- [从安装到首次采集](docs/QUICK_START.md) · [离线部署与升级](docs/OFFLINE_DEPLOYMENT.md)
+- [监控工作台](docs/MONITORING_WORKSPACE.md) · [事件调查](docs/INCIDENT_INVESTIGATION.md) · [日志分析](docs/LOG_ANALYSIS.md)
+- [Linux 与容器存储](docs/CONTAINER_STORAGE.md) · [Kubernetes 接入](docs/OFFLINE_DEPLOYMENT.md#kubernetes-接入) · [托管 PostgreSQL](docs/MANAGED_POSTGRESQL.md)
+- [长期指标留存](docs/HISTORY_STORAGE.md) · [运维系统接口](docs/OPERATIONS_INTEGRATION.md) · [事件证据助手](docs/AI_EVIDENCE_REVIEW.md)
 
-当前正式版 **V2.25.0** 为 Linux amd64 和 arm64 提供 Go 静态服务端、标准与增强一键离线容器包和原生 systemd 安装包。原生安装可连接已有独立 PostgreSQL 18，预检覆盖数据库版本、写入状态和架构迁移权限。资产大屏的 12 张趋势图可点击放大，并保留当前实例、时段和同步游标。资产大屏可对照主机资源、I/O、PG 连接、事务、SQL 延迟、锁等待、复制、连接池及容器文件缓存。打开异常能继续调查同一个事件，查看根因证据并返回同一资产和时间窗。监控工作台支持集群、实例、数据库和 SQL 层级下钻。管理员可短时高频采样并回放历史阻塞树。增强包提供站内 Grafana 专题，可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v2.25.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [连接阶段与等待](docs/CONNECTION_STAGES.md) · [规模采集与历史验收](docs/COLLECTOR_LOAD_ACCEPTANCE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
-
-慢日志支持分批增量导入和重复记录检测。SQL 诊断按纳管数据库和 Query ID 回放计划，呈现扫描、连接方式、估算偏差与临时 I/O 的前后对照。[SQL 证据与前后计划](docs/MONITORING_WORKSPACE.md#sql-证据与前后计划)
-
-接入 OpenTelemetry 后，同一事件可查看跨服务请求、PgBouncer 路由和 PostgreSQL 后端 PID 的对应证据，展示采样声明、缺失的父 Span 和时间异常。[全链路故障回放](docs/MONITORING_WORKSPACE.md#全链路故障回放)
-
-## 部署与接入
-
-- [事件证据助手与本地模型](docs/AI_EVIDENCE_REVIEW.md)
-- [无模型风险预警与历史回测](docs/RISK_FORECAST.md)
-- [长期指标留存与容量验收](docs/HISTORY_STORAGE.md)
-- [外部运维接口与 Prometheus](docs/OPERATIONS_INTEGRATION.md)
-- [Go 一键部署与离线包](docs/OFFLINE_DEPLOYMENT.md)：Go 静态程序、容器离线包及当前验收范围。
-- [PG18 存储](docs/STORAGE_V0.3.md)：长期数据、保留策略与备份恢复。
-- [Kubernetes 接入](docs/DEPLOYMENT_V0.2.md)：只读 ServiceAccount、Namespace 与指标权限。
-- [Patroni 接入与验收](docs/PATRONI_ACCEPTANCE.md)：只读拓扑、告警、同事件根因候选及本机故障演练。
-- [告警通知](docs/NOTIFICATIONS_V0.3.md)、[巡检报告](docs/INSPECTIONS_V0.4.md)、[SQL 性能](docs/SQL_PERFORMANCE_V0.5.md)：各功能的配置与使用。
-- [可选 AI 诊断](docs/AI_INTEGRATION.md)：Go 版接入方式、脱敏范围与故障回退。
-- [事件工单与审批](docs/V0.9_RELEASE_GATE.md)：双角色只读采样、审批期限、审计和限制。
-
-纳管目标建议使用专用 `pg_monitor` 账号，默认只读。仅有 PostgreSQL 连接串时只提供数据库侧观测；主机、K8S、连接池、备份和应用链路需要相应的数据源。对外访问应使用 HTTPS 入口。
-
-## 项目文档
-
-- [功能与产品边界](docs/PRODUCT_DESIGN.md)
-- [V0.1–V1.0 功能规划](docs/ROADMAP.md)
-- [开发任务归档](docs/DEVELOPMENT_TASKS.md)
-
-DbSphere 是独立自主研发的开源项目，采用 [Apache License 2.0](LICENSE)。欢迎通过 [GitHub Issues](https://github.com/cuipengdba/DbSphere/issues) 提交 PostgreSQL 故障场景与需求。
+DbSphere 是独立开发的开源项目，采用 [Apache License 2.0](LICENSE)。欢迎提交 [问题反馈](https://github.com/cuipengdba/DbSphere/issues)。
