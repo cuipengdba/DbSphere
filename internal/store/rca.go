@@ -244,6 +244,26 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if item.Kind == kingbaseLockGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {
+				wait := object(list(payload["waits"])[0])
+				title := "已观测到金仓 V9 锁阻塞"
+				holder, waiter := stringValue(wait["blockingSession"]), stringValue(wait["waitingSession"])
+				if holder == "0" {
+					title = fmt.Sprintf("预备事务持锁，阻塞金仓会话 %s", waiter)
+				} else if holder != "" && waiter != "" {
+					title = fmt.Sprintf("金仓会话 %s 持锁，阻塞会话 %s", holder, waiter)
+				}
+				supports := []string{item.ID}
+				if id := stringValue(payload["sampleId"]); id != "" {
+					supports = append(supports, "sample:"+id)
+				}
+				addCandidate("kingbase_session_lock", title, "high", supports,
+					[]string{"核对持锁事务的开始时间和提交路径"}, "金仓锁视图及阻塞会话函数确认了采样瞬间的阻塞关系。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == dm8LockGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {

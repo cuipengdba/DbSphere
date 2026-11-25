@@ -55,7 +55,7 @@ func (s *Postgres) addUnassignedWallHosts(snapshot json.RawMessage) (json.RawMes
 
 const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	SELECT a.id,a.name,a.cluster_name,a.runtime,a.environment,a.organization_id,o.name AS organization_name,
-		CASE WHEN a.runtime IN ('mysql','dm8') THEN a.runtime ELSE 'postgres' END AS engine,
+		CASE WHEN a.runtime IN ('mysql','dm8','kingbase') THEN a.runtime ELSE 'postgres' END AS engine,
 		a.role,a.k8s_cluster,a.k8s_namespace,a.k8s_pod,a.k8s_node,a.last_sample_at,a.last_status,a.linux_host,a.linux_exporter_port,
 		CASE WHEN a.last_sample_at IS NULL THEN 'pending'
 			WHEN $3::int>0 AND a.last_sample_at<=now()-make_interval(secs=>$3) THEN 'stale'
@@ -143,6 +143,12 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 		'ioPressure',m.metrics_json#>'{containerStorage,containers}'->(m.metrics_json#>>'{containerStorage,primary}')#>'{pressure,io_some_avg10}',
 		'blocked',CASE WHEN m.metrics_json#>>'{diagnostics,locks,status}'='ok'
 			THEN m.metrics_json#>'{diagnostics,locks,data,blockedSessions}' END,
+			'engineMetrics',CASE WHEN a.engine='kingbase' THEN jsonb_build_object(
+				'sessions',m.metrics_json#>'{kingbase,sessions}','active',m.metrics_json#>'{kingbase,activeSessions}',
+				'transactions',m.metrics_json#>'{kingbase,transactions}','size',m.metrics_json#>'{kingbase,databaseBytes}',
+				'waits',CASE WHEN m.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+					AND jsonb_typeof(m.metrics_json#>'{kingbase,waits}')='array' THEN jsonb_array_length(m.metrics_json#>'{kingbase,waits}') END)
+				END,
 		'linux',m.metrics_json#>'{linux,status}','k8s',m.metrics_json#>'{k8s,status}')
 		|| CASE WHEN $8 THEN jsonb_build_object('clusterKey',a.cluster_key,'recoveredAt',a.recovered_at,'maintenanceUntil',a.maintenance_until,
 			'wallHost',CASE WHEN h.host_key IS NOT NULL THEN

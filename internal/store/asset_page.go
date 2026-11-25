@@ -25,7 +25,7 @@ const assetJSON = `jsonb_build_object(
 	'id',id,'organizationId',organization_id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
 	'environment',environment,'tags',tags,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
-	'engine',CASE WHEN runtime IN ('mysql','dm8') THEN runtime ELSE 'postgresql' END,
+	'engine',CASE WHEN runtime IN ('mysql','dm8','kingbase') THEN runtime ELSE 'postgresql' END,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
 	'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 	'patroniConfigured',patroni_url_enc IS NOT NULL,
@@ -43,7 +43,7 @@ func (s *Postgres) AssetPage(ctx context.Context, query AssetPageQuery, assetIDs
 		return nil, ErrInvalidAssetPage
 	}
 	if query.Runtime != "" && query.Runtime != "all" && query.Runtime != "linux" &&
-		query.Runtime != "k8s" && query.Runtime != "managed" && query.Runtime != "mysql" && query.Runtime != "dm8" {
+		query.Runtime != "k8s" && query.Runtime != "managed" && query.Runtime != "mysql" && query.Runtime != "dm8" && query.Runtime != "kingbase" {
 		return nil, ErrInvalidAssetPage
 	}
 	var beforeTime time.Time

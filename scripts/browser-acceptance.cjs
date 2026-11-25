@@ -1151,6 +1151,44 @@ async function dm8Monitoring(page) {
   proof.push('DM8 admission, engine-specific real-time trends, lock evidence, readable source, and same-event return');
 }
 
+async function kingbaseMonitoring(page) {
+  await navigate(page, 'assets');
+  await page.locator('#asset-add').click();
+  await formField(page, 'asset-form', 'runtime').selectOption('kingbase');
+  assert.equal(await formField(page, 'asset-form', 'port').inputValue(), '54321');
+  await formField(page, 'asset-form', 'name').fill('Browser QA Kingbase');
+  await formField(page, 'asset-form', 'host').fill('127.0.0.1');
+  await formField(page, 'asset-form', 'username').fill('dbsphere_monitor');
+  await formField(page, 'asset-form', 'password').fill('dbsphere-kingbase-fixture');
+  const created = await action(page,page.locator('#asset-submit'),'POST','/api/assets',201);
+  const asset = (await created.json()).asset.id;
+  const sample = randomUUID(), event = randomUUID();
+  runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES
+    ('${sample}','${asset}',now()-interval '15 seconds','ok',
+    '{"adapter":{"engine":"kingbase","role":"primary","transport":{"readOnly":true},"signals":[{"key":"lockWaits","status":"ok"},{"key":"topSql","source":"sys_stat_statements","status":"not_configured","reason":"SQL 统计已关闭"}]},
+    "kingbase":{"version":"KingbaseES V009R001C010","mode":"pg","startedAt":"2026-01-01T00:00:00Z","sessions":2,"activeSessions":1,"transactions":2,
+    "databaseBytes":104857600,"waits":[{"waitingSession":"201","blockingSession":"202","event":"transactionid"}],"waitCategories":[{"category":"Lock","count":1}],"replication":{"connected":0}}}');
+    UPDATE assets SET last_status='ok',last_sample_at=(SELECT collected_at FROM samples WHERE id='${sample}'),version_num=90000 WHERE id='${asset}';
+    INSERT INTO event_keys(id,asset_id,started_at) SELECT '${event}',asset_id,collected_at FROM samples WHERE id='${sample}';
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+    SELECT id,asset_id,'kingbase_lock_wait','金仓 QA 锁等待','open',started_at,'kingbase_lock_wait' FROM event_keys WHERE id='${event}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT gen_random_uuid(),'${event}','kingbase_lock_wait',collected_at,
+    jsonb_build_object('sampleId',id,'waits',metrics_json#>'{kingbase,waits}') FROM samples WHERE id='${sample}';`);
+  await page.goto(origin+'/#live?engine=kingbase&asset='+asset);
+  await page.locator('[data-live=metrics]').getByRole('button',{name:'阻塞关系',exact:true}).click();
+  await page.getByRole('button',{name:'查看金仓 SQL 指纹与锁链',exact:true}).click();
+  await visible(page.locator('#detail'),'金仓锁阻塞链');
+  await visible(page.locator('#detail'),'SQL 统计已关闭');
+  await page.goto(origin+'/#incidents?event='+event);
+  await visible(page.locator('#event-detail'),'金仓会话 202 持锁，阻塞会话 201');
+  await page.locator(`#event-detail a[href="/api/assets/${asset}/samples/${sample}"]:visible`).first().click();
+  await visible(page.locator('#sample-details'),sample);
+  await page.locator('#sample-return').click();
+  await visible(page.locator('#event-detail'),event);
+  proof.push('Kingbase V9 admission, native live trends and lock chain, missing Top SQL coverage, and same-event raw sample');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -1173,6 +1211,7 @@ async function dm8Monitoring(page) {
     await dutyMatrix(page);
     await v3Investigation(page, asset);
     await dm8Monitoring(page);
+    await kingbaseMonitoring(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

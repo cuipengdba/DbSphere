@@ -113,6 +113,12 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_dm8_active_sessions", "Dameng active sessions excluding the probe session.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Active }},
 		{"asset_dm8_transactions", "Dameng active transactions excluding the probe session.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Transactions }},
 		{"asset_dm8_lock_waits_observed", "Dameng transaction lock waits in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Waits }},
+		{"asset_kingbase_sessions", "Kingbase client sessions in the monitored database.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseSessions }},
+		{"asset_kingbase_active_sessions", "Active Kingbase client sessions in the monitored database.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseActive }},
+		{"asset_kingbase_transactions", "Kingbase sessions with a transaction.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseTransactions }},
+		{"asset_kingbase_lock_pairs_observed", "Kingbase waiting and blocking session pairs in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseWaits }},
+		{"asset_kingbase_database_bytes", "Size of the monitored Kingbase database.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseSize }},
+		{"asset_kingbase_max_replay_lag_bytes", "Kingbase WAL position difference to the most delayed visible replica.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseLag }},
 	} {
 		name := "dbsphere_" + metric.name
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, metric.help, name, metric.kind)

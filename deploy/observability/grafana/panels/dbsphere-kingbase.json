@@ -1,0 +1,764 @@
+{
+  "uid": "dbsphere-kingbase",
+  "title": "DbSphere · 金仓 KingbaseES V9",
+  "description": "金仓 V9 PostgreSQL 兼容模式。通过资产查看等待关系、长事务、Top SQL 指纹与原始证据。权限不足的信号保留空值。",
+  "tags": [
+    "DbSphere",
+    "KingbaseES",
+    "金仓"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "30s",
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "返回 DbSphere 实时观测",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=live&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "icon": "external link",
+      "targetBlank": false
+    },
+    {
+      "title": "回到原事件",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+      "icon": "bolt",
+      "targetBlank": false
+    },
+    {
+      "title": "DbSphere 专题",
+      "type": "dashboards",
+      "asDropdown": true,
+      "tags": [
+        "dbsphere"
+      ],
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "organization",
+        "label": "组织 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cluster",
+        "label": "集群",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "asset",
+        "label": "资产 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "engine",
+        "label": "引擎",
+        "type": "textbox",
+        "query": "kingbase",
+        "current": {
+          "text": "kingbase",
+          "value": "kingbase"
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "event",
+        "label": "事件 ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dbsphere_context",
+        "label": "调查上下文",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "金仓 V9 实例",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(dbsphere_asset_info{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "活动会话",
+      "description": "",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_kingbase_active_sessions{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "已观测阻塞关系",
+      "description": "金仓锁视图确认的阻塞关系，每次采样最多保留 32 条。",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_kingbase_lock_pairs_observed{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 1
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "数据库容量",
+      "description": "",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_kingbase_database_bytes{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 0.85
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "会话与事务",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_kingbase_sessions{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"}",
+          "legendFormat": "{{asset_name}} 会话",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_asset_kingbase_transactions{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"}",
+          "legendFormat": "{{asset_name}} 事务",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "复制回放差距",
+      "description": "从主库读取最慢可见副本的回放位置差距。没有副本或权限不足时留空。",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_kingbase_max_replay_lag_bytes{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "已观测阻塞关系",
+      "description": "金仓锁视图确认的阻塞关系，每次采样最多保留 32 条。",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_kingbase_lock_pairs_observed{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "处理中事件",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_open_events{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"kingbase\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

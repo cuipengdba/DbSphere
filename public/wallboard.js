@@ -470,7 +470,7 @@
           button.dataset.state = asset.unavailable ? 'error' : asset.freshness;
           button.setAttribute('aria-pressed', String(asset.id === selection.asset));
           const name = node('strong', '', asset.name);
-          const role = roles[asset.role] || (asset.engine === 'mysql' ? 'MySQL' : '数据库');
+          const role = roles[asset.role] || ({mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9'}[asset.engine] || '数据库');
           const availability = asset.unavailable ? '故障' : statuses[asset.freshness] || '缺采';
           const connection = finite(asset.connections) && asset.maxConnections > 0
             ? '连接 ' + asset.connections + '/' + asset.maxConnections : '连接缺采';

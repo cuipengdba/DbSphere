@@ -15,7 +15,15 @@
     { key: 'dm8Transactions', title: '事务', unit: '', source: 'V$TRX · 窗口均值' },
     { key: 'dm8Waits', title: '已观测锁等待', unit: '', source: 'V$TRXWAIT · 窗口峰值' }
   ];
-  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8'};
+  const kingbaseMetrics = [
+    { key: 'kingbaseSessions', title: '会话', unit: '', source: 'sys_catalog.sys_stat_activity · 桶内均值' },
+    { key: 'kingbaseActive', title: '活动会话', unit: '', source: 'sys_catalog.sys_stat_activity · 桶内均值' },
+    { key: 'kingbaseTransactions', title: '事务', unit: '', source: 'sys_catalog.sys_stat_activity · 桶内均值' },
+    { key: 'kingbaseWaits', title: '阻塞关系', unit: '', source: 'sys_catalog.sys_locks · 桶内峰值' },
+    { key: 'kingbaseSize', title: '数据库容量', unit: ' B', source: 'sys_catalog.sys_database_size · 桶内均值' },
+    { key: 'kingbaseReplayLag', title: '复制回放差距', unit: ' B', source: 'sys_catalog.sys_stat_replication · 桶内峰值' }
+  ];
+  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9'};
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
   const freshnessLabels = { ok: '采样正常', error: '采集失败', pending: '待采样', stale: '采样陈旧' };
@@ -30,6 +38,7 @@
   const grafanaPages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
     replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
     dm8: 'dbsphere-dm8',
+    kingbase: 'dbsphere-kingbase',
     containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
 
   function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night, back }) {
@@ -83,7 +92,7 @@
     return asset.cluster ? [asset.organizationId, asset.engine, asset.cluster].join('/') : asset.id;
   }
 
-  function create(root, { api, openEvent, formatTime, assetRuntimeLabel }) {
+  function create(root, { api, openEvent, formatTime, assetRuntimeLabel, openAsset }) {
     const get = name => root.querySelector('[data-live="' + name + '"]');
     const filters = { organization: get('organization'), environment: get('environment'), cluster: get('cluster'),
       engine: get('engine'), minutes: get('window') };
@@ -393,8 +402,17 @@
         ? number.format(selected.connections / selected.maxConnections * 100) + '%' : '—';
       const count = key => current && finite(selected[key]) ? number.format(selected[key]) : '—';
       const observed = selected ? age(selected.collectedAt, now) : '暂无样本';
-      const cards = [
-        ['可用性', snapshot.fresh + ' / ' + snapshot.total, `采样正常 · 不可用 ${snapshot.unavailable}`, snapshot.unavailable ? 'alert' : 'cyan', 'pgAvailable'],
+      const availability = ['可用性', snapshot.fresh + ' / ' + snapshot.total, `采样正常 · 不可用 ${snapshot.unavailable}`, snapshot.unavailable ? 'alert' : 'cyan', 'pgAvailable'];
+      const native = current ? selected.engineMetrics || {} : {};
+      const nativeCount = key => finite(native[key]) ? number.format(native[key]) : '—';
+      const cards = selected?.engine === 'kingbase' ? [
+        availability,
+        ['会话', nativeCount('sessions'), `活动 ${nativeCount('active')} · ${observed}`, 'blue', 'kingbaseSessions'],
+        ['事务', nativeCount('transactions'), observed, 'violet', 'kingbaseTransactions'],
+        ['阻塞关系', nativeCount('waits'), observed, native.waits > 0 ? 'alert' : 'violet', 'kingbaseWaits'],
+        ['数据库容量', bytes(native.size), observed, 'cyan', 'kingbaseSize']
+      ] : [
+        availability,
         ['连接与排队', connections, `池等待 ${count('poolWaiting')} · ${observed}`, 'blue', 'averageConnectionUsagePercent'],
         ['活跃与等待', count('active'), `阻塞 ${count('blocked')} · ${observed}`, current && selected.blocked > 0 ? 'alert' : 'violet', 'waiting'],
         ['复制差距', bytes(current ? selected.replicationLag : null), `观测字节差 · ${observed}`, 'blue', 'averageReplicationLagBytes'],
@@ -577,6 +595,13 @@
       parent.replaceChildren();
       label.textContent = '';
       if (!asset || !asset.sampleId || asset.engine !== 'postgres') {
+        if (asset?.engine === 'kingbase') {
+          const button = element('button', '查看金仓 SQL 指纹与锁链', 'ghost small-button');
+          button.type = 'button';
+          button.onclick = () => openAsset(asset.id);
+          parent.append(button);
+          return;
+        }
         const message = asset?.engine === 'dm8' ? '达梦实例和原始锁等待请查看资产详情。' :
           asset?.engine === 'mysql' ? '在资产详情查看 MySQL SQL 指纹。' : '暂无 PostgreSQL SQL 指纹样本。';
         parent.append(element('p', message, 'live-empty'));
@@ -618,7 +643,8 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const enabled = asset?.engine === 'dm8' ? dm8Metrics : asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
+      const enabled = asset?.engine === 'kingbase' ? kingbaseMetrics :
+        asset?.engine === 'dm8' ? dm8Metrics : asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
       const metricKey = enabled.map(metric => metric.key).join();
       if (list.dataset.metrics !== metricKey) {
@@ -646,7 +672,7 @@
       const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
         bucketMinutes: String(bucketMinutes) };
       const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
-      if (asset.engine === 'dm8') trend.set('metricProfile', 'dm8');
+      if (asset.engine === 'dm8' || asset.engine === 'kingbase') trend.set('metricProfile', asset.engine);
       const waits = new URLSearchParams({ ...q, group: 'type' });
       if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];

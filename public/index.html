@@ -397,7 +397,7 @@
           <label>组织<select data-live="organization"></select></label>
           <label>环境<select data-live="environment"></select></label>
           <label>集群<select data-live="cluster"></select></label>
-          <label>引擎<select data-live="engine"><option value="">全部引擎</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="dm8">达梦 DM8</option></select></label>
+          <label>引擎<select data-live="engine"><option value="">全部引擎</option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option></select></label>
           <label>时间范围<select data-live="window"><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="60" selected>1 小时</option><option value="360">6 小时</option></select></label>
           <button type="button" data-live="follow" hidden>跟随实时</button>
           <button type="button" data-live="baseline" aria-pressed="false">对比前一时段</button>
@@ -475,7 +475,7 @@
       <div data-view="assets">
         <section class="panel">
           <div class="section-head"><div><h2>数据库资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
-          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索数据库资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux PostgreSQL</option><option value="k8s">Kubernetes PostgreSQL</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 预览</option><option value="dm8">达梦 DM8</option></select></div>
+          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索数据库资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux PostgreSQL</option><option value="k8s">Kubernetes PostgreSQL</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 预览</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option></select></div>
           <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <details id="asset-readiness-batch" class="settings-details admin-only platform-only">
             <summary>批量纳管体检</summary>
@@ -525,7 +525,7 @@
             <label>监控用户名<input name="username" required placeholder="dbsphere_monitor"></label>
             <label>密码<input name="password" type="password" autocomplete="new-password"></label>
             <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
-            <label>数据库与运行环境<select name="runtime" id="runtime"><option value="linux">PostgreSQL · Linux 主机</option><option value="k8s">PostgreSQL · Kubernetes</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 · 只读预览</option><option value="dm8">达梦 DM8</option></select></label>
+            <label>数据库与运行环境<select name="runtime" id="runtime"><option value="linux">PostgreSQL · Linux 主机</option><option value="k8s">PostgreSQL · Kubernetes</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 · 只读预览</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option></select></label>
             <label class="linux-field">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <div id="k8s-fields" class="nested wide" hidden>

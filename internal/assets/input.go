@@ -20,6 +20,7 @@ var poolerHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
 // DbSphere versions skip these assets when they run against the same store.
 const RuntimeMySQL = "mysql"
 const RuntimeDM8 = "dm8"
+const RuntimeKingbase = "kingbase"
 
 func IsPostgreSQLRuntime(runtime string) bool {
 	return runtime == "linux" || runtime == "k8s" || runtime == "managed"
@@ -105,10 +106,10 @@ func (a Input) Validate() error {
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid database TLS mode")
 	}
-	if !IsPostgreSQLRuntime(a.Runtime) && a.Runtime != RuntimeMySQL && a.Runtime != RuntimeDM8 {
+	if !IsPostgreSQLRuntime(a.Runtime) && a.Runtime != RuntimeMySQL && a.Runtime != RuntimeDM8 && a.Runtime != RuntimeKingbase {
 		return errors.New("invalid runtime")
 	}
-	if a.Runtime == RuntimeMySQL || a.Runtime == RuntimeDM8 {
+	if !IsPostgreSQLRuntime(a.Runtime) {
 		if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
 			return errors.New("DM8 uses an HTTPS probe with a local database connection")
 		}

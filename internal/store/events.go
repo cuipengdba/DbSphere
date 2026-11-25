@@ -174,6 +174,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		assetLayer = "mysql"
 	} else if event.Kind == dm8LockGroup {
 		assetLayer = "dm8"
+	} else if event.Kind == kingbaseLockGroup {
+		assetLayer = "kingbase"
 	}
 	nodes := []map[string]any{
 		{"id": eventNode, "type": "event", "label": event.Title, "at": event.StartedAt, "source": "/api/events/" + event.ID},

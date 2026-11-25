@@ -92,8 +92,8 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 func describeReadiness(sample readinessSample, runtime string) []readinessCheck {
 	metrics := sample.Metrics
 	pgStatus := stringValue(object(metrics["collector"])["pgStatus"])
-	if pgStatus == "" && runtime == "mysql" {
-		pgStatus = stringValue(object(metrics["collector"])["mysqlStatus"])
+	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8") {
+		pgStatus = stringValue(object(metrics["collector"])[runtime+"Status"])
 	}
 	if pgStatus == "" && sample.Status == "ok" {
 		pgStatus = "ok"
@@ -140,11 +140,11 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		switch signal["key"] {
 		case "activeWaits", "activityQueryID", "instanceIO", "checkpoints", "wal", "replicationLinks", "walReceiver",
 			"logicalPublications", "logicalSubscriptions", "logicalApplyProgress", "logicalSubscriptionErrors", "sqlPerformance",
-			"connections", "lockWaits", "replication":
+			"connections", "lockWaits", "replication", "sessions", "databaseSize", "topSql":
 			switch signal["status"] {
 			case "ok", "inactive":
 				add(stringValue(signal["key"]), stringValue(signal["status"]), "")
-			case "limited_permissions":
+			case "limited_permissions", "permission_denied":
 				add(stringValue(signal["key"]), "limited", "check_stats_permission")
 			case "not_configured":
 				add(stringValue(signal["key"]), "not_configured", "check_extension")

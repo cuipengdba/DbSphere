@@ -6,16 +6,18 @@ import (
 )
 
 type PrometheusAsset struct {
-	ID, Name, Organization, Cluster, Engine, Runtime  string
-	SampleAt, Fresh, OpenEvents                       *float64
-	Connections, MaxConnections, Blocked              *float64
-	ReplicationLag, Transactions, LinuxCPU, LinuxRAM  *float64
-	PodReady, PGWaiting, PGSQLFingerprints            *float64
-	LinuxRX, LinuxTX, LinuxDiskRead, LinuxDiskWrite   *float64
-	PodCPU, PodMemory                                 *float64
-	MySQLRunning, MySQLLockWaits                      *float64
-	DM8Sessions, DM8Active, DM8Transactions, DM8Waits *float64
-	Container                                         json.RawMessage
+	ID, Name, Organization, Cluster, Engine, Runtime                      string
+	SampleAt, Fresh, OpenEvents                                           *float64
+	Connections, MaxConnections, Blocked                                  *float64
+	ReplicationLag, Transactions, LinuxCPU, LinuxRAM                      *float64
+	PodReady, PGWaiting, PGSQLFingerprints                                *float64
+	LinuxRX, LinuxTX, LinuxDiskRead, LinuxDiskWrite                       *float64
+	PodCPU, PodMemory                                                     *float64
+	MySQLRunning, MySQLLockWaits                                          *float64
+	DM8Sessions, DM8Active, DM8Transactions, DM8Waits                     *float64
+	KingbaseSessions, KingbaseActive, KingbaseTransactions, KingbaseWaits *float64
+	KingbaseSize, KingbaseLag                                             *float64
+	Container                                                             json.RawMessage
 }
 
 func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]PrometheusAsset, error) {
@@ -32,6 +34,7 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
 			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits,
 			&a.DM8Sessions, &a.DM8Active, &a.DM8Transactions, &a.DM8Waits,
+			&a.KingbaseSessions, &a.KingbaseActive, &a.KingbaseTransactions, &a.KingbaseWaits, &a.KingbaseSize, &a.KingbaseLag,
 			&a.LinuxRX, &a.LinuxTX, &a.LinuxDiskRead, &a.LinuxDiskWrite, &a.PodCPU, &a.PodMemory, &a.Container); err != nil {
 			return nil, err
 		}
@@ -45,7 +48,7 @@ const prometheusAssetsSQL = `WITH selected AS (
 	FROM assets a ORDER BY a.id LIMIT 5000
 )
 SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
-	CASE WHEN a.runtime IN ('mysql','dm8') THEN a.runtime ELSE 'postgres' END,a.runtime,
+	CASE WHEN a.runtime IN ('mysql','dm8','kingbase') THEN a.runtime ELSE 'postgres' END,a.runtime,
 	extract(epoch FROM a.last_sample_at)::float8,
 	CASE WHEN a.recent AND a.last_status='ok' THEN 1.0 ELSE 0.0 END::float8,
 	e.total::float8,
@@ -74,6 +77,14 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
 		AND jsonb_typeof(raw.metrics_json#>'{dm8,waits}')='array'
 		THEN jsonb_array_length(raw.metrics_json#>'{dm8,waits}')::float8 END,
+	(raw.metrics_json#>>'{kingbase,sessions}')::float8,
+	(raw.metrics_json#>>'{kingbase,activeSessions}')::float8,
+	(raw.metrics_json#>>'{kingbase,transactions}')::float8,
+	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(raw.metrics_json#>'{kingbase,waits}')='array'
+		THEN jsonb_array_length(raw.metrics_json#>'{kingbase,waits}')::float8 END,
+	(raw.metrics_json#>>'{kingbase,databaseBytes}')::float8,
+	(raw.metrics_json#>>'{kingbase,replication,maxReplayLagBytes}')::float8,
 	(raw.metrics_json#>>'{linux,interval,networkReceiveBps}')::float8,
 	(raw.metrics_json#>>'{linux,interval,networkTransmitBps}')::float8,
 	(raw.metrics_json#>>'{linux,interval,diskReadBps}')::float8,

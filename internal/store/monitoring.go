@@ -41,12 +41,17 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 		return nil, ErrInvalidRange
 	}
 	var values []json.RawMessage
-	if params.Get("metricProfile") == "dm8" {
+	switch params.Get("metricProfile") {
+	case "dm8", "kingbase":
 		if len(ids) != 1 {
 			return nil, ErrInvalidRange
 		}
-		values, err = s.queryJSON(ctx, dm8SeriesSQL, ids[0], from, to, minutes)
-	} else {
+		query := dm8SeriesSQL
+		if params.Get("metricProfile") == "kingbase" {
+			query = kingbaseSeriesSQL
+		}
+		values, err = s.queryJSON(ctx, query, ids[0], from, to, minutes)
+	default:
 		values, err = s.readMonitoringBuckets(ctx, ids, from, to, minutes)
 	}
 	if err != nil {
@@ -85,6 +90,20 @@ const dm8SeriesSQL = `SELECT jsonb_build_object(
 	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
 	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='dm8'
 	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'dm8'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
+
+const kingbaseSeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'kingbaseSessions',avg((s.metrics_json#>>'{kingbase,sessions}')::numeric),
+	'kingbaseActive',avg((s.metrics_json#>>'{kingbase,activeSessions}')::numeric),
+	'kingbaseTransactions',avg((s.metrics_json#>>'{kingbase,transactions}')::numeric),
+	'kingbaseWaits',max(CASE WHEN s.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(s.metrics_json#>'{kingbase,waits}')='array' THEN jsonb_array_length(s.metrics_json#>'{kingbase,waits}') END),
+	'kingbaseSize',avg((s.metrics_json#>>'{kingbase,databaseBytes}')::numeric),
+	'kingbaseReplayLag',max((s.metrics_json#>>'{kingbase,replication,maxReplayLagBytes}')::numeric),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='kingbase'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'kingbase'
 	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {

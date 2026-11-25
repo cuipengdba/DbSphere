@@ -24,6 +24,7 @@ var reviewSourceKinds = []string{
 	"trace_span", "linux_state", "k8s_state", "pgbouncer_state", "patroni_state",
 	"routing_observed", "recovery_verified", "risk_forecast",
 	"dm8_lock_wait",
+	"kingbase_lock_wait",
 }
 
 var reviewNumericPaths = []struct {
