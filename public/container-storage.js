@@ -204,10 +204,12 @@
 
     function refreshOptions() {
       const eligible = assets.filter(asset => ['k8s', 'linux'].includes(asset.runtime));
-      if (!route.asset || (eligible.length && !eligible.some(asset => asset.id === route.asset))) {
+      if (!route.asset) {
         route.asset = (eligible.find(asset => asset.runtime === 'k8s') || eligible[0])?.id || '';
       }
-      selectOptions(get('asset'), [['', '选择数据库资产'], ...eligible.map(asset => [asset.id, asset.name])], route.asset);
+      const choices = eligible.map(asset => [asset.id, asset.name]);
+      if (route.asset && !eligible.some(asset => asset.id === route.asset)) choices.push([route.asset, '当前链接资产']);
+      selectOptions(get('asset'), [['', '选择数据库资产'], ...choices], route.asset);
     }
 
     async function load() {
@@ -220,10 +222,18 @@
       const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(),
         container: route.container, device: route.device, nodeDevice: route.nodeDevice, pvcUid: route.pvcUid });
       try {
+        if (!assets.some(asset => asset.id === route.asset)) {
+          const { asset } = await api(`/api/assets/${route.asset}`);
+          if (request !== generation || !active) return;
+          if (asset && ['k8s', 'linux'].includes(asset.runtime)) {
+            assets = [...assets, asset];
+            refreshOptions();
+          }
+        }
         if (route.topic === 'cache') {
           cacheLoadedAt = Date.now();
           const current = `${route.asset}:${route.container}`;
-          const keys = [...new Set([...cachePins, current])].filter(key => assets.some(asset => asset.id === key.slice(0, 36)));
+          const keys = [...new Set([...cachePins, current])];
           const responses = await Promise.allSettled(keys.map(key => api(`/api/assets/${key.slice(0, 36)}/container-storage?` +
             new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), container: key.slice(37) }))));
           if (request !== generation || !active) return;
@@ -482,7 +492,7 @@
         const asset = assets.find(row => row.id === key.slice(0, 36));
         const storage = data?.latest?.storage;
         const name = key.slice(37) || storage?.primary || '';
-        const identity = `${asset?.id}:${name}`;
+        const identity = `${key.slice(0, 36)}:${name}`;
         if (identities.has(identity)) continue;
         identities.add(identity);
         const sample = storage?.containers?.[name];
