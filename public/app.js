@@ -17,6 +17,7 @@ let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
 let rcaWorkbenchRequest = 0;
+let accessDirectoryRequest = 0;
 const pageSections = { alerts: 'active', inspections: 'history', settings: 'storage' };
 let recentEvents = [];
 let allAssets = [];
@@ -202,7 +203,7 @@ function accessForm(title, parent, existing, save) {
       await save(new FormData(form));
       form.reset();
       notice('已保存账号或团队设置。');
-      await loadAccessDirectory();
+      await loadAccessDirectory(true);
     } catch (error) {
       notice(error.message, true);
       button.disabled = false;
@@ -255,15 +256,20 @@ function renderOrganizationAudit() {
   void update();
 }
 
-async function loadAccessDirectory() {
+async function loadAccessDirectory(saved = false) {
   const content = $('access-directory-content');
+  const request = ++accessDirectoryRequest;
+  const session = workspaceData.session;
+  const mayRender = () => request === accessDirectoryRequest && session === workspaceData.session &&
+    (saved || !content.contains(document.activeElement) || !document.activeElement.closest('form'));
   let directory;
   try {
     directory = await api('/api/admin/access');
   } catch (error) {
-    content.replaceChildren(cell('p', error.message, 'empty'));
+    if (mayRender()) content.replaceChildren(cell('p', error.message, 'empty'));
     return;
   }
+  if (!mayRender()) return;
   const { accounts = [], teams = [] } = directory;
   if (directory.organizations) organizations = directory.organizations;
   const teamPanel = cell('div', '', 'list');

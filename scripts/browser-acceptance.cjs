@@ -482,8 +482,12 @@ async function operations(page, asset) {
   const directory = page.locator('#access-directory-content');
   const team = directory.locator('div.settings-details').filter({ has: page.getByText('新建团队', { exact: true }) });
   await team.locator('[name=project]').fill('UI coverage');
+  const directoryRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/access');
+  await page.locator('[data-view=settings] [data-section=access]').evaluate(button => button.click());
+  assert((await directoryRefresh).ok());
   await team.locator('[name=name]').fill('QA operators');
   await team.locator('[name=assetIds]').fill(asset);
+  assert.equal(await team.locator('[name=project]').inputValue(), 'UI coverage');
   const teamResponse = await action(page, team.getByRole('button', { name: '创建团队' }), 'POST', '/api/admin/teams', 201);
   const createdTeam = (await teamResponse.json()).team;
   const teamSettings = directory.locator('details').filter({ hasText: 'QA operators' });
