@@ -24,6 +24,8 @@
   const mebi = new Set(['diskReadBps', 'diskWriteBps', 'networkReceiveBps', 'networkTransmitBps', 'lag', 'activeFile', 'inactiveFile']);
   const statuses = { ok: '正常', stale: '陈旧', error: '失联', pending: '待首采', degraded: '部分缺采' };
   const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例' };
+  const boardStates = new Set(['affected', 'missing', 'maintenance', 'recovered', 'healthy']);
+  const watchKey = 'dbsphere.wallboard.watch';
   const scopeFields = { organization: 36, environment: 80, cluster: 256 };
   const finite = v => typeof v === 'number' && Number.isFinite(v);
   const iso = v => new Date(v).toISOString();
@@ -31,7 +33,7 @@
   const metric = (key, raw) => !finite(raw) ? null : mebi.has(key) ? raw / 1048576 : raw;
   const countLabel = v => finite(v) ? number.format(v) : '—';
   const id = v => uuid.test(v || '') ? v : '';
-  const currentState = () => ({ organization: '', environment: '', cluster: '', window: 60, page: 0, asset: '', event: '', cursor: null, fixed: null });
+  const currentState = () => ({ organization: '', environment: '', cluster: '', state: '', window: 60, page: 0, asset: '', event: '', cursor: null, fixed: null });
   const historyPath = asset => '/api/assets/' + asset + '/wallboard-history';
 
   function node(tag, className, label) {
@@ -53,6 +55,12 @@
     let snapshot, historyData, currentRange, pending, timer, active = false, paused = false;
     let snapshotKey = '', historyKey = '', renderedAssets = '', renderedEvents = '';
     let lastStatus = '', integrationsReady = false, checkIntegrationAfter = 0;
+    const renderedHealth = new Map();
+    let watches = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(watchKey));
+      if (Array.isArray(saved)) watches = [...new Set(saved.filter(value => id(value)))].slice(0, 4);
+    } catch {}
     const chartDialog = get('chart-dialog');
     const largePlot = get('chart-plot');
     const largeChart = {
@@ -119,6 +127,7 @@
     function scope() {
       const params = new URLSearchParams();
       for (const key of Object.keys(scopeFields)) if (selection[key]) params.set(key, selection[key]);
+      if (selection.state) params.set('state', selection.state);
       return params;
     }
 
@@ -139,6 +148,7 @@
     function restore(params) {
       const next = currentState();
       for (const [key, limit] of Object.entries(scopeFields)) next[key] = (params.get(key) || '').slice(0, limit);
+      if (boardStates.has(params.get('state'))) next.state = params.get('state');
       const window = Number(params.get('window'));
       if (windows.includes(window)) next.window = window;
       next.page = Math.max(0, Math.min(10000, Number.parseInt(params.get('page'), 10) || 0));
@@ -189,6 +199,7 @@
       snapshot = historyData = currentRange = undefined;
       renderedAssets = renderedEvents = snapshotKey = historyKey = '';
       integrationsReady = paused = false;
+      renderedHealth.clear();
       checkIntegrationAfter = 0;
       delete get('dates').dataset.editing;
       get('assets').replaceChildren();
@@ -294,7 +305,8 @@
 
     function renderAssets(assets) {
       const nodes = snapshot?.unassignedHosts || [];
-      const key = JSON.stringify([assets, nodes, selection.asset]);
+      const layout = get('layout').value;
+      const key = JSON.stringify([assets, nodes, selection.asset, layout, watches]);
       if (key === renderedAssets) return;
       renderedAssets = key;
       const hostGroups = new Map();
@@ -303,7 +315,7 @@
         if (!hostGroups.has(key)) hostGroups.set(key, []);
         hostGroups.get(key).push(asset);
       }
-      const views = [...hostGroups.values()].map(group => {
+      const views = layout === 'cluster' ? renderMatrix(assets) : [...hostGroups.values()].map(group => {
         const readings = group.filter(asset => asset.wallHost?.status === 'ok').sort((a, b) =>
           (Date.parse(b.wallHost.observedAt) || 0) - (Date.parse(a.wallHost.observedAt) || 0));
         const hostAsset = readings[0] || group[0];
@@ -351,7 +363,7 @@
         card.append(heading, dbs);
         return card;
       });
-      for (const host of nodes) {
+      for (const host of layout === 'host' ? nodes : []) {
         const hostName = node('div', 'wallboard-host');
         hostName.append(makeIcon('host'), node('span', 'wallboard-host-name', host.name), node('span', 'wallboard-host-meta', '未关联数据库 · ' + host.source));
         const card = node('div', 'wallboard-node');
@@ -369,10 +381,98 @@
       }
       const container = get('assets');
       const scroll = container.scrollTop;
-      const focused = container.contains(document.activeElement) ? document.activeElement.dataset.asset : '';
+      const active = document.activeElement;
+      const focused = container.contains(active) && active.dataset.asset;
+      const focusedPin = active?.classList.contains('wallboard-pin');
+      container.dataset.layout = layout;
       container.replaceChildren(...views);
       container.scrollTop = scroll;
-      if (id(focused)) container.querySelector('[data-asset="' + focused + '"]')?.focus({ preventScroll: true });
+      if (id(focused)) container.querySelector((focusedPin ? '.wallboard-pin' : '.wallboard-database') + '[data-asset="' + focused + '"]')?.focus({ preventScroll: true });
+      renderWatch(assets);
+    }
+
+    function matrixState(asset) {
+      if (asset.unavailable || asset.freshness === 'error' || asset.openEvents) return 'affected';
+      if (asset.maintenanceUntil) return 'maintenance';
+      if (asset.freshness !== 'ok') return 'missing';
+      return asset.recoveredAt ? 'recovered' : 'healthy';
+    }
+
+    function renderMatrix(assets) {
+      const groups = new Map();
+      for (const asset of assets) {
+        const key = (asset.clusterKey || asset.id) + '/' + asset.environment;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(asset);
+      }
+      const labels = { affected: '异常', maintenance: '维护中', missing: '缺采', recovered: '已恢复', healthy: '正常' };
+      return [...groups.values()].map(group => {
+        const region = node('section', 'wallboard-cluster');
+        const first = group[0];
+        region.append(node('h3', '', first.cluster || first.name), node('small', '',
+          [first.organization, first.environment, group.length + ' 个实例'].filter(Boolean).join(' · ')));
+        const grid = node('div', 'wallboard-cluster-grid');
+        for (const asset of group) {
+          const state = matrixState(asset);
+          const card = node('div', 'wallboard-tile');
+          card.dataset.state = state;
+          if (renderedHealth.has(asset.id) && renderedHealth.get(asset.id) !== state) card.dataset.transition = 'true';
+          renderedHealth.set(asset.id, state);
+          const button = node('button', 'wallboard-database');
+          button.type = 'button';
+          button.dataset.asset = asset.id;
+          button.setAttribute('aria-pressed', String(asset.id === selection.asset));
+          const text = node('span', 'wallboard-database-text');
+          const reason = state === 'missing' ? statuses[asset.freshness] || '缺采' : labels[state];
+          text.append(node('strong', '', asset.name), node('span', '',
+            [reason, roles[asset.role], asset.collectedAt ? '采样 ' + short(asset.collectedAt) : '待首采'].filter(Boolean).join(' · ')));
+          button.append(makeIcon('database'), text);
+          button.title = [asset.name, reason, asset.collectedAt && formatTime(asset.collectedAt),
+            asset.maintenanceUntil && '维护至 ' + formatTime(asset.maintenanceUntil)].filter(Boolean).join(' · ');
+          button.addEventListener('click', () => selectAsset(asset.id));
+          const pinned = watches.includes(asset.id);
+          const pin = node('button', 'wallboard-pin', pinned ? '★' : '☆');
+          pin.type = 'button'; pin.dataset.asset = asset.id;
+          pin.setAttribute('aria-label', (pinned ? '取消关注 ' : '关注 ') + asset.name);
+          pin.setAttribute('aria-pressed', String(pinned));
+          pin.disabled = !pinned && watches.length >= 4;
+          pin.addEventListener('click', () => toggleWatch(asset.id));
+          card.append(button, pin);
+          grid.append(card);
+        }
+        region.append(grid);
+        return region;
+      });
+    }
+
+    function toggleWatch(asset) {
+      if (watches.includes(asset)) watches = watches.filter(value => value !== asset);
+      else if (watches.length < 4) watches = [...watches, asset];
+      try { localStorage.setItem(watchKey, JSON.stringify(watches)); } catch {}
+      renderAssets(snapshot?.assets || []);
+    }
+
+    function renderWatch(assets) {
+      const bar = get('watch');
+      bar.hidden = !watches.length;
+      if (bar.hidden) return;
+      bar.replaceChildren(node('strong', '', '关注 ' + watches.length + '/4'));
+      for (const asset of assets.filter(item => watches.includes(item.id))) {
+        const chip = node('button', 'ghost', asset.name + ' · ' + countLabel(asset.connections) + ' 连接');
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(selection.asset === asset.id));
+        chip.addEventListener('click', () => selectAsset(asset.id));
+        bar.append(chip);
+      }
+      const clear = node('button', 'ghost', '清除关注');
+      clear.type = 'button';
+      clear.addEventListener('click', () => {
+        watches = [];
+        try { localStorage.removeItem(watchKey); } catch {}
+        renderAssets(snapshot?.assets || []);
+        get('layout').focus();
+      });
+      bar.append(clear);
     }
 
     function openPriority(event) {
@@ -385,17 +485,20 @@
       const cursor = finite(started) ? started : selection.cursor;
       const back = new URLSearchParams(route(true, event.assetId, range, event.id, cursor).split('?')[1]);
       back.delete('page');
+      back.delete('state');
       void openEvent(event.id, true, 'wallboard?' + back);
     }
 
     function renderEvents(events) {
-      const key = JSON.stringify([events, selection.asset, selection.event, Math.floor(Date.parse(snapshot?.observedAt) / minute)]);
+      const list = get('event-list').value;
+      const key = JSON.stringify([events, selection.asset, selection.event, list, Math.floor(Date.parse(snapshot?.observedAt) / minute)]);
       if (key === renderedEvents) return;
       renderedEvents = key;
       const ranked = events.filter(event => event.id === selection.event)
-        .concat(events.filter(event => event.status === 'open' && event.id !== selection.event)).slice(0, 4);
+        .concat(events.filter(event => event.status === list && event.id !== selection.event)).slice(0, 8);
       if (!ranked.length) {
-        get('events').replaceChildren(node('div', 'wallboard-empty', snapshot ? '当前无待处理事件' : '正在读取事件'));
+        get('events').replaceChildren(node('div', 'wallboard-empty', snapshot ?
+          (list === 'open' ? '当前无待处理事件' : '近 6 小时没有恢复事件') : '正在读取事件'));
         return;
       }
       const duration = event => {
@@ -456,15 +559,8 @@
       if (!get('dates').hidden && selection.fixed && get('dates').dataset.editing !== 'true') fillDates(selection.fixed);
       get('pause').textContent = paused ? '继续' : '暂停';
       get('pause').setAttribute('aria-pressed', String(paused));
-      const kpis = [['可见主机', snapshot && snapshot.hostCount + (snapshot.unassignedHosts?.length || 0), 'host'],
-        ['数据库实例', snapshot?.total, 'database'], ['处理中异常', snapshot?.openEvents, 'incident'],
-        ['陈旧或缺采实例', snapshot?.missingCount, 'missing']];
-      get('kpis').replaceChildren(...kpis.map(([name, count, kind]) => {
-        const card = node('div', 'wallboard-kpi');
-        card.append(makeIcon(kind), node('span', '', name), node('strong', '', countLabel(count)));
-        return card;
-      }));
-      const pages = Math.max(1, Math.ceil((snapshot?.total || 0) / pageSize));
+      renderKPIs();
+      const pages = Math.max(1, Math.ceil((snapshot?.filteredTotal ?? snapshot?.total ?? 0) / pageSize));
       get('page').textContent = (selection.page + 1) + ' / ' + pages;
       get('prev').disabled = selection.page === 0;
       get('next').disabled = selection.page + 1 >= pages;
@@ -475,6 +571,35 @@
       renderContext();
       renderLinks();
       drawAll();
+    }
+
+    const kpis = [['全部实例', 'total', 'database', ''], ['处理中事件', 'openEvents', 'incident', null],
+      ['受影响实例', 'affectedCount', 'incident', 'affected'], ['已恢复 · 6 小时', 'recoveredCount', 'database', 'recovered'],
+      ['陈旧或缺采', 'missingCount', 'missing', 'missing'], ['维护中实例', 'maintenanceCount', 'host', 'maintenance']];
+    get('kpis').append(...kpis.map(([name, key, icon, state]) => {
+      const card = node(state === null ? 'div' : 'button', 'wallboard-kpi');
+      card.dataset.kpi = key;
+      if (state !== null) {
+        card.type = 'button';
+        card.dataset.filter = state;
+        card.addEventListener('click', () => {
+          const next = selection.state === state ? '' : state;
+          if (selection.state === next) return;
+          get('event-list').value = next === 'recovered' ? 'resolved' : 'open';
+          Object.assign(selection, { state: next, page: 0, asset: '', cursor: null, event: '' });
+          saveRoute();
+          refreshSelection();
+        });
+      }
+      card.append(makeIcon(icon), node('span', '', name), node('strong'));
+      return card;
+    }));
+
+    function renderKPIs() {
+      for (const card of get('kpis').children) {
+        card.lastChild.textContent = countLabel(snapshot?.[card.dataset.kpi]);
+        if (card.tagName === 'BUTTON') card.setAttribute('aria-pressed', String(card.dataset.filter === selection.state));
+      }
     }
 
     function nearestPoint() {
@@ -709,6 +834,8 @@
       refreshSelection();
     });
     get('clear').addEventListener('click', () => setCursor(null));
+    get('layout').addEventListener('change', () => renderAssets(snapshot?.assets || []));
+    get('event-list').addEventListener('change', () => renderEvents(snapshot?.events || []));
     get('pause').addEventListener('click', () => {
       paused = !paused;
       if (paused) {

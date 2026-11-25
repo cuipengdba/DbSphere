@@ -177,8 +177,9 @@ body[data-active-view="live"] .workspace-heading { display: none; }
   overflow-wrap: anywhere;
 }
 .live-member::before { content: ""; position: absolute; top: 12px; left: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--live-muted); }
-.live-member[data-freshness="ok"]::before { background: var(--live-accent); }
-.live-member[data-freshness="error"]::before, .live-member[data-freshness="stale"]::before { background: var(--live-hot); }
+.live-member[data-freshness="ok"]::before { background: var(--ok-line); }
+.live-member[data-freshness="error"]::before { background: var(--issue-line); }
+.live-member[data-freshness="stale"]::before { background: var(--warn-line); }
 .live-member[data-unavailable="true"] { border-color: var(--live-hot); box-shadow: inset 0 0 12px var(--live-event-fill); }
 .live-member small { color: var(--live-muted); grid-column: 1 / -1; font-size: .68rem; font-weight: 500; }
 .live-member-events { color: var(--live-hot); grid-column: 2; grid-row: 1; }

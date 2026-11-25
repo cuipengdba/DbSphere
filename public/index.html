@@ -258,11 +258,12 @@
         <div class="wallboard-kpis" data-board="kpis"></div>
         <div class="wallboard-overview">
           <section class="wallboard-panel">
-            <header class="wallboard-panel-heading"><h2>主机与数据库</h2><div class="wallboard-page"><button class="ghost" type="button" data-board="prev" aria-label="上一页资产">‹</button><span data-board="page"></span><button class="ghost" type="button" data-board="next" aria-label="下一页资产">›</button></div></header>
+            <header class="wallboard-panel-heading"><h2>集群与实例</h2><div class="wallboard-page"><select data-board="layout" aria-label="资产布局"><option value="cluster">集群矩阵</option><option value="host">主机分组</option></select><button class="ghost" type="button" data-board="prev" aria-label="上一页资产">‹</button><span data-board="page"></span><button class="ghost" type="button" data-board="next" aria-label="下一页资产">›</button></div></header>
+            <div class="wallboard-watch" data-board="watch" aria-label="关注实例" hidden></div>
             <div class="wallboard-topology" data-board="assets"></div>
           </section>
           <section class="wallboard-panel">
-            <header class="wallboard-panel-heading"><h2>优先处理</h2><a href="#incidents">所有事件 ↗</a></header>
+            <header class="wallboard-panel-heading"><h2>优先处理</h2><select data-board="event-list" aria-label="事件范围"><option value="open">处理中</option><option value="resolved">近 6 小时已恢复</option></select><a href="#incidents">所有事件 ↗</a></header>
             <div class="wallboard-events" data-board="events"></div>
           </section>
         </div>

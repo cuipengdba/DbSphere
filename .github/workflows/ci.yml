@@ -7,7 +7,7 @@ on:
 
 jobs:
   log-archive-capacity:
-    if: github.ref == 'refs/heads/release/v2.19.0' || github.ref == 'refs/heads/release/v2.24.0' || github.ref == 'refs/heads/release/v2.25.0'
+    if: github.ref == 'refs/heads/release/v2.19.0' || github.ref == 'refs/heads/release/v2.24.0' || github.ref == 'refs/heads/release/v2.25.0' || github.ref == 'refs/heads/release/v2.30.0'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     services:
@@ -526,8 +526,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.24.0'
-          previous_sha='1bdf84401affa99bc284d98b2c779d987ba1b6abdfaa33e18795a015dfdd7888'
+          previous_version='2.25.0'
+          previous_sha='d92d9ac4ee7c51c2adb5350e6547742da929c24b27572e25fda0515bded0e97f'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -596,8 +596,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.24.0'
-          previous_arm_sha='1b140753c0e382dbf92436e01be125d3705d12b6eab0842b694311320f3ce0b5'
+          previous_version='2.25.0'
+          previous_arm_sha='8daccc81eaa8bb944bffd038711a4f1c71970448437f9fb45c42f7be0c44950a'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

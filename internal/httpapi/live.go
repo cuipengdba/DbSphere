@@ -28,6 +28,13 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 		Cluster: params.Get("cluster"), Engine: params.Get("engine")}
 	if params.Get("board") == "wallboard" {
 		scope.Wallboard, scope.UnassignedHosts, scope.Focus = true, platformAdmin, params.Get("asset")
+		scope.BoardState = params.Get("state")
+		switch scope.BoardState {
+		case "", "affected", "missing", "maintenance", "recovered", "healthy":
+		default:
+			respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid wallboard state"})
+			return
+		}
 		if params.Has("page") {
 			page, err := strconv.Atoi(params.Get("page"))
 			if err != nil || page < 0 || page > 10000 {

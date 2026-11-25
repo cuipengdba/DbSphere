@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { join } = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { chromium } = require('playwright');
 
 const origin = 'http://127.0.0.1:18080';
@@ -624,6 +625,61 @@ async function pagination(page, asset) {
   proof.push('Wallboard, overview, asset and incident pagination with 53 registered assets and 53 resolved events');
 }
 
+async function dutyMatrix(page) {
+  const states = ['healthy', 'affected', 'maintenance', 'recovered', 'missing'];
+  const assets = Object.fromEntries(states.map(state => [state, randomUUID()]));
+  const opened = randomUUID(), recovered = randomUUID();
+  const rows = states.map((state, index) => `('${assets[state]}','Matrix ${state}','127.0.0.1',15434,'postgres','postgres','','disable','managed',
+    'matrix-acceptance','Matrix ${index < 2 ? 'A' : 'B'}',now(),${state === 'missing' ? 'NULL' : 'now()'},
+    '${state === 'missing' ? 'pending' : 'ok'}','${index === 0 || index === 3 ? 'replica' : 'primary'}')`);
+  runFixtureSQL(`INSERT INTO assets(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,environment,cluster_name,created_at,last_sample_at,last_status,role)
+    VALUES ${rows.join(',')};
+    INSERT INTO event_keys(id,asset_id,started_at) VALUES ('${opened}','${assets.affected}',now()-interval '3 minutes'),('${recovered}','${assets.recovered}',now()-interval '5 minutes');
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,ended_at,event_group)
+    SELECT id,asset_id,'collection_failure','Matrix ' || CASE WHEN id='${opened}' THEN 'unavailable' ELSE 'recovery' END,
+      CASE WHEN id='${opened}' THEN 'open' ELSE 'resolved' END,started_at,CASE WHEN id='${recovered}' THEN now() END,'availability'
+    FROM event_keys WHERE id IN ('${opened}','${recovered}');
+    INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES ('${assets.affected}','availability','${opened}');
+    INSERT INTO silences(id,kind,asset_id,starts_at,ends_at,reason,created_at)
+    VALUES (gen_random_uuid(),'maintenance','${assets.maintenance}',now()-interval '1 minute',now()+interval '5 minutes','Browser maintenance',now());`);
+  const board = name => page.locator(`[data-board="${name}"]`);
+  await page.goto(origin + '/#wallboard?environment=matrix-acceptance');
+  for (const state of states) await board('assets').locator(`.wallboard-tile[data-state="${state}"]`).waitFor();
+  for (const [state, key] of [['affected','affectedCount'], ['maintenance','maintenanceCount'], ['recovered','recoveredCount'], ['missing','missingCount']]) {
+    const filter = board('kpis').locator(`[data-kpi="${key}"]`);
+    assert.equal(await filter.locator('strong').innerText(), '1');
+    await filter.click();
+    await visible(board('focus'), 'Matrix ' + state);
+    assert.equal(parameters(page).get('state'), state);
+    await filter.click();
+    await board('assets').locator('.wallboard-tile[data-state=healthy]').waitFor();
+  }
+  await board('assets').getByRole('button', { name: '关注 Matrix healthy', exact: true }).click();
+  await board('assets').getByRole('button', { name: '关注 Matrix affected', exact: true }).click();
+  await visible(board('watch'), '关注 2/4');
+  await board('watch').getByRole('button', { name: /Matrix healthy/ }).click();
+  await visible(board('focus'), 'Matrix healthy');
+  await board('layout').selectOption('host');
+  await board('assets').locator('.wallboard-host').first().waitFor();
+  await board('layout').selectOption('cluster');
+  await board('event-list').selectOption('resolved');
+  await board('events').locator(`[data-event="${recovered}"]`).click();
+  await visible(page.locator('#event-detail'), recovered);
+  await page.getByText('返回监控大屏', { exact: true }).click();
+  await visible(board('focus'), 'Matrix recovered');
+  assert.equal(parameters(page).get('event'), recovered);
+  assert(parameters(page).has('cursor') && parameters(page).has('from'));
+  await board('watch').getByRole('button', { name: '清除关注' }).click();
+  for (const width of [390, 1920, 3840]) {
+    await page.setViewportSize({width, height: width === 390 ? 844 : 1080});
+    assert(await board('assets').isVisible());
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  }
+  await page.setViewportSize({width: 1440, height: 880});
+  if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'duty-matrix.png') });
+  proof.push('Two cluster groups and five status types, scoped counts and filters, multiple pinned instances, host layout, recovered event return, and 390/1920/3840 viewport widths');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -640,6 +696,7 @@ async function pagination(page, asset) {
     await monitoring(page, asset);
     await operations(page, asset);
     await pagination(page, asset);
+    await dutyMatrix(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

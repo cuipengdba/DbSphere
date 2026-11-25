@@ -14,6 +14,7 @@ type LiveScope struct {
 	UnassignedHosts                            bool
 	Page                                       int
 	Focus                                      string
+	BoardState                                 string
 }
 
 // LiveObservation applies the authorized scope before ranking or limiting assets.
@@ -23,9 +24,9 @@ func (s *Postgres) LiveObservation(ctx context.Context, ids []string, staleAfter
 	var result json.RawMessage
 	err := s.pool.QueryRow(ctx, liveObservationSQL, ids, OrganizationFromContext(ctx), staleAfter,
 		scope.Organization, scope.Environment, scope.Cluster, scope.Engine, scope.Wallboard,
-		scope.Page, scope.Focus).Scan(&result)
+		scope.Page, scope.Focus, scope.BoardState).Scan(&result)
 	if err == nil && scope.Wallboard && scope.UnassignedHosts && ids == nil && scope.Organization == "" &&
-		scope.Environment == "" && scope.Cluster == "" && scope.Engine == "" && scope.Page == 0 {
+		scope.Environment == "" && scope.Cluster == "" && scope.Engine == "" && scope.BoardState == "" && scope.Page == 0 {
 		return s.addUnassignedWallHosts(result)
 	}
 	return result, err
@@ -79,6 +80,25 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	) priority ON true
 ), counts AS (
 	SELECT asset_id,count(*) AS total,bool_or(event_group='availability') AS unavailable FROM active GROUP BY asset_id
+), recoveries AS MATERIALIZED (
+	SELECT e.id,e.kind,e.event_group,e.title,e.status,e.asset_id,v.name AS asset_name,v.organization_id,e.started_at,e.ended_at,NULL::text AS severity
+	FROM events e JOIN selected v ON v.id=e.asset_id WHERE e.status='resolved'
+	AND e.started_at>=now()-interval '7 days' AND e.ended_at>=now()-interval '6 hours'
+), board_assets AS MATERIALIZED (
+	SELECT v.*,coalesce(c.total,0) AS open_events,coalesce(c.unavailable,false) AS unavailable,
+		r.ended_at AS recovered_at,w.ends_at AS maintenance_until
+	FROM selected v LEFT JOIN counts c ON c.asset_id=v.id
+	LEFT JOIN (SELECT asset_id,max(ended_at) AS ended_at FROM recoveries WHERE $8 GROUP BY asset_id) r ON r.asset_id=v.id
+	LEFT JOIN LATERAL (SELECT max(ends_at) AS ends_at FROM silences WHERE $8 AND kind='maintenance' AND revoked_at IS NULL
+		AND starts_at<=now() AND ends_at>now() AND (asset_id=v.id OR asset_id IS NULL)) w ON true
+), filtered AS MATERIALIZED (
+	SELECT * FROM board_assets WHERE NOT $8 OR CASE $11
+		WHEN 'affected' THEN open_events>0 OR freshness='error'
+		WHEN 'missing' THEN freshness NOT IN ('ok','error')
+		WHEN 'maintenance' THEN maintenance_until IS NOT NULL
+		WHEN 'recovered' THEN recovered_at IS NOT NULL
+		WHEN 'healthy' THEN open_events=0 AND freshness='ok' AND maintenance_until IS NULL
+		ELSE true END
 ), wall_hosts AS MATERIALIZED (
 	SELECT v.id,h.name,h.kind,h.assigned_node,
 		CASE WHEN h.identity IS NOT NULL THEN md5(concat_ws(chr(31),v.organization_id::text,v.environment,h.identity)) END AS host_key
@@ -103,10 +123,9 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	) h ON true
 	WHERE $8::boolean
 ), shown AS (
-	SELECT v.*,coalesce(c.total,0) AS open_events,coalesce(c.unavailable,false) AS unavailable
-	FROM selected v LEFT JOIN counts c ON c.asset_id=v.id
+	SELECT v.* FROM filtered v
 	LEFT JOIN wall_hosts h ON h.id=v.id
-	ORDER BY ($8 AND $9=0 AND v.id::text=$10) DESC,coalesce(c.unavailable,false) DESC,(c.total IS NOT NULL) DESC,
+	ORDER BY ($8 AND $9=0 AND v.id::text=$10) DESC,v.unavailable DESC,(v.open_events>0) DESC,
 		(v.freshness='error') DESC,CASE WHEN $8 THEN h.host_key END NULLS LAST,v.last_sample_at DESC NULLS LAST,v.id
 	LIMIT CASE WHEN $8 THEN 24 ELSE 120 END OFFSET CASE WHEN $8 THEN $9::int*24 ELSE 0 END
 ), readings AS (
@@ -125,7 +144,8 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 		'blocked',CASE WHEN m.metrics_json#>>'{diagnostics,locks,status}'='ok'
 			THEN m.metrics_json#>'{diagnostics,locks,data,blockedSessions}' END,
 		'linux',m.metrics_json#>'{linux,status}','k8s',m.metrics_json#>'{k8s,status}')
-		|| CASE WHEN $8 THEN jsonb_build_object('wallHost',CASE WHEN h.host_key IS NOT NULL THEN
+		|| CASE WHEN $8 THEN jsonb_build_object('clusterKey',a.cluster_key,'recoveredAt',a.recovered_at,'maintenanceUntil',a.maintenance_until,
+			'wallHost',CASE WHEN h.host_key IS NOT NULL THEN
 			jsonb_build_object('id',h.host_key,'name',h.name,'kind',h.kind,'cpu',m.metrics_json#>'{linux,cpu,usedPercent}',
 				'memory',m.metrics_json#>'{linux,memory,usedPercent}','diskRead',m.metrics_json#>'{linux,interval,diskReadBps}',
 				'diskWrite',m.metrics_json#>'{linux,interval,diskWriteBps}','source',m.metrics_json#>>'{linux,source}',
@@ -139,9 +159,7 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	SELECT *,CASE WHEN severity='critical' THEN 0 WHEN event_group='availability' THEN 1 WHEN severity='warning' THEN 2 ELSE 3 END AS priority FROM (
 		SELECT * FROM active
 		UNION ALL
-		SELECT e.id,e.kind,e.event_group,e.title,e.status,e.asset_id,v.name,v.organization_id,e.started_at,e.ended_at,NULL::text
-		FROM events e JOIN selected v ON v.id=e.asset_id WHERE e.status='resolved'
-		AND e.started_at>=now()-interval '7 days' AND e.ended_at>=now()-interval '6 hours'
+		SELECT * FROM recoveries
 	) rows ORDER BY (status='open') DESC,priority,coalesce(ended_at,started_at) DESC,id LIMIT 24
 )
 SELECT jsonb_build_object('observedAt',now(),'staleAfter',$3,
@@ -157,6 +175,10 @@ SELECT jsonb_build_object('observedAt',now(),'staleAfter',$3,
 		'status',status,'assetId',asset_id,'assetName',asset_name,'organizationId',organization_id,'severity',severity,'group',event_group,
 		'startedAt',started_at,'endedAt',ended_at) ORDER BY (status='open') DESC,priority,coalesce(ended_at,started_at) DESC,id) FROM recent),'[]'::jsonb))
 	|| CASE WHEN $8 THEN jsonb_build_object('hostCount',(SELECT count(DISTINCT host_key) FROM wall_hosts),
-		'missingCount',(SELECT count(*) FROM selected WHERE freshness<>'ok'),
+		'filteredTotal',(SELECT count(*) FROM filtered),
+		'affectedCount',(SELECT count(*) FROM board_assets WHERE open_events>0 OR freshness='error'),
+		'missingCount',(SELECT count(*) FROM board_assets WHERE freshness NOT IN ('ok','error')),
+		'maintenanceCount',(SELECT count(*) FROM board_assets WHERE maintenance_until IS NOT NULL),
+		'recoveredCount',(SELECT count(*) FROM recoveries),
 		'assignedNodes',coalesce((SELECT jsonb_agg(DISTINCT assigned_node) FROM wall_hosts WHERE assigned_node IS NOT NULL),'[]'::jsonb))
 	ELSE '{}'::jsonb END`
