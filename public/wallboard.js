@@ -53,6 +53,12 @@
     let snapshot, historyData, currentRange, pending, timer, active = false, paused = false;
     let snapshotKey = '', historyKey = '', renderedAssets = '', renderedEvents = '';
     let lastStatus = '', integrationsReady = false, checkIntegrationAfter = 0;
+    const chartDialog = get('chart-dialog');
+    const largePlot = get('chart-plot');
+    const largeChart = {
+      card: chartDialog, canvas: largePlot.querySelector('canvas'), values: get('chart-values'),
+      empty: get('chart-empty'), start: get('chart-start'), end: get('chart-end'), source: get('chart-source')
+    };
 
     const charts = chartSpecs.map(([title, source, series, maximum]) => {
       const card = node('section', 'wallboard-chart');
@@ -63,7 +69,8 @@
       caption.append(info, values);
       const plot = node('button', 'wallboard-plot');
       plot.type = 'button';
-      plot.setAttribute('aria-label', title + '，用左右方向键移动同步游标');
+      plot.setAttribute('aria-label', '放大' + title);
+      plot.setAttribute('aria-haspopup', 'dialog');
       const canvas = node('canvas');
       canvas.setAttribute('aria-hidden', 'true');
       const empty = node('span', 'wallboard-chart-empty');
@@ -71,26 +78,40 @@
       axis.setAttribute('aria-hidden', 'true');
       const start = node('span'), end = node('span');
       axis.append(start, end);
-      plot.append(canvas, empty);
+      const expand = node('span', 'wallboard-expand-icon', '⤢');
+      expand.setAttribute('aria-hidden', 'true');
+      plot.append(canvas, empty, expand);
       card.append(caption, plot, axis);
       get('charts').append(card);
-      plot.addEventListener('click', ev => {
-        if (!currentRange) return;
-        const fraction = ev.detail ? Math.max(0, Math.min(1, ev.offsetX / plot.clientWidth)) : 0.5;
-        setCursor(currentRange.from + fraction * (currentRange.to - currentRange.from));
+      plot.addEventListener('click', () => {
+        get('chart-heading').textContent = title;
+        largeChart.source.textContent = source;
+        largeChart.source.removeAttribute('title');
+        Object.assign(largeChart, { series, maximum });
+        chartDialog.showModal();
+        drawAll();
       });
       plot.addEventListener('keydown', ev => {
-        if (!currentRange || !['ArrowLeft', 'ArrowRight', 'Escape'].includes(ev.key)) return;
-        ev.preventDefault();
-        if (ev.key === 'Escape') return setCursor(null);
-        const step = (historyData?.bucketMinutes || 1) * minute;
-        setCursor((selection.cursor ?? currentRange.to) + (ev.key === 'ArrowLeft' ? -step : step));
+        if (ev.key === 'Escape' && selection.cursor != null) {
+          ev.preventDefault();
+          setCursor(null);
+        } else moveCursor(ev);
       });
       return { card, canvas, values, empty, start, end, source: info.lastChild, series, maximum };
     });
 
+    get('chart-close').addEventListener('click', () => chartDialog.close());
+    largePlot.addEventListener('keydown', moveCursor);
+    largePlot.addEventListener('click', ev => {
+      if (!currentRange) return;
+      const bounds = largePlot.getBoundingClientRect();
+      const fraction = ev.detail ? (ev.clientX - bounds.left) / bounds.width : 0.5;
+      setCursor(currentRange.from + fraction * (currentRange.to - currentRange.from));
+    });
+
     const resize = new ResizeObserver(() => { if (active) drawAll(); });
     resize.observe(get('charts'));
+    resize.observe(largePlot);
     const theme = new MutationObserver(() => { if (active) drawAll(); });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
@@ -157,6 +178,7 @@
       clearTimeout(timer);
       pending?.abort();
       pending = null;
+      if (chartDialog.open) chartDialog.close();
       if (document.fullscreenElement === root) void document.exitFullscreen().catch(() => {});
     }
 
@@ -603,6 +625,13 @@
       const colors = { grid: variable('grid'), error: variable('error'), ok: variable('ok'), change: variable('change'),
         cursor: variable('text'), series: [variable('a'), variable('b')] };
       for (const chart of charts) paint(chart, colors);
+      if (chartDialog.open) {
+        const point = nearestPoint();
+        const label = point ? (selection.cursor == null ? '最近样本 ' : '游标样本 ') + formatTime(point.at)
+          : selection.cursor == null ? '' : '游标处缺采 ' + formatTime(iso(selection.cursor));
+        get('chart-context').textContent = [get('focus').textContent, label].filter(Boolean).join(' · ');
+        paint(largeChart, colors);
+      }
     }
 
     function selectAsset(value) {
@@ -619,6 +648,13 @@
       } else selection.cursor = null;
       saveRoute();
       render();
+    }
+
+    function moveCursor(event) {
+      if (!currentRange || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const step = (historyData?.bucketMinutes || 1) * minute;
+      setCursor((selection.cursor ?? currentRange.to) + (event.key === 'ArrowLeft' ? -step : step));
     }
 
     function fillDates(range) {

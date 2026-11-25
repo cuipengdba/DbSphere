@@ -2,7 +2,7 @@
 
 **全域数据库智能运维管理平台** · 开源数据库监控、诊断与运维工作台
 
-[![当前版本 v2.24.0](https://img.shields.io/badge/当前版本-v2.24.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v2.24.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前版本 v2.25.0](https://img.shields.io/badge/当前版本-v2.25.0-238636?style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/tag/v2.25.0) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、一条可追溯证据链**为核心，把资产、数据库指标、Linux/Kubernetes 资源、连接池、告警、巡检、SQL 性能和应用 Trace 汇集到浏览器工作台。监控目标支持 PostgreSQL 14–19，长期监控存储使用独立 PostgreSQL 18。
 
@@ -56,7 +56,7 @@ DbSphere 面向已有 PostgreSQL 环境，以**一个问题、一个事件 ID、
 
 ## 当前交付状态
 
-当前正式版 **V2.24.0** 为 Linux amd64 和 arm64 提供 Go 静态服务端、标准与增强一键离线容器包和原生 systemd 安装包。原生安装可连接已有独立 PostgreSQL 18，预检覆盖数据库版本、写入状态和架构迁移权限。资产大屏可对照主机资源、I/O、PG 连接、事务、SQL 延迟、锁等待、复制、连接池及容器文件缓存。打开异常能继续调查同一个事件，查看根因证据并返回同一资产和时间窗。监控工作台支持集群、实例、数据库和 SQL 层级下钻。管理员可短时高频采样并回放历史阻塞树。增强包提供站内 Grafana 专题，可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v2.24.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [连接阶段与等待](docs/CONNECTION_STAGES.md) · [规模采集与历史验收](docs/COLLECTOR_LOAD_ACCEPTANCE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
+当前正式版 **V2.25.0** 为 Linux amd64 和 arm64 提供 Go 静态服务端、标准与增强一键离线容器包和原生 systemd 安装包。原生安装可连接已有独立 PostgreSQL 18，预检覆盖数据库版本、写入状态和架构迁移权限。资产大屏的 12 张趋势图可点击放大，并保留当前实例、时段和同步游标。资产大屏可对照主机资源、I/O、PG 连接、事务、SQL 延迟、锁等待、复制、连接池及容器文件缓存。打开异常能继续调查同一个事件，查看根因证据并返回同一资产和时间窗。监控工作台支持集群、实例、数据库和 SQL 层级下钻。管理员可短时高频采样并回放历史阻塞树。增强包提供站内 Grafana 专题，可选 AI 提供证据问答与严重告警解读。[一键离线安装包](https://github.com/cuipengdba/DbSphere/releases/tag/v2.25.0) · [监控工作台](docs/MONITORING_WORKSPACE.md) · [连接阶段与等待](docs/CONNECTION_STAGES.md) · [规模采集与历史验收](docs/COLLECTOR_LOAD_ACCEPTANCE.md) · [支持矩阵](docs/SUPPORT_MATRIX.md) · [安全审查](docs/V1_SECURITY_REVIEW.md)
 
 慢日志支持分批增量导入和重复记录检测。SQL 诊断按纳管数据库和 Query ID 回放计划，呈现扫描、连接方式、估算偏差与临时 I/O 的前后对照。[SQL 证据与前后计划](docs/MONITORING_WORKSPACE.md#sql-证据与前后计划)
 

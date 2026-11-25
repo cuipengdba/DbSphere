@@ -1,0 +1,64 @@
+name: Browser acceptance
+
+on:
+  push:
+    branches: [main, 'release/**', 'verify/v2.25-browser']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: dbsphere-browser-fixture
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Verify the console against the Go server and PostgreSQL 18
+        shell: bash
+        env:
+          DBSPHERE_HOST: 127.0.0.1
+          DBSPHERE_PORT: 18080
+          DBSPHERE_ADMIN_PASSWORD: dbsphere-browser-admin-fixture
+          DBSPHERE_VIEWER_PASSWORD: dbsphere-browser-viewer-fixture
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-browser-fixture@127.0.0.1:15434/postgres?sslmode=disable
+          DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
+          export DBSPHERE_TEST_VERSION="$(node -p "require('./package.json').version")"
+          export DBSPHERE_BROWSER_OUTPUT="$RUNNER_TEMP/browser-results"
+          mkdir -p "$DBSPHERE_BROWSER_OUTPUT"
+          go build -o "$RUNNER_TEMP/dbsphere" ./cmd/dbsphere
+          "$RUNNER_TEMP/dbsphere" >"$DBSPHERE_BROWSER_OUTPUT/server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:18080/readyz
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-package-lock @playwright/cli@0.1.22
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright-cli" install-browser chromium
+          cp scripts/browser-acceptance.cjs scripts/log-browser-acceptance.cjs "$RUNNER_TEMP/pw/"
+          node "$RUNNER_TEMP/pw/browser-acceptance.cjs" | tee "$DBSPHERE_BROWSER_OUTPUT/console.json"
+          node "$RUNNER_TEMP/pw/log-browser-acceptance.cjs" | tee "$DBSPHERE_BROWSER_OUTPUT/logs.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dbsphere-browser-acceptance
+          path: ${{ runner.temp }}/browser-results
+          if-no-files-found: error

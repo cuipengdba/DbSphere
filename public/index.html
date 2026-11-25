@@ -272,6 +272,24 @@
         </div>
         <div class="wallboard-context" data-board="context"></div>
         <div class="wallboard-charts" data-board="charts"></div>
+        <dialog class="wallboard-chart-dialog" data-board="chart-dialog" aria-labelledby="wallboard-chart-heading">
+          <header class="wallboard-chart-dialog-heading">
+            <div>
+              <h2 id="wallboard-chart-heading" data-board="chart-heading"></h2>
+              <span class="wallboard-chart-source" data-board="chart-source"></span>
+            </div>
+            <button type="button" class="ghost" data-board="chart-close" autofocus>关闭</button>
+          </header>
+          <div class="wallboard-chart-dialog-meta">
+            <span data-board="chart-context"></span>
+            <div class="wallboard-chart-values" data-board="chart-values"></div>
+          </div>
+          <button type="button" class="wallboard-plot" data-board="chart-plot" aria-label="图表游标，用左右方向键查看采样值">
+            <canvas aria-hidden="true"></canvas>
+            <span class="wallboard-chart-empty" data-board="chart-empty"></span>
+          </button>
+          <div class="wallboard-axis"><span data-board="chart-start"></span><span data-board="chart-end"></span></div>
+        </dialog>
         <footer class="wallboard-fullscreen-foot" data-board="fullscreen-version"></footer>
       </section>
       <section class="operations-board" id="operations-board" data-view="overview" aria-label="全域监控总览">
