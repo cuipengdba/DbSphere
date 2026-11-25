@@ -2713,14 +2713,55 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
   if (replay.peak) comparisons.set('peak', replay.peak);
+  const graph = analysis.graph || { nodes: [], edges: [] };
+  const graphNodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const orderedPoints = replay.points.filter(point => incidentPointKey(point) && Number.isFinite(Date.parse(point.at)))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const eventStart = Date.parse(event.startedAt);
+  const firstEvidence = Date.parse(orderedPoints[0]?.at) || eventStart;
+  const lastEvidence = Date.parse(orderedPoints.at(-1)?.at) || eventStart;
+  const trackWindow = { from: Math.min(eventStart, firstEvidence) - 60000,
+    to: Math.max(Date.parse(event.endedAt) || eventStart, lastEvidence) + 60000 };
+  const services = [...new Set(orderedPoints.filter(point => point.layer === 'app' && point.source).map(point => point.source))].sort();
   const params = investigationParams(event.id);
   let phase = phases.some(([key]) => key === params.get('focusPhase')) ? params.get('focusPhase') : 'during';
   let layer = layers.some(([key]) => key === params.get('focusLayer')) ? params.get('focusLayer') : 'all';
-  let focused = replay.points.find(point => incidentPointKey(point) && incidentPointKey(point) === params.get('focusPoint'));
+  let service = services.includes(params.get('focusService')) ? params.get('focusService') : '';
+  let focused = orderedPoints.find(point => incidentPointKey(point) === params.get('focusPoint'));
+  let playTimer = null;
   const anchor = cell('p', '', 'investigation-anchor');
   const list = cell('div', '', 'investigation-signals');
   const lanes = cell('div', '', 'investigation-lanes');
   const selection = cell('div', '', 'investigation-selection');
+  const selectedRelations = cell('div', '', 'investigation-relations');
+  const compare = cell('section', '', 'investigation-differences');
+  const player = cell('div', '', 'investigation-player');
+  player.setAttribute('aria-label', '事件回放控制');
+  const playButton = makeControl('播放', togglePlayback);
+  playButton.setAttribute('aria-label', '播放事件回放');
+  playButton.setAttribute('aria-pressed', 'false');
+  const previousFrame = makeControl('上一条', () => { stopPlayback(); step(-1); });
+  const nextFrame = makeControl('下一条', () => { stopPlayback(); step(1); });
+  const scrubber = cell('input');
+  scrubber.type = 'range'; scrubber.min = '0'; scrubber.step = '1';
+  scrubber.setAttribute('aria-label', '证据时间轴游标');
+  scrubber.addEventListener('input', () => { stopPlayback(); activateFrame(Number(scrubber.value)); });
+  const timeReadout = cell('small', '', 'investigation-playback-readout');
+  const controls = cell('div', '', 'investigation-player-controls');
+  controls.append(previousFrame, playButton, nextFrame, timeReadout);
+  if (services.length) {
+    const selector = cell('select');
+    selector.setAttribute('aria-label', '应用服务');
+    for (const name of ['', ...services]) selector.append(new Option(name || '全部应用服务', name));
+    selector.value = service;
+    selector.addEventListener('change', () => {
+      stopPlayback(); service = selector.value;
+      if (focused && !inService(focused)) focused = undefined;
+      render(true);
+    });
+    controls.append(selector);
+  }
+  player.append(controls, scrubber);
   const phaseBar = cell('div', '', 'investigation-stages');
   phaseBar.setAttribute('aria-label', '故障阶段');
   lanes.setAttribute('aria-label', '同窗分层证据');
@@ -2730,12 +2771,12 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     const stage = stagePoint(key);
     const at = stage?.sampleAt || stage?.at;
     button.append(cell('strong', label), cell('small', at ? formatTime(at) : key === 'after' && event.status === 'open' ? '待恢复' : '缺采样'));
-    button.addEventListener('click', () => { phase = key; focused = undefined; render(true); });
+    button.addEventListener('click', () => { stopPlayback(); phase = key; focused = undefined; render(true); });
     button.dataset.phase = key;
     phaseBar.append(button);
     return button;
   });
-  timeline.append(cell('h4', '同一时间窗'), phaseBar, anchor, lanes, selection, list);
+  timeline.append(cell('h4', '事件证据回放'), phaseBar, player, anchor, lanes, selection, selectedRelations, compare, list);
   const exportButton = cell('button', '下载当前证据复盘', 'ghost small-button');
   exportButton.type = 'button';
   const rank = candidate => Number(candidate.review?.status !== 'rejected') * 4 + Number(candidate.evidenceStrength === 'direct');
@@ -2784,11 +2825,133 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     cautions.append(cell('strong', '反证与标识冲突'),
       cell('p', conflicts[0]?.limitation || (typeof counterEvidence === 'string' ? counterEvidence : '详见根因候选中的反证。')));
   }
+  if (primary) {
+    const sources = cell('div', '', 'investigation-candidate-sources');
+    for (const [key, title] of [['supports', '支持证据'], ['against', '反证']]) {
+      const ids = primary[key] || [];
+      const rows = ids.slice(0, 6).map(id => {
+        const node = graphNodes.get(id) || graphNodes.get(`evidence:${id}`);
+        const point = orderedPoints.find(item => evidenceNodes(item).includes(node?.id || id));
+        if (point) return makeControl(node?.label || replayKinds[point.kind] || point.kind, () => selectPoint(point, 'all'));
+        if (node?.source) {
+          const link = cell('a', node.label || id, 'monitor-link');
+          link.href = node.source;
+          return link;
+        }
+        return cell('span', node?.label || id);
+      });
+      if (rows.length) sources.append(cell('strong', title), ...rows);
+    }
+    if (sources.childElementCount) cautions.append(sources);
+  }
   if (reasons.length || analysis.missingSignals?.length) {
     cautions.append(cell('strong', '待核对'), cell('p', reasons[0] || analysis.missingSignals[0]));
   }
   if (cautions.childElementCount) diagnosis.append(cautions);
   diagnosis.append(exportButton);
+
+  function makeControl(label, action) {
+    const button = cell('button', label, 'ghost small-button');
+    button.type = 'button';
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  function inService(point) { return !service || point.layer !== 'app' || service === point.source; }
+  function frames() { return orderedPoints.filter(point => inService(point) && (layer === 'all' || layerKeys[layer].includes(point.layer))); }
+  function frameIndex(items) {
+    if (items.includes(focused)) return items.indexOf(focused);
+    const at = Date.parse(focus()?.at || event.startedAt);
+    const next = items.findIndex(item => Date.parse(item.at) >= at);
+    return next >= 0 ? next : Math.max(0, items.length - 1);
+  }
+  function activateFrame(index) {
+    const point = frames()[index];
+    if (!point) return false;
+    focused = point;
+    phase = phases.some(([key]) => key === point.phase) ? point.phase : phase;
+    render(true);
+    return true;
+  }
+  function step(delta) { return activateFrame(frameIndex(frames()) + delta); }
+  function stopPlayback() {
+    clearInterval(playTimer);
+    playTimer = null;
+    playButton.textContent = '播放';
+    playButton.setAttribute('aria-label', '播放事件回放');
+    playButton.setAttribute('aria-pressed', 'false');
+  }
+  function togglePlayback() {
+    if (playTimer) { stopPlayback(); return; }
+    const points = frames();
+    if (points.length < 2) return;
+    if (!focused || frameIndex(points) === points.length - 1) activateFrame(0);
+    playButton.textContent = '暂停';
+    playButton.setAttribute('aria-label', '暂停事件回放');
+    playButton.setAttribute('aria-pressed', 'true');
+    playTimer = setInterval(() => {
+      if (!panel.isConnected || panel.closest('[hidden]') || document.hidden || !step(1)) stopPlayback();
+    }, 900);
+  }
+
+  function evidenceNodes(point) {
+    return [point.evidenceId && `evidence:${point.evidenceId}`, point.sampleId && `sample:${point.sampleId}`,
+      point.traceId && point.spanId && `span:${point.traceId}:${point.spanId}`].filter(Boolean);
+  }
+
+  function renderSelectedRelations(point) {
+    const ids = new Set(point ? evidenceNodes(point) : []);
+    const edges = graph.edges.filter(edge => ids.has(edge.from) || ids.has(edge.to)).slice(0, 8);
+    selectedRelations.replaceChildren();
+    selectedRelations.hidden = !edges.length;
+    if (edges.length) selectedRelations.append(cell('strong', '当前证据关系'));
+    const names = { blocked_by: '被阻塞于', same_backend_pid: '后端 PID 匹配', time_window: '同一时间窗',
+      observed_in: '原始采样', calls_service: '调用服务', calls: '调用', observed_session: '观测会话',
+      collected_from: '采自', observed_sql: '观测到 SQL', via_pooler: '经由连接池', compared_with: '对照样本', contains: '包含' };
+    for (const edge of edges) {
+      const from = graphNodes.get(edge.from), to = graphNodes.get(edge.to);
+      const row = cell('p', `${from?.label || edge.from} · ${names[edge.relation] || edge.relation} · ${to?.label || edge.to}`);
+      const origin = ids.has(edge.from) ? to : from;
+      if (origin?.source) {
+        const link = cell('a', '打开证据', 'monitor-link');
+        link.href = origin.source;
+        row.append(' · ', link);
+      }
+      selectedRelations.append(row);
+    }
+  }
+
+  const phaseSelect = (name, setting, fallback) => {
+    const input = cell('select');
+    input.setAttribute('aria-label', name);
+    for (const [key, label] of phases) input.append(new Option(label, key));
+    input.value = phases.some(([key]) => key === params.get(setting)) ? params.get(setting) : fallback;
+    input.addEventListener('change', () => { stopPlayback(); render(true); });
+    return input;
+  };
+  const leftPhase = phaseSelect('对比基线阶段', 'compareLeft', 'before');
+  const rightPhase = phaseSelect('对比目标阶段', 'compareRight', event.status === 'resolved' ? 'after' : replay.peak ? 'peak' : 'during');
+  const diffGrid = cell('div', '', 'monitor-table');
+  const diffControls = cell('div', '', 'investigation-player-controls');
+  diffControls.append(cell('strong', '阶段对比'), leftPhase, rightPhase);
+  compare.append(diffControls, diffGrid);
+
+  function renderComparison() {
+    const before = comparisons.get(leftPhase.value), after = comparisons.get(rightPhase.value);
+    const labels = [leftPhase, rightPhase].map(select => select.selectedOptions[0].text);
+    const provenance = [before, after].map((row, index) => {
+      const container = cell('span', `${labels[index]} ${row?.at ? formatTime(row.at) : '缺少可比采样'}`);
+      if (row?.sampleId) container.append(' · ', replaySampleLink(event.assetId, row.sampleId));
+      return container;
+    });
+    const values = [['connections', '连接'], ['blockedSessions', '阻塞会话'], ['poolWaiting', '连接池等待'], ['replicationLagBytes', '复制差距（字节）']];
+    const rows = values.map(([key, title]) => {
+      const a = before?.metrics?.[key], b = after?.metrics?.[key];
+      return [title, a ?? '—', b ?? '—', Number.isFinite(a) && Number.isFinite(b) ? `${b > a ? '+' : ''}${b - a}` : '—'];
+    });
+    const sources = cell('div', '', 'investigation-comparison-sources'); sources.append(...provenance);
+    diffGrid.replaceChildren(sources, importTable(['信号', ...labels, '变化'], rows));
+  }
 
   function stagePoint(key) {
     const row = comparisons.get(key);
@@ -2798,7 +2961,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   function focus() { return focused || stagePoint(phase); }
   function selectedPoints(at) {
     if (!Number.isFinite(at)) return [];
-    return replay.points.filter(point => (layer === 'all' || layerKeys[layer].includes(point.layer)) &&
+    return replay.points.filter(point => inService(point) && (layer === 'all' || layerKeys[layer].includes(point.layer)) &&
       Math.abs(Date.parse(point.at) - at) <= 300000)
       .sort((a, b) => Math.abs(Date.parse(a.at) - at) - Math.abs(Date.parse(b.at) - at)).slice(0, 16);
   }
@@ -2816,6 +2979,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     return source && at >= source.from && at < source.to ? source : { from: at - 300000, to: Math.max(at + 1, Math.min(Date.now(), at + 300000)) };
   }
   function selectPoint(point, key) {
+    stopPlayback();
     focused = point;
     layer = key;
     render(true);
@@ -2826,6 +2990,8 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     if (save) {
       const query = investigationParams(event.id);
       query.set('focusPhase', phase); query.set('focusLayer', layer);
+      if (service) query.set('focusService', service); else query.delete('focusService');
+      query.set('compareLeft', leftPhase.value); query.set('compareRight', rightPhase.value);
       const key = focused && incidentPointKey(focused);
       if (key) query.set('focusPoint', key);
       else query.delete('focusPoint');
@@ -2834,6 +3000,16 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     const point = focus();
     const at = Date.parse(point?.sampleAt || point?.at);
     const viewport = Number.isFinite(at) ? phaseWindow(at) : null;
+    const ordered = frames();
+    const index = frameIndex(ordered);
+    scrubber.max = String(Math.max(0, ordered.length - 1)); scrubber.value = String(index);
+    scrubber.disabled = playButton.disabled = ordered.length < 2;
+    previousFrame.disabled = index === 0 || !ordered.length;
+    nextFrame.disabled = index >= ordered.length - 1;
+    timeReadout.textContent = ordered.length ? `${formatTime(ordered[index].at)} · ${index + 1}/${ordered.length}` : '缺少可播放证据';
+    scrubber.setAttribute('aria-valuetext', timeReadout.textContent);
+    renderSelectedRelations(point);
+    renderComparison();
     anchor.replaceChildren(document.createTextNode(viewport
       ? `${formatTime(at)} · ${formatTime(viewport.from)} 至 ${formatTime(viewport.to)}${point.sampleId ? '' : ' · 无对应原始采样'}`
       : phase === 'after' && event.status === 'open' ? '等待恢复观测' : '缺少可比采样'));
@@ -2851,26 +3027,23 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     const all = cell('button', '所有证据层', 'investigation-lane-filter');
     all.type = 'button';
     all.setAttribute('aria-pressed', String(layer === 'all'));
-    all.addEventListener('click', () => { layer = 'all'; render(true); lanes.firstElementChild.focus(); });
+    all.addEventListener('click', () => { stopPlayback(); layer = 'all'; render(true); lanes.firstElementChild.focus(); });
     lanes.append(all);
     for (const [key, label] of layers.slice(1)) {
       const row = cell('div', '', 'investigation-lane');
       const filter = cell('button', label, 'investigation-lane-filter');
       filter.type = 'button';
       filter.setAttribute('aria-pressed', String(layer === key));
-      filter.addEventListener('click', () => { layer = key; render(true); lanes.querySelector(`[data-lane="${key}"]`).focus(); });
+      filter.addEventListener('click', () => { stopPlayback(); layer = key; render(true); lanes.querySelector(`[data-lane="${key}"]`).focus(); });
       filter.dataset.lane = key;
       row.append(filter);
       const track = cell('div', '', 'investigation-track');
-      const points = viewport ? replay.points.filter(item => {
-        const time = Date.parse(item.at);
-        return layerKeys[key].includes(item.layer) && time >= viewport.from && time <= viewport.to;
-      }) : [];
+      const points = orderedPoints.filter(item => inService(item) && layerKeys[key].includes(item.layer));
       if (!points.length) track.append(cell('small', '当前选区缺采样', 'investigation-track-empty'));
       else {
-        const position = time => 4 + 92 * (time - viewport.from) / (viewport.to - viewport.from);
+        const position = time => 4 + 92 * Math.max(0, Math.min(1, (time - trackWindow.from) / (trackWindow.to - trackWindow.from)));
         const marker = cell('span', '', 'investigation-cursor');
-        marker.style.left = `${position(at)}%`;
+        marker.style.left = `${position(Date.parse(point?.at) || eventStart)}%`;
         marker.setAttribute('aria-hidden', 'true');
         track.append(marker);
         const nextByPosition = new Map();
@@ -2957,6 +3130,8 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
     lines.push(`调查链接 <${location.href}>`, '',
       `关键证据 ${reference(strongestSource || replay.detection)}`,
       `恢复 ${replay.recovery?.at ? formatTime(replay.recovery.at) : '待观察'} · ${reference(replay.recovery)}`, '');
+    lines.push(`对照基线 ${clean(leftPhase.selectedOptions[0].text)} · ${reference(comparisons.get(leftPhase.value))}`,
+      `对照目标 ${clean(rightPhase.selectedOptions[0].text)} · ${reference(comparisons.get(rightPhase.value))}`, '');
     if (primary) lines.push(`候选 ${clean(primary.hypothesis || primary.title)}`, `核查范围 ${clean(primary.limitation)}`,
       `人工结论 ${clean(primary.review?.status || '待复核')} ${clean(primary.review?.reason)}`, '');
     for (const item of selectedPoints(at)) lines.push(`- ${formatTime(item.at)} · ${clean(replayLayers[item.layer])} · ${clean(pointStrength(item))} · 证据 ${clean(item.evidenceId)} · ${reference(item)}`);
@@ -3194,6 +3369,22 @@ function incidentImpactPanel(impact, event) {
   const open = members.filter(item => item.status === 'open').length;
   panel.append(cell('h4', '跨实例影响范围'),
     cell('p', `${impact.truncated ? '当前展示 ' : ''}${members.length} 个实例事件 · ${open} 个处理中 · ${resolved} 个已恢复`, 'hint'));
+  const assetsInScope = new Map(members.map(member => [member.assetId, member.assetName || member.assetId]));
+  const assetFilter = cell('select');
+  assetFilter.setAttribute('aria-label', '筛选受影响资产');
+  assetFilter.append(new Option('全部受影响资产', ''));
+  for (const [id, label] of assetsInScope) assetFilter.append(new Option(label, id));
+  const assetScope = investigationParams(event.id).get('impactAsset');
+  if (assetsInScope.has(assetScope)) assetFilter.value = assetScope;
+  const memberRows = cell('div', '', 'impact-members');
+  if (assetsInScope.size > 1) panel.append(assetFilter);
+  panel.append(memberRows);
+  assetFilter.addEventListener('change', () => {
+    const query = investigationParams(event.id);
+    if (assetFilter.value) query.set('impactAsset', assetFilter.value); else query.delete('impactAsset');
+    history.replaceState(history.state, '', `#incidents?${query}`);
+    for (const row of memberRows.children) row.hidden = !!assetFilter.value && row.dataset.asset !== assetFilter.value;
+  });
   const eventLink = (id, label) => {
     const link = cell('a', label, 'monitor-link');
     link.href = `#incidents?event=${encodeURIComponent(id)}`;
@@ -3201,6 +3392,8 @@ function incidentImpactPanel(impact, event) {
   };
   for (const member of members) {
     const row = cell('div', '', 'evidence impact-member');
+    row.dataset.asset = member.assetId;
+    row.hidden = !!assetFilter.value && member.assetId !== assetFilter.value;
     const prefix = member.eventId === impact.primaryEventId ? '主事件' : '子事件';
     const times = [member.cluster, member.startedAt && `开始 ${formatTime(member.startedAt)}`,
       member.endedAt ? `结束 ${formatTime(member.endedAt)}` : member.status === 'open' ? '处理中' : member.status].filter(Boolean);
@@ -3211,7 +3404,7 @@ function incidentImpactPanel(impact, event) {
       row.append(observed);
     }
     if (member.services?.length) row.append(cell('p', `同窗数据库失败调用 · ${member.services.map(service => `${service.name} ${service.failures} 次`).join(' · ')}`));
-    panel.append(row);
+    memberRows.append(row);
   }
   if (history.length) {
     const details = cell('details', '', 'settings-details');

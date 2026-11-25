@@ -757,6 +757,7 @@ async function dutyMatrix(page) {
   const states = ['healthy', 'affected', 'maintenance', 'recovered', 'missing'];
   const assets = Object.fromEntries(states.map(state => [state, randomUUID()]));
   const opened = randomUUID(), recovered = randomUUID(), originSample = randomUUID();
+  const recoverySample = randomUUID(), triggerEvidence = randomUUID(), recoveryEvidence = randomUUID();
   const rows = states.map((state, index) => `('${assets[state]}','Matrix ${state}','127.0.0.1',15434,'postgres','postgres','','disable','managed',
     'matrix-acceptance','Matrix ${index < 2 ? 'A' : 'B'}',now(),${state === 'missing' ? 'NULL' : 'now()'},
     '${state === 'missing' ? 'pending' : 'ok'}','${index === 0 || index === 3 ? 'replica' : 'primary'}')`);
@@ -768,11 +769,17 @@ async function dutyMatrix(page) {
       CASE WHEN id='${opened}' THEN 'open' ELSE 'resolved' END,started_at,CASE WHEN id='${recovered}' THEN now() END,'availability'
     FROM event_keys WHERE id IN ('${opened}','${recovered}');
     INSERT INTO samples(id,asset_id,collected_at,status,metrics_json,error)
-    SELECT '${originSample}',asset_id,started_at,'error','{"collector":{"pgStatus":"error"}}','Browser capture at incident start'
+    SELECT '${originSample}',asset_id,started_at,'error','{"connections":9,"collector":{"pgStatus":"error"}}','Browser capture at incident start'
+    FROM event_keys WHERE id='${recovered}';
+    INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+    SELECT gen_random_uuid(),asset_id,started_at-interval '1 minute','ok','{"connections":3}' FROM event_keys WHERE id='${recovered}'
+    UNION ALL SELECT '${recoverySample}'::uuid,asset_id,ended_at,'ok','{"connections":4}'::jsonb FROM events WHERE id='${recovered}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT '${triggerEvidence}',id,'collection_error',started_at,jsonb_build_object('sampleId','${originSample}'::text,'source','go_collector')
     FROM event_keys WHERE id='${recovered}';
     INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-    SELECT gen_random_uuid(),id,'collection_error',started_at,jsonb_build_object('sampleId','${originSample}'::text,'source','go_collector')
-    FROM event_keys WHERE id='${recovered}';
+    SELECT '${recoveryEvidence}',id,'collection_recovered',ended_at,jsonb_build_object('sampleId','${recoverySample}'::text,'source','go_collector')
+    FROM events WHERE id='${recovered}';
     INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES ('${assets.affected}','availability','${opened}');
     INSERT INTO silences(id,kind,asset_id,starts_at,ends_at,reason,created_at)
     VALUES (gen_random_uuid(),'maintenance','${assets.maintenance}',now()-interval '1 minute',now()+interval '5 minutes','Browser maintenance',now());`);
@@ -799,12 +806,31 @@ async function dutyMatrix(page) {
   await board('event-list').selectOption('resolved');
   await board('events').locator(`[data-event="${recovered}"]`).click();
   await visible(page.locator('#event-detail'), recovered);
+  const investigation = page.getByRole('region', { name: '事件调查工作台' });
+  const scrubber = investigation.getByLabel('证据时间轴游标');
+  await investigation.getByRole('button', { name: '播放事件回放' }).click();
+  await page.waitForFunction(id => new URLSearchParams(location.hash.split('?')[1]).get('focusPoint') === id, recoveryEvidence);
+  const pause = investigation.getByRole('button', { name: '暂停事件回放' });
+  if (await pause.isVisible()) await pause.click();
+  await scrubber.press('Home');
+  await page.waitForFunction(id => new URLSearchParams(location.hash.split('?')[1]).get('focusPoint') === id, triggerEvidence);
+  await investigation.getByLabel('对比目标阶段').selectOption('during');
+  const delta = investigation.getByRole('row').filter({ hasText: '连接' });
+  await visible(delta, '+6');
+  await investigation.getByLabel('对比目标阶段').selectOption('after');
+  await visible(delta, '+1');
+  await visible(investigation.locator('.investigation-relations'), '当前证据关系');
   const evidenceRoute = route(page);
   await page.locator(`#event-detail a[href="/api/assets/${assets.recovered}/samples/${originSample}"]:visible`).first().click();
   await visible(page.locator('#sample-details'), 'Browser capture at incident start');
   await page.locator('#sample-return').click();
   await page.waitForURL(url => url.hash === evidenceRoute);
   await visible(page.locator('#event-detail'), recovered);
+  assert.equal(await investigation.getByLabel('对比目标阶段').inputValue(), 'after');
+  assert.equal(parameters(page).get('focusPoint'), triggerEvidence);
+  await download(page, investigation.getByRole('button', { name: '下载当前证据复盘' }), /\.md$/);
+  if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'incident-playback.png') });
+  proof.push('Played and scrubbed one incident, compared observed phases, loaded selected relationships, reopened evidence and downloaded the restored investigation');
   await page.getByText('返回监控大屏', { exact: true }).click();
   await visible(board('focus'), 'Matrix recovered');
   assert.equal(parameters(page).get('event'), recovered);

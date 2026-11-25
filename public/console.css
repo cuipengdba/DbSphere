@@ -111,6 +111,14 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .investigation-stage[aria-pressed="true"] { color: var(--accent); background: var(--selected); border-color: var(--brand-fill); box-shadow: inset 0 -2px var(--brand-fill); }
 .investigation-stage small { color: var(--muted); font-size: 10px; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .investigation-anchor { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.investigation-player, .investigation-differences, .investigation-relations { display: grid; gap: 8px; min-width: 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+.investigation-player-controls, .investigation-comparison-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; }
+.investigation-player input[type="range"] { width: 100%; min-width: 0; accent-color: var(--brand-fill); }
+.investigation-player select, .investigation-differences select { min-width: 0; max-width: 100%; padding: 5px 8px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface); color: var(--text); }
+.investigation-playback-readout, .investigation-comparison-sources { color: var(--muted); font-variant-numeric: tabular-nums; }
+.investigation-relations p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.investigation-candidate-sources { display: grid; justify-items: start; gap: 5px; }
+.investigation-candidate-sources button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .investigation-lanes { display: grid; gap: 1px; padding: 5px; background: var(--soft); border: 1px solid var(--border); border-radius: 8px; }
 .investigation-lane { display: grid; grid-template-columns: minmax(101px, max-content) minmax(0, 1fr) 21px; gap: 4px; align-items: center; min-height: 29px; border-top: 1px solid var(--border); }
 .investigation-lane-filter, .investigation-pick { justify-self: start; padding: 4px; text-align: left; background: transparent; color: var(--text); font-size: 11px; }

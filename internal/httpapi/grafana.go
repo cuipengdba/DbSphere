@@ -140,7 +140,7 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 		if raw, ok := strings.CutPrefix(context, "incidents?"); ok && len(context) <= 5200 {
 			selected, err := url.ParseQuery(raw)
 			if err == nil && selected.Get("event") == eventID {
-				for _, key := range []string{"return", "focusPhase", "focusLayer", "layer", "phase", "strength"} {
+				for _, key := range []string{"return", "focusPhase", "focusLayer", "focusService", "compareLeft", "compareRight", "impactAsset", "layer", "phase", "strength"} {
 					if value := selected.Get(key); value != "" {
 						output.Set(key, value)
 					}
