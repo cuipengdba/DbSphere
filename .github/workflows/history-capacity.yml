@@ -120,10 +120,17 @@ jobs:
           docker run -d --name dbsphere-load-mysql -p 127.0.0.1:33306:3306 \
             -e MYSQL_ROOT_PASSWORD=dbsphere-load-mysql-fixture mysql:8.4.13 --performance-schema=ON
           docker run -d --name dbsphere-load-redis -p 127.0.0.1:16379:6379 redis:7.2.17-alpine
-          docker run -d --name dbsphere-load-etcd -p 127.0.0.1:22379:2379 \
-            gcr.io/etcd-development/etcd:v3.6.17 /usr/local/bin/etcd --name=load \
-            --listen-client-urls=http://0.0.0.0:2379 --advertise-client-urls=http://127.0.0.1:2379 \
-            --initial-cluster=load=http://127.0.0.1:2380
+          etcd_archive="$RUNNER_TEMP/etcd-v3.6.17-linux-amd64.tar.gz"
+          curl -fsSL --retry 4 --retry-all-errors \
+            https://github.com/etcd-io/etcd/releases/download/v3.6.17/etcd-v3.6.17-linux-amd64.tar.gz -o "$etcd_archive"
+          printf '%s  %s\n' 5c6365e03d0c81f605458f3f9a115f6daaebca08d1fb42d3ab0f1a38fd30909c "$etcd_archive" | sha256sum -c -
+          tar -xzf "$etcd_archive" -C "$RUNNER_TEMP" etcd-v3.6.17-linux-amd64/etcd
+          "$RUNNER_TEMP/etcd-v3.6.17-linux-amd64/etcd" --name=load --data-dir="$RUNNER_TEMP/etcd-load" \
+            --listen-client-urls=http://127.0.0.1:22379 --advertise-client-urls=http://127.0.0.1:22379 \
+            --listen-peer-urls=http://127.0.0.1:22380 --initial-advertise-peer-urls=http://127.0.0.1:22380 \
+            --initial-cluster=load=http://127.0.0.1:22380 >"$proof/etcd.log" 2>&1 &
+          etcd_pid=$!
+          trap 'kill "$etcd_pid" ${first:-} ${second:-} 2>/dev/null || true' EXIT
           for host in dbsphere-load-history dbsphere-load-pg14 dbsphere-load-pg16 dbsphere-load-pg18; do
             for attempt in $(seq 1 60); do
               docker exec "$host" pg_isready -h 127.0.0.1 -U postgres && break
@@ -151,7 +158,6 @@ jobs:
           export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
           DBSPHERE_PORT=18090 "$RUNNER_TEMP/dbsphere" >"$proof/collector-1.log" 2>&1 &
           first=$!
-          trap 'kill "$first" ${second:-} 2>/dev/null || true' EXIT
           curl -fsS --retry 35 --retry-connrefused --retry-delay 1 http://127.0.0.1:18090/readyz
           DBSPHERE_PORT=18091 "$RUNNER_TEMP/dbsphere" >"$proof/collector-2.log" 2>&1 &
           second=$!
@@ -168,6 +174,7 @@ jobs:
           node scripts/drill-collector-load.mjs "$proof/config.json"
           kill -TERM "$first"
           wait "$first" || true
+          first=
           jq '.site="http://127.0.0.1:18091"' "$proof/config.json" > "$proof/failover-config.json"
           node scripts/drill-collector-load.mjs "$proof/failover-config.json" failover
       - uses: actions/upload-artifact@v4
