@@ -43,6 +43,8 @@ Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。�
 
 ## 部署与依赖
 
+混合采集负载记录纳管资产与物理实例的数量。100 个健康资产覆盖 PostgreSQL 14、16、18、MySQL 8.4、Redis OSS 7.2 和 etcd 3.6，另外观察认证失败与端点不可达。达梦、金仓、瀚高按各节的实库构建和拓扑验收。长期历史压测用 300 个资产、90 天合成样本，另验证 PostgreSQL 18 备份和独立恢复。 [规模采集](COLLECTOR_LOAD_ACCEPTANCE.md) · [历史留存](HISTORY_STORAGE.md)
+
 | 交付方式 | 已验证平台 | 运行时依赖 | 监控存储 |
 | --- | --- | --- | --- |
 | 一键离线容器包 | Linux amd64、arm64 实机架构 CI，含无外网的 Docker Engine 27 与 Compose v2 升级回退 | 目标机预装 Docker Engine/Compose | 包内 PostgreSQL 18 镜像，独立持久卷；可改用已有独立 PG18 |

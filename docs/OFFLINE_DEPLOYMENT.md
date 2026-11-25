@@ -2,7 +2,7 @@
 
 [快速开始](QUICK_START.md) · [最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest) · [支持矩阵](SUPPORT_MATRIX.md)
 
-发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v3.9.0 为例。
+发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v3.10.0 为例。
 
 | 部署方式 | 文件前缀 | 目标机条件 |
 | --- | --- | --- |
@@ -14,7 +14,7 @@
 ## 容器化一键安装
 
 ```bash
-bundle=DbSphere-go-offline-3.9.0-linux-amd64.run
+bundle=DbSphere-go-offline-3.10.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
@@ -28,7 +28,7 @@ curl -fsS http://127.0.0.1:8081/readyz
 ## Grafana 增强离线包
 
 ```bash
-bundle=DbSphere-go-observability-3.9.0-linux-amd64.run
+bundle=DbSphere-go-observability-3.10.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 ```
 
@@ -43,7 +43,7 @@ Prometheus 数据默认保留 7 天并限制为 2 GB，可通过 `DBSPHERE_PROME
 从发布页下载对应架构的 systemd 包。将示例路径 `/absolute/dbsphere.env` 改成实际配置路径。填写独立 `DBSPHERE_DATABASE_URL` 和管理员引导配置。已部署环境须沿用原 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 ```bash
-bundle=DbSphere-go-systemd-3.9.0-linux-amd64.run
+bundle=DbSphere-go-systemd-3.10.0-linux-amd64.run
 sha256sum --check "$bundle.sha256"
 (umask 077 && bash "$bundle" --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
@@ -71,6 +71,8 @@ systemctl status dbsphere-native.service
 跨主机可将应用实例接入同一外置负载均衡器和 PG18 可写主节点入口，例如已经部署并验收的 Patroni 写入口。副本使用相同的 `DBSPHERE_MASTER_KEY`、目标采集周期、通知和作业配置。外置模式要在相应副本设置 `DBSPHERE_ENABLE_GO_COLLECTOR=true`。网关或外置负载均衡器可用 `/readyz` 路由，`/healthz` 可用于进程存活检查。采集租约未完成时由下一副本在到期后接手。Webhook 的 `Idempotency-Key` 和 `X-DbSphere-Delivery-Id` 在重试时一致，接收端可据此去重。[Compose 合并规则](https://docs.docker.com/reference/compose-file/merge/)
 
 Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版本>-linux-amd64.run --backup /absolute/backup/directory`。命令校验离线包和唯一运行的 Go PG18 容器，以 PG18 `pg_dump -Fc` 生成归档，`pg_restore --list` 验证可读性，并输出带 SHA-256 的 JSON 清单。源码一键部署可运行 `bash scripts/backup-go-store.sh /absolute/backup/directory`。外部 PG18 不由此命令备份，应使用其自身的 PG18 备份体系。此能力仅备份数据库。部署方可在独立 PG18 中演练恢复，并核对资产、事件和原始日志。
+
+生产升级前保存当前安装包、数据库备份和原部署配置，包括用于解密已纳管凭据的 `DBSPHERE_MASTER_KEY`。在独立 PG18 恢复备份后，使用原密钥启动一个验收副本，核对资产、历史采样、事件和原始证据。升级后的回退演练先用兼容包复测保留卷。涉及不可逆数据变更时，应使用升级前归档及对应版本恢复到独立环境，确认通过后再切换流量。
 
 在「系统状态 → 账号和团队」创建项目团队，填写团队负责的资产 UUID，再为独立账号分配角色和团队。管理员可全局管理。值班员可以确认、交接其授权事件并提交工单，独立审批人可以批准或驳回授权范围内他人提交的工单，只读人员可以查看授权资产和证据。新设密码至少 12 字符。停用账号或轮换凭据会撤销该账号已有的会话。团队清单为空的非管理员账号拥有零资产访问权。
 

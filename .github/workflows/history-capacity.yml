@@ -95,12 +95,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Verify 100 assets with two collectors and three PostgreSQL versions
+      - name: Verify 100 mixed assets, failure isolation, and collector takeover
         env:
           DBSPHERE_HOST: 127.0.0.1
           DBSPHERE_ADMIN_PASSWORD: dbsphere-load-admin-fixture
           DBSPHERE_LOAD_ADMIN_PASSWORD: dbsphere-load-admin-fixture
           DBSPHERE_LOAD_MONITOR_PASSWORD: dbsphere-load-monitor-fixture
+          DBSPHERE_LOAD_BAD_PASSWORD: dbsphere-load-incorrect-fixture
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-load-test@127.0.0.1:15434/postgres?sslmode=disable
           DBSPHERE_ENABLE_GO_COLLECTOR: 'true'
           DBSPHERE_COLLECT_INTERVAL_SECONDS: '30'
@@ -116,6 +117,13 @@ jobs:
               -e POSTGRES_PASSWORD=dbsphere-load-target postgres:$pg-bookworm \
               postgres -c shared_preload_libraries=pg_stat_statements
           done
+          docker run -d --name dbsphere-load-mysql -p 127.0.0.1:33306:3306 \
+            -e MYSQL_ROOT_PASSWORD=dbsphere-load-mysql-fixture mysql:8.4.13 --performance-schema=ON
+          docker run -d --name dbsphere-load-redis -p 127.0.0.1:16379:6379 redis:7.2.17-alpine
+          docker run -d --name dbsphere-load-etcd -p 127.0.0.1:22379:2379 \
+            gcr.io/etcd-development/etcd:v3.6.17 /usr/local/bin/etcd --name=load \
+            --listen-client-urls=http://0.0.0.0:2379 --advertise-client-urls=http://127.0.0.1:2379 \
+            --initial-cluster=load=http://127.0.0.1:2380
           for host in dbsphere-load-history dbsphere-load-pg14 dbsphere-load-pg16 dbsphere-load-pg18; do
             for attempt in $(seq 1 60); do
               docker exec "$host" pg_isready -h 127.0.0.1 -U postgres && break
@@ -127,6 +135,18 @@ jobs:
             docker exec "dbsphere-load-pg$pg" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c \
               "CREATE EXTENSION pg_stat_statements; CREATE ROLE dbsphere_collector LOGIN PASSWORD 'dbsphere-load-monitor-fixture'; GRANT pg_monitor TO dbsphere_collector;"
           done
+          for attempt in $(seq 1 90); do
+            docker exec -e MYSQL_PWD=dbsphere-load-mysql-fixture dbsphere-load-mysql mysql -uroot -Nse 'SELECT 1' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec -e MYSQL_PWD=dbsphere-load-mysql-fixture dbsphere-load-mysql mysql -uroot -e \
+            "CREATE DATABASE dbsphere_fixture; CREATE USER 'dbsphere_collector'@'%' IDENTIFIED BY 'dbsphere-load-monitor-fixture';
+             GRANT SELECT ON performance_schema.* TO 'dbsphere_collector'@'%';
+             CREATE USER 'dbsphere_limited'@'%' IDENTIFIED BY 'dbsphere-load-monitor-fixture';
+             GRANT SELECT ON performance_schema.global_status TO 'dbsphere_limited'@'%';"
+          docker exec dbsphere-load-redis redis-cli ACL SETUSER dbsphere_collector on '>dbsphere-load-monitor-fixture' '-@all' \
+            +ping +hello +info +slowlog\|get +cluster\|info +cluster\|shards
+          curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:22379/health
           go build -o "$RUNNER_TEMP/dbsphere" ./cmd/dbsphere
           export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
           DBSPHERE_PORT=18090 "$RUNNER_TEMP/dbsphere" >"$proof/collector-1.log" 2>&1 &
@@ -137,9 +157,19 @@ jobs:
           second=$!
           curl -fsS --retry 35 --retry-connrefused --retry-delay 1 http://127.0.0.1:18091/readyz
           jq -n --arg report "$proof/load.json" '{site:"http://127.0.0.1:18090",storeContainer:"dbsphere-load-history",
-            assetCount:100,intervalSeconds:30,durationSeconds:120,report:$report,
-            targets:([14,16,18]|map({host:"127.0.0.1",port:(15430+.),container:("dbsphere-load-pg"+tostring)}))}' > "$proof/config.json"
+            mixed:true,assetCount:100,intervalSeconds:30,durationSeconds:120,report:$report,
+            targets:(([14,16,18]|map({host:"127.0.0.1",port:(15430+.),container:("dbsphere-load-pg"+tostring)})) + [
+              {host:"127.0.0.1",port:33306,runtime:"mysql",database:"dbsphere_fixture"},
+              {host:"127.0.0.1",port:33306,runtime:"mysql",database:"dbsphere_fixture",username:"dbsphere_limited"},
+              {host:"127.0.0.1",port:16379,runtime:"redis",database:"0"},
+              {host:"127.0.0.1",port:22379,runtime:"etcd",database:"etcd",username:"monitor"}]),
+            failureTargets:[{host:"127.0.0.1",port:18999},
+              {host:"127.0.0.1",port:16379,runtime:"redis",database:"0",passwordEnv:"DBSPHERE_LOAD_BAD_PASSWORD"}]}' > "$proof/config.json"
           node scripts/drill-collector-load.mjs "$proof/config.json"
+          kill -TERM "$first"
+          wait "$first" || true
+          jq '.site="http://127.0.0.1:18091"' "$proof/config.json" > "$proof/failover-config.json"
+          node scripts/drill-collector-load.mjs "$proof/failover-config.json" failover
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -6,15 +6,15 @@
 
 目标机需要 Bash、Docker Engine 和 Compose v2。标准包和增强包都自带 Go 服务、静态前端和独立 PostgreSQL 18 监控库。增强包另外提供 Prometheus 和 Grafana OSS。安装阶段可以断网，运行时需要能访问被监控实例。
 
-在能联网的机器打开[最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest)，下载对应架构的 `.run` 和同名 `.run.sha256`，复制到 Linux 服务器的同一个目录。`uname -m` 显示 `x86_64` 时选 `amd64`，显示 `aarch64` 时选 `arm64`。以下以 v3.9.0 的标准包为例，按手头的安装包调整文件名。
+在能联网的机器打开[最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest)，下载对应架构的 `.run` 和同名 `.run.sha256`，复制到 Linux 服务器的同一个目录。`uname -m` 显示 `x86_64` 时选 `amd64`，显示 `aarch64` 时选 `arm64`。以下以 v3.10.0 的标准包为例，按手头的安装包调整文件名。
 
 ```bash
-bundle=DbSphere-go-offline-3.9.0-linux-amd64.run
+bundle=DbSphere-go-offline-3.10.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
 
-就绪响应中应包含 `"status":"ready"` 和 `"storage":"postgresql18"`。使用增强版时，将 `bundle` 改成 `DbSphere-go-observability-3.9.0-linux-amd64.run`。已有独立 PG18 或需要原生 systemd 安装时，见[部署手册](OFFLINE_DEPLOYMENT.md)。
+就绪响应中应包含 `"status":"ready"` 和 `"storage":"postgresql18"`。使用增强版时，将 `bundle` 改成 `DbSphere-go-observability-3.10.0-linux-amd64.run`。已有独立 PG18 或需要原生 systemd 安装时，见[部署手册](OFFLINE_DEPLOYMENT.md)。
 
 ## 2. 首次登录
 

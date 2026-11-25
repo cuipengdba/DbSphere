@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
+const phase = process.argv[3] ?? 'load';
 const site = new URL(config.site);
 const assetCount = config.assetCount ?? 100;
 const interval = config.intervalSeconds ?? 30;
@@ -17,7 +18,7 @@ if (!adminPassword || !monitorPassword || !config.targets?.length || !config.sto
     !Number.isInteger(assetCount) || assetCount < 1 || assetCount > 1000 ||
     !Number.isInteger(interval) || interval < 10 || interval > 3600 ||
     !Number.isInteger(duration) || duration < 2 * interval || duration > 48 * 3600 ||
-    !/^[a-z_][a-z_0-9]{0,62}$/.test(monitor)) {
+    !/^[a-z_][a-z_0-9]{0,62}$/.test(monitor) || !['load','failover'].includes(phase)) {
   throw new Error('Check the load-test configuration and the two password variables in the acceptance guide');
 }
 
@@ -50,27 +51,60 @@ async function api(path, body) {
   return response.json();
 }
 
+const identifiers = ids => {
+  if (!Array.isArray(ids) || !ids.length || ids.some(id => !/^[0-9a-f-]{36}$/.test(id))) throw new Error('Invalid load-test asset IDs');
+  return 'ARRAY[' + ids.map(id => "'" + id + "'").join(',') + ']::uuid[]';
+};
+
+if (phase === 'failover') {
+  const ids = identifiers(JSON.parse(await readFile(config.report + '.assets.json','utf8')));
+  const start = new Date(await storeSQL('SELECT to_jsonb(now())')).toISOString();
+  let result;
+  for (let tries = 0; tries <= 45; tries++) {
+    result = await storeSQL(`SELECT jsonb_build_object('fresh',count(*) FILTER (WHERE last_success_at>='${start}'),
+      'replicas',coalesce(jsonb_agg(DISTINCT last_replica_id) FILTER (WHERE last_success_at>='${start}'),'[]'::jsonb),
+      'duplicateSlots',(SELECT count(*)-count(DISTINCT (asset_id,metrics_json#>>'{collector,scheduledFor}')) FROM samples
+        WHERE asset_id=ANY(${ids}) AND status='ok' AND collected_at>='${start}' AND metrics_json#>>'{collector,scheduledFor}' IS NOT NULL))
+      FROM collection_jobs WHERE asset_id=ANY(${ids})`);
+    if (result.fresh === assetCount && result.replicas.length === 1 && result.replicas[0] && result.duplicateSlots === 0) break;
+    await sleep(2000);
+  }
+  const pass = result.fresh === assetCount && result.replicas.length === 1 && Boolean(result.replicas[0]) && result.duplicateSlots === 0;
+  const proof = { start, assetCount, ...result, pass };
+  await writeFile(config.report + '.failover.json', JSON.stringify(proof, null, 2) + '\n');
+  console.log(JSON.stringify(proof, null, 2));
+  if (!pass) process.exitCode = 1;
+  process.exit();
+}
+
 const marker = config.marker ?? 'collector-load-' + Date.now();
 if (!/^collector-load-\d{13}$/.test(marker)) throw new Error('Invalid load-test batch marker');
 const prepared = await storeSQL("SELECT coalesce(jsonb_object_agg(name,id),'{}') FROM assets WHERE name LIKE '" + marker + "-%'");
 const assets = [];
-for (let number = 0; number < assetCount; number++) {
-  const name = marker + '-' + number;
+async function register(name, target) {
   let id = prepared[name];
   if (!id) {
-    const target = config.targets[number % config.targets.length];
+    const password = target.passwordEnv ? process.env[target.passwordEnv] : target.runtime === 'etcd' ? '' : monitorPassword;
+    if (password === undefined) throw new Error('Missing fixture password variable ' + target.passwordEnv);
     const { asset } = await api('/api/assets', {
       name, host: target.host, port: target.port ?? 5432, database: target.database ?? 'postgres',
-      username: monitor, password: monitorPassword, sslMode: 'disable', runtime: 'managed',
+      username: target.username ?? monitor, password, sslMode: 'disable', runtime: target.runtime ?? 'managed',
     });
     id = asset.id;
   }
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid asset ID from API');
-  assets.push(id);
+  return id;
+}
+for (let number = 0; number < assetCount; number++) {
+  assets.push(await register(marker + '-' + number, config.targets[number % config.targets.length]));
+}
+const faults = [];
+for (const [index, target] of (config.failureTargets ?? []).entries()) {
+  faults.push(await register(marker + '-fault-' + index, target));
 }
 await writeFile(config.report + '.assets.json', JSON.stringify(assets, null, 2));
-const assetIDs = 'ARRAY[' + assets.map(id => "'" + id + "'").join(',') + ']::uuid[]';
-const targetCounters = async () => Promise.all(config.targets.map(async target => ({
+const assetIDs = identifiers(assets);
+const targetCounters = async () => Promise.all(config.targets.filter(target => target.container).map(async target => ({
   target: target.host,
   ...await sql(target.container, target.database ?? 'postgres', "SELECT jsonb_build_object(" +
     "'version',current_setting('server_version'),'calls',coalesce(sum(calls),0),'executionMs',coalesce(sum(total_exec_time),0)) " +
@@ -108,8 +142,18 @@ const observed = await storeSQL([
   "'queryP95Ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY query)) FROM scheduled",
 ].join('\n'));
 const coverage = 100 * observed.ok / expected;
-const pass = coverage >= 99 && observed.duplicates === 0 && observed.timed > 0 && observed.queueP95Ms <= interval * 1000;
-const report = { marker, assetCount, interval, duration, from, to, expected, observed, coverage, pass };
+const isolation = faults.length ? await storeSQL(`SELECT jsonb_build_object('isolated',count(*) FILTER (WHERE isolated),
+  'lastTargetErrors',count(*) FILTER (WHERE last_outcome='target_error')) FROM collection_jobs WHERE asset_id=ANY(${identifiers(faults)})`) : null;
+const engineCoverage = await storeSQL(`SELECT jsonb_object_agg(engine,counts) FROM (
+  SELECT coalesce(j.last_engine,a.runtime) AS engine,jsonb_build_object('targets',count(*),'permissionsChecked',count(j.last_permission_gaps),
+  'limited',count(*) FILTER (WHERE j.last_permission_gaps>0),'p95WriteMs',percentile_disc(0.95) WITHIN GROUP (ORDER BY j.last_store_ms)) AS counts
+  FROM assets a JOIN collection_jobs j ON j.asset_id=a.id WHERE a.id=ANY(${assetIDs}) GROUP BY coalesce(j.last_engine,a.runtime)) engines`);
+const pass = coverage >= 99 && observed.duplicates === 0 && observed.timed > 0 && observed.queueP95Ms <= interval * 1000 &&
+  (!isolation || isolation.isolated === faults.length && isolation.lastTargetErrors === faults.length) &&
+  (!config.mixed || ['postgres','mysql','redis','etcd'].every(engine => engineCoverage[engine]?.targets > 0 &&
+    engineCoverage[engine].permissionsChecked > 0 && engineCoverage[engine].p95WriteMs != null) &&
+    engineCoverage.mysql.limited > 0 && observed.replicas.length === 2);
+const report = { marker, assetCount, interval, duration, from, to, expected, observed, coverage, engineCoverage, isolation, pass };
 await writeFile(config.report, JSON.stringify(report, null, 2) + '\n');
 const after = { targetSQL: await targetCounters(), storageBytes: await storageBytes() };
 const timings = { coverage: [], hourlySeries: [] };

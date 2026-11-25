@@ -2810,6 +2810,8 @@ function renderCollectorStatus(status) {
   if (status.cycle?.atBatchLimit) summary.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
   summary.append(cell('p', '轮次统计来自当前进程的常规采集队列。所有副本的任务、租约和重试记录保存在 PostgreSQL 18。', 'hint'));
   if (summary.nextElementSibling) return;
+  const engines = {postgres:'PostgreSQL',highgo:'瀚高',mysql:'MySQL 8.4',dm8:'达梦 DM8',kingbase:'金仓 V9',redis:'Redis',etcd:'etcd'};
+  const runtimes = {linux:'Linux',k8s:'Kubernetes',managed:'托管'};
   const queue = cell('div', '', 'monitor-table');
   queue.setAttribute('aria-live', 'polite');
   const loadQueue = cell('button', '查看采集队列', 'ghost small-button');
@@ -2820,9 +2822,9 @@ function renderCollectorStatus(status) {
       const labels = { due: '到期', delayed: '调度延迟', missing: '尚无采样', running: '正在采集', backoff: '退避重试', scheduled: '已排期' };
       const outcomes = { ok: '采样成功', target_error: '目标采集失败', execution_error: '采集器执行失败' };
       queue.replaceChildren(cell('p', Object.entries(labels).map(([key, label]) => `${label} ${counts[key]}`).join(' · '), 'hint'));
-      if (jobs.length) queue.append(importTable(['实例', '调度状态', '最近结果', '下次到期', '租约截止', '连续失败', '采样'], jobs.map(job => [
-        job.name, [labels[job.state], job.isolated ? '隔离队列' : ''].filter(Boolean).join(' · '), outcomes[job.outcome] ?? '待执行',
-        formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures,
+      if (jobs.length) queue.append(importTable(['实例', '引擎', '调度状态', '最近结果', '下次到期', '租约截止', '连续失败', '权限缺口', '采样'], jobs.map(job => [
+        job.name, engines[job.engine] || job.engine, [labels[job.state], job.isolated ? '隔离队列' : ''].filter(Boolean).join(' · '), outcomes[job.outcome] ?? '待执行',
+        formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures, job.permissionGaps ?? '未核对',
         job.lastSampleId ? replaySampleLink(job.assetId, job.lastSampleId) : '—'
       ])));
       if (counts.total > jobs.length) queue.append(cell('p', `显示优先级最高的 ${jobs.length} 个任务，共 ${counts.total} 个。`, 'hint'));
@@ -2844,19 +2846,29 @@ function renderCollectorStatus(status) {
   });
   target.append(loadTrend, trendReport);
   const loadCoverage = cell('button', '查看采集覆盖与耗时', 'ghost small-button');
-  const report = cell('div', '', 'monitor-table');
+  const report = cell('section', '', 'collector-fleet-report');
   report.setAttribute('aria-live', 'polite');
   loadCoverage.addEventListener('click', async () => {
     loadCoverage.disabled = true;
     try {
       const coverage = await api('/api/admin/collector/health');
-      report.replaceChildren(cell('p', `每个资产采用最近一次调度结果。距最近成功样本 ${coverage.freshnessSeconds} 秒内计为有效。`, 'hint'));
-      const source = { linux: 'Linux', k8s: 'Kubernetes', managed: '托管 PostgreSQL', mysql: 'MySQL' };
-      const ms = (value, count) => value == null ? '待采样' : `${value} ms / ${count} 个`;
-      const rows = coverage.groups.map(group => [group.organization, source[group.source] ?? group.source,
-        `${group.fresh} / ${group.targets}`, group.isolated, ms(group.queueP95Ms, group.timedTargets),
-        ms(group.queryP95Ms, group.queryTargets), ms(group.storeP95Ms, group.storeTargets), formatTime(group.latestSampleAt)]);
-      if (rows.length) report.append(importTable(['组织', '采集来源', '新鲜 / 纳管', '隔离', '排队 P95', '目标查询 P95', 'PG18 写入 P95', '最新样本'], rows));
+      report.replaceChildren(cell('h3', '采集健康'), cell('p', `距最近一次成功采样 ${coverage.freshnessSeconds} 秒内计为有效。P95 采用各实例最近一次调度结果。`, 'hint'));
+      const cards = cell('div', '', 'collector-fleet-cards');
+      const ms = (value, count) => value == null ? '待采样' : `${value} ms · ${count} 个实例`;
+      for (const group of coverage.groups) {
+        const card = cell('article', '', 'collector-fleet-card');
+        const name = [engines[group.engine] || group.engine, runtimes[group.source], group.organization].filter(Boolean).join(' · ');
+        const ratio = cell('progress', ''); ratio.max = group.targets; ratio.value = group.fresh;
+        ratio.setAttribute('aria-label', `${name} 近期采样覆盖`);
+        card.append(cell('h4', name), cell('strong', `${group.fresh} / ${group.targets} 近期成功`), ratio,
+          cell('p', `逾期 ${group.overdue} · 运行中 ${group.collecting} · 退避 ${group.backoff} · 隔离 ${group.isolated}`),
+          cell('p', `目标失败 ${group.failed} · 采集器错误 ${group.executionErrors} · 权限受限 ${group.permissionLimited}/${group.permissionChecked}`),
+          importTable(['最近时延','P95'], [['排队',ms(group.queueP95Ms,group.timedTargets)],['目标查询',ms(group.queryP95Ms,group.queryTargets)],
+            ['PG18 写入事务',ms(group.storeP95Ms,group.storeTargets)]]),
+          cell('small', `最新样本 ${formatTime(group.latestSampleAt)}`));
+        cards.append(card);
+      }
+      if (cards.children.length) report.append(cards);
       else report.append(cell('p', '当前组织没有待采集数据库。', 'hint'));
     } catch (error) { report.replaceChildren(cell('p', error.message, 'warning')); }
     finally { loadCoverage.disabled = false; }

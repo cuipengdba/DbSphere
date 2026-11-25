@@ -80,12 +80,18 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 		ON CONFLICT(asset_id) DO NOTHING`, int(interval.Seconds())); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `WITH ready AS (
-		SELECT j.asset_id FROM collection_jobs j JOIN assets a ON a.id=j.asset_id
+	rows, err := tx.Query(ctx, `WITH eligible AS (
+		SELECT j.asset_id,j.due_at,row_number() OVER (PARTITION BY CASE WHEN a.runtime IN ('linux','k8s','managed')
+			THEN 'postgres' ELSE a.runtime END ORDER BY j.due_at,j.asset_id) AS source_slot
+		FROM collection_jobs j JOIN assets a ON a.id=j.asset_id
 		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
 		AND a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
 		AND ($4::int=0 OR j.isolated=($4=2))
-		ORDER BY j.due_at,j.asset_id LIMIT $1 FOR UPDATE OF j SKIP LOCKED
+	), ready AS (
+		SELECT j.asset_id FROM eligible e JOIN collection_jobs j ON j.asset_id=e.asset_id
+		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
+		AND ($4::int=0 OR j.isolated=($4=2))
+		ORDER BY e.source_slot,e.due_at,e.asset_id LIMIT $1 FOR UPDATE OF j SKIP LOCKED
 	) UPDATE collection_jobs j SET lease_token=gen_random_uuid(),
 		lease_until=statement_timestamp()+make_interval(secs=>$2),lease_replica_id=nullif($3,'')
 	FROM ready WHERE j.asset_id=ready.asset_id RETURNING j.asset_id::text,j.lease_token::text,j.due_at,statement_timestamp(),j.isolated`,
@@ -117,6 +123,7 @@ const finishCollectionSQL = `UPDATE collection_jobs SET
 	last_outcome=$3,last_finished_at=statement_timestamp(),last_sample_id=coalesce($4,last_sample_id),
 	last_success_at=CASE WHEN $3='ok' THEN $10 ELSE last_success_at END,
 	last_queue_ms=$6,last_query_ms=$7,last_store_ms=$8,last_replica_id=nullif($9,''),
+	last_permission_gaps=$12,last_engine=coalesce(nullif($13,''),last_engine),
 	isolated=CASE WHEN $3='ok' THEN coalesce($11::bigint>=5000 AND (isolated OR last_query_ms>=5000),false)
 		ELSE isolated OR failures>=1 OR coalesce($11::bigint>=5000,false) END,
 	due_at=CASE WHEN $3='ok'
@@ -129,7 +136,7 @@ const finishCollectionSQL = `UPDATE collection_jobs SET
 func (s *Postgres) RetryCollectionLease(ctx context.Context, lease CollectionLease) error {
 	_, err := s.pool.Exec(ctx, finishCollectionSQL+" AND lease_until>clock_timestamp()",
 		lease.AssetID, lease.Token, "execution_error", nil, 5, collectionQueueDelay(lease), nil, nil,
-		s.platformReplicaID, nil, nil)
+		s.platformReplicaID, nil, nil, nil, "")
 	return err
 }
 
@@ -159,6 +166,8 @@ func collectionQueueDelay(lease CollectionLease) *int64 {
 
 const collectionQueueSQL = `WITH queue AS (
 	SELECT a.id AS "assetId",a.name,a.last_sample_at AS "lastSampleAt",j.last_sample_id AS "lastSampleId",
+		a.runtime,coalesce(j.last_engine,CASE WHEN a.runtime IN ('linux','k8s','managed') THEN 'postgres' ELSE a.runtime END) AS engine,
+		j.last_permission_gaps AS "permissionGaps",
 		j.lease_until AS "leaseUntil",j.lease_replica_id AS "leaseReplicaId",j.last_finished_at AS "lastFinishedAt",j.due_at AS "dueAt",
 		coalesce(j.isolated,false) AS isolated,j.last_queue_ms AS "queueMs",j.last_query_ms AS "queryMs",j.last_store_ms AS "storeMs",
 		coalesce(j.failures,0) AS failures,coalesce(j.last_outcome,'') AS outcome,

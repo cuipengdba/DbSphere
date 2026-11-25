@@ -21,6 +21,12 @@ pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: any
 .incident-dependency-source { align-content: start; }
 .incident-dependency-step[data-state=error] { border-inline-start-color: var(--warn-line); }
 .incident-dependency small { color: var(--muted); }
+.collector-fleet-report { margin-block: 12px; }
+.collector-fleet-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 12px; }
+.collector-fleet-card { display: grid; gap: 6px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.collector-fleet-card > :is(h4, p) { margin: 0; }
+.collector-fleet-card progress { width: 100%; height: 9px; accent-color: var(--accent); }
+.collector-fleet-card small { color: var(--muted); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .topbar { position: sticky; top: 0; z-index: 5; height: 58px; padding: 0 22px; gap: 8px; box-shadow: none; }
 .product, .section-actions { display: flex; align-items: center; gap: 10px; }

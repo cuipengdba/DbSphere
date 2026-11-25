@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.9.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.10.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.9.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.9.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.10.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.10.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -49,6 +49,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递。支持 PostgreSQL、达梦、金仓、Redis 和 etcd 的业务时段风险基线、影子预警和历史回测，以及巡检、变更时间线和 Markdown／HTML 报告。 |
 | 权限与作业 | 按组织、项目团队和资产划分访问权限，支持本地账号、OIDC、凭据轮换和签名审计。受控采样、巡检或已配置作业支持预演、独立审批和结果回写。 |
 | 增强可观测性 | 增强包内置 Prometheus 与 Grafana OSS，提供环境、PostgreSQL 集群、等待、SQL、复制、Linux、Kubernetes 及各引擎专题。平台管理员在 DbSphere 内打开面板，沿用当前资产和时段。 |
+| 采集健康 | 按引擎查看覆盖、权限缺口、退避、隔离、排队时延、目标查询与 PG18 写入耗时。两个或更多采集副本可通过 PostgreSQL 18 共用调度与租约。 |
 | 可选 AI | 在系统状态中配置和测试模型、设置预算及超时。提交前可预览同事件证据和填写追问。模型停用时仍可使用采集、告警、巡检和规则根因分析。 |
 | 存储与交付 | Go 后端内嵌静态前端，独立 PostgreSQL 18 保存长期指标、证据和采集队列。支持指标分层留存、监控库备份、平台副本及共享采集租约。提供 Linux amd64／arm64 标准和增强一键离线包、静态程序和 systemd 安装包。 |
 

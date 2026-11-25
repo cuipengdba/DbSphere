@@ -24,6 +24,8 @@ type PrometheusAsset struct {
 	RedisEvicted, RedisRejected, RedisLatency, RedisSlots                 *float64
 	EtcdHasLeader, EtcdElections, EtcdPending, EtcdSize, EtcdQuota        *float64
 	EtcdWAL, EtcdCommit, EtcdAPILatency                                   *float64
+	CollectorQueue, CollectorQuery, CollectorStore, CollectorGapSignals   *float64
+	CollectorIsolated, CollectorBackoff                                   *float64
 	Container                                                             json.RawMessage
 }
 
@@ -48,7 +50,9 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 			&a.RedisOps, &a.RedisClients, &a.RedisMemory, &a.RedisHit, &a.RedisEvicted, &a.RedisRejected, &a.RedisLatency, &a.RedisSlots,
 			&a.EtcdHasLeader, &a.EtcdElections, &a.EtcdPending, &a.EtcdSize, &a.EtcdQuota,
 			&a.EtcdWAL, &a.EtcdCommit, &a.EtcdAPILatency,
-			&a.LinuxRX, &a.LinuxTX, &a.LinuxDiskRead, &a.LinuxDiskWrite, &a.PodCPU, &a.PodMemory, &a.Container); err != nil {
+			&a.LinuxRX, &a.LinuxTX, &a.LinuxDiskRead, &a.LinuxDiskWrite, &a.PodCPU, &a.PodMemory,
+			&a.CollectorQueue, &a.CollectorQuery, &a.CollectorStore, &a.CollectorGapSignals,
+			&a.CollectorIsolated, &a.CollectorBackoff, &a.Container); err != nil {
 			return nil, err
 		}
 		samples = append(samples, a)
@@ -125,12 +129,16 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	(raw.metrics_json#>>'{linux,interval,diskWriteBps}')::float8,
 	(raw.metrics_json#>>'{k8s,resourceMetrics,podUsage,cpuCores}')::float8,
 	(raw.metrics_json#>>'{k8s,resourceMetrics,podUsage,memoryBytes}')::float8,
+	(j.last_queue_ms::float8/1000),(j.last_query_ms::float8/1000),(j.last_store_ms::float8/1000),j.last_permission_gaps::float8,
+	CASE WHEN j.asset_id IS NOT NULL THEN j.isolated::integer::float8 END,
+	CASE WHEN j.asset_id IS NOT NULL THEN (j.failures>0 AND j.due_at>now())::integer::float8 END,
 	CASE WHEN raw.metrics_json ? 'containerStorage' THEN jsonb_build_object(
 		'storage',raw.metrics_json->'containerStorage','node',raw.metrics_json#>'{linux,deviceRates,disk}',
 		'nodeNumbers',raw.metrics_json#>'{linux,deviceNumbers}',
 		'pgDatabase',raw.metrics_json#>'{diagnostics,database,data}',
 		'checkpoints',raw.metrics_json#>'{diagnostics,checkpoints,data}', 'wal',raw.metrics_json#>'{diagnostics,wal,data}') END
 FROM selected a
+LEFT JOIN collection_jobs j ON j.asset_id=a.id
 LEFT JOIN LATERAL (SELECT count(*) AS total FROM open_event_groups WHERE asset_id=a.id) e ON true
 LEFT JOIN LATERAL (SELECT connections,max_connections,blocked_sessions,replication_lag_bytes,commits,rollbacks,linux_cpu,linux_memory
 	FROM monitoring_trend_points WHERE asset_id=a.id AND collected_at=a.last_sample_at ORDER BY id DESC LIMIT 1) t ON a.recent

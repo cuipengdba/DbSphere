@@ -685,9 +685,10 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 			elapsed := writeStarted.Sub(lease.startedAt).Milliseconds()
 			workMs = &elapsed
 		}
+		gaps, engine := collectionPermissionGaps(metrics)
 		if _, err := tx.Exec(ctx, finishCollectionSQL,
 			lease.AssetID, lease.Token, outcome, sampleID, int(interval.Seconds()), collectionQueueDelay(*lease),
-			lease.queryMs, time.Since(writeStarted).Milliseconds(), s.platformReplicaID, now, workMs); err != nil {
+			lease.queryMs, time.Since(writeStarted).Milliseconds(), s.platformReplicaID, now, workMs, gaps, engine); err != nil {
 			return CheckResult{}, fmt.Errorf("advance collection schedule: %w", err)
 		}
 	}
