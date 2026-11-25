@@ -527,8 +527,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='3.2.0'
-          previous_sha='426a7cf43e51c387cc82b22c8c756788f58a00e09fe4d91b83d5b0188a078cf5'
+          previous_version='3.3.0'
+          previous_sha='4e0a221900d148778f11d9df07fadd67344c7ec027d87f1d806858ad5b15f10e'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -612,8 +612,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='3.2.0'
-          previous_arm_sha='63221c2f8404751c87e428e17420750199005e889cd4a905f63dcde44acb5759'
+          previous_version='3.3.0'
+          previous_arm_sha='1fa780d6a959383781898b00f84a497fe758d2d34a6f8647228e9fb267d46b70'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -703,11 +703,11 @@ jobs:
           if [[ "$CHECK_BASELINE" == true ]]; then
             dir="$RUNNER_TEMP/previous-enhanced"
             mkdir -p "$dir"
-            old=3.2.0
+            old=3.3.0
             if [[ "$ARCH" == amd64 ]]; then
-              digest=bd703b97b1345373d1cb6e5d09d0d37c928f571a26d38a25d879304597ee3506
+              digest=7819897bd82edaaa44dd281fb54cf951648af36a6c17fcff0568b26e601bc7af
             else
-              digest=e22bba725701b41c69601d6efb74657ef90a2a09aad36e24663f5fe77b9d61a6
+              digest=d728592b1230fd7f39f4f2c19089239bfe12a735c269c0420872e6d170f05058
             fi
             name="DbSphere-go-observability-$old-linux-$ARCH.run"
             curl -fL --retry 3 -o "$dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v$old/$name"

@@ -8,12 +8,13 @@ import "context"
 const ContractVersion = 1
 
 type Target struct {
-	Host     string
-	Port     int
-	Database string
-	Username string
-	SSLMode  string
-	Runtime  string
+	Host              string
+	Port              int
+	Database          string
+	Username          string
+	SSLMode           string
+	Runtime           string
+	KubernetesCluster string
 }
 
 type Signal struct {

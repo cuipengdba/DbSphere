@@ -41,22 +41,23 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 		return nil, ErrInvalidRange
 	}
 	var values []json.RawMessage
+	var query string
 	switch params.Get("metricProfile") {
 	case "redis":
+		query = redisSeriesSQL
+	case "dm8":
+		query = dm8SeriesSQL
+	case "kingbase":
+		query = kingbaseSeriesSQL
+	case "etcd":
+		query = etcdSeriesSQL
+	}
+	if query != "" {
 		if len(ids) != 1 {
 			return nil, ErrInvalidRange
-		}
-		values, err = s.queryJSON(ctx, redisSeriesSQL, ids[0], from, to, minutes)
-	case "dm8", "kingbase":
-		if len(ids) != 1 {
-			return nil, ErrInvalidRange
-		}
-		query := dm8SeriesSQL
-		if params.Get("metricProfile") == "kingbase" {
-			query = kingbaseSeriesSQL
 		}
 		values, err = s.queryJSON(ctx, query, ids[0], from, to, minutes)
-	default:
+	} else {
 		values, err = s.readMonitoringBuckets(ctx, ids, from, to, minutes)
 	}
 	if err != nil {
@@ -124,6 +125,19 @@ const redisSeriesSQL = `SELECT jsonb_build_object(
 	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
 	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='redis'
 	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'redis'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
+
+const etcdSeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'etcdLeader',min((s.metrics_json#>>'{etcd,hasLeader}')::numeric),
+	'etcdPending',max((s.metrics_json#>>'{etcd,proposalsPending}')::numeric),
+	'etcdSize',avg((s.metrics_json#>>'{etcd,sizeBytes}')::numeric),
+	'etcdWAL',max((s.metrics_json#>>'{etcdInterval,wal,meanMs}')::numeric),
+	'etcdCommit',max((s.metrics_json#>>'{etcdInterval,backend,meanMs}')::numeric),
+	'etcdAPI',max((s.metrics_json#>>'{etcdInterval,kubernetes,meanMs}')::numeric),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='etcd'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'etcd'
 	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {

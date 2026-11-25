@@ -525,6 +525,7 @@ async function renderRCAWorkbench(eventId = '', preferredCode = '') {
 }
 
 function assetRuntimeLabel(asset) {
+  if (asset.runtime === 'etcd') return 'etcd';
   if (asset.runtime === 'redis') return 'Redis';
   if (asset.runtime === 'kingbase') return '金仓 V9';
   if (asset.runtime === 'dm8') return '达梦 DM8';
@@ -1043,7 +1044,7 @@ function renderAssets(assets, summary = '') {
       info.append(label);
     }
     const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
-      : asset.runtime === 'redis' ? (asset.versionNum ? `Redis ${Math.floor(asset.versionNum / 10000)}.${Math.floor(asset.versionNum / 100) % 100}.${asset.versionNum % 100}` : 'Redis 待识别')
+      : ['redis','etcd'].includes(asset.runtime) ? (asset.versionNum ? `${assetRuntimeLabel(asset)} ${Math.floor(asset.versionNum / 10000)}.${Math.floor(asset.versionNum / 100) % 100}.${asset.versionNum % 100}` : `${assetRuntimeLabel(asset)} 待识别`)
       : asset.runtime === 'dm8' || asset.runtime === 'kingbase' ? assetRuntimeLabel(asset)
         : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
     info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
@@ -1079,6 +1080,7 @@ const readinessLabels = {
   connection: '数据库连接', tls: '会话 TLS', readOnly: '采集会话只读', connections: '连接状态',
   sessions: '数据库会话', databaseSize: '数据库容量', topSql: 'Top SQL 指纹',
   server: '实例身份', redisCounters: 'Redis 原生指标', slowCommands: '慢命令', slots: '槽位状态', shards: '分片', sentinel: 'Sentinel 主节点组',
+  etcdHealth: 'etcd 健康探测', etcdRaft: 'Raft 状态', etcdMembers: '成员列表', etcdMetrics: '原生指标', etcdAPIServer: 'Kubernetes API Server',
   activeWaits: '活动等待', activityQueryID: '会话 Query ID', lockWaits: '锁等待',
   instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL', replicationLinks: '复制链路',
   walReceiver: 'WAL 接收', replication: '复制状态', sqlPerformance: 'Top SQL 指纹',
@@ -1208,6 +1210,11 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'redis') {
     renderRedisAsset(detail, asset, samples);
+    if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
+    return;
+  }
+  if (asset.runtime === 'etcd') {
+    renderEtcdAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     return;
   }
@@ -1775,6 +1782,91 @@ function renderRedisAsset(detail, asset, samples) {
   table('最近原始采样',['时间','角色','主节点','窗口淘汰','证据'],samples.filter(item=>item.metrics?.redis).slice(0,20).map(item=>
     [formatTime(item.collectedAt),{primary:'主节点',replica:'副本',sentinel:'Sentinel'}[item.metrics.redis.role] || '待识别',
       item.metrics.redis.sentinel?.master || '—',show(item.metrics.redisInterval?.evicted),replaySampleLink(asset.id,item.id)]),'当前没有历史样本');
+}
+
+function renderEtcdAsset(detail, asset, samples) {
+  detail.replaceChildren(cell('h3',asset.name),cell('p',`etcd · ${asset.host}:${asset.port}`),
+    cell('p',[assetHealth(asset).label,formatTime(asset.lastSampleAt),asset.lastError].filter(Boolean).join(' · '),'hint'));
+  const event = recentEvents.find(item=>item.assetId===asset.id && item.kind.startsWith('etcd_'));
+  if (event) {
+    const link = cell('a','打开 etcd 事件','monitor-link');
+    link.href = '#incidents?' + new URLSearchParams({event:event.id});
+    detail.append(link);
+  }
+  const sample=samples[0];
+  const metrics=sample?.status==='ok' && sample.collectedAt===asset.lastSampleAt ? sample.metrics : null;
+  const etcd=metrics?.etcd;
+  if (!etcd) {
+    detail.append(cell('p','当前没有成功的 etcd 采样。请核对观测端点与 TLS 配置。','empty'));
+    return;
+  }
+  const format = new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2});
+  const value = n=>Number.isFinite(n)?format.format(n):'未采集';
+  const number = (n,unit)=>Number.isFinite(n)?value(n)+unit:'未采集';
+  const capacity = n=>number(Number.isFinite(n)?n/1048576:null,' MiB');
+  const windows=metrics.etcdInterval || {};
+  const source=key=>metrics.adapter?.signals?.find(item=>item.key===key);
+  const tiles = cell('div','','metric-grid');
+  for(const [label,reading] of [
+    ['健康',etcd.health===true?'通过':etcd.health===false?'异常':'未采集'],['Leader',etcd.leaderId || (etcd.hasLeader===0?'暂无 Leader':'未采集')],
+    ['提案积压',value(etcd.proposalsPending)],['Raft 任期',etcd.raftTerm || '未采集'],
+    ['WAL fsync',number(windows.wal?.meanMs,' ms')],['后端提交',number(windows.backend?.meanMs,' ms')],
+    ['空间占用',capacity(etcd.sizeBytes)],['后端配额',capacity(etcd.quotaBytes)]
+  ]){
+    const card=cell('div');
+    card.append(cell('span',label),cell('strong',reading));
+    tiles.append(card);
+  }
+  const trend=cell('a','查看 etcd 实时趋势','monitor-link');
+  trend.href='#live?'+new URLSearchParams({engine:'etcd',asset:asset.id});
+  detail.append(tiles,cell('small',[`etcd ${etcd.version}`,etcd.clusterId && '集群 '+etcd.clusterId,
+    etcd.memberId && '采样成员 '+etcd.memberId].filter(Boolean).join(' · '),'hint'),trend);
+  if(currentRole==='admin' && !currentOrganization){
+    const link=cell('a','打开 etcd Grafana 专题','monitor-link');
+    link.href=window.DbSphereLive.grafanaPath({section:'etcd',asset:asset.id,engine:'etcd',organization:asset.organizationId,
+      cluster:asset.clusterName,event:event?.id,back:trend.hash.slice(1),from:Date.now()-3600000,to:Date.now()});
+    void api('/api/live/integrations').then(state=>{
+      if(selectedAsset===asset.id && state.grafana && trend.isConnected) trend.after(link);
+    }).catch(()=>{});
+  }
+  const table=(heading,columns,rows,empty)=>{
+    const panel=cell('section','','evidence monitor-table');
+    panel.append(cell('h4',heading),rows.length?importTable(columns,rows):cell('p',empty,'hint'));
+    detail.append(panel);
+  };
+  table('etcd 集群成员',['成员','成员 ID','角色','端点'],(etcd.members || []).map(member=>[
+    member.name || '待识别',member.id,member.id===etcd.leaderId?'Leader':member.learner?'Learner':etcd.leaderId?'Follower':'待识别',
+    member.endpoint || '未采集'
+  ]),source('etcdMembers')?.reason || '当前无成员列表');
+  table('Raft 与提案',['指标','值'],[
+    ['Raft 位置',etcd.raftIndex || '未采集'],['已应用位置',etcd.raftApplied || '未采集'],
+    ['Leader 变更计数',value(etcd.leaderChanges)],['提交提案',value(etcd.proposalsCommitted)],
+    ['应用提案',value(etcd.proposalsApplied)],['失败提案',value(etcd.proposalsFailed)],['后端使用',capacity(etcd.inUseBytes)]
+  ]);
+  table('存储延迟',['指标','采样间操作数','平均耗时','P95 桶上界'],[
+    ['WAL fsync',value(windows.wal?.observations),number(windows.wal?.meanMs,' ms'),number(windows.wal?.p95UpperMs,' ms')],
+    ['后端提交',value(windows.backend?.observations),number(windows.backend?.meanMs,' ms'),number(windows.backend?.p95UpperMs,' ms')]
+  ]);
+  if(asset.k8sCluster){
+    const kube=etcd.kubernetes;
+    table('Kubernetes API Server 同窗观测',['Context','已观测请求','请求错误','当前窗口平均耗时'],
+      kube?[[kube.context,value(kube.requests),value(kube.errors),number(windows.kubernetes?.meanMs,' ms')]]:[],
+      source('etcdAPIServer')?.reason || '等待 API Server 样本');
+  }
+  const expiry = date => {
+    const expires=Date.parse(date);
+    return Number.isFinite(expires) ? formatTime(date)+` · ${Math.ceil((expires-Date.now())/86400000)} 天` : '未采集';
+  };
+  if (asset.sslMode==='require') table('TLS 证书',['证书','到期时间'],[
+    ['服务端',expiry(etcd.serverCertUntil)],['客户端',expiry(etcd.clientCertUntil)]
+  ]);
+  const coverage=cell('details','','settings-details');
+  coverage.append(cell('summary','采集来源与缺口'),importTable(['来源','状态'],(metrics.adapter?.signals || []).map(item=>
+    [item.source,item.status==='ok'?'已采集':item.reason || '采集缺口'])));
+  detail.append(coverage);
+  table('最近原始采样',['时间','Leader','积压提案','证据'],samples.filter(item=>item.metrics?.etcd).slice(0,20).map(item=>
+    [formatTime(item.collectedAt),item.metrics.etcd.leaderId || '—',value(item.metrics.etcd.proposalsPending),replaySampleLink(asset.id,item.id)]),
+    '当前没有历史样本');
 }
 
 function renderMySQLAsset(detail, asset, samples) {
@@ -2837,7 +2929,7 @@ function setupAssetImport() {
 
 setupAssetImport();
 
-function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase','redis'].includes(runtime) ? runtime : 'postgres'; }
+function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase','redis','etcd'].includes(runtime) ? runtime : 'postgres'; }
 
 function editAsset(asset) {
   editingAsset = asset.id;
@@ -2861,7 +2953,7 @@ function editAsset(asset) {
   $('asset-dialog').dataset.mode = 'edit';
   $('asset-dialog-title').textContent = asset.runtime === 'dm8' ? '编辑达梦 DM8 实例' :
     asset.runtime === 'mysql' ? '编辑 MySQL 实例' : asset.runtime === 'kingbase' ? '编辑金仓 V9 实例' :
-    asset.runtime === 'redis' ? '编辑 Redis 实例' : '编辑 PostgreSQL 实例';
+    asset.runtime === 'redis' ? '编辑 Redis 实例' : asset.runtime === 'etcd' ? '编辑 etcd 成员' : '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
@@ -2881,7 +2973,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', redis: 'Redis', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', redis: 'Redis', etcd: 'etcd', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -2893,6 +2985,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', kingbase_lock_wait: '金仓锁等待', recovery_verified: '人工验证恢复',
   redis_eviction: 'Redis 缓存淘汰', redis_sentinel_failover: 'Sentinel 主节点异常或切换', redis_slots_unhealthy: 'Redis 槽位异常',
+  etcd_leader_change: 'etcd Leader 中断或切换', etcd_health_degraded: 'etcd 健康检查异常', etcd_disk_latency: 'etcd 磁盘延迟',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
 
@@ -3054,7 +3147,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
   panel.append(grid);
   const phases = [['before', '故障前'], ['during', '触发时'], ['peak', '峰值'], ['after', '恢复后']];
   const layers = [['all', '全部'], ['app', '应用'], ['pooler', '入口与连接池'], ['postgres', '数据库'], ['infra', 'Linux / Kubernetes'], ['storage', '容器 / 磁盘 / PVC']];
-  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'redis', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
+  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'redis', 'sql', 'replication'], infra: ['linux', 'k8s', 'etcd'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
   if (replay.peak) comparisons.set('peak', replay.peak);
   const graph = analysis.graph || { nodes: [], edges: [] };
@@ -3988,7 +4081,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const dm8 = asset?.runtime === 'dm8' || event.kind?.startsWith('dm8');
     const kingbase = asset?.runtime === 'kingbase' || event.kind?.startsWith('kingbase');
     const redis = asset?.runtime === 'redis' || event.kind?.startsWith('redis');
-    const engine = redis ? 'redis' : kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
+    const etcd = asset?.runtime === 'etcd' || event.kind?.startsWith('etcd_');
+    const engine = etcd ? 'etcd' : redis ? 'redis' : kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
     const anchor = back ? new URLSearchParams(back.split('?')[1]) : null;
@@ -4876,34 +4970,41 @@ $('runtime').addEventListener('change', (event) => {
   const dm8 = event.target.value === 'dm8';
   const kingbase = event.target.value === 'kingbase';
   const redis = event.target.value === 'redis';
+  const etcd = event.target.value === 'etcd';
   const previous = event.target.dataset.previousRuntime;
   const previousEngine = databaseRuntimeGroup(previous);
   const nextEngine = databaseRuntimeGroup(event.target.value);
   event.target.dataset.previousRuntime = event.target.value;
   const form = $('asset-form');
   if (!editingAsset && previousEngine !== nextEngine) {
-    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321', redis:'6379'};
-    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test', redis:'0'};
+    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321', redis:'6379', etcd:'2379'};
+    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test', redis:'0', etcd:'etcd'};
     if (form.elements.port.value === ports[previousEngine]) form.elements.port.value = ports[nextEngine];
     if (form.elements.database.value === names[previousEngine]) form.elements.database.value = names[nextEngine];
     if (previous === 'dm8') form.elements.sslMode.value = 'require';
   }
   form.elements.sslMode.closest('label').hidden = dm8;
   if (dm8) form.elements.sslMode.value = 'disable';
-  $('asset-database-label').textContent = redis ? '实例范围／Sentinel 组' : '数据库';
-  $('asset-integrations').hidden = mysql || dm8 || kingbase || redis;
-  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8 || kingbase || redis;
+  $('asset-database-label').textContent = etcd ? '监控对象' : redis ? '实例范围／Sentinel 组' : '数据库';
+  $('asset-password-label').textContent = etcd ? '观测令牌（可选）' : '密码';
+  $('asset-integrations').hidden = mysql || dm8 || kingbase || redis || etcd;
+  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8 || kingbase || redis || etcd;
   $('asset-runtime-hint').textContent = mysql ? '数据库名称用于筛选 SQL 指纹。使用专用账号读取 Performance Schema。'
     : dm8 ? '主机和端口须匹配达梦采集探针的授权目标。使用专用监控账号读取动态性能视图。'
     : kingbase ? '选择 PostgreSQL 兼容模式的金仓 V9。使用专用只读账号和实际数据库名称。'
     : redis ? '普通节点和 Cluster 填 0。Sentinel 填主节点组名，端口通常为 26379。'
+    : etcd ? '填写成员观测端点。Kubernetes Context 可选，使用该 Context 的只读凭据读取 API Server 指标。'
     : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
-  $('k8s-fields').hidden = !k8s;
+  $('k8s-fields').hidden = !k8s && !etcd;
+  $('asset-k8s-label').textContent = etcd ? 'Kubernetes Context（可选）' : 'K8S 集群';
+  for (const child of $('k8s-fields').children) {
+    child.hidden = !k8s && (child.querySelector?.('[name=k8sCluster]') === null);
+  }
   for (const field of document.querySelectorAll('.linux-field')) {
     field.hidden = !linux;
     field.querySelector('input').disabled = !linux;
   }
-  for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s;
+  for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s && (!etcd || field.name !== 'k8sCluster');
   $('asset-form').elements.k8sCluster.required = k8s;
   $('asset-form').elements.namespace.required = k8s;
 });

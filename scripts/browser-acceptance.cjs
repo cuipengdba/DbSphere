@@ -1233,6 +1233,49 @@ async function redisMonitoring(page) {
   proof.push('Redis admission, eviction trend, sanitized slow command, and same-event original sample');
 }
 
+async function etcdMonitoring(page) {
+  await navigate(page,'assets');
+  await page.locator('#asset-add').click();
+  await formField(page,'asset-form','runtime').selectOption('etcd');
+  assert.equal(await formField(page,'asset-form','port').inputValue(),'2379');
+  await formField(page,'asset-form','name').fill('Browser QA etcd');
+  await formField(page,'asset-form','host').fill('127.0.0.1');
+  await formField(page,'asset-form','username').fill('monitor');
+  await formField(page,'asset-form','k8sCluster').fill('metrics-fixture');
+  const created=await action(page,page.locator('#asset-submit'),'POST','/api/assets',201);
+  const asset=(await created.json()).asset.id;
+  const sample=randomUUID(),event=randomUUID();
+  runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES
+    ('${sample}','${asset}',now()-interval '15 seconds','ok',
+    '{"adapter":{"role":"leader","engine":"etcd","transport":{"readOnly":true,"verified":true},"signals":[{"key":"etcdAPIServer","status":"ok"}]},
+    "etcd":{"version":"3.6.17","health":true,"leaderId":"abc313","memberId":"abc313","clusterId":"f7234","raftTerm":"3",
+    "hasLeader":1,"sizeBytes":10485760,"quotaBytes":1073741824,"proposalsPending":2,
+    "members":[{"id":"abc313","name":"qa-control-1","endpoint":"https://127.0.0.1:2379"}],
+    "kubernetes":{"context":"metrics-fixture","requests":43,"errors":1}},
+    "etcdInterval":{"wal":{"observations":8,"meanMs":80,"p95UpperMs":128},"kubernetes":{"meanMs":13}}}');
+    UPDATE assets SET last_status='ok',last_sample_at=(SELECT collected_at FROM samples WHERE id='${sample}'),version_num=30617 WHERE id='${asset}';
+    INSERT INTO event_keys(id,asset_id,started_at) SELECT '${event}',asset_id,collected_at FROM samples WHERE id='${sample}';
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+    SELECT id,asset_id,'etcd_disk_latency','etcd QA 磁盘延迟','open',started_at,'etcd_disk_latency' FROM event_keys WHERE id='${event}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT gen_random_uuid(),'${event}','etcd_disk_latency',collected_at,jsonb_build_object('sampleId',id,'wal',metrics_json#>'{etcdInterval,wal}')
+    FROM samples WHERE id='${sample}';`);
+  await page.goto(origin+'/#live?engine=etcd&asset='+asset);
+  await page.locator('[data-live=metrics]').getByRole('button',{name:'WAL fsync',exact:true}).click();
+  const sqlPanel=page.locator('[data-live=sql-panel]');
+  if(await sqlPanel.getAttribute('open')===null) await sqlPanel.locator('summary').click();
+  await page.getByRole('button',{name:'查看 etcd 成员和存储延迟',exact:true}).click();
+  await visible(page.locator('#detail'),'qa-control-1');
+  await visible(page.locator('#detail'),'Kubernetes API Server 同窗观测');
+  await page.goto(origin+'/#incidents?event='+event);
+  await visible(page.locator('#event-detail'),'etcd 的 WAL 或后端提交延迟升高');
+  await page.locator(`#event-detail a[href="/api/assets/${asset}/samples/${sample}"]:visible`).first().click();
+  await visible(page.locator('#sample-details'),sample);
+  await page.locator('#sample-return').click();
+  await visible(page.locator('#event-detail'),event);
+  proof.push('etcd admission, member visibility, same-window Kubernetes API Server metrics, and same-event original sample');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -1257,6 +1300,7 @@ async function redisMonitoring(page) {
     await dm8Monitoring(page);
     await kingbaseMonitoring(page);
     await redisMonitoring(page);
+    await etcdMonitoring(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

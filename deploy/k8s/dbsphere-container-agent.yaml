@@ -17,7 +17,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: agent
-          image: dbsphere/offline-go-app:3.3.0
+          image: dbsphere/offline-go-app:3.4.0
           imagePullPolicy: Never
           args: [container-agent]
           env:

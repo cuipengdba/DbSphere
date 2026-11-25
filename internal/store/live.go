@@ -55,7 +55,7 @@ func (s *Postgres) addUnassignedWallHosts(snapshot json.RawMessage) (json.RawMes
 
 const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	SELECT a.id,a.name,a.cluster_name,a.runtime,a.environment,a.organization_id,o.name AS organization_name,
-		CASE WHEN a.runtime IN ('mysql','dm8','kingbase','redis') THEN a.runtime ELSE 'postgres' END AS engine,
+		CASE WHEN a.runtime IN ('mysql','dm8','kingbase','redis','etcd') THEN a.runtime ELSE 'postgres' END AS engine,
 		a.role,a.k8s_cluster,a.k8s_namespace,a.k8s_pod,a.k8s_node,a.last_sample_at,a.last_status,a.linux_host,a.linux_exporter_port,
 		CASE WHEN a.last_sample_at IS NULL THEN 'pending'
 			WHEN $3::int>0 AND a.last_sample_at<=now()-make_interval(secs=>$3) THEN 'stale'
@@ -143,7 +143,12 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 		'ioPressure',m.metrics_json#>'{containerStorage,containers}'->(m.metrics_json#>>'{containerStorage,primary}')#>'{pressure,io_some_avg10}',
 		'blocked',CASE WHEN m.metrics_json#>>'{diagnostics,locks,status}'='ok'
 			THEN m.metrics_json#>'{diagnostics,locks,data,blockedSessions}' END,
-			'engineMetrics',CASE WHEN a.engine='redis' THEN jsonb_build_object(
+			'engineMetrics',CASE WHEN a.engine='etcd' THEN jsonb_build_object(
+				'health',m.metrics_json#>'{etcd,health}','leaderId',m.metrics_json#>'{etcd,leaderId}',
+				'pending',m.metrics_json#>'{etcd,proposalsPending}','size',m.metrics_json#>'{etcd,sizeBytes}',
+				'wal',m.metrics_json#>'{etcdInterval,wal,meanMs}','commit',m.metrics_json#>'{etcdInterval,backend,meanMs}',
+				'api',m.metrics_json#>'{etcdInterval,kubernetes,meanMs}')
+				WHEN a.engine='redis' THEN jsonb_build_object(
 				'ops',m.metrics_json#>'{redis,ops}','clients',m.metrics_json#>'{redis,clients}',
 				'memory',m.metrics_json#>'{redis,memoryBytes}','hitPercent',m.metrics_json#>'{redisInterval,hitPercent}',
 				'evicted',m.metrics_json#>'{redisInterval,evicted}','latency',m.metrics_json#>'{redis,latencyMs}',

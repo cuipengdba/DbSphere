@@ -38,7 +38,7 @@ grep -q 'grafanaBootData' "$scratch/frame.html"
 if grep -Eqi '^(Location:.*login|Set-Cookie:)' "$scratch/frame.headers"; then exit 1; fi
 echo 'Grafana private network and DbSphere access roles passed.'
 
-for topic in overview postgres waits replication infrastructure mysql dm8 kingbase redis; do
+for topic in overview postgres waits replication infrastructure mysql dm8 kingbase redis etcd; do
   panels=8
   if [[ "$topic" == waits ]]; then panels=10; fi
   if [[ "$topic" == infrastructure ]]; then panels=12; fi
@@ -46,7 +46,7 @@ for topic in overview postgres waits replication infrastructure mysql dm8 kingba
     jq -e --arg uid "dbsphere-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and
       (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=event")))' >/dev/null
 done
-echo 'Grafana dashboard provisioning passed for all nine topics.'
+echo 'Grafana dashboard provisioning passed for all ten topics.'
 for topic in io cache volumes rca; do
   panels=4
   if [[ "$topic" == io ]]; then panels=6; fi
@@ -138,4 +138,4 @@ wait "$waiter"
 api -X POST "$base/api/assets/$asset/check" >/dev/null
 api "$base/api/events/$event" | jq -e --arg id "$event" '.event.id==$id and .event.status=="resolved"' >/dev/null
 trap - EXIT
-printf 'Grafana with private Prometheus displayed 13 dashboards. Native lock sample %s and recovery shared event %s.\n' "$sample" "$event"
+printf 'Grafana with private Prometheus displayed 14 dashboards. Native lock sample %s and recovery shared event %s.\n' "$sample" "$event"

@@ -19,6 +19,8 @@ type PrometheusAsset struct {
 	KingbaseSize, KingbaseLag                                             *float64
 	RedisOps, RedisClients, RedisMemory, RedisHit                         *float64
 	RedisEvicted, RedisRejected, RedisLatency, RedisSlots                 *float64
+	EtcdHasLeader, EtcdElections, EtcdPending, EtcdSize, EtcdQuota        *float64
+	EtcdWAL, EtcdCommit, EtcdAPILatency                                   *float64
 	Container                                                             json.RawMessage
 }
 
@@ -38,6 +40,8 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 			&a.DM8Sessions, &a.DM8Active, &a.DM8Transactions, &a.DM8Waits,
 			&a.KingbaseSessions, &a.KingbaseActive, &a.KingbaseTransactions, &a.KingbaseWaits, &a.KingbaseSize, &a.KingbaseLag,
 			&a.RedisOps, &a.RedisClients, &a.RedisMemory, &a.RedisHit, &a.RedisEvicted, &a.RedisRejected, &a.RedisLatency, &a.RedisSlots,
+			&a.EtcdHasLeader, &a.EtcdElections, &a.EtcdPending, &a.EtcdSize, &a.EtcdQuota,
+			&a.EtcdWAL, &a.EtcdCommit, &a.EtcdAPILatency,
 			&a.LinuxRX, &a.LinuxTX, &a.LinuxDiskRead, &a.LinuxDiskWrite, &a.PodCPU, &a.PodMemory, &a.Container); err != nil {
 			return nil, err
 		}
@@ -51,7 +55,7 @@ const prometheusAssetsSQL = `WITH selected AS (
 	FROM assets a ORDER BY a.id LIMIT 5000
 )
 SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
-	CASE WHEN a.runtime IN ('mysql','dm8','kingbase','redis') THEN a.runtime ELSE 'postgres' END,a.runtime,
+	CASE WHEN a.runtime IN ('mysql','dm8','kingbase','redis','etcd') THEN a.runtime ELSE 'postgres' END,a.runtime,
 	extract(epoch FROM a.last_sample_at)::float8,
 	CASE WHEN a.recent AND a.last_status='ok' THEN 1.0 ELSE 0.0 END::float8,
 	e.total::float8,
@@ -96,6 +100,14 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	(raw.metrics_json#>>'{redisInterval,rejected}')::float8,
 	(raw.metrics_json#>>'{redis,latencyMs}')::float8,
 	(raw.metrics_json#>>'{redis,slotsOk}')::float8,
+	(raw.metrics_json#>>'{etcd,hasLeader}')::float8,
+	(raw.metrics_json#>>'{etcd,leaderChanges}')::float8,
+	(raw.metrics_json#>>'{etcd,proposalsPending}')::float8,
+	(raw.metrics_json#>>'{etcd,sizeBytes}')::float8,
+	(raw.metrics_json#>>'{etcd,quotaBytes}')::float8,
+	(raw.metrics_json#>>'{etcdInterval,wal,meanMs}')::float8,
+	(raw.metrics_json#>>'{etcdInterval,backend,meanMs}')::float8,
+	(raw.metrics_json#>>'{etcdInterval,kubernetes,meanMs}')::float8,
 	(raw.metrics_json#>>'{linux,interval,networkReceiveBps}')::float8,
 	(raw.metrics_json#>>'{linux,interval,networkTransmitBps}')::float8,
 	(raw.metrics_json#>>'{linux,interval,diskReadBps}')::float8,

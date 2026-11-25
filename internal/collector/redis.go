@@ -238,11 +238,11 @@ func (RedisAdapter) Collect(ctx context.Context, target Target, password string)
 	}
 	report.Role = details.Role
 	return collectoradapter.Snapshot{Report: report, Metrics: map[string]any{
-		"redis": details, "role": nullableRedisRole(details.Role), "version_num": version,
+		"redis": details, "role": nullableCollectorRole(details.Role), "version_num": version,
 	}}, nil
 }
 
-func nullableRedisRole(role string) any {
+func nullableCollectorRole(role string) any {
 	if role == "" {
 		return nil
 	}

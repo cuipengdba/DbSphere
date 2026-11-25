@@ -22,6 +22,7 @@ const RuntimeMySQL = "mysql"
 const RuntimeDM8 = "dm8"
 const RuntimeKingbase = "kingbase"
 const RuntimeRedis = "redis"
+const RuntimeEtcd = "etcd"
 
 func IsPostgreSQLRuntime(runtime string) bool {
 	return runtime == "linux" || runtime == "k8s" || runtime == "managed"
@@ -29,7 +30,7 @@ func IsPostgreSQLRuntime(runtime string) bool {
 
 func IsSupportedRuntime(runtime string) bool {
 	return IsPostgreSQLRuntime(runtime) || runtime == RuntimeMySQL || runtime == RuntimeDM8 ||
-		runtime == RuntimeKingbase || runtime == RuntimeRedis
+		runtime == RuntimeKingbase || runtime == RuntimeRedis || runtime == RuntimeEtcd
 }
 
 type OptionalPort int
@@ -119,7 +120,10 @@ func (a Input) Validate() error {
 		if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
 			return errors.New("DM8 uses an HTTPS probe with a local database connection")
 		}
-		if a.LinuxHost != "" || a.LinuxExporterPort != 0 || a.K8sCluster != "" || a.Namespace != "" ||
+		if a.Runtime == RuntimeEtcd && (len(a.K8sCluster) > 150 || strings.ContainsAny(a.K8sCluster, "\x00\r\n\t")) {
+			return errors.New("invalid etcd Kubernetes context")
+		}
+		if a.LinuxHost != "" || a.LinuxExporterPort != 0 || (a.K8sCluster != "" && a.Runtime != RuntimeEtcd) || a.Namespace != "" ||
 			a.Workload != "" || a.Pod != "" || a.Node != "" || a.PoolerURL != "" || a.PoolerEndpoint != "" || a.PatroniURL != "" {
 			return errors.New("database engine does not support PostgreSQL infrastructure mappings")
 		}

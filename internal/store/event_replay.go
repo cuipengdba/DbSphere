@@ -160,6 +160,10 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			point.Source == "go_redis_collector" || item.Kind == "collection_recovered" &&
 			(event.Kind == redisEvictionGroup || event.Kind == redisSentinelGroup || event.Kind == redisSlotsGroup) {
 			point.Layer = "redis"
+		} else if item.Kind == etcdLeaderGroup || item.Kind == etcdHealthGroup || item.Kind == etcdDiskGroup ||
+			point.Source == "go_etcd_collector" || item.Kind == "collection_recovered" &&
+			(event.Kind == etcdLeaderGroup || event.Kind == etcdHealthGroup || event.Kind == etcdDiskGroup) {
+			point.Layer = "etcd"
 		}
 		if point.Layer == "" {
 			continue
@@ -174,7 +178,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		}
 		switch item.Kind {
 		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup, dm8LockGroup, kingbaseLockGroup,
-			redisEvictionGroup, redisSentinelGroup, redisSlotsGroup:
+			redisEvictionGroup, redisSentinelGroup, redisSlotsGroup, etcdLeaderGroup, etcdHealthGroup, etcdDiskGroup:
 			point.Stage = "detection"
 			if detection == nil || (detection.SampleID == "" && point.SampleID != "") {
 				value := point
@@ -229,7 +233,8 @@ func candidateEvidenceStrength(candidate map[string]any, samples map[string]samp
 	if hasRawSample {
 		switch stringValue(candidate["code"]) {
 		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down", "mysql_innodb_lock_wait", "dm8_transaction_lock", "kingbase_session_lock",
-			"redis_eviction_confirmed", "redis_sentinel_master_observed", "redis_slots_observed":
+			"redis_eviction_confirmed", "redis_sentinel_master_observed", "redis_slots_observed",
+			"etcd_leader_observed", "etcd_disk_observed", "etcd_health_observed":
 			return "direct"
 		}
 		return "correlated"

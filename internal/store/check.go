@@ -37,7 +37,7 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis')
+		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -184,6 +184,10 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	if runtime == assets.RuntimeRedis {
 		return s.checkRedis(ctx, id, target, password, lease, interval)
+	}
+	if runtime == assets.RuntimeEtcd {
+		target.KubernetesCluster = dereference(k8sCluster)
+		return s.checkEtcd(ctx, id, target, password, lease, interval)
 	}
 	poolerURL := ""
 	if poolerEncrypted != nil {
@@ -398,6 +402,8 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		label, source = "金仓 V9", "go_kingbase_collector"
 	} else if runtime == assets.RuntimeRedis {
 		label, source = "Redis", "go_redis_collector"
+	} else if runtime == assets.RuntimeEtcd {
+		label, source = "etcd", "go_etcd_collector"
 	}
 	if lease != nil {
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
@@ -445,6 +451,15 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		redisWindow = redisInterval(current, redisBefore, now.Sub(previousAt), interval, previousID)
 		if redisWindow != nil {
 			metrics["redisInterval"] = redisWindow
+		}
+	}
+	var etcdBefore collector.EtcdMetrics
+	var etcdReading *etcdWindow
+	if current, ok := metrics["etcd"].(collector.EtcdMetrics); ok && runtime == assets.RuntimeEtcd {
+		etcdBefore = priorEtcdSample(previousJSON)
+		etcdReading = etcdInterval(current, etcdBefore, previousAt, now, interval, previousID)
+		if etcdReading != nil {
+			metrics["etcdInterval"] = etcdReading
 		}
 	}
 	if status == "ok" && assets.IsPostgreSQLRuntime(runtime) {
@@ -613,6 +628,12 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		if current, ok := metrics["redis"].(collector.RedisMetrics); ok && status == "ok" {
 			if err := recordRedisEvents(ctx, tx, id, sampleID, previousID, now, current, redisBefore, redisWindow); err != nil {
 				return CheckResult{}, fmt.Errorf("record Redis event: %w", err)
+			}
+		}
+	} else if runtime == assets.RuntimeEtcd {
+		if current, ok := metrics["etcd"].(collector.EtcdMetrics); ok && status == "ok" {
+			if err := recordEtcdEvents(ctx, tx, id, sampleID, previousID, now, current, etcdBefore, etcdReading); err != nil {
+				return CheckResult{}, fmt.Errorf("record etcd event: %w", err)
 			}
 		}
 	} else {

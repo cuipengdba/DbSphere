@@ -244,6 +244,28 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if item.Kind == etcdLeaderGroup || item.Kind == etcdHealthGroup || item.Kind == etcdDiskGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) != nil {
+				continue
+			}
+			supports := []string{item.ID}
+			if id := stringValue(payload["sampleId"]); id != "" {
+				supports = append(supports, "sample:"+id)
+			}
+			switch item.Kind {
+			case etcdLeaderGroup:
+				addCandidate("etcd_leader_observed", "etcd 观测到 Leader 中断或切换", "high", supports,
+					[]string{"核对同一集群的 Leader ID 和 Raft 任期"}, "原始采样包含成员报告的 Leader 状态。", nil, item.ObservedAt, nil)
+			case etcdHealthGroup:
+				addCandidate("etcd_health_observed", "etcd 端点报告健康检查失败", "high", supports,
+					[]string{"核对该成员及其他成员的健康与磁盘指标"}, "成员的 /health 返回失败。", nil, item.ObservedAt, nil)
+			case etcdDiskGroup:
+				addCandidate("etcd_disk_observed", "etcd 的 WAL 或后端提交延迟升高", "high", supports,
+					[]string{"核对同窗磁盘延迟、积压提案和 API Server 请求耗时"}, "同一成员的累计分布在采样间报告更长的平均耗时。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == redisEvictionGroup || item.Kind == redisSentinelGroup || item.Kind == redisSlotsGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) != nil {

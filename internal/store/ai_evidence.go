@@ -28,6 +28,9 @@ var reviewSourceKinds = []string{
 	"redis_eviction",
 	"redis_sentinel_failover",
 	"redis_slots_unhealthy",
+	"etcd_leader_change",
+	"etcd_health_degraded",
+	"etcd_disk_latency",
 }
 
 var reviewNumericPaths = []struct {

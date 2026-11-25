@@ -23,7 +23,7 @@
   ];
   const mebi = new Set(['diskReadBps', 'diskWriteBps', 'networkReceiveBps', 'networkTransmitBps', 'lag', 'activeFile', 'inactiveFile']);
   const statuses = { ok: '正常', stale: '陈旧', error: '失联', pending: '待首采', degraded: '部分缺采' };
-  const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例' };
+  const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例', leader:'Leader', follower:'Follower', 'no-leader':'暂无 Leader' };
   const boardStates = new Set(['affected', 'missing', 'maintenance', 'recovered', 'healthy']);
   const baselineModes = new Set(['previous', 'day', 'week']);
   const watchKey = 'dbsphere.wallboard.watch';
@@ -470,7 +470,7 @@
           button.dataset.state = asset.unavailable ? 'error' : asset.freshness;
           button.setAttribute('aria-pressed', String(asset.id === selection.asset));
           const name = node('strong', '', asset.name);
-          const role = roles[asset.role] || ({mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis'}[asset.engine] || '数据库');
+          const role = roles[asset.role] || ({mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'}[asset.engine] || '数据库');
           const availability = asset.unavailable ? '故障' : statuses[asset.freshness] || '缺采';
           const connection = finite(asset.connections) && asset.maxConnections > 0
             ? '连接 ' + asset.connections + '/' + asset.maxConnections : '连接缺采';

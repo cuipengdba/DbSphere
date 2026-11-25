@@ -33,11 +33,19 @@
     { key:'redisLatency', title:'观测往返', unit:' ms', source:'含连接与 INFO server · 桶内峰值' },
     { key:'redisSlots', title:'正常槽位', unit:'', source:'CLUSTER INFO · 桶内最小值' }
   ];
-  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis'};
+  const etcdMetrics = [
+    {key:'etcdLeader', title:'Leader 状态',unit:'',ceiling:1,source:'etcd_server_has_leader · 桶内最小值'},
+    {key:'etcdPending', title:'提案积压',unit:'',source:'etcd_server_proposals_pending · 桶内峰值'},
+    {key:'etcdSize', title:'后端空间',unit:' B',source:'etcd_mvcc_db_total_size_in_bytes · 桶内均值'},
+    {key:'etcdWAL', title:'WAL fsync',unit:' ms',source:'采样间平均耗时 · 桶内峰值'},
+    {key:'etcdCommit', title:'后端提交',unit:' ms',source:'采样间平均耗时 · 桶内峰值'},
+    {key:'etcdAPI', title:'API Server → etcd',unit:' ms',source:'API Server 记录的 etcd 请求耗时 · 桶内峰值'}
+  ];
+  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'};
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
   const freshnessLabels = { ok: '采样正常', error: '采集失败', pending: '待采样', stale: '采样陈旧' };
-  const roleLabels = { primary: '主库', replica: '备库', standby: '备库' };
+  const roleLabels = { primary: '主库', replica: '备库', standby: '备库', leader:'Leader', follower:'Follower', 'no-leader':'暂无 Leader' };
   const shortTime = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
   const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
   const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -50,6 +58,7 @@
     dm8: 'dbsphere-dm8',
     kingbase: 'dbsphere-kingbase',
     redis: 'dbsphere-redis',
+    etcd: 'dbsphere-etcd',
     containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
 
   function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night, back }) {
@@ -359,6 +368,7 @@
       }
       renderPriority(firstEvent, selected, now);
       get('asset-title').textContent = selected?.name || '实例趋势';
+      get('diagnostic-title').textContent = ({etcd:'控制面诊断',redis:'慢命令与拓扑',dm8:'锁等待详情'})[selected?.engine] || 'Top SQL';
       get('sample-age').textContent = selected ? freshnessLabels[selected.freshness] + ' · ' + age(selected.collectedAt, now) : '';
       renderKPIs(selected, now);
 
@@ -416,7 +426,13 @@
       const availability = ['可用性', snapshot.fresh + ' / ' + snapshot.total, `采样正常 · 不可用 ${snapshot.unavailable}`, snapshot.unavailable ? 'alert' : 'cyan', 'pgAvailable'];
       const native = current ? selected.engineMetrics || {} : {};
       const nativeCount = key => finite(native[key]) ? number.format(native[key]) : '—';
-      const cards = selected?.engine === 'redis' && native.mode === 'sentinel' ? [
+      const cards = selected?.engine === 'etcd' ? [
+        ['健康', native.health===true?'通过':native.health===false?'异常':'—',observed,native.health===false?'alert':'cyan','etcdLeader'],
+        ['Leader',native.leaderId || '—',observed,'violet','etcdLeader'],
+        ['提案积压',nativeCount('pending'),observed,'blue','etcdPending'],
+        ['WAL fsync',finite(native.wal)?nativeCount('wal')+' ms':'—',observed,'violet','etcdWAL'],
+        ['后端提交',finite(native.commit)?nativeCount('commit')+' ms':'—',observed,'cyan','etcdCommit']
+      ] : selected?.engine === 'redis' && native.mode === 'sentinel' ? [
         availability,
         ['主节点组',native.sentinel?.group || '—',observed,'blue','redisLatency'],
         ['当前主节点',native.sentinel?.master || '—',native.sentinel?.state === 'ok' ? '可用' : '存在缺口','violet','redisLatency'],
@@ -618,8 +634,8 @@
       parent.replaceChildren();
       label.textContent = '';
       if (!asset || !asset.sampleId || asset.engine !== 'postgres') {
-        if (asset?.engine === 'kingbase' || asset?.engine === 'redis') {
-          const name = asset.engine === 'redis' ? '查看 Redis 慢命令和拓扑' : '查看金仓 SQL 指纹与锁链';
+        const name = {redis:'查看 Redis 慢命令和拓扑',kingbase:'查看金仓 SQL 指纹与锁链',etcd:'查看 etcd 成员和存储延迟'}[asset?.engine];
+        if (name) {
           const button = element('button', name, 'ghost small-button');
           button.type = 'button';
           button.onclick = () => openAsset(asset.id);
@@ -667,10 +683,9 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const enabled = asset?.engine === 'redis' ? asset.engineMetrics?.mode === 'sentinel' ?
-        redisMetrics.filter(metric => metric.key === 'redisLatency') : redisMetrics
-        : asset?.engine === 'kingbase' ? kingbaseMetrics :
-        asset?.engine === 'dm8' ? dm8Metrics : asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
+      const specialized = {etcd:etcdMetrics,redis:redisMetrics,kingbase:kingbaseMetrics,dm8:dm8Metrics,mysql:metrics.slice(0,1)};
+      const enabled = asset?.engine === 'redis' && asset.engineMetrics?.mode === 'sentinel' ?
+        redisMetrics.filter(metric => metric.key === 'redisLatency') : specialized[asset?.engine] || metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
       const metricKey = enabled.map(metric => metric.key).join();
       if (list.dataset.metrics !== metricKey) {
@@ -698,7 +713,7 @@
       const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
         bucketMinutes: String(bucketMinutes) };
       const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
-      if (asset.engine === 'dm8' || asset.engine === 'kingbase' || asset.engine === 'redis') trend.set('metricProfile', asset.engine);
+      if (specialized[asset.engine] && asset.engine !== 'mysql') trend.set('metricProfile', asset.engine);
       const waits = new URLSearchParams({ ...q, group: 'type' });
       if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];

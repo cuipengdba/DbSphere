@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.3.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.4.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看数据库、Linux 和 Kubernetes 指标，从一张异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.3.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.3.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.4.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.4.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -38,7 +38,7 @@ DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看�
 
 | 领域 | 功能 |
 | --- | --- |
-| 资产纳管 | 支持 PostgreSQL 14–19、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis OSS 7.2 与 8.4，以及 MySQL 8.4 只读预览。支持 Linux、Docker、Kubernetes 和托管数据库，提供批量清单预览与导入、授权资产导出、连接及权限体检。 |
+| 资产纳管 | 支持 PostgreSQL 14–19、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis OSS 7.2 与 8.4、etcd 3.5 与 3.6，以及 MySQL 8.4 只读预览。支持 Linux、Docker、Kubernetes 和托管数据库，提供批量清单预览与导入、授权资产导出、连接及权限体检。 |
 | 监控工作台 | 从集群下钻到实例、数据库和 SQL。对照连接、事务、等待、锁、WAL、复制、检查点和容量，支持同窗多实例对比、短时等待采样、历史阻塞树回放和原始样本。 |
 | 监控大屏 | 按资产查看 12 张可放大趋势图。个人和团队值班视图可跨浏览器恢复，团队成员按各自的资产权限查看。支持同步游标、固定时段、历史基线和基线采样下钻。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |
@@ -58,7 +58,7 @@ DbSphere 是面向 PostgreSQL 的开源运维工作台。在浏览器中查看�
 
 - [从安装到首次采集](docs/QUICK_START.md) · [离线部署与升级](docs/OFFLINE_DEPLOYMENT.md)
 - [监控工作台](docs/MONITORING_WORKSPACE.md) · [事件调查](docs/INCIDENT_INVESTIGATION.md) · [日志分析](docs/LOG_ANALYSIS.md)
-- [Linux 与容器存储](docs/CONTAINER_STORAGE.md) · [Kubernetes 接入](docs/OFFLINE_DEPLOYMENT.md#kubernetes-接入) · [托管 PostgreSQL](docs/MANAGED_POSTGRESQL.md) · [达梦 DM8](docs/DM8.md) · [金仓 V9](docs/KINGBASE.md) · [Redis](docs/REDIS.md)
+- [Linux 与容器存储](docs/CONTAINER_STORAGE.md) · [Kubernetes 接入](docs/OFFLINE_DEPLOYMENT.md#kubernetes-接入) · [托管 PostgreSQL](docs/MANAGED_POSTGRESQL.md) · [达梦 DM8](docs/DM8.md) · [金仓 V9](docs/KINGBASE.md) · [Redis](docs/REDIS.md) · [etcd 控制面](docs/ETCD.md)
 - [长期指标留存](docs/HISTORY_STORAGE.md) · [运维系统接口](docs/OPERATIONS_INTEGRATION.md) · [事件证据助手](docs/AI_EVIDENCE_REVIEW.md)
 
 DbSphere 是独立开发的开源项目，采用 [Apache License 2.0](LICENSE)。欢迎提交 [问题反馈](https://github.com/cuipengdba/DbSphere/issues)。

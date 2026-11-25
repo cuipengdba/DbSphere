@@ -127,6 +127,14 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_redis_interval_rejected_connections", "Connections rejected between two Redis samples.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisRejected }},
 		{"asset_redis_observation_latency_milliseconds", "Collector elapsed time including Redis connection and INFO server.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisLatency }},
 		{"asset_redis_cluster_slots_ok", "Healthy slots as visible to the sampled Redis Cluster node.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisSlots }},
+		{"asset_etcd_has_leader", "Whether the observed etcd member reports a leader.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdHasLeader }},
+		{"asset_etcd_leader_changes_total", "Leader changes observed by the etcd member.", "counter", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdElections }},
+		{"asset_etcd_proposals_pending", "Pending proposals as reported by the etcd member.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdPending }},
+		{"asset_etcd_backend_size_bytes", "Allocated etcd backend database size.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdSize }},
+		{"asset_etcd_backend_quota_bytes", "Configured etcd backend quota.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdQuota }},
+		{"asset_etcd_wal_ms", "Mean etcd WAL fsync latency between two samples.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdWAL }},
+		{"asset_etcd_backend_commit_ms", "Mean etcd backend commit latency between two samples.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdCommit }},
+		{"asset_etcd_kube_apiserver_ms", "Mean API server etcd request latency between two samples.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.EtcdAPILatency }},
 	} {
 		name := "dbsphere_" + metric.name
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, metric.help, name, metric.kind)

@@ -191,6 +191,8 @@ func makeImportPlan(items []assets.Declaration, known []importAsset, profiles []
 			row.Action, row.Reason = "invalid", "金仓 V9 资产使用单实例纳管入口"
 		case item.Input.Runtime == assets.RuntimeRedis:
 			row.Action, row.Reason = "invalid", "Redis 资产使用单实例纳管入口"
+		case item.Input.Runtime == assets.RuntimeEtcd:
+			row.Action, row.Reason = "invalid", "etcd 资产使用单实例纳管入口"
 		case item.ID != "" && !evidenceUUID.MatchString(item.ID) || item.Input.Validate() != nil:
 			row.Action, row.Reason = "invalid", "资产标识或连接参数无效"
 		case !sameExplicitTarget && (len(matched) > 1 || len(matched) == 1 && matched[0].ID != row.ID):

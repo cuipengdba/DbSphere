@@ -92,7 +92,7 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 func describeReadiness(sample readinessSample, runtime string) []readinessCheck {
 	metrics := sample.Metrics
 	pgStatus := stringValue(object(metrics["collector"])["pgStatus"])
-	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8" || runtime == "redis") {
+	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8" || runtime == "redis" || runtime == "etcd") {
 		pgStatus = stringValue(object(metrics["collector"])[runtime+"Status"])
 	}
 	if pgStatus == "" && sample.Status == "ok" {
@@ -141,7 +141,8 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		case "activeWaits", "activityQueryID", "instanceIO", "checkpoints", "wal", "replicationLinks", "walReceiver",
 			"logicalPublications", "logicalSubscriptions", "logicalApplyProgress", "logicalSubscriptionErrors", "sqlPerformance",
 			"connections", "lockWaits", "replication", "sessions", "databaseSize", "topSql",
-			"server", "redisCounters", "slowCommands", "slots", "shards", "sentinel":
+			"server", "redisCounters", "slowCommands", "slots", "shards", "sentinel",
+			"etcdHealth", "etcdRaft", "etcdMembers", "etcdMetrics", "etcdAPIServer":
 			switch signal["status"] {
 			case "ok", "inactive":
 				add(stringValue(signal["key"]), stringValue(signal["status"]), "")

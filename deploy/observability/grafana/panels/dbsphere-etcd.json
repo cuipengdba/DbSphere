@@ -1,0 +1,764 @@
+{
+  "uid": "dbsphere-etcd",
+  "title": "DbSphere · etcd 控制面",
+  "description": "etcd 成员的 Leader 状态、提案、WAL、存储与 Kubernetes API Server 同窗指标。",
+  "tags": [
+    "DbSphere",
+    "etcd",
+    "Kubernetes"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "30s",
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "返回 DbSphere 实时观测",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=live&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}",
+      "icon": "external link",
+      "targetBlank": false
+    },
+    {
+      "title": "回到原事件",
+      "type": "link",
+      "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+      "icon": "bolt",
+      "targetBlank": false
+    },
+    {
+      "title": "DbSphere 专题",
+      "type": "dashboards",
+      "asDropdown": true,
+      "tags": [
+        "dbsphere"
+      ],
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "organization",
+        "label": "组织 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cluster",
+        "label": "集群",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "asset",
+        "label": "资产 ID",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "engine",
+        "label": "引擎",
+        "type": "textbox",
+        "query": "etcd",
+        "current": {
+          "text": "etcd",
+          "value": "etcd"
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "event",
+        "label": "事件 ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dbsphere_context",
+        "label": "调查上下文",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 2,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "etcd 观测端点",
+      "description": "当前纳管的观测端点。",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(dbsphere_asset_info{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "有 Leader 的端点",
+      "description": "按端点报告计数。",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dbsphere_asset_etcd_has_leader{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "提案积压",
+      "description": "每个成员原生积压。",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(dbsphere_asset_etcd_proposals_pending{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 1
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "后端占用",
+      "description": "所选范围内成员报告的最大后端大小。",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(dbsphere_asset_etcd_backend_size_bytes{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#008985",
+                "value": null
+              },
+              {
+                "color": "#f07950",
+                "value": 0.85
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "WAL fsync",
+      "description": "两次有效采样之间的平均耗时。",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_etcd_wal_ms{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "后端提交",
+      "description": "两次有效采样之间的平均耗时。",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_etcd_backend_commit_ms{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "API Server → etcd",
+      "description": "需要已授权的 Kubernetes Context。",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_etcd_kube_apiserver_ms{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "后端占用与配额",
+      "description": "显示每个成员的配额与实际占用。",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_etcd_backend_size_bytes{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"}",
+          "legendFormat": "{{asset_name}} 占用",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "dbsphere_asset_etcd_backend_quota_bytes{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"etcd\"}",
+          "legendFormat": "{{asset_name}} 配额",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}
