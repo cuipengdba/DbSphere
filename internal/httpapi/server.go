@@ -1761,7 +1761,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" &&
 			r.URL.Path != "/observability.js" &&
 			r.URL.Path != "/monitoring.js" && r.URL.Path != "/live.js" && r.URL.Path != "/live.css" && r.URL.Path != "/theme.js" &&
-			r.URL.Path != "/wallboard.js" && r.URL.Path != "/wallboard.css" &&
+			r.URL.Path != "/wallboard.js" && r.URL.Path != "/wallboard.css" && r.URL.Path != "/grafana-return.js" &&
 			r.URL.Path != "/log-analysis.js" && r.URL.Path != "/log-analysis.css" &&
 			r.URL.Path != "/overview.js" && r.URL.Path != "/overview.css" &&
 			r.URL.Path != "/container-storage.js" && r.URL.Path != "/container-storage.css" &&
@@ -1782,7 +1782,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if !isGrafana {
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'")
 		}
-		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces" || isGrafana) {
+		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces" || isGrafana && path != grafanaReturnPath) {
 			hash, err := administrator.CurrentAdminPasswordHash(r.Context())
 			if err != nil {
 				w.Header().Set("X-DbSphere-Storage", "unavailable")

@@ -678,6 +678,39 @@ async function dutyMatrix(page) {
   await page.setViewportSize({width: 1440, height: 880});
   if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'duty-matrix.png') });
   proof.push('Two cluster groups and five status types, scoped counts and filters, multiple pinned instances, host layout, recovered event return, and 390/1920/3840 viewport widths');
+  await grafanaReturn(page, assets.recovered, recovered);
+}
+
+async function grafanaReturn(page, asset, event) {
+  const now = Math.floor(Date.now() / 1000) * 1000 + 123;
+  const from = new Date(now - 60 * 60_000).toISOString();
+  const end = new Date(now).toISOString();
+  const identityURL = origin + '/grafana/api/user';
+  const dashURL = url => url.pathname === '/grafana/d/dbsphere-overview';
+  const link = (view, event = '') => '/grafana/dbsphere-return?' + new URLSearchParams({ view, asset, event, from, to: end });
+  await page.route(identityURL, route => route.fulfill({ json: { login: 'dbsphere-local-admin', isGrafanaAdmin: false } }));
+  await page.route(dashURL, route => route.fulfill({ contentType: 'text/html', body: '<!doctype html>' +
+    `<a href="${link('live')}">返回 DbSphere 实时观测</a>` +
+    `<a href="${link('event')}">空事件返回</a>` +
+    `<a href="${link('event', event)}">回到原事件</a>` }));
+  try {
+    for (const [label, view] of [['返回 DbSphere 实时观测', 'live'], ['空事件返回', 'live'], ['回到原事件', 'incidents']]) {
+      await page.goto(origin + '/#grafana?panel=dbsphere-overview');
+      await page.frameLocator('#grafana-frame').getByRole('link', { name: label, exact: true }).click();
+      await page.waitForFunction(value => document.body.dataset.activeView === value, view);
+      assert.equal(parameters(page).get('asset'), asset);
+      assert.equal(parameters(page).get('from'), from);
+      assert.equal(parameters(page).get(view === 'live' ? 'end' : 'to'), end);
+      if (view === 'incidents') {
+        assert.equal(parameters(page).get('event'), event);
+        await visible(page.locator('#event-detail'), event);
+      }
+    }
+  } finally {
+    await page.unroute(identityURL);
+    await page.unroute(dashURL);
+  }
+  proof.push('Same-origin Grafana iframe links return to live, fall back from an empty event, or open the matching event with its time window');
 }
 
 (async () => {

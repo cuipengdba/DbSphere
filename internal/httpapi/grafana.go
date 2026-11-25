@@ -59,6 +59,9 @@ func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string
 }
 
 func registerGrafana(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
+	// The return bridge opens only DbSphere routes. The target page independently
+	// applies login and asset access rules, including after the session expires.
+	mux.HandleFunc("GET "+grafanaReturnPath, returnFromGrafana)
 	upstream := auth.Observability.GrafanaURL
 	if upstream == nil {
 		return
@@ -110,10 +113,6 @@ func registerGrafana(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 			return
 		}
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-		if r.URL.Path == grafanaReturnPath && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-			returnFromGrafana(w, r)
-			return
-		}
 		proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), accountKey{}, username)))
 	}
 	mux.HandleFunc(grafanaPrefix, handler)
@@ -124,33 +123,30 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	input := r.URL.Query()
 	output := url.Values{}
 	view := "live"
-	if input.Get("view") == "storage" {
+	eventID := input.Get("event")
+	hasEvent := opsUUID.MatchString(eventID)
+	requested := input.Get("view")
+	if requested == "storage" || requested == "event" && !hasEvent && input.Get("source") == "storage" {
 		view = "storage"
 		output.Set("mode", "history")
-		switch topic := input.Get("topic"); topic {
-		case "resources", "containers", "claims":
-			output.Set("topic", topic)
-		}
-		if id := input.Get("event"); opsUUID.MatchString(id) {
-			output.Set("event", id)
+		if hasEvent {
+			output.Set("event", eventID)
 		}
 	}
-	if input.Get("view") == "event" {
+	if requested == "event" && hasEvent {
 		view = "incidents"
-		if id := input.Get("event"); opsUUID.MatchString(id) {
-			output.Set("event", id)
-			context := input.Get("context")
-			if raw, ok := strings.CutPrefix(context, "incidents?"); ok && len(context) <= 5200 {
-				selected, err := url.ParseQuery(raw)
-				if err == nil && selected.Get("event") == id {
-					for _, key := range []string{"return", "focusPhase", "focusLayer", "layer", "phase", "strength"} {
-						if value := selected.Get(key); value != "" {
-							output.Set(key, value)
-						}
+		output.Set("event", eventID)
+		context := input.Get("context")
+		if raw, ok := strings.CutPrefix(context, "incidents?"); ok && len(context) <= 5200 {
+			selected, err := url.ParseQuery(raw)
+			if err == nil && selected.Get("event") == eventID {
+				for _, key := range []string{"return", "focusPhase", "focusLayer", "layer", "phase", "strength"} {
+					if value := selected.Get(key); value != "" {
+						output.Set(key, value)
 					}
-					if point := selected.Get("focusPoint"); opsUUID.MatchString(point) || investigationSpan.MatchString(point) {
-						output.Set("focusPoint", point)
-					}
+				}
+				if point := selected.Get("focusPoint"); opsUUID.MatchString(point) || investigationSpan.MatchString(point) {
+					output.Set("focusPoint", point)
 				}
 			}
 		}
@@ -158,6 +154,10 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 	if view == "storage" || view == "incidents" && input.Get("source") == "storage" {
 		if view == "incidents" {
 			output.Set("origin", "storage")
+		}
+		switch topic := input.Get("topic"); topic {
+		case "resources", "containers", "claims", "cache":
+			output.Set("topic", topic)
 		}
 		if container := input.Get("container"); len(container) > 0 && len(container) <= 63 {
 			output.Set("container", container)
@@ -190,10 +190,12 @@ func returnFromGrafana(w http.ResponseWriter, r *http.Request) {
 		location += "?" + encoded
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	if r.Header.Get("Sec-Fetch-Dest") == "iframe" {
+	destination := r.Header.Get("Sec-Fetch-Dest")
+	if destination == "iframe" || destination == "frame" || destination == "" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; base-uri 'none'")
-		fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>返回 DbSphere</title><a id="dbsphere-grafana-return" href="%s" target="_top">返回 DbSphere</a></html>`, html.EscapeString(location))
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; frame-ancestors 'self'; base-uri 'none'")
+		fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>返回 DbSphere</title><a id="dbsphere-grafana-return" href="%s" target="_top">返回 DbSphere</a><script src="/grafana-return.js" defer></script></html>`, html.EscapeString(location))
 		return
 	}
 	http.Redirect(w, r, location, http.StatusSeeOther)
