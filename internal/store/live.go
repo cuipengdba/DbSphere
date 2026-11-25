@@ -125,18 +125,18 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	LEFT JOIN LATERAL (SELECT metrics_json AS sample FROM samples
 		WHERE asset_id=v.id AND collected_at=v.last_sample_at ORDER BY id DESC LIMIT 1) m ON true
 	LEFT JOIN LATERAL (SELECT
-		CASE WHEN v.runtime='k8s' AND m.sample#>>'{k8s,status}'='ok' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
+		CASE WHEN m.sample#>>'{k8s,status}'='ok' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
 				AND nullif(v.k8s_cluster,'') IS NOT NULL THEN 'node/' || v.k8s_cluster || '/' || (m.sample#>>'{k8s,node,uid}')
-			WHEN v.runtime='linux' AND nullif(v.linux_host,'') IS NOT NULL AND v.linux_exporter_port>0
+			WHEN v.runtime IN ('linux','dm8','kingbase') AND nullif(v.linux_host,'') IS NOT NULL AND v.linux_exporter_port>0
 				THEN 'linux/' || lower(v.linux_host) || '/' || v.linux_exporter_port
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' AND nullif(m.sample#>>'{containerStorage,node}','') IS NOT NULL
 				THEN 'docker/' || (m.sample#>>'{containerStorage,node}') END AS identity,
-		CASE WHEN v.runtime='k8s' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN m.sample#>>'{k8s,node,name}'
-			WHEN v.runtime='linux' AND v.linux_exporter_port>0 THEN v.linux_host
+		CASE WHEN nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN m.sample#>>'{k8s,node,name}'
+			WHEN v.runtime IN ('linux','dm8','kingbase') AND v.linux_exporter_port>0 THEN v.linux_host
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN m.sample#>>'{containerStorage,node}' END AS name,
-		CASE WHEN v.runtime='k8s' THEN 'Kubernetes'
+		CASE WHEN nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN 'Kubernetes'
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN 'Docker' ELSE 'Linux' END AS kind,
-		CASE WHEN v.runtime='k8s' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
+		CASE WHEN nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
 			THEN v.k8s_cluster || '/' || (m.sample#>>'{k8s,node,name}')
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN m.sample#>>'{containerStorage,node}' END AS assigned_node
 	) h ON true

@@ -170,7 +170,9 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	eventNode := "event:" + event.ID
 	assetNode := "asset:" + event.AssetID
 	assetLayer := "postgres"
-	if event.Kind == mysqlLockGroup {
+	if engine, _ := nativeHAEvent(event.Kind); engine != "" {
+		assetLayer = engine
+	} else if event.Kind == mysqlLockGroup {
 		assetLayer = "mysql"
 	} else if event.Kind == dm8LockGroup {
 		assetLayer = "dm8"

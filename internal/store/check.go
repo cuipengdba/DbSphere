@@ -176,11 +176,14 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if runtime == assets.RuntimeMySQL {
 		return s.checkMySQL(ctx, id, target, password, lease, interval)
 	}
-	if runtime == assets.RuntimeDM8 {
-		return s.checkDM8(ctx, id, target, password, lease, interval)
-	}
-	if runtime == assets.RuntimeKingbase {
-		return s.checkKingbase(ctx, id, target, password, lease, interval)
+	if runtime == assets.RuntimeDM8 || runtime == assets.RuntimeKingbase {
+		infra := nativeInfraTarget{host: linuxHost, exporterPort: exporterPort, kube: collector.KubernetesTarget{
+			Cluster: dereference(k8sCluster), Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod), Workload: dereference(k8sWorkload),
+		}}
+		if runtime == assets.RuntimeDM8 {
+			return s.checkDM8(ctx, id, target, password, lease, interval, infra)
+		}
+		return s.checkKingbase(ctx, id, target, password, lease, interval, infra)
 	}
 	if runtime == assets.RuntimeRedis {
 		return s.checkRedis(ctx, id, target, password, lease, interval)
@@ -617,11 +620,21 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 			if err := recordDM8LockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
 				return CheckResult{}, fmt.Errorf("record DM8 lock event: %w", err)
 			}
+			if details, ok := metrics["dm8"].(collector.DM8Metrics); ok {
+				if err := recordNativeHAEvents(ctx, tx, id, sampleID, previousID, "dm8", now, previousAt, details.HA, previous, interval); err != nil {
+					return CheckResult{}, fmt.Errorf("record DM8 replication event: %w", err)
+				}
+			}
 		}
 	} else if runtime == assets.RuntimeKingbase {
 		if status == "ok" {
 			if err := recordKingbaseLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
 				return CheckResult{}, fmt.Errorf("record Kingbase lock event: %w", err)
+			}
+			if details, ok := metrics["kingbase"].(collector.KingbaseMetrics); ok {
+				if err := recordNativeHAEvents(ctx, tx, id, sampleID, previousID, "kingbase", now, previousAt, details.HA, previous, interval); err != nil {
+					return CheckResult{}, fmt.Errorf("record Kingbase replication event: %w", err)
+				}
 			}
 		}
 	} else if runtime == assets.RuntimeRedis {

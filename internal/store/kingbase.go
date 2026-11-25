@@ -13,13 +13,10 @@ import (
 
 const kingbaseLockGroup = "kingbase_lock_wait"
 
-func (s *Postgres) checkKingbase(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
-	started := time.Now()
-	if lease != nil {
-		lease.startedAt = started
-	}
-	snapshot, err := (collector.KingbaseAdapter{}).Collect(ctx, target, password)
-	lease.recordQueryDuration(started)
+func (s *Postgres) checkKingbase(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
+		return (collector.KingbaseAdapter{}).Collect(ctx, target, password)
+	})
 	group, reason := "", ""
 	metrics := snapshot.Metrics
 	if err != nil {
@@ -29,7 +26,7 @@ func (s *Postgres) checkKingbase(ctx context.Context, id string, target collecto
 			group, reason = collectionError(err)
 			reason = strings.Replace(reason, "PostgreSQL", "KingbaseES", 1)
 		}
-		metrics = map[string]any{"collector": map[string]any{"kingbaseStatus": group}}
+		metrics["collector"] = map[string]any{"kingbaseStatus": group}
 	} else {
 		metrics["adapter"] = snapshot.Report
 		metrics["collector"] = map[string]any{"kingbaseStatus": "ok"}

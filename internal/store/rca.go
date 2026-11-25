@@ -244,6 +244,32 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if engine, action := nativeHAEvent(item.Kind); engine != "" {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) != nil {
+				continue
+			}
+			supports := []string{item.ID}
+			for _, key := range []string{"sampleId", "previousSampleId"} {
+				if id := stringValue(payload[key]); id != "" {
+					supports = append(supports, "sample:"+id)
+				}
+			}
+			label := nativeHALabel(engine)
+			switch action {
+			case "role":
+				addCandidate(item.Kind, label+" 已观测到主备角色变化", "high", supports,
+					[]string{"对照切换前后节点身份、角色及恢复采样"}, "同一个节点在相邻两个有效样本中报告了不同角色。", nil, item.ObservedAt, nil)
+			case "replication":
+				addCandidate(item.Kind, label+" 已观测到复制异常或回放积压", "high", supports,
+					[]string{"对照发送、落盘和回放位置，再核对同窗主机磁盘 I/O 和存储事件"},
+					"数据库原生视图提供复制状态或日志位点，根因还需核对同窗证据。", nil, item.ObservedAt, nil)
+			case "archive":
+				addCandidate(item.Kind, label+" 已报告归档异常", "high", supports,
+					[]string{"核对归档状态、容量和归档错误日志"}, "数据库原生归档状态或错误时间给出异常证据。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == etcdLeaderGroup || item.Kind == etcdHealthGroup || item.Kind == etcdDiskGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) != nil {

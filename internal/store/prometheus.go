@@ -15,8 +15,10 @@ type PrometheusAsset struct {
 	PodCPU, PodMemory                                                     *float64
 	MySQLRunning, MySQLLockWaits                                          *float64
 	DM8Sessions, DM8Active, DM8Transactions, DM8Waits                     *float64
+	DM8ReplayGap, DM8Switches                                             *float64
 	KingbaseSessions, KingbaseActive, KingbaseTransactions, KingbaseWaits *float64
 	KingbaseSize, KingbaseLag                                             *float64
+	KingbaseStandbyLag, KingbaseArchiveFailures                           *float64
 	RedisOps, RedisClients, RedisMemory, RedisHit                         *float64
 	RedisEvicted, RedisRejected, RedisLatency, RedisSlots                 *float64
 	EtcdHasLeader, EtcdElections, EtcdPending, EtcdSize, EtcdQuota        *float64
@@ -38,7 +40,9 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
 			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits,
 			&a.DM8Sessions, &a.DM8Active, &a.DM8Transactions, &a.DM8Waits,
+			&a.DM8ReplayGap, &a.DM8Switches,
 			&a.KingbaseSessions, &a.KingbaseActive, &a.KingbaseTransactions, &a.KingbaseWaits, &a.KingbaseSize, &a.KingbaseLag,
+			&a.KingbaseStandbyLag, &a.KingbaseArchiveFailures,
 			&a.RedisOps, &a.RedisClients, &a.RedisMemory, &a.RedisHit, &a.RedisEvicted, &a.RedisRejected, &a.RedisLatency, &a.RedisSlots,
 			&a.EtcdHasLeader, &a.EtcdElections, &a.EtcdPending, &a.EtcdSize, &a.EtcdQuota,
 			&a.EtcdWAL, &a.EtcdCommit, &a.EtcdAPILatency,
@@ -84,6 +88,7 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
 		AND jsonb_typeof(raw.metrics_json#>'{dm8,waits}')='array'
 		THEN jsonb_array_length(raw.metrics_json#>'{dm8,waits}')::float8 END,
+	(raw.metrics_json#>>'{dm8,ha,replayGap}')::float8,(raw.metrics_json#>>'{dm8,ha,switches}')::float8,
 	(raw.metrics_json#>>'{kingbase,sessions}')::float8,
 	(raw.metrics_json#>>'{kingbase,activeSessions}')::float8,
 	(raw.metrics_json#>>'{kingbase,transactions}')::float8,
@@ -92,6 +97,7 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 		THEN jsonb_array_length(raw.metrics_json#>'{kingbase,waits}')::float8 END,
 	(raw.metrics_json#>>'{kingbase,databaseBytes}')::float8,
 	(raw.metrics_json#>>'{kingbase,replication,maxReplayLagBytes}')::float8,
+	(raw.metrics_json#>>'{kingbase,ha,replayGap}')::float8,(raw.metrics_json#>>'{kingbase,ha,archive,failed}')::float8,
 	(raw.metrics_json#>>'{redis,ops}')::float8,
 	(raw.metrics_json#>>'{redis,clients}')::float8,
 	(raw.metrics_json#>>'{redis,memoryBytes}')::float8,

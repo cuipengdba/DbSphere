@@ -31,13 +31,16 @@
     dm8: [
       ['会话', 'V$SESSIONS · 个', [['dm8Sessions','会话'],['dm8Active','活动']]],
       ['事务与锁等待', 'V$TRX / V$TRXWAIT · 个', [['dm8Transactions','事务'],['dm8Waits','等待']]],
-      ['数据文件容量', '可见数据文件 · MiB', [['dm8Allocated','已分配'],['dm8Used','已使用']]]
+      ['数据文件容量', '可见数据文件 · MiB', [['dm8Allocated','已分配'],['dm8Used','已使用']]],
+      ['备库回放差距', '备库已刷盘与已重演 · LSN', [['dm8ReplayGap','回放差距']]],
+      ['Data Watch 切换', '守护组累计 · 次', [['dm8Switches','切换']]]
     ],
     kingbase: [
       ['会话', 'sys_stat_activity · 个', [['kingbaseSessions','会话'],['kingbaseActive','活动']]],
       ['事务与锁等待', 'sys_stat_activity / sys_locks · 个', [['kingbaseTransactions','事务'],['kingbaseWaits','等待']]],
       ['数据库容量', 'sys_database_size · MiB', [['kingbaseSize','容量']]],
-      ['复制回放差距', 'sys_stat_replication · MiB', [['kingbaseLag','回放差距']]]
+      ['复制回放差距', 'WAL 收发与回放 · MiB', [['kingbaseLag','回放差距']]],
+      ['归档失败', 'sys_stat_archiver 累计 · 次', [['kingbaseArchiveFailures','失败']]]
     ],
     redis: [
       ['每秒操作', 'INFO stats · OPS', [['redisOps','操作']]],

@@ -747,6 +747,174 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "备库回放差距",
+      "description": "已落盘至已重演之间的差距，单位为达梦 LSN。",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_dm8_standby_replay_gap_lsn{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"dm8\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Data Watch 切换计数",
+      "description": "守护进程报告的主备切换累计值。",
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_asset_dm8_data_watch_switches_total{asset_id=~\"$asset\", organization_id=~\"$organization\", cluster=~\"$cluster\", engine=\"dm8\"}",
+          "legendFormat": "{{asset_name}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          },
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "核对 DbSphere 原事件",
+              "url": "/grafana/dbsphere-return?view=event&event=${event}&asset=${asset}&from=${__from:date:iso}&to=${__to:date:iso}&context=${dbsphere_context:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "noValue": "暂无样本",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 13,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false,
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ]
 }

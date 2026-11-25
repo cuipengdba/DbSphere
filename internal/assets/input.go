@@ -116,10 +116,11 @@ func (a Input) Validate() error {
 	if !IsSupportedRuntime(a.Runtime) {
 		return errors.New("invalid runtime")
 	}
-	if !IsPostgreSQLRuntime(a.Runtime) {
-		if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
-			return errors.New("DM8 uses an HTTPS probe with a local database connection")
-		}
+	nativeHA := a.Runtime == RuntimeDM8 || a.Runtime == RuntimeKingbase
+	if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
+		return errors.New("DM8 uses an HTTPS probe with a local database connection")
+	}
+	if !IsPostgreSQLRuntime(a.Runtime) && !nativeHA {
 		if a.Runtime == RuntimeEtcd && (len(a.K8sCluster) > 150 || strings.ContainsAny(a.K8sCluster, "\x00\r\n\t")) {
 			return errors.New("invalid etcd Kubernetes context")
 		}
@@ -129,6 +130,15 @@ func (a Input) Validate() error {
 		}
 		return nil
 	}
+	if nativeHA {
+		if a.PoolerURL != "" || a.PoolerEndpoint != "" || a.PatroniURL != "" {
+			return errors.New("database engine does not support PostgreSQL routing integrations")
+		}
+		if (a.K8sCluster != "" || a.Namespace != "" || a.Workload != "" || a.Pod != "" || a.Node != "") &&
+			(a.K8sCluster == "" || a.Namespace == "" || (a.Workload == "" && a.Pod == "")) {
+			return errors.New("Kubernetes cluster, namespace and pod or workload are required")
+		}
+	}
 	if a.Runtime == "managed" && (a.LinuxHost != "" || a.LinuxExporterPort != 0 ||
 		a.K8sCluster != "" || a.Namespace != "" || a.Workload != "" || a.Pod != "" || a.Node != "") {
 		return errors.New("managed PostgreSQL cannot have Linux or Kubernetes resource mapping")
@@ -136,7 +146,7 @@ func (a Input) Validate() error {
 	if a.Runtime == "k8s" && (a.K8sCluster == "" || a.Namespace == "") {
 		return errors.New("Kubernetes cluster and namespace are required")
 	}
-	if a.LinuxExporterPort != 0 && (a.Runtime != "linux" || !shortHostPattern.MatchString(a.LinuxHost) ||
+	if a.LinuxExporterPort != 0 && (a.Runtime != "linux" && !nativeHA || !shortHostPattern.MatchString(a.LinuxHost) ||
 		int(a.LinuxExporterPort) < 1 || int(a.LinuxExporterPort) > 65535) {
 		return errors.New("invalid Linux exporter endpoint")
 	}

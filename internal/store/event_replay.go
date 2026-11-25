@@ -147,7 +147,13 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			point.Value = &value
 		}
 		point.Layer = incidentLayer(item.Kind, point.Signal)
-		if item.Kind == mysqlLockGroup || point.Source == "go_mysql_collector" ||
+		engine, _ := nativeHAEvent(item.Kind)
+		if item.Kind == "collection_recovered" && engine == "" {
+			engine, _ = nativeHAEvent(event.Kind)
+		}
+		if engine != "" {
+			point.Layer = "replication"
+		} else if item.Kind == mysqlLockGroup || point.Source == "go_mysql_collector" ||
 			(event.Kind == mysqlLockGroup && item.Kind == "collection_recovered") {
 			point.Layer = "mysql"
 		} else if item.Kind == dm8LockGroup || point.Source == "go_dm8_collector" ||
@@ -176,7 +182,11 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			}
 			layers[point.Layer] = true
 		}
-		switch item.Kind {
+		kind := item.Kind
+		if actionEngine, _ := nativeHAEvent(kind); actionEngine != "" {
+			kind = "collection_error"
+		}
+		switch kind {
 		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup, dm8LockGroup, kingbaseLockGroup,
 			redisEvictionGroup, redisSentinelGroup, redisSlotsGroup, etcdLeaderGroup, etcdHealthGroup, etcdDiskGroup:
 			point.Stage = "detection"

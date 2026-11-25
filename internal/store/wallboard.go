@@ -253,6 +253,7 @@ func wallboardNativeValues(values map[string]float64, metrics map[string]any) bo
 	case metrics["dm8"] != nil:
 		m := object(metrics["dm8"])
 		copyValues(m, map[string]string{"dm8Sessions": "sessions", "dm8Active": "activeSessions", "dm8Transactions": "transactions"})
+		copyValues(object(m["ha"]), map[string]string{"dm8ReplayGap": "replayGap", "dm8Switches": "switches"})
 		putWaits("dm8Waits", m["waits"])
 		files, ok := m["files"].([]any)
 		if ok && m["filesTruncated"] != true && signalOK("datafiles") {
@@ -271,6 +272,8 @@ func wallboardNativeValues(values map[string]float64, metrics map[string]any) bo
 			"kingbaseTransactions": "transactions", "kingbaseSize": "databaseBytes"})
 		putWaits("kingbaseWaits", m["waits"])
 		copyValues(object(m["replication"]), map[string]string{"kingbaseLag": "maxReplayLagBytes"})
+		copyValues(object(m["ha"]), map[string]string{"kingbaseLag": "replayGap"})
+		copyValues(object(object(m["ha"])["archive"]), map[string]string{"kingbaseArchiveFailures": "failed"})
 	case metrics["redis"] != nil:
 		m := object(metrics["redis"])
 		copyValues(m, map[string]string{"redisOps": "ops", "redisClients": "clients", "redisMemory": "memoryBytes",

@@ -19,10 +19,12 @@ GRANT pg_read_all_stats TO dbsphere_monitor;
 | 会话、等待类别、长事务 | `sys_catalog.sys_stat_activity` | 当前数据库。长事务面板展示超过 10 秒的事务。 |
 | 阻塞关系 | `sys_catalog.sys_locks` 和 `sys_catalog.sys_blocking_pids` | 当前数据库的等待会话、直接持锁会话及采样时间。每次保留至多 32 条关系。 |
 | 数据库容量 | `sys_catalog.sys_database_size` | 当前数据库的数据大小。 |
-| 复制观测 | `sys_catalog.sys_stat_replication`、`sys_catalog.sys_stat_wal_receiver` | 实例角色、已连接副本、可见回放差距与 WAL 接收进程。整组主备切换单独验收。 |
+| 主备与归档 | `sys_catalog.sys_stat_replication`、`sys_catalog.sys_stat_wal_receiver`、`sys_catalog.sys_stat_archiver` | 流复制上下游、同步和归档状态、可见的发送、接收、落盘与回放位置、主备切换证据。 |
 | Top SQL | `sys_stat_statements` | 累计执行时间、次数、平均及最大耗时，按数据库、用户和语句 ID 区分指纹。需启用 `sys_stat_statements.track` 并在目标数据库有扩展。 |
 
-页面逐项标记权限不足、统计关闭与视图不可用。SQL 指纹采集只读取统计字段。实时趋势和历史对照使用 DbSphere 周期采样，数据保存在独立 PostgreSQL 18。厂商 KSH 历史将随原生诊断扩展单独验收。
+页面逐项标记权限不足、统计关闭与视图不可用。会话等待历史保存 `sys_stat_activity` 的周期采样以及可见的 SQL ID。Top SQL 采集指纹和统计字段。两类数据均保存在独立 PostgreSQL 18。
+
+主备节点分别纳管并填写相同集群名。在「主备拓扑与复制证据」核对节点角色、WAL 位点、归档错误、回放差距和原始样本。监控账号使用只读统计访问。选填 Linux 或 Kubernetes 映射后，同一原始样本可以同时包含数据库与基础设施证据。
 
 ## 查看一次锁故障
 

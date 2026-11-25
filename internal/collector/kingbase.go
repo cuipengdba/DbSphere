@@ -42,6 +42,8 @@ type KingbaseMetrics struct {
 	LongTransactions json.RawMessage `json:"longTransactions"`
 	Replication      json.RawMessage `json:"replication"`
 	TopSQL           json.RawMessage `json:"topSql"`
+	SessionWaits     json.RawMessage `json:"sessionWaits"`
+	HA               *NativeHA       `json:"ha,omitempty"`
 }
 
 type KingbaseAdapter struct{}
@@ -108,17 +110,27 @@ func (KingbaseAdapter) Collect(ctx context.Context, target Target, password stri
 	}
 	err = conn.QueryRow(ctx, `SELECT sys_catalog.sys_database_size(current_database())::bigint`).Scan(&details.DatabaseBytes)
 	recordSignal("databaseSize", "sys_catalog.sys_database_size", err)
+	var endpoint string
+	err = conn.QueryRow(ctx, `SELECT coalesce(host(inet_server_addr())||':'||inet_server_port()::text,'')`).Scan(&endpoint)
+	if err == nil && endpoint != "" {
+		details.HA = &NativeHA{Node: endpoint, Role: role, Unit: "bytes", Source: "sys_catalog.sys_is_in_recovery"}
+	}
 	const activitySource = "sys_catalog.sys_stat_activity"
 	const sqlSource = "sys_stat_statements"
 	if !stats {
 		limited("sessions", activitySource)
+		limited("sessionWaits", activitySource)
 		limited("lockWaits", kingbaseLockSource)
 		limited("replication", "sys_catalog.sys_stat_replication / sys_stat_wal_receiver")
+		limited("replicationDetail", "sys_catalog.sys_stat_replication / sys_stat_wal_receiver")
+		limited("archive", "sys_catalog.sys_stat_archiver")
 		limited("topSql", sqlSource)
 	} else {
 		err = conn.QueryRow(ctx, kingbaseSessionsSQL).Scan(&details.Sessions, &details.ActiveSessions, &details.Transactions,
 			&details.WaitCategories, &details.LongTransactions)
 		recordSignal("sessions", activitySource, err)
+		err = conn.QueryRow(ctx, kingbaseSessionWaitsSQL).Scan(&details.SessionWaits)
+		recordSignal("sessionWaits", activitySource, err)
 		var locks []byte
 		err = conn.QueryRow(ctx, kingbaseLocksSQL).Scan(&locks)
 		if err == nil {
@@ -135,6 +147,9 @@ func (KingbaseAdapter) Collect(ctx context.Context, target Target, password stri
 		}
 		err = conn.QueryRow(ctx, replicationSQL).Scan(&details.Replication)
 		recordSignal("replication", replicationSource, err)
+		if details.HA != nil {
+			kingbaseCollectHA(ctx, conn, details.HA, standby, replicationSource, recordSignal)
+		}
 		var schema, tracking string
 		err = conn.QueryRow(ctx, `SELECT n.nspname,coalesce(current_setting('sys_stat_statements.track',true),'none')
 			FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='sys_stat_statements'`).Scan(&schema, &tracking)
@@ -200,5 +215,66 @@ const kingbaseSenderSQL = `SELECT jsonb_build_object('connected',count(*)::int,
 	'maxReplayLagBytes',max(sys_catalog.sys_wal_lsn_diff(sys_catalog.sys_current_wal_lsn(),replay_lsn))::bigint)
 	FROM sys_catalog.sys_stat_replication`
 
+const kingbaseSessionWaitsSQL = `SELECT coalesce(jsonb_agg(to_jsonb(w) ORDER BY w.session),'[]'::jsonb) FROM (
+	SELECT a.pid::text AS session,left(a.wait_event_type,96) AS category,left(a.wait_event,96) AS event,
+		coalesce(to_jsonb(a)->>'query_id','') AS "queryId",a.backend_start AS "backendStartedAt"
+	FROM sys_catalog.sys_stat_activity a WHERE a.datname=current_database() AND a.pid<>sys_catalog.sys_backend_pid()
+		AND a.backend_type='client backend' AND a.state='active' AND a.wait_event_type IS NOT NULL AND a.wait_event_type<>'Client'
+	ORDER BY a.query_start NULLS LAST,a.pid LIMIT 32
+) w`
+
 const kingbaseReceiverSQL = `SELECT coalesce((SELECT jsonb_build_object('receiver',status)
 	FROM sys_catalog.sys_stat_wal_receiver LIMIT 1),jsonb_build_object('receiver','absent'))`
+
+func kingbaseCollectHA(ctx context.Context, conn *pgx.Conn, ha *NativeHA, standby bool, source string,
+	recordSignal func(string, string, error)) {
+	var peerJSON []byte
+	query := kingbaseHASenderSQL
+	if standby {
+		query = kingbaseHAReceiverSQL
+	}
+	err := conn.QueryRow(ctx, query).Scan(&ha.Current, &ha.Received, &ha.Replayed, &ha.ReplayGap, &peerJSON)
+	if err == nil {
+		err = json.Unmarshal(peerJSON, &ha.Peers)
+		if err == nil {
+			ha.PeersObserved = true
+			ha.Source = source
+		}
+	}
+	if len(ha.Peers) > 32 {
+		ha.Peers = ha.Peers[:32]
+		ha.PeersTruncated = true
+	}
+	recordSignal("replicationDetail", source, err)
+	var archive NativeArchive
+	err = conn.QueryRow(ctx, `SELECT archived_count,failed_count,coalesce(last_archived_time::text,''),
+		coalesce(last_failed_time::text,''),coalesce(stats_reset::text,''),current_setting('archive_mode'),
+		CASE WHEN current_setting('archive_mode')='off' THEN NULL ELSE
+		last_failed_time IS NOT NULL AND (last_archived_time IS NULL OR last_failed_time>last_archived_time) END
+		FROM sys_catalog.sys_stat_archiver`).Scan(&archive.Archived, &archive.Failed, &archive.LastOK, &archive.LastFail, &archive.ResetAt, &archive.State, &archive.Error)
+	if err == nil {
+		ha.Archive = &archive
+	}
+	recordSignal("archive", "sys_catalog.sys_stat_archiver", err)
+}
+
+const kingbaseHASenderSQL = `SELECT sys_catalog.sys_current_wal_lsn()::text,''::text,''::text,NULL::bigint,
+	coalesce((SELECT jsonb_agg(to_jsonb(p) ORDER BY name) FROM (
+		SELECT left(application_name,128) AS name,'downstream' AS kind,coalesce(state,'') AS state,
+			coalesce(sync_state,'') AS sync,sent_lsn::text AS sent,write_lsn::text AS received,
+			flush_lsn::text AS flushed,replay_lsn::text AS replayed,
+			CASE WHEN sent_lsn>=write_lsn THEN sys_catalog.sys_wal_lsn_diff(sent_lsn,write_lsn)::bigint END AS "transferGap",
+			CASE WHEN flush_lsn>=replay_lsn THEN sys_catalog.sys_wal_lsn_diff(flush_lsn,replay_lsn)::bigint END AS "replayGap"
+		FROM sys_catalog.sys_stat_replication ORDER BY application_name,pid LIMIT 33
+	) p),'[]'::jsonb)`
+
+const kingbaseHAReceiverSQL = `WITH positions AS (SELECT sys_catalog.sys_last_wal_receive_lsn() AS received,
+	sys_catalog.sys_last_wal_replay_lsn() AS replayed)
+	SELECT ''::text,coalesce(received::text,''),coalesce(replayed::text,''),
+		CASE WHEN received>=replayed THEN sys_catalog.sys_wal_lsn_diff(received,replayed)::bigint END,
+		coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM (
+			SELECT left(coalesce(to_jsonb(r)->>'sender_host','')||':'||coalesce(to_jsonb(r)->>'sender_port',''),128) AS name,
+				'upstream' AS kind,status AS state,received::text AS flushed,replayed::text AS replayed,
+				coalesce(to_jsonb(r)->>'written_lsn',to_jsonb(r)->>'received_lsn') AS received,to_jsonb(r)->>'latest_end_lsn' AS sent
+			FROM sys_catalog.sys_stat_wal_receiver r LIMIT 1
+		) p),'[]'::jsonb) FROM positions`

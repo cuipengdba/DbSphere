@@ -6,18 +6,16 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/collector"
+	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/jackc/pgx/v5"
 )
 
 const dm8LockGroup = "dm8_lock_wait"
 
-func (s *Postgres) checkDM8(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
-	started := time.Now()
-	if lease != nil {
-		lease.startedAt = started
-	}
-	snapshot, err := (collector.DM8Adapter{}).Collect(ctx, target, password)
-	lease.recordQueryDuration(started)
+func (s *Postgres) checkDM8(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
+		return (collector.DM8Adapter{}).Collect(ctx, target, password)
+	})
 	if err != nil {
 		reason := "达梦探针或实例暂不可达"
 		if errors.Is(err, collector.ErrDM8Unconfigured) {
@@ -25,8 +23,8 @@ func (s *Postgres) checkDM8(ctx context.Context, id string, target collector.Tar
 		} else if errors.Is(err, collector.ErrDM8Connection) {
 			reason = "达梦连接或监控授权未通过"
 		}
-		values := map[string]any{"collector": map[string]any{"dm8Status": "telemetry"}}
-		return s.recordCheckWithLease(ctx, id, values, "telemetry", reason, time.Now().UTC(), lease, interval)
+		snapshot.Metrics["collector"] = map[string]any{"dm8Status": "telemetry"}
+		return s.recordCheckWithLease(ctx, id, snapshot.Metrics, "telemetry", reason, time.Now().UTC(), lease, interval)
 	}
 	snapshot.Metrics["adapter"] = snapshot.Report
 	snapshot.Metrics["collector"] = map[string]any{"dm8Status": "ok"}

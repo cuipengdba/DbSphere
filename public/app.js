@@ -1602,6 +1602,7 @@ function renderDM8Asset(detail, asset, samples) {
     else panel.append(cell('p', '无可显示记录', 'hint'));
     detail.append(panel);
   };
+  renderNativeHA(detail, asset, samples, 'dm8', data.ha);
   if (data.waits.length) table('事务锁阻塞链', ['等待会话', '阻塞会话', '等待事务', '持锁事务', '等待 ms'],
     data.waits.map(wait => [wait.waitingSession || '未知', wait.blockingSession || '未知', wait.waitingTransaction, wait.blockingTransaction, numeric(wait.waitMs)]));
   table('表空间与数据文件', ['表空间', '文件 ID', '已分配', '已用', '利用率'], data.files.map(file => [
@@ -1609,6 +1610,10 @@ function renderDM8Asset(detail, asset, samples) {
     file.allocatedBytes ? numeric((1 - file.freeBytes / file.allocatedBytes) * 100) + '%' : '未知'
   ]));
   if (data.filesTruncated) detail.append(cell('p', '当前展示前 64 个数据文件。', 'hint'));
+  if (data.waitTotals?.length) table('实例原生等待累计', ['等待事件', '次数', '等待毫秒'],
+    data.waitTotals.map(row => [row.name, numeric(row.count), numeric(row.waitUs / 1000)]));
+  if (data.sqlHistory?.length) table('近期 SQL 资源记录', ['原生 SQL ID', '会话', '执行毫秒'],
+    data.sqlHistory.map(row => [row.id, row.session, numeric(row.elapsedMs)]));
   const coverage = cell('details', '', 'settings-details');
   coverage.append(cell('summary', '采集来源与缺口'), importTable(['来源', '状态'], data.signals.map(signal =>
     [signal.source, signal.status === 'ok' ? '已采集' : signal.reason || '采集缺口'])));
@@ -1670,12 +1675,18 @@ function renderKingbaseAsset(detail, asset, samples) {
     panel.append(cell('h4', heading), rows.length ? importTable(columns, rows) : cell('p', empty, 'hint'));
     detail.append(panel);
   };
+  renderNativeHA(detail, asset, samples, 'kingbase', data.ha);
   table('金仓锁阻塞链', ['等待会话', '持锁会话', '等待事件', '等待语句开始', '持锁事务开始'],
     waits.map(wait => [wait.waitingSession, wait.blockingSession === '0' ? '预备事务' : wait.blockingSession, wait.event,
       formatTime(wait.waitingQueryStarted), formatTime(wait.blockingTransactionStarted)]),
     signal('lockWaits')?.reason || '采样时未观测到阻塞关系');
   table('等待类别', ['类别', '会话数'], (data.waitCategories || []).map(row => [row.category, value(row.count)]),
     signal('sessions')?.reason || '采样时未观测到非空闲等待');
+  const history = samples.filter(sample => sample.metrics?.kingbase?.sessionWaits?.length).slice(0,12);
+  table('会话等待历史', ['时间', '会话', '类别', '事件', 'SQL ID', '证据'], history.flatMap(sample =>
+    sample.metrics.kingbase.sessionWaits.slice(0, 8).map(row => [formatTime(sample.collectedAt),
+      row.session, row.category, row.event, row.queryId || '未采集', replaySampleLink(asset.id, sample.id)])),
+    signal('sessionWaits')?.reason || '保留窗口内尚无会话等待记录');
   table('长事务', ['会话', '状态', '开始时间', '事务时长 ms'],
     (data.longTransactions || []).map(row => [row.session, row.state, formatTime(row.startedAt), value(row.ageMs)]),
     signal('sessions')?.reason || '采样时没有超过 10 秒的事务');
@@ -1697,6 +1708,50 @@ function renderKingbaseAsset(detail, asset, samples) {
       return [formatTime(sample.collectedAt), value(reading.sessions), value(reading.transactions), size(reading.databaseBytes),
         replaySampleLink(asset.id, sample.id)];
     }), '当前没有历史样本');
+}
+
+function renderNativeHA(detail, asset, samples, engine, ha) {
+  if (!ha) return;
+  const panel = cell('section', '', 'evidence monitor-table');
+  panel.append(cell('h4', '主备拓扑与复制证据'));
+  const labels = {primary:'主库', standby:'备库', normal:'单实例', VALID:'有效', INVALID:'失效',
+    ASYNC_SEND:'正在同步', streaming:'流式复制', catchup:'追平中', downstream:'下游', upstream:'上游'};
+  const label = value => labels[value] || value || '未观测';
+  const delta = value => Number.isFinite(value) ? (ha.unit === 'bytes' ? size(value) : `${numeric(value)} LSN`) : '未采集';
+  panel.append(cell('p', [ha.node, label(ha.role), ha.watchGroup, ha.watchState, ha.state].filter(Boolean).join(' · '), 'hint'));
+  const fields = [['当前位点', ha.current], ['接收位点', ha.received], ['已落盘', ha.flushed],
+    ['回放位点', ha.replayed], ['本地回放差距', delta(ha.replayGap)], ['守护切换计数', ha.switches]];
+  if (ha.archive) fields.push(['归档状态', label(ha.archive.state)], ['归档失败计数', ha.archive.failed],
+    ['最近归档失败', ha.archive.lastFailedAt], ['最近成功归档', ha.archive.lastArchivedAt]);
+  panel.append(importTable(['本地节点', '观测值'], fields.filter(([,value]) => value !== undefined && value !== null && value !== '')));
+  if (ha.peers?.length) panel.append(importTable(['对端身份', '关系', '复制状态', '同步', '已发送', '已接收', '已落盘', '已回放', '传输差距', '回放差距'],
+    ha.peers.map(peer => [peer.name, label(peer.kind), label(peer.state), label(peer.sync),
+      peer.sent || '—', peer.received || '—', peer.flushed || '—', peer.replayed || '—', delta(peer.transferGap), delta(peer.replayGap)])));
+  else panel.append(cell('p', ha.peersObserved ? '原生视图当前未报告对端。' : '当前采样没有对端证据。', 'hint'));
+  panel.append(cell('p', (ha.peersTruncated ? '显示前 32 个对端 · ' : '') + ha.source, 'hint'));
+  if (ha.peers?.some(peer => peer.applySource)) panel.append(cell('p', '主库侧对端回放位置按原生视图周期刷新，可与备库直采核对。', 'hint'));
+  const latest = samples.find(sample => sample.metrics?.[engine]?.ha);
+  if (latest?.metrics?.linux || latest?.metrics?.k8s) {
+    const {linux, k8s} = latest.metrics;
+    const infra = [];
+    if (linux) infra.push(['Linux 采样', linux.status === 'ok' ? '已采集' : '未采集', replaySampleLink(asset.id, latest.id)]);
+    if (k8s) infra.push(['Kubernetes Pod / PVC', k8s.status === 'ok' ? '已采集' : '未采集', replaySampleLink(asset.id, latest.id)]);
+    panel.append(importTable(['同窗基础设施', '状态', '证据'], infra));
+  }
+  const events = recentEvents.filter(item => item.assetId === asset.id && item.kind?.startsWith(engine+'_ha_')).slice(0,6);
+  if (events.length) {
+    panel.append(importTable(['事件', '触发时间', '状态'], events.map(event => {
+      const link = cell('a', event.title, 'monitor-link');
+      link.href = '#incidents?' + new URLSearchParams({event:event.id});
+      return [link, formatTime(event.startedAt), event.status === 'open' ? '处理中' : '已恢复'];
+    })));
+  }
+  const history = samples.filter(sample => sample.metrics?.[engine]?.ha).slice(0,20);
+  panel.append(cell('h5', '节点角色与位点时间线'), importTable(['采样时间', '节点', '角色', '回放差距', '证据'], history.map(sample => {
+    const reading = sample.metrics[engine].ha;
+    return [formatTime(sample.collectedAt), reading.node, label(reading.role), delta(reading.replayGap), replaySampleLink(asset.id, sample.id)];
+  })));
+  detail.append(panel);
 }
 
 function renderRedisAsset(detail, asset, samples) {
@@ -4969,6 +5024,7 @@ $('runtime').addEventListener('change', (event) => {
   const mysql = event.target.value === 'mysql';
   const dm8 = event.target.value === 'dm8';
   const kingbase = event.target.value === 'kingbase';
+  const nativeHA = dm8 || kingbase;
   const redis = event.target.value === 'redis';
   const etcd = event.target.value === 'etcd';
   const previous = event.target.dataset.previousRuntime;
@@ -4995,16 +5051,17 @@ $('runtime').addEventListener('change', (event) => {
     : redis ? '普通节点和 Cluster 填 0。Sentinel 填主节点组名，端口通常为 26379。'
     : etcd ? '填写成员观测端点。Kubernetes Context 可选，使用该 Context 的只读凭据读取 API Server 指标。'
     : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
-  $('k8s-fields').hidden = !k8s && !etcd;
-  $('asset-k8s-label').textContent = etcd ? 'Kubernetes Context（可选）' : 'K8S 集群';
+  $('k8s-fields').hidden = !k8s && !etcd && !nativeHA;
+  $('asset-k8s-label').textContent = etcd || nativeHA ? 'Kubernetes Context（可选）' : 'K8S 集群';
   for (const child of $('k8s-fields').children) {
-    child.hidden = !k8s && (child.querySelector?.('[name=k8sCluster]') === null);
+    child.hidden = nativeHA ? child.id === 'discover-k8s' || child.id === 'discovery-results'
+      : !k8s && child.querySelector?.('[name=k8sCluster]') === null;
   }
   for (const field of document.querySelectorAll('.linux-field')) {
-    field.hidden = !linux;
-    field.querySelector('input').disabled = !linux;
+    field.hidden = !linux && !nativeHA;
+    field.querySelector('input').disabled = !linux && !nativeHA;
   }
-  for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s && (!etcd || field.name !== 'k8sCluster');
+  for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s && !nativeHA && (!etcd || field.name !== 'k8sCluster');
   $('asset-form').elements.k8sCluster.required = k8s;
   $('asset-form').elements.namespace.required = k8s;
 });

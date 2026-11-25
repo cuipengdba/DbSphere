@@ -1115,13 +1115,22 @@ async function dm8Monitoring(page) {
   await formField(page, 'asset-form', 'host').fill('127.0.0.1');
   await formField(page, 'asset-form', 'username').fill('DBSPHERE_MON');
   await formField(page, 'asset-form', 'password').fill('dbsphere-dm8-fixture');
+  await formField(page, 'asset-form', 'linuxHost').fill('127.0.0.1');
+  await formField(page, 'asset-form', 'linuxExporterPort').fill('19136');
+  await formField(page, 'asset-form', 'k8sCluster').fill('fixture-kube');
+  await formField(page, 'asset-form', 'namespace').fill('fixture-db');
+  await formField(page, 'asset-form', 'pod').fill('dm8-primary');
   const created = await action(page,page.locator('#asset-submit'),'POST','/api/assets',201);
-  const asset = (await created.json()).asset.id;
+  const configured = (await created.json()).asset;
+  assert.equal(configured.pod,'dm8-primary');
+  assert.equal(configured.linuxExporterPort,19136);
+  const asset = configured.id;
   const sample = randomUUID(), event = randomUUID();
   runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES
     ('${sample}','${asset}',now()-interval '15 seconds','ok',
     '{"adapter":{"signals":[{"key":"lockWaits","status":"ok"}]},"dm8":{"version":"DM Database Server x64 V8",
-    "build":"qa-fixture","status":"OPEN","mode":"NORMAL","sessions":2,"activeSessions":1,"transactions":1,
+    "build":"qa-fixture","status":"OPEN","mode":"PRIMARY","sessions":2,"activeSessions":1,"transactions":1,
+    "ha":{"node":"DM8_PRIMARY","role":"primary","source":"V$DMWATCHER","unit":"lsn","peersObserved":true,"watchGroup":"QA_DW","peers":[{"name":"DM8_STANDBY","kind":"REALTIME","state":"VALID"}]},
     "waits":[{"waitingSession":"101","blockingSession":"102","waitingTransaction":"31","blockingTransaction":"30","waitMs":2500}],
     "signals":[{"key":"lockWaits","source":"V$TRXWAIT / V$TRX","status":"ok"}],
     "files":[{"id":"1:0","tablespace":"MAIN","allocatedBytes":104857600,"freeBytes":52428800}]}}');
@@ -1148,7 +1157,9 @@ async function dm8Monitoring(page) {
   await listing.getByRole('button',{name:'查看',exact:true}).click();
   await visible(page.locator('#detail'),'事务锁阻塞链');
   await visible(page.locator('#detail'),'MAIN');
-  proof.push('DM8 admission, engine-specific real-time trends, lock evidence, readable source, and same-event return');
+  await visible(page.locator('#detail'),'主备拓扑与复制证据');
+  await visible(page.locator('#detail'),'DM8_STANDBY');
+  proof.push('DM8 admission with infrastructure mapping, Data Watch topology, native lock evidence and same-event source return');
 }
 
 async function kingbaseMonitoring(page) {
@@ -1167,7 +1178,9 @@ async function kingbaseMonitoring(page) {
     ('${sample}','${asset}',now()-interval '15 seconds','ok',
     '{"adapter":{"engine":"kingbase","role":"primary","transport":{"readOnly":true},"signals":[{"key":"lockWaits","status":"ok"},{"key":"topSql","source":"sys_stat_statements","status":"not_configured","reason":"SQL 统计已关闭"}]},
     "kingbase":{"version":"KingbaseES V009R001C010","mode":"pg","startedAt":"2026-01-01T00:00:00Z","sessions":2,"activeSessions":1,"transactions":2,
-    "databaseBytes":104857600,"waits":[{"waitingSession":"201","blockingSession":"202","event":"transactionid"}],"waitCategories":[{"category":"Lock","count":1}],"replication":{"connected":0}}}');
+    "databaseBytes":104857600,"waits":[{"waitingSession":"201","blockingSession":"202","event":"transactionid"}],"waitCategories":[{"category":"Lock","count":1}],"replication":{"connected":0},
+    "ha":{"node":"127.0.0.1:54321","role":"primary","source":"sys_catalog.sys_stat_replication","unit":"bytes","peersObserved":true},
+    "sessionWaits":[{"session":"201","category":"Lock","event":"transactionid","queryId":"6716"}]}}');
     UPDATE assets SET last_status='ok',last_sample_at=(SELECT collected_at FROM samples WHERE id='${sample}'),version_num=90000 WHERE id='${asset}';
     INSERT INTO event_keys(id,asset_id,started_at) SELECT '${event}',asset_id,collected_at FROM samples WHERE id='${sample}';
     INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
@@ -1182,6 +1195,8 @@ async function kingbaseMonitoring(page) {
   await page.getByRole('button',{name:'查看金仓 SQL 指纹与锁链',exact:true}).click();
   await visible(page.locator('#detail'),'金仓锁阻塞链');
   await visible(page.locator('#detail'),'SQL 统计已关闭');
+  await visible(page.locator('#detail'),'会话等待历史');
+  await visible(page.locator('#detail'),'6716');
   await page.goto(origin+'/#incidents?event='+event);
   await visible(page.locator('#event-detail'),'金仓会话 202 持锁，阻塞会话 201');
   await page.locator(`#event-detail a[href="/api/assets/${asset}/samples/${sample}"]:visible`).first().click();

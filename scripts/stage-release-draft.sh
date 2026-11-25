@@ -46,9 +46,27 @@ verify_group 'dbsphere-observability-amd64-tested-packages' \
 verify_group 'dbsphere-observability-arm64-tested-packages' "DbSphere-go-observability-$version-linux-arm64.run"
 test "${#upload[@]}" -eq 20
 
-gh release upload "$tag" "${upload[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-gh api "repos/$GITHUB_REPOSITORY/releases/$draft/assets?per_page=100" |
-  jq -e --slurpfile expected <(jq -s add "$out"/*.json) '
-    length == 20 and
-    all(.[]; . as $asset | any($expected[0][]; .name==$asset.name and .bytes==$asset.size and
-      ("sha256:"+.sha256)==$asset.digest and $asset.state=="uploaded"))' >/dev/null
+expected="$(jq -cs add "$out"/*.json)"
+for attempt in 1 2 3 4 5; do
+  if ! remote="$(gh api "repos/$GITHUB_REPOSITORY/releases/$draft/assets?per_page=100")"; then
+    sleep 4
+    continue
+  fi
+  missing="$(jq -nr --argjson expected "$expected" --argjson remote "$remote" '
+    $expected[] | . as $file | select(all($remote[]; .name!=$file.name or
+      .size!=$file.bytes or .digest!=("sha256:"+$file.sha256) or .state!="uploaded")) | .name')"
+  if [[ -z "$missing" ]]; then
+    jq -e 'length == 20' <<< "$remote" >/dev/null
+    exit 0
+  fi
+  if [[ "$attempt" == 5 ]]; then break; fi
+  pending=()
+  for file in "${upload[@]}"; do
+    if grep -Fxq -- "$(basename -- "$file")" <<< "$missing"; then pending+=("$file"); fi
+  done
+  if ! gh release upload "$tag" "${pending[@]}" --repo "$GITHUB_REPOSITORY" --clobber; then
+    sleep 4
+  fi
+done
+printf '%s\n' 'Release assets could not be verified on GitHub' >&2
+exit 1

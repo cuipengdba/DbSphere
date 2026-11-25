@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.5.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.6.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.5.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.5.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.6.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.6.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -43,7 +43,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | 监控大屏 | 按引擎查看资产数、影响范围、近期采样、缺采、失败和端点失联。趋势图随资产引擎切换，支持放大、同步游标、固定时段、历史基线和原始采样。个人和团队值班视图可跨浏览器恢复。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |
 | SQL 与对象 | 分析 Top SQL 指纹、锁链、慢日志和执行计划，核对对象大小、死元组、冻结、Vacuum、Analyze、分区与索引状态。 |
-| 主备与服务入口 | 查看 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的可用信号，分析逻辑复制槽、回放延迟、积压和切换。核对入口探测与实际后端。 |
+| 主备与服务入口 | 查看 PostgreSQL、达梦 Data Watch 和金仓流复制的角色、归档、位点和切换证据。支持 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的入口监控。 |
 | 事件与根因 | 以同一个事件 ID 关联应用 Trace、PG 会话、连接池、主机、K8S 和原始日志。对照事前、触发、峰值与恢复采样，可分派、确认接班、验证恢复并导出复盘。 |
 | 日志分析 | 导入 PostgreSQL、瀚高、金仓 V9 和达梦 DM8 日志。支持项目和批次、断点续传、应用负载矩阵、延迟分布、原文回链、跨批次对比、调优复测、Zstd 归档及保留策略。 |
 | 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递、风险回测、手动及定时巡检、变更时间线和 Markdown／HTML 报告。 |
