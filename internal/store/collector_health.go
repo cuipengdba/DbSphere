@@ -62,7 +62,7 @@ func (s *Postgres) CollectionHealth(ctx context.Context, interval int) (any, err
 		'storeP95Ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY j.last_store_ms))
 		FROM assets a JOIN organizations o ON o.id=a.organization_id
 		LEFT JOIN collection_jobs j ON j.asset_id=a.id
-		WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase') AND ($2::uuid IS NULL OR a.organization_id=$2)
+		WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis') AND ($2::uuid IS NULL OR a.organization_id=$2)
 		GROUP BY a.organization_id,o.name,a.runtime ORDER BY o.name,a.organization_id,a.runtime`,
 		interval, nullable(OrganizationFromContext(ctx)))
 	return map[string]any{"groups": rows, "freshnessSeconds": 2 * interval}, err

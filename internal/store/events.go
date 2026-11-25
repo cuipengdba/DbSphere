@@ -176,6 +176,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		assetLayer = "dm8"
 	} else if event.Kind == kingbaseLockGroup {
 		assetLayer = "kingbase"
+	} else if event.Kind == redisEvictionGroup || event.Kind == redisSentinelGroup || event.Kind == redisSlotsGroup {
+		assetLayer = "redis"
 	}
 	nodes := []map[string]any{
 		{"id": eventNode, "type": "event", "label": event.Title, "at": event.StartedAt, "source": "/api/events/" + event.ID},

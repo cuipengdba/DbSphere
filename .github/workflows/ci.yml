@@ -527,8 +527,8 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='3.1.0'
-          previous_sha='97312e94242d7007cd0b3743b4f1eb7da9b149c48d9e3a3c29769d12ec66608c'
+          previous_version='3.2.0'
+          previous_sha='426a7cf43e51c387cc82b22c8c756788f58a00e09fe4d91b83d5b0188a078cf5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
@@ -612,8 +612,8 @@ jobs:
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='3.1.0'
-          previous_arm_sha='6c8eb8e7fda8163c785c32db4b777af43da4bda5d0e31b8c140cee1afb3dd1d1'
+          previous_version='3.2.0'
+          previous_arm_sha='63221c2f8404751c87e428e17420750199005e889cd4a905f63dcde44acb5759'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -703,11 +703,11 @@ jobs:
           if [[ "$CHECK_BASELINE" == true ]]; then
             dir="$RUNNER_TEMP/previous-enhanced"
             mkdir -p "$dir"
-            old=3.1.0
+            old=3.2.0
             if [[ "$ARCH" == amd64 ]]; then
-              digest=274ceb8c5915787ebaa233593a707b27da178a08254ec505d12b36d3fe92395d
+              digest=bd703b97b1345373d1cb6e5d09d0d37c928f571a26d38a25d879304597ee3506
             else
-              digest=cbe44a37c984645ec0931a894da8eca75c06fa6f6b5bc9d50a0b024b8c6045d8
+              digest=e22bba725701b41c69601d6efb74657ef90a2a09aad36e24663f5fe77b9d61a6
             fi
             name="DbSphere-go-observability-$old-linux-$ARCH.run"
             curl -fL --retry 3 -o "$dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v$old/$name"
@@ -726,6 +726,46 @@ jobs:
             ${{ runner.temp }}/enhanced/*.sha256
             ${{ runner.temp }}/enhanced/*.tar.gz
           compression-level: 0
+          if-no-files-found: error
+
+  stage-release-draft:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v3.')
+    needs: [go-offline-package, go-offline-package-arm64, go-observability-offline]
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: draft
+        name: Find the unpublished draft matching this commit
+        run: |
+          version="$(jq -er .version package.json)"
+          test "$GITHUB_REF" = "refs/heads/release/v$version"
+          draft="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=10" |
+            jq -r --arg tag "v$version" --arg sha "$GITHUB_SHA" \
+              '.[] | select(.draft and .tag_name==$tag and .target_commitish==$sha) | .id')"
+          if [[ -n "$draft" ]]; then
+            echo 'matched=true' >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.draft.outputs.matched == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dbsphere-*-tested-packages
+          path: ${{ runner.temp }}/release-builds
+      - if: steps.draft.outputs.matched == 'true'
+        name: Verify checksums and upload tested packages to the draft
+        run: |
+          bash scripts/stage-release-draft.sh "$RUNNER_TEMP/release-builds" "$RUNNER_TEMP/release-manifests"
+      - if: steps.draft.outputs.matched == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbsphere-release-manifests
+          path: ${{ runner.temp }}/release-manifests/*.json
           if-no-files-found: error
 
   go-external-store:

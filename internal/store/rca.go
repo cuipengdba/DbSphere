@@ -244,6 +244,30 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if item.Kind == redisEvictionGroup || item.Kind == redisSentinelGroup || item.Kind == redisSlotsGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) != nil {
+				continue
+			}
+			supports := []string{item.ID}
+			if id := stringValue(payload["sampleId"]); id != "" {
+				supports = append(supports, "sample:"+id)
+			}
+			switch item.Kind {
+			case redisEvictionGroup:
+				if count := number(payload["value"]); count > 0 {
+					addCandidate("redis_eviction_confirmed", fmt.Sprintf("Redis 在采样间淘汰 %.0f 个键", count), "high", supports,
+						[]string{"核对同窗内存上限、内存用量和命中率"}, "同一 Redis 进程的原生淘汰计数增加。", nil, item.ObservedAt, nil)
+				}
+			case redisSentinelGroup:
+				addCandidate("redis_sentinel_master_observed", "Sentinel 已观测到主节点异常或切换", "high", supports,
+					[]string{"对照故障和恢复采样里的主节点身份"}, "Sentinel 返回主节点和组状态。", nil, item.ObservedAt, nil)
+			case redisSlotsGroup:
+				addCandidate("redis_slots_observed", "Redis Cluster 报告槽位异常", "high", supports,
+					[]string{"核对故障槽位和分片节点状态"}, "目标节点返回的 CLUSTER INFO 显示集群状态异常。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == kingbaseLockGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {

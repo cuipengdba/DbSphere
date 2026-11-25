@@ -21,9 +21,15 @@ var poolerHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
 const RuntimeMySQL = "mysql"
 const RuntimeDM8 = "dm8"
 const RuntimeKingbase = "kingbase"
+const RuntimeRedis = "redis"
 
 func IsPostgreSQLRuntime(runtime string) bool {
 	return runtime == "linux" || runtime == "k8s" || runtime == "managed"
+}
+
+func IsSupportedRuntime(runtime string) bool {
+	return IsPostgreSQLRuntime(runtime) || runtime == RuntimeMySQL || runtime == RuntimeDM8 ||
+		runtime == RuntimeKingbase || runtime == RuntimeRedis
 }
 
 type OptionalPort int
@@ -106,7 +112,7 @@ func (a Input) Validate() error {
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid database TLS mode")
 	}
-	if !IsPostgreSQLRuntime(a.Runtime) && a.Runtime != RuntimeMySQL && a.Runtime != RuntimeDM8 && a.Runtime != RuntimeKingbase {
+	if !IsSupportedRuntime(a.Runtime) {
 		return errors.New("invalid runtime")
 	}
 	if !IsPostgreSQLRuntime(a.Runtime) {

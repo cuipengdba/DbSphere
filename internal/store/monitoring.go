@@ -42,6 +42,11 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 	}
 	var values []json.RawMessage
 	switch params.Get("metricProfile") {
+	case "redis":
+		if len(ids) != 1 {
+			return nil, ErrInvalidRange
+		}
+		values, err = s.queryJSON(ctx, redisSeriesSQL, ids[0], from, to, minutes)
 	case "dm8", "kingbase":
 		if len(ids) != 1 {
 			return nil, ErrInvalidRange
@@ -104,6 +109,21 @@ const kingbaseSeriesSQL = `SELECT jsonb_build_object(
 	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
 	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='kingbase'
 	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'kingbase'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
+
+const redisSeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'redisOps',avg((s.metrics_json#>>'{redis,ops}')::numeric),
+	'redisClients',avg((s.metrics_json#>>'{redis,clients}')::numeric),
+	'redisMemory',avg((s.metrics_json#>>'{redis,memoryBytes}')::numeric),
+	'redisHitPercent',avg((s.metrics_json#>>'{redisInterval,hitPercent}')::numeric),
+	'redisEvicted',sum((s.metrics_json#>>'{redisInterval,evicted}')::numeric),
+	'redisRejected',sum((s.metrics_json#>>'{redisInterval,rejected}')::numeric),
+	'redisLatency',max((s.metrics_json#>>'{redis,latencyMs}')::numeric),
+	'redisSlots',min((s.metrics_json#>>'{redis,slotsOk}')::numeric),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='redis'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'redis'
 	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {

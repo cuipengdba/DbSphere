@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/cuipengdba/dbsphere/internal/assets"
 )
 
 var ErrInvalidAssetPage = errors.New("invalid asset page query")
@@ -25,7 +27,7 @@ const assetJSON = `jsonb_build_object(
 	'id',id,'organizationId',organization_id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
 	'environment',environment,'tags',tags,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
-	'engine',CASE WHEN runtime IN ('mysql','dm8','kingbase') THEN runtime ELSE 'postgresql' END,
+	'engine',CASE WHEN runtime IN ('mysql','dm8','kingbase','redis') THEN runtime ELSE 'postgresql' END,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
 	'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 	'patroniConfigured',patroni_url_enc IS NOT NULL,
@@ -42,8 +44,7 @@ func (s *Postgres) AssetPage(ctx context.Context, query AssetPageQuery, assetIDs
 		utf8.RuneCountInString(strings.TrimSpace(query.Search)) > 128 {
 		return nil, ErrInvalidAssetPage
 	}
-	if query.Runtime != "" && query.Runtime != "all" && query.Runtime != "linux" &&
-		query.Runtime != "k8s" && query.Runtime != "managed" && query.Runtime != "mysql" && query.Runtime != "dm8" && query.Runtime != "kingbase" {
+	if query.Runtime != "" && query.Runtime != "all" && !assets.IsSupportedRuntime(query.Runtime) {
 		return nil, ErrInvalidAssetPage
 	}
 	var beforeTime time.Time

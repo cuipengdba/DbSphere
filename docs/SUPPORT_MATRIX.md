@@ -29,6 +29,10 @@
 
 Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。读取金仓原生会话、锁、容量和复制信号，Top SQL 指纹依赖目标库的统计配置和权限。  [金仓接入与权限](KINGBASE.md)
 
+## Redis OSS 7.2 与 8.4
+
+独立只读 ACL 用户可读取 Redis 单节点、主从、Sentinel 与 Cluster。覆盖 OPS、缓存窗口、慢命令、持久化及拓扑，按可用权限显示缺口。 [Redis 接入与指标](REDIS.md)
+
 ## MySQL 8.4 只读预览
 
 读取连接指标、InnoDB 等待关系、按数据库筛选的 SQL 指纹和入站复制通道。采集和事件证据使用与 PostgreSQL 相同的独立 PG18 监控库。MySQL 专项验收使用 Linux 上的 MySQL Community Server 8.4 实例，覆盖实际阻塞和同事件恢复。[接入与权限](MYSQL_PREVIEW.md)

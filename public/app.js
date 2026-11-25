@@ -525,6 +525,7 @@ async function renderRCAWorkbench(eventId = '', preferredCode = '') {
 }
 
 function assetRuntimeLabel(asset) {
+  if (asset.runtime === 'redis') return 'Redis';
   if (asset.runtime === 'kingbase') return '金仓 V9';
   if (asset.runtime === 'dm8') return '达梦 DM8';
   if (asset.runtime === 'mysql') return 'MySQL 8.4 预览';
@@ -1042,6 +1043,7 @@ function renderAssets(assets, summary = '') {
       info.append(label);
     }
     const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
+      : asset.runtime === 'redis' ? (asset.versionNum ? `Redis ${Math.floor(asset.versionNum / 10000)}.${Math.floor(asset.versionNum / 100) % 100}.${asset.versionNum % 100}` : 'Redis 待识别')
       : asset.runtime === 'dm8' || asset.runtime === 'kingbase' ? assetRuntimeLabel(asset)
         : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
     info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
@@ -1076,6 +1078,7 @@ $('asset-readiness-batch').addEventListener('toggle', () => {
 const readinessLabels = {
   connection: '数据库连接', tls: '会话 TLS', readOnly: '采集会话只读', connections: '连接状态',
   sessions: '数据库会话', databaseSize: '数据库容量', topSql: 'Top SQL 指纹',
+  server: '实例身份', redisCounters: 'Redis 原生指标', slowCommands: '慢命令', slots: '槽位状态', shards: '分片', sentinel: 'Sentinel 主节点组',
   activeWaits: '活动等待', activityQueryID: '会话 Query ID', lockWaits: '锁等待',
   instanceIO: '实例 I/O', checkpoints: '检查点', wal: 'WAL', replicationLinks: '复制链路',
   walReceiver: 'WAL 接收', replication: '复制状态', sqlPerformance: 'Top SQL 指纹',
@@ -1200,6 +1203,11 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'kingbase') {
     renderKingbaseAsset(detail, asset, samples);
+    if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
+    return;
+  }
+  if (asset.runtime === 'redis') {
+    renderRedisAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     return;
   }
@@ -1682,6 +1690,91 @@ function renderKingbaseAsset(detail, asset, samples) {
       return [formatTime(sample.collectedAt), value(reading.sessions), value(reading.transactions), size(reading.databaseBytes),
         replaySampleLink(asset.id, sample.id)];
     }), '当前没有历史样本');
+}
+
+function renderRedisAsset(detail, asset, samples) {
+  detail.replaceChildren(cell('h3', asset.name), cell('p', `Redis · ${asset.host}:${asset.port}`),
+    cell('p', [assetHealth(asset).label, formatTime(asset.lastSampleAt), asset.lastError].filter(Boolean).join(' · '), 'hint'));
+  const event = recentEvents.find(item => item.assetId === asset.id && item.kind.startsWith('redis_'));
+  if (event) {
+    const link = cell('a', '打开 Redis 事件', 'monitor-link');
+    link.href = '#incidents?' + new URLSearchParams({event:event.id});
+    detail.append(link);
+  }
+  const sample = samples[0];
+  const current = sample?.status === 'ok' && sample.collectedAt === asset.lastSampleAt ? sample.metrics : null;
+  const redis = current?.redis;
+  if (!redis) {
+    detail.append(cell('p', '当前没有成功的 Redis 采样。请核对连接和 INFO 权限。', 'empty'));
+    return;
+  }
+  const format = new Intl.NumberFormat('zh-CN', {maximumFractionDigits:2});
+  const show = n => Number.isFinite(n) ? format.format(n) : '未采集';
+  const unit = (n, units) => Number.isFinite(n) ? show(n)+units : '未采集';
+  const bytes = n => unit(Number.isFinite(n) ? n/1048576 : null, ' MiB');
+  const interval = current.redisInterval || {};
+  const mode = {sentinel:'Sentinel', cluster:'Cluster', standalone:'Redis 节点'}[redis.mode];
+  const role = {primary:'主节点', replica:'副本', sentinel:'Sentinel'}[redis.role] || '待识别';
+  const health = {ok:'可用', unavailable:'异常', unknown:'待核验', online:'在线', fail:'异常', loading:'加载中'};
+  const cards = redis.mode === 'sentinel' ? [['主节点组',redis.sentinel?.group || '待配置'],['当前主节点',redis.sentinel?.master || '未采集'],
+    ['组状态',health[redis.sentinel?.state] || '未采集'],['副本',show(redis.sentinel?.replicas)],['其他 Sentinel',show(redis.sentinel?.peers)],
+    ['观测往返',unit(redis.latencyMs,' ms')]] : [['当前角色',role],['OPS',unit(redis.ops,' /s')],['会话',show(redis.clients)],
+    ['窗口命中率',unit(interval.hitPercent,'%')],['窗口淘汰',show(interval.evicted)],['内存',bytes(redis.memoryBytes)],
+    ['连接拒绝',show(interval.rejected)],['观测往返',unit(redis.latencyMs,' ms')]];
+  const tiles = cell('div', '', 'metric-grid');
+  for (const [label, reading] of cards) {
+    const tile = cell('div');
+    tile.append(cell('span', label), cell('strong', reading));
+    tiles.append(tile);
+  }
+  const trend = cell('a','查看 Redis 实时趋势','monitor-link');
+  trend.href = '#live?' + new URLSearchParams({asset:asset.id,engine:'redis'});
+  detail.append(tiles,cell('small',`Redis ${redis.version} · ${mode}`,'hint'),trend);
+  if (currentRole === 'admin' && !currentOrganization) {
+    const link = cell('a','打开 Redis Grafana 专题','monitor-link');
+    link.href = window.DbSphereLive.grafanaPath({section:'redis', asset:asset.id, engine:'redis',
+      organization:asset.organizationId, cluster:asset.clusterName, event:event?.id,
+      back:trend.hash.slice(1), from:Date.now()-3600000, to:Date.now()});
+    void api('/api/live/integrations').then(state => {
+      if (selectedAsset === asset.id && state.grafana && trend.isConnected) trend.after(link);
+    }).catch(() => {});
+  }
+  const signal = key => current.adapter?.signals?.find(item => item.key === key);
+  const table = (heading, columns, rows, empty) => {
+    const panel = cell('section', '', 'evidence monitor-table');
+    panel.append(cell('h4',heading), rows.length ? importTable(columns,rows) : cell('p',empty,'hint'));
+    detail.append(panel);
+  };
+  if (redis.mode !== 'sentinel') {
+    table('资源与持久化',['指标','值'],[
+      ['连接上限',show(redis.maxClients)],['等待客户端',show(redis.blocked)],
+      ['内存上限',redis.maxMemoryBytes===0 ? '未限制' : bytes(redis.maxMemoryBytes)],
+      ['RDB 最近保存',redis.rdbLastSave>0 ? formatTime(new Date(redis.rdbLastSave*1000)) : '未观测到'],
+      ['RDB 保存状态',redis.rdbStatus || '未采集'],['AOF',redis.aofEnabled===1?'已启用':redis.aofEnabled===0?'未启用':'未采集'],
+      ['AOF 写入',redis.aofWriteStatus || '—'],['AOF 重写',redis.aofRewriteStatus || '—']
+    ]);
+    table('复制状态',['指标','值'],[['角色',role],['已连接副本',show(redis.connectedReplica)],
+      ['副本连接',redis.replicationLink || '—'],['复制位置',show(redis.replicationOffset)]]);
+    table('慢命令',['时间','命令类型','服务端执行时长'],(redis.slowCommands || []).map(row =>
+      [formatTime(row.at),row.command,unit(row.durationUs,' μs')]),signal('slowCommands')?.reason || '当前没有慢命令样本');
+  }
+  if (redis.mode === 'cluster') {
+    table('集群槽位',['状态','正常','疑似故障','故障'],
+      redis.clusterState ? [[health[redis.clusterState],show(redis.slotsOk),show(redis.slotsPfail),show(redis.slotsFail)]] : [],
+      signal('slots')?.reason || '当前没有槽位样本');
+    table('分片与节点',['分片','槽位区间','节点 ID','角色','状态'],(redis.shards || []).flatMap((shard, index) =>
+      shard.nodes.map(node=>[index+1,shard.slots.map(slot=>slot.start+'–'+slot.end).join(', '),node.id,
+        node.role === 'master' ? '主节点' : node.role === 'replica' ? '副本' : '待识别',health[node.health] || '待核验'])),
+      signal('shards')?.reason || '当前没有分片样本');
+    if (redis.shardsTruncated) detail.append(cell('p','分片和节点只展示采样保留的范围。','hint'));
+  }
+  const coverage = cell('details','','settings-details');
+  coverage.append(cell('summary','采集来源与缺口'),importTable(['来源','状态'],(current.adapter?.signals || []).map(item =>
+    [item.source,item.status==='ok'?'已采集':item.reason || '采集缺口'])));
+  detail.append(coverage);
+  table('最近原始采样',['时间','角色','主节点','窗口淘汰','证据'],samples.filter(item=>item.metrics?.redis).slice(0,20).map(item=>
+    [formatTime(item.collectedAt),{primary:'主节点',replica:'副本',sentinel:'Sentinel'}[item.metrics.redis.role] || '待识别',
+      item.metrics.redis.sentinel?.master || '—',show(item.metrics.redisInterval?.evicted),replaySampleLink(asset.id,item.id)]),'当前没有历史样本');
 }
 
 function renderMySQLAsset(detail, asset, samples) {
@@ -2744,7 +2837,7 @@ function setupAssetImport() {
 
 setupAssetImport();
 
-function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase'].includes(runtime) ? runtime : 'postgres'; }
+function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase','redis'].includes(runtime) ? runtime : 'postgres'; }
 
 function editAsset(asset) {
   editingAsset = asset.id;
@@ -2767,7 +2860,8 @@ function editAsset(asset) {
   $('asset-submit').textContent = '更新资产';
   $('asset-dialog').dataset.mode = 'edit';
   $('asset-dialog-title').textContent = asset.runtime === 'dm8' ? '编辑达梦 DM8 实例' :
-    asset.runtime === 'mysql' ? '编辑 MySQL 实例' : asset.runtime === 'kingbase' ? '编辑金仓 V9 实例' : '编辑 PostgreSQL 实例';
+    asset.runtime === 'mysql' ? '编辑 MySQL 实例' : asset.runtime === 'kingbase' ? '编辑金仓 V9 实例' :
+    asset.runtime === 'redis' ? '编辑 Redis 实例' : '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
@@ -2787,7 +2881,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', redis: 'Redis', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -2798,6 +2892,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', kingbase_lock_wait: '金仓锁等待', recovery_verified: '人工验证恢复',
+  redis_eviction: 'Redis 缓存淘汰', redis_sentinel_failover: 'Sentinel 主节点异常或切换', redis_slots_unhealthy: 'Redis 槽位异常',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
 
@@ -2959,7 +3054,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
   panel.append(grid);
   const phases = [['before', '故障前'], ['during', '触发时'], ['peak', '峰值'], ['after', '恢复后']];
   const layers = [['all', '全部'], ['app', '应用'], ['pooler', '入口与连接池'], ['postgres', '数据库'], ['infra', 'Linux / Kubernetes'], ['storage', '容器 / 磁盘 / PVC']];
-  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
+  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'redis', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
   if (replay.peak) comparisons.set('peak', replay.peak);
   const graph = analysis.graph || { nodes: [], edges: [] };
@@ -3892,7 +3987,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
     const dm8 = asset?.runtime === 'dm8' || event.kind?.startsWith('dm8');
     const kingbase = asset?.runtime === 'kingbase' || event.kind?.startsWith('kingbase');
-    const engine = kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
+    const redis = asset?.runtime === 'redis' || event.kind?.startsWith('redis');
+    const engine = redis ? 'redis' : kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
     const anchor = back ? new URLSearchParams(back.split('?')[1]) : null;
@@ -4779,25 +4875,28 @@ $('runtime').addEventListener('change', (event) => {
   const mysql = event.target.value === 'mysql';
   const dm8 = event.target.value === 'dm8';
   const kingbase = event.target.value === 'kingbase';
+  const redis = event.target.value === 'redis';
   const previous = event.target.dataset.previousRuntime;
   const previousEngine = databaseRuntimeGroup(previous);
   const nextEngine = databaseRuntimeGroup(event.target.value);
   event.target.dataset.previousRuntime = event.target.value;
   const form = $('asset-form');
   if (!editingAsset && previousEngine !== nextEngine) {
-    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321'};
-    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test'};
+    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321', redis:'6379'};
+    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test', redis:'0'};
     if (form.elements.port.value === ports[previousEngine]) form.elements.port.value = ports[nextEngine];
     if (form.elements.database.value === names[previousEngine]) form.elements.database.value = names[nextEngine];
     if (previous === 'dm8') form.elements.sslMode.value = 'require';
   }
   form.elements.sslMode.closest('label').hidden = dm8;
   if (dm8) form.elements.sslMode.value = 'disable';
-  $('asset-integrations').hidden = mysql || dm8 || kingbase;
-  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8 || kingbase;
+  $('asset-database-label').textContent = redis ? '实例范围／Sentinel 组' : '数据库';
+  $('asset-integrations').hidden = mysql || dm8 || kingbase || redis;
+  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8 || kingbase || redis;
   $('asset-runtime-hint').textContent = mysql ? '数据库名称用于筛选 SQL 指纹。使用专用账号读取 Performance Schema。'
     : dm8 ? '主机和端口须匹配达梦采集探针的授权目标。使用专用监控账号读取动态性能视图。'
     : kingbase ? '选择 PostgreSQL 兼容模式的金仓 V9。使用专用只读账号和实际数据库名称。'
+    : redis ? '普通节点和 Cluster 填 0。Sentinel 填主节点组名，端口通常为 26379。'
     : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
   $('k8s-fields').hidden = !k8s;
   for (const field of document.querySelectorAll('.linux-field')) {

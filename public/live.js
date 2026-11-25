@@ -23,7 +23,17 @@
     { key: 'kingbaseSize', title: '数据库容量', unit: ' B', source: 'sys_catalog.sys_database_size · 桶内均值' },
     { key: 'kingbaseReplayLag', title: '复制回放差距', unit: ' B', source: 'sys_catalog.sys_stat_replication · 桶内峰值' }
   ];
-  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9'};
+  const redisMetrics = [
+    { key:'redisOps', title:'OPS', unit:' /s', source:'INFO stats · 每秒操作数的桶内均值' },
+    { key:'redisClients', title:'连接', unit:'', source:'INFO clients · 桶内均值' },
+    { key:'redisMemory', title:'内存', unit:' B', source:'INFO memory · 桶内均值' },
+    { key:'redisHitPercent', title:'命中率', unit:'%', ceiling:100, source:'相邻采样命中与未命中差值 · 桶内均值' },
+    { key:'redisEvicted', title:'淘汰键数', unit:'', source:'同进程相邻采样淘汰计数差 · 桶内和' },
+    { key:'redisRejected', title:'拒绝连接', unit:'', source:'同进程相邻采样拒绝连接差 · 桶内和' },
+    { key:'redisLatency', title:'观测往返', unit:' ms', source:'含连接与 INFO server · 桶内峰值' },
+    { key:'redisSlots', title:'正常槽位', unit:'', source:'CLUSTER INFO · 桶内最小值' }
+  ];
+  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis'};
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
   const freshnessLabels = { ok: '采样正常', error: '采集失败', pending: '待采样', stale: '采样陈旧' };
@@ -39,6 +49,7 @@
     replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
     dm8: 'dbsphere-dm8',
     kingbase: 'dbsphere-kingbase',
+    redis: 'dbsphere-redis',
     containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
 
   function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night, back }) {
@@ -405,7 +416,19 @@
       const availability = ['可用性', snapshot.fresh + ' / ' + snapshot.total, `采样正常 · 不可用 ${snapshot.unavailable}`, snapshot.unavailable ? 'alert' : 'cyan', 'pgAvailable'];
       const native = current ? selected.engineMetrics || {} : {};
       const nativeCount = key => finite(native[key]) ? number.format(native[key]) : '—';
-      const cards = selected?.engine === 'kingbase' ? [
+      const cards = selected?.engine === 'redis' && native.mode === 'sentinel' ? [
+        availability,
+        ['主节点组',native.sentinel?.group || '—',observed,'blue','redisLatency'],
+        ['当前主节点',native.sentinel?.master || '—',native.sentinel?.state === 'ok' ? '可用' : '存在缺口','violet','redisLatency'],
+        ['副本',finite(native.sentinel?.replicas) ? number.format(native.sentinel.replicas) : '—',observed,'cyan','redisLatency'],
+        ['观测往返',nativeCount('latency') === '—' ? '—' : nativeCount('latency') + ' ms',observed,'blue','redisLatency']
+      ] : selected?.engine === 'redis' ? [
+        availability,
+        ['操作 / 秒',nativeCount('ops'),`连接 ${nativeCount('clients')} · ${observed}`,'blue','redisOps'],
+        ['命中率',nativeCount('hitPercent') === '—' ? '—' : nativeCount('hitPercent') + '%',observed,'cyan','redisHitPercent'],
+        ['窗口淘汰',nativeCount('evicted'),observed,native.evicted > 0 ? 'alert' : 'violet','redisEvicted'],
+        ['内存',bytes(native.memory),observed,'cyan','redisMemory']
+      ] : selected?.engine === 'kingbase' ? [
         availability,
         ['会话', nativeCount('sessions'), `活动 ${nativeCount('active')} · ${observed}`, 'blue', 'kingbaseSessions'],
         ['事务', nativeCount('transactions'), observed, 'violet', 'kingbaseTransactions'],
@@ -595,8 +618,9 @@
       parent.replaceChildren();
       label.textContent = '';
       if (!asset || !asset.sampleId || asset.engine !== 'postgres') {
-        if (asset?.engine === 'kingbase') {
-          const button = element('button', '查看金仓 SQL 指纹与锁链', 'ghost small-button');
+        if (asset?.engine === 'kingbase' || asset?.engine === 'redis') {
+          const name = asset.engine === 'redis' ? '查看 Redis 慢命令和拓扑' : '查看金仓 SQL 指纹与锁链';
+          const button = element('button', name, 'ghost small-button');
           button.type = 'button';
           button.onclick = () => openAsset(asset.id);
           parent.append(button);
@@ -643,7 +667,9 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const enabled = asset?.engine === 'kingbase' ? kingbaseMetrics :
+      const enabled = asset?.engine === 'redis' ? asset.engineMetrics?.mode === 'sentinel' ?
+        redisMetrics.filter(metric => metric.key === 'redisLatency') : redisMetrics
+        : asset?.engine === 'kingbase' ? kingbaseMetrics :
         asset?.engine === 'dm8' ? dm8Metrics : asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
       const metricKey = enabled.map(metric => metric.key).join();
@@ -672,7 +698,7 @@
       const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
         bucketMinutes: String(bucketMinutes) };
       const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
-      if (asset.engine === 'dm8' || asset.engine === 'kingbase') trend.set('metricProfile', asset.engine);
+      if (asset.engine === 'dm8' || asset.engine === 'kingbase' || asset.engine === 'redis') trend.set('metricProfile', asset.engine);
       const waits = new URLSearchParams({ ...q, group: 'type' });
       if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];

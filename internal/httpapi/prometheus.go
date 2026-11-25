@@ -119,6 +119,14 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_kingbase_lock_pairs_observed", "Kingbase waiting and blocking session pairs in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseWaits }},
 		{"asset_kingbase_database_bytes", "Size of the monitored Kingbase database.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseSize }},
 		{"asset_kingbase_max_replay_lag_bytes", "Kingbase WAL position difference to the most delayed visible replica.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.KingbaseLag }},
+		{"asset_redis_ops_per_second", "Redis node operations per second from INFO stats.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisOps }},
+		{"asset_redis_clients", "Redis node connected clients.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisClients }},
+		{"asset_redis_memory_bytes", "Redis reported memory usage in bytes.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisMemory }},
+		{"asset_redis_hit_percent", "Redis hit percentage between two samples from the same process.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisHit }},
+		{"asset_redis_interval_evictions", "Keys evicted between two Redis samples from the same process.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisEvicted }},
+		{"asset_redis_interval_rejected_connections", "Connections rejected between two Redis samples.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisRejected }},
+		{"asset_redis_observation_latency_milliseconds", "Collector elapsed time including Redis connection and INFO server.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisLatency }},
+		{"asset_redis_cluster_slots_ok", "Healthy slots as visible to the sampled Redis Cluster node.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.RedisSlots }},
 	} {
 		name := "dbsphere_" + metric.name
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, metric.help, name, metric.kind)

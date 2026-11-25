@@ -37,7 +37,7 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase')
+		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis')
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if !assets.IsPostgreSQLRuntime(runtime) && runtime != assets.RuntimeMySQL && runtime != assets.RuntimeDM8 && runtime != assets.RuntimeKingbase {
+	if !assets.IsSupportedRuntime(runtime) {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	target.Runtime = runtime
@@ -181,6 +181,9 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	if runtime == assets.RuntimeKingbase {
 		return s.checkKingbase(ctx, id, target, password, lease, interval)
+	}
+	if runtime == assets.RuntimeRedis {
+		return s.checkRedis(ctx, id, target, password, lease, interval)
 	}
 	poolerURL := ""
 	if poolerEncrypted != nil {
@@ -393,6 +396,8 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		label, source = "达梦 DM8", "go_dm8_collector"
 	} else if runtime == assets.RuntimeKingbase {
 		label, source = "金仓 V9", "go_kingbase_collector"
+	} else if runtime == assets.RuntimeRedis {
+		label, source = "Redis", "go_redis_collector"
 	}
 	if lease != nil {
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
@@ -432,6 +437,15 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	status := "ok"
 	if reason != "" {
 		status = "error"
+	}
+	var redisBefore collector.RedisMetrics
+	var redisWindow *redisIntervalMetrics
+	if current, ok := metrics["redis"].(collector.RedisMetrics); ok && runtime == assets.RuntimeRedis {
+		redisBefore = priorRedisSample(previousJSON)
+		redisWindow = redisInterval(current, redisBefore, now.Sub(previousAt), interval, previousID)
+		if redisWindow != nil {
+			metrics["redisInterval"] = redisWindow
+		}
 	}
 	if status == "ok" && assets.IsPostgreSQLRuntime(runtime) {
 		if err := attachDatabaseGrowth(ctx, tx, id, metrics, now); err != nil {
@@ -593,6 +607,12 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		if status == "ok" {
 			if err := recordKingbaseLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
 				return CheckResult{}, fmt.Errorf("record Kingbase lock event: %w", err)
+			}
+		}
+	} else if runtime == assets.RuntimeRedis {
+		if current, ok := metrics["redis"].(collector.RedisMetrics); ok && status == "ok" {
+			if err := recordRedisEvents(ctx, tx, id, sampleID, previousID, now, current, redisBefore, redisWindow); err != nil {
+				return CheckResult{}, fmt.Errorf("record Redis event: %w", err)
 			}
 		}
 	} else {

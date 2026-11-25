@@ -1190,6 +1190,47 @@ async function kingbaseMonitoring(page) {
   proof.push('Kingbase V9 admission, native live trends and lock chain, missing Top SQL coverage, and same-event raw sample');
 }
 
+async function redisMonitoring(page) {
+  await navigate(page,'assets');
+  await page.locator('#asset-add').click();
+  await formField(page,'asset-form','runtime').selectOption('redis');
+  assert.equal(await formField(page,'asset-form','port').inputValue(),'6379');
+  assert.equal(await formField(page,'asset-form','database').inputValue(),'0');
+  await formField(page,'asset-form','name').fill('Browser QA Redis');
+  await formField(page,'asset-form','host').fill('127.0.0.1');
+  await formField(page,'asset-form','username').fill('dbsphere');
+  await formField(page,'asset-form','password').fill('dbsphere-redis-fixture');
+  const created = await action(page,page.locator('#asset-submit'),'POST','/api/assets',201);
+  const asset=(await created.json()).asset.id;
+  const sample=randomUUID(), event=randomUUID();
+  runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES
+    ('${sample}','${asset}',now()-interval '15 seconds','ok',
+    '{"adapter":{"engine":"redis","role":"primary","transport":{"readOnly":true},"signals":[{"key":"redisCounters","status":"ok"}]},
+    "redis":{"version":"7.2.17","mode":"standalone","role":"primary","ops":12,"clients":3,"memoryBytes":4178484,"maxMemoryBytes":4194304,
+    "latencyMs":2,"slowCommands":[{"id":4,"at":"2026-01-01T00:00:00Z","command":"SET","durationUs":3}]},
+    "redisInterval":{"hitPercent":50,"evicted":62,"rejected":0,"seconds":15}}');
+    UPDATE assets SET last_status='ok',last_sample_at=(SELECT collected_at FROM samples WHERE id='${sample}'),version_num=70217 WHERE id='${asset}';
+    INSERT INTO event_keys(id,asset_id,started_at) SELECT '${event}',asset_id,collected_at FROM samples WHERE id='${sample}';
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+    SELECT id,asset_id,'redis_eviction','Redis QA 缓存淘汰','open',started_at,'redis_eviction' FROM event_keys WHERE id='${event}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT gen_random_uuid(),'${event}','redis_eviction',collected_at,jsonb_build_object('sampleId',id,'value',62)
+    FROM samples WHERE id='${sample}';`);
+  await page.goto(origin+'/#live?engine=redis&asset='+asset);
+  await page.locator('[data-live=metrics]').getByRole('button',{name:'淘汰键数',exact:true}).click();
+  await page.locator('[data-live=sql-panel] > summary').click();
+  await page.getByRole('button',{name:'查看 Redis 慢命令和拓扑',exact:true}).click();
+  await page.locator('#detail').getByRole('heading',{name:'慢命令',exact:true}).waitFor();
+  await visible(page.locator('#detail'),'SET');
+  await page.goto(origin+'/#incidents?event='+event);
+  await visible(page.locator('#event-detail'),'Redis 在采样间淘汰 62 个键');
+  await page.locator(`#event-detail a[href="/api/assets/${asset}/samples/${sample}"]:visible`).first().click();
+  await visible(page.locator('#sample-details'),sample);
+  await page.locator('#sample-return').click();
+  await visible(page.locator('#event-detail'),event);
+  proof.push('Redis admission, eviction trend, sanitized slow command, and same-event original sample');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -1213,6 +1254,7 @@ async function kingbaseMonitoring(page) {
     await v3Investigation(page, asset);
     await dm8Monitoring(page);
     await kingbaseMonitoring(page);
+    await redisMonitoring(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

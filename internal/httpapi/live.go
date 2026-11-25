@@ -45,7 +45,7 @@ func readLiveObservation(w http.ResponseWriter, r *http.Request, db HealthStore,
 		}
 	}
 	if (scope.Organization != "" && !opsUUID.MatchString(scope.Organization)) || len(scope.Environment) > 80 || len(scope.Cluster) > 256 ||
-		(scope.Engine != "" && scope.Engine != "postgres" && scope.Engine != "mysql" && scope.Engine != "dm8" && scope.Engine != "kingbase") ||
+		(scope.Engine != "" && scope.Engine != "postgres" && scope.Engine != "mysql" && scope.Engine != "dm8" && scope.Engine != "kingbase" && scope.Engine != "redis") ||
 		(scope.Focus != "" && !opsUUID.MatchString(scope.Focus)) {
 		respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid live observation scope"})
 		return

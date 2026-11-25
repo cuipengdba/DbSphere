@@ -83,23 +83,30 @@ type engineLockEvidence struct {
 }
 
 func recordEngineLockEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID string, now time.Time, lock engineLockEvidence) error {
+	return recordEngineObservationEvent(ctx, tx, assetID, sampleID, now, lock.group, lock.title, lock.source, lock.count != 0,
+		map[string]any{"waits": lock.waits, "truncated": lock.truncated}, map[string]any{"waitCount": 0})
+}
+
+func recordEngineObservationEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID string, now time.Time,
+	group, title, source string, active bool, occurrence, recovery map[string]any) error {
 	var eventID string
 	err := tx.QueryRow(ctx, `SELECT event_id::text FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`,
-		assetID, lock.group).Scan(&eventID)
+		assetID, group).Scan(&eventID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if lock.count == 0 {
+	if !active {
 		if eventID == "" {
 			return nil
 		}
 		if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2`, now, eventID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`, assetID, lock.group); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`, assetID, group); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lock.source, "waitCount": 0})
+		recovery["sampleId"], recovery["source"] = sampleID, source
+		payload, _ := json.Marshal(recovery)
 		_, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'collection_recovered',$2,$3)`, eventID, now, payload)
 		return err
@@ -112,15 +119,15 @@ func recordEngineLockEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID str
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
-		VALUES($1,$2,$3,$4,'open',$5,$3)`, eventID, assetID, lock.group, lock.title, now); err != nil {
+		VALUES($1,$2,$3,$4,'open',$5,$3)`, eventID, assetID, group, title, now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES($1,$2,$3)`, assetID, lock.group, eventID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES($1,$2,$3)`, assetID, group, eventID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lock.source,
-		"waits": lock.waits, "truncated": lock.truncated})
+	occurrence["sampleId"], occurrence["source"] = sampleID, source
+	payload, _ := json.Marshal(occurrence)
 	_, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,$2,$3,$4)`, eventID, lock.group, now, payload)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4)`, eventID, group, now, payload)
 	return err
 }

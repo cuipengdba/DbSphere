@@ -92,7 +92,7 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 func describeReadiness(sample readinessSample, runtime string) []readinessCheck {
 	metrics := sample.Metrics
 	pgStatus := stringValue(object(metrics["collector"])["pgStatus"])
-	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8") {
+	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8" || runtime == "redis") {
 		pgStatus = stringValue(object(metrics["collector"])[runtime+"Status"])
 	}
 	if pgStatus == "" && sample.Status == "ok" {
@@ -140,7 +140,8 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		switch signal["key"] {
 		case "activeWaits", "activityQueryID", "instanceIO", "checkpoints", "wal", "replicationLinks", "walReceiver",
 			"logicalPublications", "logicalSubscriptions", "logicalApplyProgress", "logicalSubscriptionErrors", "sqlPerformance",
-			"connections", "lockWaits", "replication", "sessions", "databaseSize", "topSql":
+			"connections", "lockWaits", "replication", "sessions", "databaseSize", "topSql",
+			"server", "redisCounters", "slowCommands", "slots", "shards", "sentinel":
 			switch signal["status"] {
 			case "ok", "inactive":
 				add(stringValue(signal["key"]), stringValue(signal["status"]), "")

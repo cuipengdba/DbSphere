@@ -25,6 +25,9 @@ var reviewSourceKinds = []string{
 	"routing_observed", "recovery_verified", "risk_forecast",
 	"dm8_lock_wait",
 	"kingbase_lock_wait",
+	"redis_eviction",
+	"redis_sentinel_failover",
+	"redis_slots_unhealthy",
 }
 
 var reviewNumericPaths = []struct {
