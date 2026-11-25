@@ -159,7 +159,7 @@ const runAcceptance = async (page) => {
   await loc('open-archive').click();
   const archive = loc('archive-dialog');
   const days = archive.getByRole('spinbutton', { name: org.name + '原文保留天数' });
-  const row = archive.getByRole('row').filter({ has: days });
+  const row = archive.getByRole('row').filter({ has: page.getByRole('spinbutton', { name: org.name + '原文保留天数' }) });
   await days.fill('7');
   const save = dialogButton(row, '保存');
   assert(await save.isDisabled(), 'Archive policy can be saved before preview');
@@ -171,7 +171,7 @@ const runAcceptance = async (page) => {
   assert(await days.inputValue() === '7', 'Archive retention policy was not persisted');
   await dialogButton(row, org.name).click();
   const files = loc('archive-files-dialog');
-  await visible(files, '调查保护');
+  await visible(files.getByRole('table'), '调查保护');
   results.push('v2.24 previewed and saved retention, and listed investigation-protected originals');
 
   return { result: 'V224_BROWSER_PASS', event: investigation.eventId, adoptedRecord: inventory.id, checks: results };
