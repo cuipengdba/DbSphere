@@ -454,6 +454,19 @@ async function savedDutyView(page, asset) {
   if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'duty-baseline.png') });
   await board('delete-view').click();
   await visible(board('view-status'), '已删除 ' + label);
+  const legacyName = 'Browser QA v2.30 saved view';
+  await page.evaluate(async ({name, path}) => {
+    const session = await fetch('/api/session').then(response => response.json());
+    const identity = [session.role || 'admin', session.username || '', session.organizationId || ''];
+    localStorage.setItem('dbsphere.wallboard.views.' + JSON.stringify(identity), JSON.stringify([{name, path}]));
+  }, {name: legacyName, path: new URL(shared).hash.slice(1)});
+  await page.reload();
+  await board('import-views').click();
+  await visible(board('view-status'), '已导入 1 个视图');
+  await board('saved-view').selectOption({label: legacyName});
+  await visible(board('baseline-status'), '虚线基线');
+  await board('delete-view').click();
+  await visible(board('view-status'), '已删除 ' + legacyName);
   await page.getByLabel('选择变更前后对比').selectOption(change);
   await visible(board('baseline-status'), '变更时刻');
   assert.equal(parameters(page).get('compare'), 'previous');
@@ -1079,10 +1092,11 @@ async function v3Investigation(page, asset) {
     await owner.reload();
     await visible(owner.locator('#event-detail'), '已恢复');
     await owner.getByRole('button', {name: '处置', exact: true}).click();
-    await owner.getByLabel('记录类型').selectOption('recovery_verification');
-    assert.equal(await owner.getByLabel('成功采样 ID').inputValue(), recovery);
-    await owner.getByLabel('处理记录（5–500 字）').fill('恢复采样显示连接已恢复正常');
-    await action(owner, owner.getByRole('button', {name: '保存到事件时间线'}), 'POST', '/api/events/' + event + '/response', 200);
+    const responseForm = owner.locator('form').filter({has: owner.getByRole('heading', {name: '处置与恢复验证', exact: true})});
+    await responseForm.getByLabel('记录类型', {exact: true}).selectOption('recovery_verification');
+    assert.equal(await responseForm.getByLabel('成功采样 ID').inputValue(), recovery);
+    await responseForm.getByLabel('处理记录（5–500 字）').fill('恢复采样显示连接已恢复正常');
+    await action(owner, responseForm.getByRole('button', {name: '保存到事件时间线'}), 'POST', '/api/events/' + event + '/response', 200);
     const report = await owner.evaluate(async eventID => fetch('/api/events/' + eventID + '/report?format=md').then(response => response.text()), event);
     assert(report.includes(event) && report.includes('v3-owner 已确认接手') && report.includes('恢复采样显示连接已恢复正常') && report.includes(recovery));
     proof.push('Configured and disabled a loopback model, verified reviewed evidence, scoped team views, followed cross-layer identity, and verified handoff and recovery in the same incident report');
