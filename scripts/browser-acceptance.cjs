@@ -765,7 +765,8 @@ async function grafanaReturn(page, asset, event) {
 
 (async () => {
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1440, height: 880 }, hasTouch: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
+  const page = await context.newPage();
   page.setDefaultTimeout(15000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
