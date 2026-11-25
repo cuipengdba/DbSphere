@@ -123,7 +123,8 @@ async function createAsset(page) {
   await page.locator('#k8s-fields').waitFor();
   await visible(page.locator('#k8s-fields'), '发现此 Namespace');
   await formField(page, 'asset-form', 'runtime').selectOption('mysql');
-  await page.locator('#k8s-fields').waitFor({ state: 'hidden' });
+  await visible(page.locator('#k8s-fields'), 'Kubernetes Context（可选）');
+  await page.locator('#discover-k8s').waitFor({ state: 'hidden' });
   await formField(page, 'asset-form', 'runtime').selectOption('managed');
   await page.locator('#k8s-fields').waitFor({ state: 'hidden' });
   await page.locator('#asset-integrations > summary').click();

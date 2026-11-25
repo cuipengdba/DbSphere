@@ -1958,7 +1958,7 @@ function renderMySQLAsset(detail, asset, samples) {
   coverage.append(cell('summary', '采集能力与缺口'));
   const labels = {connections:'连接状态',lockWaits:'InnoDB 锁等待',sqlPerformance:'Top SQL 指纹',replication:'复制状态',
     innodbBufferPool:'InnoDB 缓冲池',activeTransactions:'活跃事务',replicaWorkers:'复制工作线程'};
-  const status = { ok: '已采集', limited_permissions: '权限受限', not_configured: '未启用', unavailable: '采集失败' };
+  const status = { ok: '已采集', partial: '部分采集', limited_permissions: '权限受限', not_configured: '未启用', unavailable: '采集失败' };
   const table = (headings, rows) => {
     const block = cell('div', '', 'monitor-table');
     block.append(importTable(headings, rows));
