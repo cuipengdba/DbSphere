@@ -437,7 +437,7 @@ async function operations(page, asset) {
   const routing = page.locator('#asset-layer-routing-detail');
   await routing.getByText('配置只读入口探测', { exact: true }).click();
   await routing.getByLabel('入口类型').selectOption('haproxy');
-  await routing.getByLabel('入口主机与端口').fill('127.0.0.1:15434');
+  await routing.getByLabel('入口主机与端口', { exact: true }).fill('127.0.0.1:15434');
   await action(page, routing.getByRole('button', { name: '保存入口配置' }), 'PATCH', `/api/assets/${asset}/routing`, 200);
   await visible(routing, '等待新配置的首次采样。');
   proof.push('Asset refresh and bulk onboarding, readiness and JSON export, edit and deletion, history and risk controls, log and plan import, and route editing across a concurrent refresh');
