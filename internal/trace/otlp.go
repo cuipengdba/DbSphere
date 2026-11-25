@@ -21,6 +21,7 @@ var endpointName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 
 type Asset struct {
 	ID         string
+	Engine     string
 	Host       string
 	Port       int
 	Database   string
@@ -64,7 +65,30 @@ func ConnectionStage(kind string) (phase string, timeout bool) {
 
 func IsDatabaseTargetSpan(kind string) bool {
 	phase, _ := ConnectionStage(kind)
-	return kind == "postgresql_client" || phase != ""
+	switch kind {
+	case "postgresql_client", "mysql_client", "redis_client", "etcd_client", "dm8_client", "kingbase_client":
+		return true
+	}
+	return phase != ""
+}
+
+func databaseClient(system string) (kind, engine string, port int) {
+	switch system {
+	case "postgresql":
+		return "postgresql_client", "postgres", 5432
+	case "mysql":
+		return "mysql_client", "mysql", 3306
+	case "redis":
+		return "redis_client", "redis", 6379
+	case "etcd":
+		return "etcd_client", "etcd", 2379
+	case "dm8":
+		return "dm8_client", "dm8", 5236
+	case "kingbase":
+		return "kingbase_client", "kingbase", 54321
+	default:
+		return "", "", 0
+	}
 }
 
 type Result struct {
@@ -158,6 +182,7 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 		address   string
 		port      int
 		namespace string
+		engine    string
 	}
 	groups := map[string][]parsedSpan{}
 	result := Result{Spans: []Span{}}
@@ -193,8 +218,8 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					continue
 				}
 				attrs := attributes(raw.Attributes)
-				isDB := (rawText(raw.Kind) == "3" || rawText(raw.Kind) == "SPAN_KIND_CLIENT") &&
-					attrs["db.system.name"] == "postgresql"
+				kind, engine, defaultPort := databaseClient(attrs["db.system.name"])
+				isDB := kind != "" && (rawText(raw.Kind) == "3" || rawText(raw.Kind) == "SPAN_KIND_CLIENT")
 				item := parsedSpan{Span: Span{TraceID: strings.ToLower(raw.TraceID),
 					SpanID: strings.ToLower(raw.SpanID), ParentSpanID: strings.ToLower(raw.ParentSpanID),
 					Service: service, Kind: "service", Start: start, End: end, Status: "ok",
@@ -203,23 +228,25 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 					item.Status = "error"
 				}
 				if isDB {
-					item.Kind = "postgresql_client"
-					switch attrs["dbsphere.connection.phase"] {
-					case "", "execute":
-					case "pool_acquire":
-						item.Kind = "pg_pool_acquire"
-					case "connect":
-						item.Kind = "pg_connect"
-					default:
-						continue
-					}
-					if endpoint := attrs["dbsphere.endpoint"]; endpointName.MatchString(endpoint) {
-						item.Endpoint = endpoint
-					}
-					if item.Kind != "postgresql_client" && item.Status == "error" && attrs["dbsphere.connection.outcome"] == "timeout" {
-						item.Kind += "_timeout"
-					}
+					item.Kind, item.engine = kind, engine
 					item.AppPodNamespace, item.AppPodName, item.AppPodUID = appNamespace, appPod, appUID
+					if engine == "postgres" {
+						switch attrs["dbsphere.connection.phase"] {
+						case "", "execute":
+						case "pool_acquire":
+							item.Kind = "pg_pool_acquire"
+						case "connect":
+							item.Kind = "pg_connect"
+						default:
+							continue
+						}
+						if endpoint := attrs["dbsphere.endpoint"]; endpointName.MatchString(endpoint) {
+							item.Endpoint = endpoint
+						}
+						if item.Kind != "postgresql_client" && item.Status == "error" && attrs["dbsphere.connection.outcome"] == "timeout" {
+							item.Kind += "_timeout"
+						}
+					}
 					if item.Kind == "postgresql_client" {
 						if value, err := strconv.ParseInt(attrs["dbsphere.pg.backend_pid"], 10, 32); err == nil && value > 0 {
 							item.BackendPID = int(value)
@@ -229,11 +256,14 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 						}
 					}
 					item.address = attrs["server.address"]
-					item.port = 5432
+					item.port = defaultPort
 					if value := attrs["server.port"]; value != "" {
 						item.port, _ = strconv.Atoi(value)
 					}
 					item.namespace = strings.Split(attrs["db.namespace"], "|")[0]
+					if engine == "redis" && item.namespace == "" {
+						item.namespace = "0"
+					}
 				}
 				groups[item.TraceID] = append(groups[item.TraceID], item)
 			}
@@ -263,9 +293,16 @@ func Decode(body []byte, assets []Asset, now time.Time) (Result, error) {
 			match, route := "", ""
 			count := 0
 			for _, asset := range assets {
+				engine := asset.Engine
+				if engine == "" {
+					engine = "postgres"
+				}
+				if engine != item.engine {
+					continue
+				}
 				direct := strings.EqualFold(asset.Host, item.address) && asset.Port == item.port &&
-					(item.namespace == "" || asset.Database == item.namespace)
-				viaPooler := item.namespace != "" && asset.Database == item.namespace &&
+					(engine == "etcd" || item.namespace == "" || asset.Database == item.namespace)
+				viaPooler := engine == "postgres" && item.namespace != "" && asset.Database == item.namespace &&
 					asset.PoolerHost != "" && strings.EqualFold(asset.PoolerHost, item.address) &&
 					asset.PoolerPort == item.port
 				if direct || viaPooler {

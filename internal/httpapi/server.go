@@ -586,6 +586,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		viewerScope := map[string]bool(nil)
 		if scopeIDs != nil {
+			r = r.WithContext(storepkg.WithIncidentAssetScope(r.Context(), scopeIDs))
 			viewerScope = make(map[string]bool, len(scopeIDs))
 			for _, id := range scopeIDs {
 				viewerScope[id] = true

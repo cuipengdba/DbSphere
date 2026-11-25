@@ -96,6 +96,33 @@ func TestDecodeMapsDatabaseSpansWithoutCrossAssetLeak(t *testing.T) {
 	}
 }
 
+func TestRedisTraceRequiresMatchingEngineAndLogicalDatabase(t *testing.T) {
+	now := time.Now().UTC()
+	payload := fmt.Sprintf(`{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"inventory"}}]},
+		"scopeSpans":[{"spans":[{"traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spanId":"1111111111111111","kind":3,
+		"startTimeUnixNano":%d,"endTimeUnixNano":%d,"attributes":[
+		{"key":"db.system.name","value":{"stringValue":"redis"}},
+		{"key":"server.address","value":{"stringValue":"cache"}},
+		{"key":"db.query.text","value":{"stringValue":"GET private-customer-key"}}]}]}]}]}`, now.Add(-time.Second).UnixNano(), now.UnixNano())
+	assets := []Asset{{ID: "postgres", Host: "cache", Port: 6379, Database: "0"},
+		{ID: "other-db", Engine: "redis", Host: "cache", Port: 6379, Database: "1"},
+		{ID: "redis", Engine: "redis", Host: "cache", Port: 6379, Database: "0"}}
+	result, err := Decode([]byte(payload), assets, now)
+	if err != nil || len(result.Spans) != 1 || result.Spans[0].AssetID != "redis" || result.Spans[0].Kind != "redis_client" {
+		t.Fatalf("unexpected Redis association: %+v %v", result, err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || strings.Contains(string(encoded), "private-customer-key") {
+		t.Fatalf("unexpected Redis attribute storage: %s %v", encoded, err)
+	}
+	duplicate := assets[2]
+	duplicate.ID = "duplicate"
+	result, err = Decode([]byte(payload), append(assets, duplicate), now)
+	if err != nil || len(result.Spans) != 0 || result.Rejected != 1 {
+		t.Fatalf("ambiguous Redis identity accepted: %+v %v", result, err)
+	}
+}
+
 func TestDecodeKeepsOnlyValidDeclaredSamplingAndReceiveTime(t *testing.T) {
 	now := time.Now().UTC()
 	for _, tc := range []struct {

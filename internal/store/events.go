@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -373,7 +374,7 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 			serviceImpacts[service] = impact
 		}
 		impact.Spans++
-		if kind == "postgresql_client" {
+		if trace.IsDatabaseTargetSpan(kind) {
 			impact.DatabaseSpans++
 		}
 		if spanStatus == "error" {
@@ -399,9 +400,11 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		addNode(serviceNode, "service", service,
 			"/api/assets/"+event.AssetID+"/traces/"+traceID, at)
 		spanType := "service_span"
-		if kind == "postgresql_client" {
+		if trace.IsDatabaseTargetSpan(kind) {
 			databaseSpans++
 			spanType = "db_client_span"
+		}
+		if kind == "postgresql_client" {
 			if parentID != nil && !timingAnomaly {
 				item := traceDBSpan{
 					Node: spanNode, Parent: "span:" + traceID + ":" + *parentID,
@@ -421,6 +424,9 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		}
 		edges = append(edges, map[string]string{"from": serviceNode, "to": spanNode, "relation": "emitted"},
 			map[string]string{"from": eventNode, "to": spanNode, "relation": timeRelation})
+		if trace.IsDatabaseTargetSpan(kind) && kind != "postgresql_client" {
+			edges = append(edges, map[string]string{"from": spanNode, "to": assetNode, "relation": "observed_endpoint"})
+		}
 		if kind == "postgresql_client" {
 			if route == "pgbouncer" {
 				poolerNode := "pooler:" + event.AssetID
@@ -577,10 +583,14 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	if len(candidates) > 0 {
 		status = "candidates"
 	}
+	dependencies, err := s.incidentDependencies(ctx, event, observedSpans, samples)
+	if err != nil {
+		return nil, err
+	}
 	analysis := map[string]any{
 		"status": status, "graph": map[string]any{"nodes": nodes, "edges": edges},
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
-		"ruleSuppressedCount": len(hidden),
+		"ruleSuppressedCount": len(hidden), "dependencies": dependencies,
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
 			"unresolvedParentSpans": unresolvedParentSpans,
 			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,

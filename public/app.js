@@ -4116,6 +4116,107 @@ function eventLogSearch(event, refreshEvent) {
   return panel;
 }
 
+function incidentDependencyPanel(data, event) {
+  const panel = cell('section', '', 'incident-dependency');
+  panel.append(cell('h4', '跨数据库调用与基础设施证据'));
+  const labels = {postgres:'PostgreSQL',mysql:'MySQL',dm8:'达梦 DM8',kingbase:'金仓 V9',redis:'Redis',etcd:'etcd'};
+  const millis = value => Number.isFinite(value) ? `${value.toFixed(2)} ms` : '未采集';
+  const modal = cell('dialog', '', 'log-dialog log-raw');
+  const content = cell('div', '');
+  const close = cell('button', '返回当前事件', 'ghost');
+  close.type = 'button';
+  close.addEventListener('click', () => modal.close());
+  modal.append(cell('h3', '原始 Trace'), content, close);
+  panel.append(modal);
+  async function showTrace(call) {
+    content.replaceChildren(cell('p', '正在读取 Trace…'));
+    if (!modal.open) modal.showModal();
+    try {
+      const result = await api(`/api/assets/${call.assetId}/traces/${call.traceId}`);
+      if (!modal.open) return;
+      content.replaceChildren(cell('p', call.traceId, 'hint'), importTable(['服务','Span','父 Span','开始时间','耗时','状态'],
+        result.spans.map(span => [span.service, span.spanId, span.parentSpanId || '根 Span', formatTime(span.start),
+          millis(Date.parse(span.end) - Date.parse(span.start)), span.status === 'error' ? '错误' : '正常'])));
+    } catch (error) {
+      if (modal.open) content.replaceChildren(cell('p', error.message, 'warning'));
+    }
+  }
+  if (data.calls?.length) {
+    const filters = cell('div', '', 'incident-dependency-filters');
+    const results = cell('div', '', 'incident-dependency-results');
+    const select = (label, values) => {
+      const field = cell('label', label);
+      const picker = cell('select', '');
+      const all = cell('option', '全部'); all.value = ''; picker.append(all);
+      for (const [key, name] of values) {
+        const option = cell('option', name); option.value = key; picker.append(option);
+      }
+      field.append(picker); filters.append(field);
+      picker.addEventListener('change', render);
+      return picker;
+    };
+    const service = select('应用服务', new Map(data.calls.map(call => [call.service, call.service])));
+    const engine = select('数据库引擎', new Map(data.calls.map(call => [call.engine, labels[call.engine] || call.engine])));
+    const asset = select('纳管实例', new Map(data.calls.map(call => [call.assetId, call.asset])));
+    function render() {
+      const requests = new Map();
+      for (const call of data.calls) {
+        if ((service.value && service.value !== call.service) || (engine.value && engine.value !== call.engine) ||
+            (asset.value && asset.value !== call.assetId)) continue;
+        const key = call.traceId + ':' + call.parentId;
+        if (!requests.has(key)) requests.set(key, []);
+        requests.get(key).push(call);
+      }
+      results.replaceChildren();
+      for (const group of requests.values()) {
+        const chain = cell('section', '', 'incident-dependency-chain');
+        const request = cell('div', '', 'incident-dependency-source');
+        request.append(cell('strong', group[0].service), cell('small', `Trace ${group[0].traceId}`));
+        chain.append(request);
+        for (const call of group) {
+          const step = cell('article', '', 'incident-dependency-step');
+          step.dataset.state = call.status;
+          step.append(cell('strong', `${labels[call.engine] || call.engine} · ${call.asset}`),
+            cell('p', `已匹配调用端点 · ${millis(call.durationMs)} · ${call.status === 'error' ? '调用异常' : '调用完成'}`));
+          const actions = cell('div', '', 'log-actions');
+          const trace = cell('button', '查看 Trace', 'ghost small-button');
+          trace.type = 'button'; trace.addEventListener('click', () => void showTrace(call));
+          actions.append(trace);
+          if (call.sample) {
+            const {linux, devices, containers, podUid, pvcs, fingerprint, evictions, hitPercent} = call.sample;
+            const signals = [linux && `Linux · ${devices} 个磁盘`, podUid && `Pod ${podUid}`, pvcs && `${pvcs} 个 PVC`,
+              containers && `${containers} 个容器`, fingerprint && `SQL 指纹 ${fingerprint}`,
+              evictions != null && `窗口淘汰 ${evictions}`, hitPercent != null && `命中率 ${hitPercent.toFixed(1)}%`].filter(Boolean);
+            step.append(cell('small', `同期采样 ${formatTime(call.sample.at)}${signals.length ? ' · ' + signals.join(' · ') : ''}`));
+            actions.append(replaySampleLink(call.assetId, call.sample.id));
+          } else step.append(cell('small', '该调用附近无可用原始采样'));
+          step.append(actions); chain.append(step);
+        }
+        results.append(chain);
+      }
+      if (!requests.size) results.append(cell('p', '当前筛选没有调用。', 'empty'));
+    }
+    render();
+    panel.append(filters, results, cell('small', '同组调用共享 Trace 和已观测的父 Span。同期指标需要结合原始证据核实。'));
+    if (data.limited) panel.append(cell('small', '显示范围为最近 12 条 Trace、最多 64 条调用。'));
+  }
+  if (data.controlPlane) {
+    const path = data.controlPlane;
+    const chain = cell('section', '', 'incident-dependency-chain');
+    for (const [label, value] of [
+      ['Kubernetes API Server', path.context ? `${path.context} · etcd 请求 ${millis(path.apiMeanMs)}` : 'API Server 指标未采集'],
+      ['etcd', `${path.member || '成员身份未采集'} · WAL fsync ${millis(path.walMeanMs)} · 后端提交 ${millis(path.commitMeanMs)}`],
+      ['Linux 磁盘', path.linux ? `${path.linux} · ${path.devices} 个磁盘` : '主机磁盘未采集']
+    ]) {
+      const step = cell('article', '', 'incident-dependency-step');
+      step.append(cell('strong', label), cell('p', value)); chain.append(step);
+    }
+    panel.append(chain, cell('small', '使用已配置的 Kubernetes Context、etcd 成员和主机关联核对同窗观测。'),
+      replaySampleLink(event.assetId, path.sampleId));
+  }
+  return panel;
+}
+
 async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const request = ++eventRequest;
   const params = investigationParams(id);
@@ -4343,7 +4444,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (analysis.traceCoverage) {
     const coverage = analysis.traceCoverage;
     diagnosis.append(cell('small', coverage.spans
-      ? `应用链路：${coverage.services.join('、')} · ${coverage.databaseSpans} 条 PostgreSQL 客户端 Span。`
+      ? `应用链路：${coverage.services.join('、')} · ${coverage.databaseSpans} 条数据服务客户端 Span。`
       : '应用链路：事件时间窗内无 Trace；数据库、Linux 与 K8S 侧诊断仍可使用。'));
     if (coverage.spans) {
       const declared = coverage.sampling;
@@ -4363,6 +4464,9 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     `链路断点：${analysis.traceCoverage.unresolvedParentSpans} 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；可能由采样、延迟或时间窗造成。`));
   if (analysis.traceCoverage?.requestPaths?.length) {
     diagnosis.append(traceRequestEvidence(analysis.traceCoverage.requestPaths, event.assetId, analysis.traceCoverage.requestPathsAtLimit));
+  }
+  if (analysis.dependencies?.calls?.length || analysis.dependencies?.controlPlane) {
+    diagnosis.append(incidentDependencyPanel(analysis.dependencies, event));
   }
   if (analysis.traceCoverage?.serviceImpact?.length) {
     const impact = document.createElement('details'); impact.append(cell('summary', '查看应用请求关联证据'));
@@ -5094,8 +5198,8 @@ $('runtime').addEventListener('change', (event) => {
       : !k8s && child.querySelector?.('[name=k8sCluster]') === null;
   }
   for (const field of document.querySelectorAll('.linux-field')) {
-    field.hidden = !linux && !nativeHA;
-    field.querySelector('input').disabled = !linux && !nativeHA;
+    field.hidden = !linux && !nativeHA && !redis && !etcd;
+    field.querySelector('input').disabled = field.hidden;
   }
   for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s && !nativeHA && (!etcd || field.name !== 'k8sCluster');
   $('asset-form').elements.k8sCluster.required = k8s;

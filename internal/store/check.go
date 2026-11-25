@@ -186,11 +186,11 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		return s.checkKingbase(ctx, id, target, password, lease, interval, infra)
 	}
 	if runtime == assets.RuntimeRedis {
-		return s.checkRedis(ctx, id, target, password, lease, interval)
+		return s.checkRedis(ctx, id, target, password, lease, interval, nativeInfraTarget{host: linuxHost, exporterPort: exporterPort})
 	}
 	if runtime == assets.RuntimeEtcd {
 		target.KubernetesCluster = dereference(k8sCluster)
-		return s.checkEtcd(ctx, id, target, password, lease, interval)
+		return s.checkEtcd(ctx, id, target, password, lease, interval, nativeInfraTarget{host: linuxHost, exporterPort: exporterPort})
 	}
 	poolerURL := ""
 	if poolerEncrypted != nil {

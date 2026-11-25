@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/collector"
+	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -18,13 +19,10 @@ const (
 	etcdDiskGroup   = "etcd_disk_latency"
 )
 
-func (s *Postgres) checkEtcd(ctx context.Context, id string, target collector.Target, token string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
-	started := time.Now()
-	if lease != nil {
-		lease.startedAt = started
-	}
-	snapshot, err := (collector.EtcdAdapter{}).Collect(ctx, target, token)
-	lease.recordQueryDuration(started)
+func (s *Postgres) checkEtcd(ctx context.Context, id string, target collector.Target, token string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
+		return (collector.EtcdAdapter{}).Collect(ctx, target, token)
+	})
 	group, reason := "", ""
 	metrics := snapshot.Metrics
 	if err != nil {
@@ -37,7 +35,7 @@ func (s *Postgres) checkEtcd(ctx context.Context, id string, target collector.Ta
 		default:
 			group, reason = "availability", "etcd 观测端点不可达"
 		}
-		metrics = map[string]any{"collector": map[string]any{"etcdStatus": group}}
+		metrics["collector"] = map[string]any{"etcdStatus": group}
 	} else {
 		metrics["adapter"] = snapshot.Report
 		metrics["collector"] = map[string]any{"etcdStatus": "ok"}

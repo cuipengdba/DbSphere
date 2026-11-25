@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/collector"
+	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,13 +19,10 @@ const (
 	redisSlotsGroup    = "redis_slots_unhealthy"
 )
 
-func (s *Postgres) checkRedis(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
-	started := time.Now()
-	if lease != nil {
-		lease.startedAt = started
-	}
-	snapshot, err := (collector.RedisAdapter{}).Collect(ctx, target, password)
-	lease.recordQueryDuration(started)
+func (s *Postgres) checkRedis(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
+		return (collector.RedisAdapter{}).Collect(ctx, target, password)
+	})
 	group, reason := "", ""
 	metrics := snapshot.Metrics
 	if err != nil {
@@ -41,7 +39,7 @@ func (s *Postgres) checkRedis(ctx context.Context, id string, target collector.T
 		default:
 			group, reason = "availability", "Redis connection or collection failed"
 		}
-		metrics = map[string]any{"collector": map[string]any{"redisStatus": group}}
+		metrics["collector"] = map[string]any{"redisStatus": group}
 	} else {
 		metrics["adapter"] = snapshot.Report
 		metrics["collector"] = map[string]any{"redisStatus": "ok"}

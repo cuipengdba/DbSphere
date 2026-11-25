@@ -18,7 +18,8 @@ import (
 )
 
 func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc,pooler_endpoint FROM assets`)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc,pooler_endpoint,
+		CASE WHEN runtime IN ('mysql','redis','etcd','dm8','kingbase') THEN runtime ELSE 'postgres' END FROM assets`)
 	if err != nil {
 		return nil, fmt.Errorf("list OTLP asset identities: %w", err)
 	}
@@ -29,7 +30,7 @@ func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, 
 		var poolerEncrypted *string
 		var poolerEndpoint *string
 		if err := rows.Scan(&asset.ID, &asset.Host, &asset.Port, &asset.Database,
-			&poolerEncrypted, &poolerEndpoint); err != nil {
+			&poolerEncrypted, &poolerEndpoint, &asset.Engine); err != nil {
 			return nil, err
 		}
 		if poolerEndpoint != nil {
