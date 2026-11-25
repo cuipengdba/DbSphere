@@ -1070,7 +1070,22 @@ async function v3Investigation(page, asset) {
     await visible(owner.locator('#event-detail'), '已接手');
     assert.equal((await request(owner, handoff + '/accept', 'POST', {assignedAt: assignment.assignedAt})).status, 200);
     assert((await request(owner, handoff)).data.assignment.acceptedAt);
-    proof.push('Configured and disabled a loopback model from the browser, verified preview and citation, isolated team views, followed cross-layer identity, and accepted the same incident as a named operator');
+    const recovery = randomUUID();
+    runFixtureSQL(`UPDATE events SET status='resolved',ended_at=now() WHERE id='${event}';
+      INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+      VALUES ('${recovery}','${asset}',now(),'ok','{"connections":5}');
+      INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+      VALUES (gen_random_uuid(),'${event}','alert_recovered',now(),jsonb_build_object('sampleId','${recovery}'::text));`);
+    await owner.reload();
+    await visible(owner.locator('#event-detail'), '已恢复');
+    await owner.getByRole('button', {name: '处置', exact: true}).click();
+    await owner.getByLabel('记录类型').selectOption('recovery_verification');
+    assert.equal(await owner.getByLabel('成功采样 ID').inputValue(), recovery);
+    await owner.getByLabel('处理记录（5–500 字）').fill('恢复采样显示连接已恢复正常');
+    await action(owner, owner.getByRole('button', {name: '保存到事件时间线'}), 'POST', '/api/events/' + event + '/response', 200);
+    const report = await owner.evaluate(async eventID => fetch('/api/events/' + eventID + '/report?format=md').then(response => response.text()), event);
+    assert(report.includes(event) && report.includes('v3-owner 已确认接手') && report.includes('恢复采样显示连接已恢复正常') && report.includes(recovery));
+    proof.push('Configured and disabled a loopback model, verified reviewed evidence, scoped team views, followed cross-layer identity, and verified handoff and recovery in the same incident report');
   } finally {
     await Promise.all([owner.close(), recipient.close(), outsider.close()]);
     await new Promise(resolve => model.close(resolve));

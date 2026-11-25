@@ -194,6 +194,7 @@
       const selected = views.find(view => view.id === savedView);
       select.value = savedView;
       get('delete-view').disabled = !selected?.canEdit;
+      get('save-view').hidden = !canSave;
       get('save-view-button').disabled = !canSave;
       get('import-views').hidden = !canSave || !browserViews().some(view =>
         !views.some(existing => !existing.teamId && existing.name === view.name));

@@ -7,12 +7,12 @@ if [[ $# -ne 2 || "$1" != /* || "$2" != /* || ! -f "$1" ]]; then
 fi
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 binary="$(basename -- "$1")"
-if [[ ! "$binary" =~ ^DbSphere-go-([0-9]+\.[0-9]+\.[0-9]+)-linux-(amd64|arm64)$ ]]; then
-  echo 'The static binary filename must include the released version and Linux architecture.' >&2
+if [[ ! "$binary" =~ ^DbSphere-go-([0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?)-linux-(amd64|arm64)$ ]]; then
+  echo 'The static binary filename must include the package version and Linux architecture.' >&2
   exit 1
 fi
 version="${BASH_REMATCH[1]}"
-arch="${BASH_REMATCH[2]}"
+arch="${BASH_REMATCH[3]}"
 out="$2"
 mkdir -p -- "$out"
 stage="$(mktemp -d "$out/.systemd.XXXXXX")"

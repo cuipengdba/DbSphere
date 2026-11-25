@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +27,7 @@ type eventReportData struct {
 		Recovery   *replayPoint       `json:"recovery"`
 		Points     []replayPoint      `json:"points"`
 		Comparison []replayComparison `json:"comparison"`
+		Peak       *investigationPeak `json:"peak"`
 	} `json:"replay"`
 	Analysis struct {
 		Status         string   `json:"status"`
@@ -511,7 +513,7 @@ func renderEventMarkdown(data eventReportData) string {
 	out.WriteString("## 处置与恢复验证\n\n")
 	responseCount := 0
 	for _, evidence := range event.Evidence {
-		if evidence.Kind != "operator_response" && evidence.Kind != "recovery_verified" {
+		if evidence.Kind != "operator_response" && evidence.Kind != "recovery_verified" && evidence.Kind != "event_handoff" {
 			continue
 		}
 		var payload map[string]any
@@ -519,9 +521,21 @@ func renderEventMarkdown(data eventReportData) string {
 			continue
 		}
 		responseCount++
-		fmt.Fprintf(&out, "- %s · %s · 证据 %s · 成功采样 %s：%s\n",
-			reportTime(&evidence.ObservedAt), reportText(stringValue(payload["phase"])), evidence.ID,
-			reportText(stringValue(payload["sampleId"])), reportText(stringValue(payload["note"])))
+		fmt.Fprintf(&out, "- %s · 证据 %s · ", reportTime(&evidence.ObservedAt), evidence.ID)
+		if evidence.Kind == "event_handoff" {
+			actor, assignee := reportText(stringValue(payload["actor"])), reportText(stringValue(payload["assignedTo"]))
+			if stringValue(payload["action"]) == "accepted" {
+				fmt.Fprintf(&out, "%s 已确认接手\n", actor)
+			} else {
+				fmt.Fprintf(&out, "%s 交接给 %s：%s\n", actor, assignee, reportText(stringValue(payload["note"])))
+			}
+			continue
+		}
+		fmt.Fprintf(&out, "%s · %s", reportText(stringValue(payload["phase"])), reportText(stringValue(payload["actor"])))
+		if sampleID := stringValue(payload["sampleId"]); evidenceUUID.MatchString(sampleID) {
+			fmt.Fprintf(&out, " · [成功采样 %s](/api/assets/%s/samples/%s)", sampleID, event.AssetID, sampleID)
+		}
+		fmt.Fprintf(&out, "：%s\n", reportText(stringValue(payload["note"])))
 	}
 	if responseCount == 0 {
 		out.WriteString("暂无人工处置或恢复验证记录。\n")
@@ -622,10 +636,18 @@ func renderEventMarkdown(data eventReportData) string {
 
 func writeComparisonMarkdown(out *strings.Builder, data eventReportData) {
 	event := data.Event
-	if len(data.Replay.Comparison) > 0 {
-		out.WriteString("## 故障前、触发与恢复采样对照\n\n| 阶段 | 时间 | 连接 | 阻塞 | 池等待 | 回放差距（字节） | Pod 未就绪 | 样本 |\n|---|---|---|---|---|---|---|---|\n")
-		phases := map[string]string{"before": "故障前", "during": "故障期间", "after": "恢复后"}
-		for _, sample := range data.Replay.Comparison {
+	rows := slices.Clone(data.Replay.Comparison)
+	if data.Replay.Peak != nil {
+		index := slices.IndexFunc(rows, func(sample replayComparison) bool { return sample.Phase == "after" })
+		if index < 0 {
+			index = len(rows)
+		}
+		rows = slices.Insert(rows, index, data.Replay.Peak.replayComparison)
+	}
+	if len(rows) > 0 {
+		out.WriteString("## 故障前、触发、峰值与恢复采样对照\n\n| 阶段 | 时间 | 连接 | 阻塞 | 池等待 | 回放差距（字节） | Pod 未就绪 | 样本 |\n|---|---|---|---|---|---|---|---|\n")
+		phases := map[string]string{"before": "故障前", "during": "故障期间", "after": "恢复后", "peak": "峰值"}
+		for _, sample := range rows {
 			fmt.Fprintf(out, "| %s | %s |", phases[sample.Phase], reportTime(sample.At))
 			for _, key := range []string{"connections", "blockedSessions", "poolWaiting", "replicationLagBytes", "podUnready"} {
 				if value, ok := sample.Metrics[key]; ok {

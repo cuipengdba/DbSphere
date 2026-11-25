@@ -173,10 +173,10 @@ button{background:var(--brand-fill)}
 
 .response-form{display:grid;gap:10px;margin:18px 0;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--soft)}.response-form h4{margin:0}.response-form label{display:grid;gap:5px;font-size:13px;color:var(--muted)}.response-form select,.response-form input,.response-form textarea{width:100%;border:1px solid var(--control-border);border-radius:8px;padding:9px 10px;background:var(--surface);color:var(--text);font:inherit}.response-form textarea{resize:vertical}.response-form button{justify-self:start}.response-form [hidden]{display:none}
 
-.header-session{display:flex;align-items:center;gap:10px}.header-session span{font-size:12px;color:var(--muted);background:var(--soft);border-radius:14px;padding:5px 9px}body[data-role=viewer] #workspace form,body[data-role=viewer] #workspace .write-action{display:none!important}
+.header-session{display:flex;align-items:center;gap:10px}.header-session span{font-size:12px;color:var(--muted);background:var(--soft);border-radius:14px;padding:5px 9px}body[data-role=viewer] #workspace form:not([data-board=save-view]),body[data-role=viewer] #workspace .write-action{display:none!important}
 
 body[data-role=viewer] section.panel:has(> #asset-form),body[data-role=viewer] section.panel:has(> #silence-form){display:none}body[data-role=viewer] div.grid[data-view=assets],body[data-role=viewer] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}
-body[data-role=approver] #workspace form,body[data-role=approver] #workspace .write-action{display:none!important}
+body[data-role=approver] #workspace form:not([data-board=save-view]),body[data-role=approver] #workspace .write-action{display:none!important}
 body[data-role=approver] section.panel:has(> #asset-form),body[data-role=approver] section.panel:has(> #silence-form){display:none}body[data-role=approver] div.grid[data-view=assets],body[data-role=approver] div.grid.lower[data-view=alerts]{grid-template-columns:1fr}
 .work-order-card small{display:block;overflow-wrap:anywhere;margin-top:5px}.work-order-card button{margin:9px 8px 0 0}
 

@@ -175,7 +175,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 				value := point
 				recovery = &value
 			}
-		case "operator_response", "event_acknowledged", "rca_decision", "work_order_executed",
+		case "operator_response", "event_acknowledged", "event_handoff", "rca_decision", "work_order_executed",
 			"notification_delivery", "notification_retry":
 			point.Stage, point.Strength = "response", "record"
 		case "ai_advisory":
