@@ -130,6 +130,12 @@
   function graph(title, window, buckets, events, format, stacked = false) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
+    const header = el('div', null, 'monitor-graph-header');
+    header.append(card.firstElementChild);
+    card.append(header);
+    const content = el('div', null, 'monitor-graph-content');
+    card.append(content);
+    const zoom = chartZoom(card, header, content, title, window);
     const width = 600, height = 154, left = window.compactPlot ? 150 : 92, right = 19, top = 13, bottom = 126;
     const area = width - left - right;
     const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
@@ -166,7 +172,7 @@
       label.textContent = `${event.title} · ${end ? '恢复' : '开始'}`;
       const marker = svg('g', { class: 'monitor-mark' });
       marker.append(label, mark, svg('circle', { cx: position, cy: top, r: 4, fill: end ? 'var(--ok-line)' : 'var(--issue-line)' }));
-      marker.addEventListener('click', () => window.openEvent(event.id));
+      marker.addEventListener('click', () => { zoom.close(); window.openEvent(event.id); });
       marks.push(marker);
     }
     const previous = new Map();
@@ -209,7 +215,7 @@
     chart.append(cursor, brush, ...marks);
     frame.tabIndex = 0;
     frame.setAttribute('role', 'group');
-    frame.setAttribute('aria-label', `${title}，用左右方向键查看时间桶`);
+    frame.setAttribute('aria-label', `${title}，用左右方向键查看时间桶，按回车放大`);
     detail.setAttribute('aria-live', 'polite');
     let selected = buckets.findLastIndex(Boolean);
     const show = index => {
@@ -223,7 +229,7 @@
       const observed = point?.observed == null ? '' : ` · 有效采样 ${point.observed}/${point.samples}`;
       detail.textContent = `${timestamp} · ${point ? (values.join(' / ').trim() || format(0)) + observed : '该时间桶无可用采样'}`;
     };
-    let start = null;
+    let start = null, drag = false, startX;
     const indexAt = event => {
       const rect = chart.getBoundingClientRect();
       const logical = (event.clientX - rect.left) * width / rect.width;
@@ -235,6 +241,8 @@
     frame.addEventListener('pointerdown', event => {
       if (event.button || event.pointerType === 'touch' || event.target.closest('.monitor-mark')) return;
       start = indexAt(event);
+      startX = event.clientX;
+      drag = false;
       frame.setPointerCapture(event.pointerId);
     });
     frame.addEventListener('pointermove', event => {
@@ -247,7 +255,8 @@
     frame.addEventListener('pointerup', event => {
       if (start === null) return;
       const index = indexAt(event);
-      if (index !== start) window.zoom(
+      drag = Math.abs(event.clientX - startX) >= 5 && index !== start;
+      if (drag) window.zoom(
         Math.max(window.from, window.first + Math.min(start, index) * window.bucketMs),
         Math.min(window.to, window.first + (Math.max(start, index) + 1) * window.bucketMs)
       );
@@ -256,7 +265,14 @@
       brush.setAttribute('width', 0);
     });
     frame.addEventListener('pointercancel', () => { start = null; brush.setAttribute('width', 0); });
+    frame.addEventListener('click', event => {
+      if (!drag && !event.target.closest('.monitor-mark')) zoom.open(frame);
+      drag = false;
+    });
     frame.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault(); zoom.open(frame); return;
+      }
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();
       move(selected + (event.key === 'ArrowLeft' ? -1 : 1));
@@ -265,9 +281,37 @@
       window.cursors.add(show);
       show(selected >= 0 ? selected : 0);
       frame.append(chart, axis);
-      card.append(frame, detail);
-    } else card.append(el('p', '所选时段暂无此指标。', 'monitor-empty'));
+      content.append(frame, detail);
+    } else content.append(el('p', '所选时段暂无此指标。', 'monitor-empty'));
     return card;
+  }
+
+  function chartZoom(card, header, content, title, time) {
+    let dialog;
+    const expand = button('放大查看', () => open(expand));
+    expand.setAttribute('aria-label', `放大查看 · ${title}`);
+    expand.setAttribute('aria-haspopup', 'dialog');
+    header.append(expand);
+    function open(source) {
+      if (dialog) return;
+      dialog = el('dialog', null, 'monitor-graph-dialog');
+      dialog.setAttribute('aria-label', `${title} · 放大查看`);
+      const bar = el('div', null, 'monitor-graph-header');
+      const close = button('关闭', () => dialog.close());
+      bar.append(el('h3', title), close);
+      const range = [time.from, time.to].map(at => new Date(at).toLocaleString('zh-CN')).join(' — ');
+      dialog.append(bar, el('p', range, 'monitor-note'), content);
+      card.append(dialog);
+      dialog.addEventListener('close', () => {
+        dialog.before(content);
+        dialog.remove();
+        dialog = null;
+        if (card.isConnected) source.focus({ preventScroll: true });
+      }, { once: true });
+      dialog.showModal();
+      (source === expand ? close : source).focus({ preventScroll: true });
+    }
+    return { open, close: () => dialog?.close() };
   }
 
   function windowFor(range, fixed) {
@@ -835,7 +879,8 @@
     }
 
     function fleetTimeline(time, selected, records, events, picker) {
-      const card = panel('可用性与事件时间条');
+      const title = '可用性与事件时间条';
+      const card = panel(title);
       card.classList.add('cluster-timeline');
       const heading = el('div', null, 'cluster-heading');
       heading.append(card.firstElementChild, picker);
@@ -845,6 +890,8 @@
       for (const [value, label] of Object.entries(states)) legend.append(el('span', label, `cluster-state cluster-state-${value}`));
       legend.append(el('span', '上排 PG · 下排采集'));
       const tracks = el('div', null, 'cluster-tracks');
+      const content = el('div', null, 'monitor-track-content');
+      const zoom = chartZoom(card, heading, content, title, time);
       const footer = el('div', null, 'cluster-bucket');
       const observation = el('small');
       const evidence = el('span');
@@ -876,7 +923,7 @@
         track.append(plot);
         const eventsForAsset = events.filter(event => event.assetId === asset.id);
         for (const { event, at, end } of eventPoints(eventsForAsset, time)) {
-          const mark = button(end ? '恢复' : '故障', () => time.openEvent(event.id), `cluster-marker ${end ? 'recovered' : ''}`);
+          const mark = button(end ? '恢复' : '故障', () => { zoom.close(); time.openEvent(event.id); }, `cluster-marker ${end ? 'recovered' : ''}`);
           mark.setAttribute('aria-label', `${event.title} · ${end ? '恢复' : '开始'} · ${formatTime(at)}`);
           mark.title = mark.getAttribute('aria-label');
           mark.style.left = `${(at - time.first) * 100 / (time.count * time.bucketMs)}%`;
@@ -910,18 +957,24 @@
           show(Math.floor((event.clientX - rect.left) * time.count / rect.width));
         };
         track.addEventListener('pointermove', inspectAt);
-        track.addEventListener('click', event => { if (!event.target.closest('.cluster-marker')) inspectAt(event); });
+        track.addEventListener('click', event => {
+          if (event.target.closest('.cluster-marker')) return;
+          inspectAt(event); zoom.open(track);
+        });
         track.addEventListener('focus', () => show(index));
         track.addEventListener('keydown', event => {
-          if (event.target !== track || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+          if (event.target !== track) return;
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); zoom.open(track); return; }
+          if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
           event.preventDefault();
           show(index + (event.key === 'ArrowLeft' ? -1 : 1));
         });
-        row.append(button(asset.name, () => openInstance(asset.id), 'monitor-link'), track);
+        row.append(button(asset.name, () => { zoom.close(); openInstance(asset.id); }, 'monitor-link'), track);
         tracks.append(row);
       }
       observation.setAttribute('aria-live', 'polite');
-      card.append(tracks, legend, footer);
+      content.append(tracks, legend, footer);
+      card.append(content);
       return card;
     }
 
@@ -1276,6 +1329,10 @@
       if (baseline) card.append(sqlComparison(performance, evidence.baseline, time));
       if (!queryId) return card;
       const trail = panel('同窗慢日志、执行计划与应用 Trace');
+      const latency = evidence.percentiles?.find(row => row.database === evidence.database);
+      trail.append(el('p', latency?.samples ? `同窗慢日志 · ${latency.samples} 条 · P95 ${milliseconds(latency.p95Ms)} · P99 ${milliseconds(latency.p99Ms)}。仅覆盖已入库且匹配数据库及 Query ID 的耗时记录。` :
+        '所选数据库和 Query ID 无可用耗时样本，P95 / P99 暂无数据。', 'monitor-note'));
+      const initialTrailSize = trail.children.length;
       for (const [kind, items] of [
         ['slow-logs', evidence?.entries || []],
         ['sql-plans', (evidence?.plans || []).filter(plan => Date.parse(plan.observedAt) >= time.from && Date.parse(plan.observedAt) < time.to)]
@@ -1306,7 +1363,7 @@
         const row = el('p', `${formatTime(trace.firstAt)} · ${trace.services.join(' / ')} · ${trace.databaseSpans} 条 PG Span · `, 'monitor-note');
         row.append(origin); trail.append(row);
       }
-      if (trail.children.length === 1) trail.append(el('p', '所选时段没有已纳管的匹配证据。', 'monitor-empty'));
+      if (trail.children.length === initialTrailSize) trail.append(el('p', '所选时段没有已纳管的匹配证据。', 'monitor-empty'));
       trail.append(button('查看实例的执行计划留存', () => openPlans(instance)));
       card.append(trail);
       return card;
@@ -1351,7 +1408,95 @@
       if (peak.load > 0) split.lastElementChild.append(button(`查峰值锁链 · ${formatTime(peak.at)}`, () => {
         lockPick = ''; lockAt = peak.at; mode = 'locks'; change();
       }));
-      return split;
+      const result = document.createDocumentFragment();
+      result.append(split, waitHeatmap(rows, time));
+      return result;
+    }
+
+    function waitHeatmap(rows, time) {
+      const card = panel('等待热力图');
+      const byTime = new Map(rows.map(row => [Date.parse(row.bucket), row]));
+      const bins = Array.from({ length: time.count }, (_, index) => byTime.get(time.first + index * time.bucketMs));
+      const groups = new Map();
+      const totals = bins.map(row => row?.observed ? row.groups.reduce((sum, entry) => {
+        const key = waitKey(entry);
+        const group = groups.get(key) || { label: waitName(entry), sum: 0 };
+        group.sum += entry.averageSessions * row.observed;
+        groups.set(key, group);
+        return sum + entry.averageSessions;
+      }, 0) : null);
+      if (!bins.some(row => row?.observed)) {
+        card.append(el('p', '所选窗口没有有效等待采样。', 'monitor-empty'));
+        return card;
+      }
+      const names = [...groups].sort((a, b) => b[1].sum - a[1].sum).slice(0, 6);
+      const peak = Math.max(...totals);
+      const timestamp = index => Math.max(time.from, time.first + index * time.bucketMs);
+      const marker = el('p', null, 'monitor-note');
+      marker.setAttribute('aria-live', 'polite');
+      const controls = el('div', null, 'monitor-wait-controls');
+      const viewport = el('div', null, 'monitor-heatmap');
+      const pageSize = 36;
+      let index = totals.lastIndexOf(peak), offset = Math.floor(index / pageSize) * pageSize;
+      const previous = button('前一组时间桶', () => { offset -= pageSize; draw(); });
+      const next = button('后一组时间桶', () => { offset += pageSize; draw(); });
+      const lock = button('查选中时间桶的锁链', () => { lockAt = timestamp(index); lockPick = ''; mode = 'locks'; change(); });
+      controls.append(previous, next, lock);
+      const at = i => new Date(timestamp(i)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      const sync = i => {
+        index = i;
+        const row = bins[i];
+        marker.textContent = `${formatTime(timestamp(i))} · ${row?.observed ? `平均活跃会话 ${number(totals[i], 3)} · 有效快照 ${row.observed}/${row.samples}` : '无可用等待快照'}`;
+        for (const cell of viewport.querySelectorAll('[data-bin]')) {
+          const selected = Number(cell.dataset.bin) === i;
+          cell.setAttribute('aria-pressed', String(selected));
+        }
+      };
+      const draw = () => {
+        const indices = Array.from({ length: Math.min(pageSize, bins.length - offset) }, (_, i) => i + offset);
+        previous.disabled = offset === 0;
+        next.disabled = offset + pageSize >= bins.length;
+        const series = [['合计', totals], ...names.map(([key, group]) => [group.label, bins.map(row =>
+          row?.observed ? row.groups.find(entry => waitKey(entry) === key)?.averageSessions || 0 : null)])];
+        const rows = series.map(([label, values]) => [label, ...indices.map(i => {
+          const value = values[i];
+          const level = value == null ? 'gap' : value === 0 ? 0 : Math.ceil(value * 4 / peak);
+          const cell = button(value == null ? '·' : number(value, 2), () => {
+            for (const cursor of time.cursors) cursor(i);
+          }, `monitor-heat-cell heat-${level}`);
+          cell.dataset.bin = i;
+          cell.tabIndex = i === indices[0] ? 0 : -1;
+          cell.title = `${label} · ${formatTime(timestamp(i))} · ${value == null ? '无采样' : `${number(value, 3)} 会话`}`;
+          cell.setAttribute('aria-label', cell.title);
+          cell.addEventListener('keydown', event => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+            event.preventDefault();
+            const sibling = event.key === 'ArrowLeft' ? cell.parentElement.previousElementSibling : cell.parentElement.nextElementSibling;
+            sibling?.firstElementChild?.focus();
+          });
+          return cell;
+        })]);
+        viewport.replaceChildren(table(['分组', ...indices.map(at)], rows, '每桶平均活跃会话'));
+        sync(index);
+      };
+      draw();
+      time.cursors.add(sync);
+      card.append(el('p', '颜色越亮表示平均活跃会话越多。0 表示采到了快照，点号表示无可用采样。点击时间桶联动资源图和锁链。', 'monitor-note'), controls, marker, viewport);
+      return card;
+    }
+
+    function waitResources(history, replication, time, events) {
+      const card = panel('同窗资源趋势');
+      if (!history) { card.append(el('p', '资源采样暂不可用。', 'monitor-empty')); return card; }
+      const series = history.series.map(row => ({ bucket: row.bucket, ...row.values,
+        tps: finite(row.values.commits) && finite(row.values.rollbacks) ? row.values.commits + row.values.rollbacks : null,
+        checkpoints: finite(row.values.timed) && finite(row.values.requested) ? row.values.timed + row.values.requested : null }));
+      card.append(metricCharts(series, time, events, [
+        ['activeSessions', '活跃客户端会话', number, palette[0]], ['connectionUsage', '实例连接占用率', percent, palette[1]],
+        ['tps', '事务吞吐', rate, palette[2]], ['tempBytes', '临时写入增量', bytes, palette[3]],
+        ['wal', 'WAL 产生速率', value => `${bytes(value)}/s`, palette[0]], ['checkpoints', '检查点计数增量', number, palette[1]]
+      ]), metricCharts(replication?.series || [], time, events, [['averageReplicationLagBytes', '复制回放差距', bytes, palette[2]]]));
+      return card;
     }
 
     function replicationPanel(asset, history, rows, time, events, topology) {
@@ -2418,7 +2563,7 @@
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
         const showWaitCaptures = ['waits', 'locks'].includes(mode);
-        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture, catalog] = await Promise.all([
+        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture, catalog, resources, waitReplication] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
@@ -2430,7 +2575,9 @@
             .then(value => ({ asset: peer, observations: value.topology })).catch(() => ({ asset: peer, observations: [] })))),
           showWaitCaptures ? api(`${path}wait-captures`).catch(() => null) : null,
           showWaitCaptures && waitCapturePick ? api(`${path}wait-captures?id=${encodeURIComponent(waitCapturePick)}`).catch(() => null) : null,
-          linkedSQL && dbOid ? api(`${path}catalog?${time.params}`).catch(() => null) : null
+          linkedSQL && dbOid ? api(`${path}catalog?${time.params}`).catch(() => null) : null,
+          mode === 'waits' ? api(`${path}instance-history?${time.params}`).catch(() => null) : null,
+          mode === 'waits' ? api(`${path}series?${time.params}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -2483,7 +2630,13 @@
             else { resetWaitFilters(); }
             change();
           }));
-          fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context));
+          void actions.grafanaPerformance?.({ asset, time, back: route(time), event: eventAnchor }).then(url => {
+            if (!url || key !== request || !visible) return;
+            const link = el('a', 'Grafana 等待与 SQL 专题', 'monitor-link');
+            link.href = url;
+            filter.append(link);
+          });
+          fragment.append(filter, waitOverview(data.buckets, time, events, group, followWait, context), waitResources(resources, waitReplication, time, events));
         }
         if (mode === 'sql') {
           const observedDB = catalog?.snapshot?.databases?.data?.databases?.find(row => row.oid === dbOid);

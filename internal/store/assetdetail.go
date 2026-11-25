@@ -63,7 +63,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.changeTimeline(ctx, id, params)
 	case "slow-logs":
 		from, to, err := timeRange(params, 24*time.Hour, 31*24*time.Hour)
-		if err != nil {
+		queryID := params.Get("queryId")
+		if err != nil || len(queryID) > 32 {
 			return nil, err
 		}
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
@@ -75,8 +76,18 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 				AND (e.ended_at IS NULL OR e.ended_at>=l.observed_at-interval '5 minutes')),'[]'::jsonb))
 			FROM slow_log_entries l WHERE l.asset_id=$1 AND l.observed_at>=$2 AND l.observed_at<$3
 			AND ($4::text='' OR l.query_id=$4)
-			ORDER BY l.observed_at DESC LIMIT 100`, id, from, to, params.Get("queryId"))
-		return map[string]any{"entries": values}, err
+			ORDER BY l.observed_at DESC LIMIT 100`, id, from, to, queryID)
+		if err != nil || queryID == "" {
+			return map[string]any{"entries": values}, err
+		}
+		percentiles, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
+			'database',database_name,'samples',count(*),
+			'p95Ms',percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms),
+			'p99Ms',percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms))
+			FROM slow_log_entries WHERE asset_id=$1 AND observed_at>=$2 AND observed_at<$3 AND query_id=$4
+			AND duration_ms>=0 AND duration_ms<'Infinity'::float8
+			GROUP BY database_name ORDER BY count(*) DESC, database_name LIMIT 100`, id, from, to, queryID)
+		return map[string]any{"entries": values, "percentiles": percentiles}, err
 	case "sql-plans":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',p.id,'assetId',p.asset_id,'queryId',p.query_id,

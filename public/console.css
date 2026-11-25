@@ -173,6 +173,28 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .monitor-plot svg { height: 175px; }
 .monitor-focus-chart .monitor-plot svg { height: 245px; }
 .monitor-plot { cursor: crosshair; }
+.monitor-graph-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.monitor-graph-header h3 { margin: 0; }
+.monitor-graph-dialog { box-sizing: border-box; width: min(94vw, 1320px); max-width: none; max-height: 92dvh; overflow: auto; padding: clamp(12px, 2vw, 24px); border: 1px solid var(--control-border); border-radius: 12px; background: var(--surface); color: var(--text); }
+.monitor-graph-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.monitor-graph-dialog .monitor-plot svg { height: clamp(220px, 54dvh, 720px); }
+.monitor-heatmap table { width: max-content; min-width: 100%; }
+.monitor-heatmap td { padding: 2px; }
+.monitor-heatmap td:first-child { padding-inline: 8px; white-space: nowrap; }
+.monitor-heat-cell { display: block; min-width: 38px; width: 100%; min-height: 32px; padding: 4px; border: 1px solid transparent; border-radius: 4px; background: var(--soft); color: var(--text); font: inherit; }
+.monitor-heat-cell.heat-gap { border-style: dashed; border-color: var(--control-border); color: var(--muted); }
+.monitor-heat-cell.heat-1 { background: color-mix(in srgb, var(--plot-cyan) 20%, var(--surface)); }
+.monitor-heat-cell.heat-2 { background: color-mix(in srgb, var(--plot-cyan) 35%, var(--surface)); }
+.monitor-heat-cell.heat-3 { background: color-mix(in srgb, var(--plot-cyan) 52%, var(--surface)); }
+.monitor-heat-cell.heat-4 { background: var(--plot-cyan); color: #091c25; font-weight: 700; }
+.monitor-heat-cell[aria-pressed="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
+.sample-workspace { min-width: 0; }
+.sample-workspace details, .sample-fields { margin: 10px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.sample-workspace summary { cursor: pointer; font-weight: 650; }
+.sample-fields { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); gap: 6px 14px; }
+.sample-fields dt, .sample-fields dd { margin: 0; overflow-wrap: anywhere; }
+.sample-fields dt { color: var(--muted); }
+.sample-workspace pre { max-height: 55dvh; padding: 12px; background: var(--soft); white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
 .monitor-brush { fill: var(--accent-line); opacity: .23; pointer-events: none; }
 .monitor-mark { cursor: pointer; }
 .monitor-event-marker { stroke-width: 1.35; }

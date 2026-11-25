@@ -14,6 +14,7 @@ let selectedAsset = null;
 let selectedAssetLayer = null;
 let selectedAssetTrendHours = 24;
 let assetDetailRequest = 0;
+let sampleRequest;
 let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
@@ -58,6 +59,7 @@ const views = {
   overview: ['全域监控总览', ''],
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
+  sample: ['原始采样', '查看采样时的指标、来源与采集状态。'],
   logs: ['日志分析', '按项目、实例与批次查看日志和原始证据。'],
   grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
@@ -82,7 +84,10 @@ function setView(route, updateHash = true) {
     (view !== 'logs' || nativeOverview && currentRole === 'admin') ? view :
     nativeOverview ? 'wallboard' : 'overview';
   const params = new URLSearchParams(query);
-  if (document.body.dataset.activeView !== selected) notice('');
+  if (document.body.dataset.activeView !== selected) {
+    notice('');
+    for (const dialog of document.querySelectorAll('.monitor-graph-dialog[open]')) dialog.close();
+  }
   document.body.dataset.activeView = selected;
   if (selected !== 'assets' && $('asset-dialog').open) resetEdit();
   for (const section of document.querySelectorAll('[data-view]'))
@@ -115,12 +120,13 @@ function setView(route, updateHash = true) {
   if (selected === 'overview' && (!updateHash || query)) operationsOverview.restore(params);
   showOverview(selected === 'overview');
   showGrafanaView(selected === 'grafana' ? params : null);
+  showSample(selected === 'sample' && currentRole ? params : null);
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() :
       selected === 'wallboard' ? wallboard.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && !['overview', 'live', 'grafana', 'wallboard', 'logs'].includes(selected) && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'live', 'sample', 'grafana', 'wallboard', 'logs'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -494,9 +500,101 @@ async function api(path, method = 'GET', payload, signal) {
   });
   if (response.headers.get('X-DbSphere-Storage') === 'unavailable') showStorageAvailability(false);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw Object.assign(new Error(data.error || `HTTP ${response.status}`), { status: response.status });
   return data;
 }
+
+const sampleUUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const samplePath = /^\/api\/assets\/([0-9a-f-]{36})\/samples\/([0-9a-f-]{36})$/;
+
+async function showSample(params) {
+  sampleRequest?.abort();
+  sampleRequest = null;
+  if (!params) return;
+  const details = $('sample-details'), status = $('sample-status'), download = $('sample-download');
+  const asset = params.get('asset'), id = params.get('sample');
+  const origin = params.get('return') || '';
+  const back = $('sample-return');
+  const backView = origin.split('?')[0];
+  const validReturn = Object.hasOwn(views, backView) && backView !== 'sample';
+  back.href = `#${validReturn ? origin : 'monitoring'}`;
+  back.textContent = `返回${validReturn ? views[backView][0] : '监控工作台'}`;
+  details.replaceChildren();
+  download.disabled = true;
+  download.onclick = null;
+  if (!sampleUUID.test(asset || '') || !sampleUUID.test(id || '')) {
+    status.textContent = '采样链接缺少有效的资产或采样 ID。';
+    return;
+  }
+  const request = new AbortController();
+  sampleRequest = request;
+  status.textContent = '正在读取原始采样…';
+  try {
+    const data = await api(`/api/assets/${asset}/samples/${id}`, 'GET', undefined, request.signal);
+    if (request.signal.aborted) return;
+    const { sample } = data;
+    const summary = document.createElement('dl');
+    summary.className = 'sample-fields';
+    const field = (list, key, value) => {
+      const term = document.createElement('dt');
+      const content = document.createElement('dd');
+      term.textContent = key;
+      content.textContent = value ?? '—';
+      list.append(term, content);
+    };
+    field(summary, '采样时间', formatTime(sample.collectedAt));
+    field(summary, '采集状态', { ok: '成功', error: '失败', partial: '部分成功' }[sample.status] || sample.status);
+    field(summary, '资产 ID', sample.assetId);
+    field(summary, '采样 ID', sample.id);
+    if (sample.error) field(summary, '采集异常', sample.error);
+    details.append(summary);
+    const sourceNames = { collector: '采集器', diagnostics: '数据库诊断', sqlPerformance: 'SQL 性能',
+      pgStorageIO: '数据库 I/O', linux: 'Linux 主机', k8s: 'Kubernetes', containerStorage: '容器与存储', backup: '备份' };
+    const scalars = document.createElement('dl');
+    scalars.className = 'sample-fields';
+    const groups = [];
+    for (const [key, value] of Object.entries(sample.metrics || {})) {
+      if (value === null || typeof value !== 'object') { field(scalars, key, value); continue; }
+      groups.push([sourceNames[key] || key, value]);
+    }
+    if (scalars.childElementCount) details.append(sampleSection('数据库与采集指标', scalars, true));
+    const jsonBlock = value => {
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(value, null, 2);
+      return pre;
+    };
+    for (const [title, value] of groups) details.append(sampleSection(title, jsonBlock(value)));
+    details.append(sampleSection('完整 JSON', jsonBlock(data)));
+    status.textContent = Object.keys(sample.metrics || {}).length ? '' : '该采样没有上报指标。';
+    download.disabled = false;
+    download.onclick = () => { location.href = `/api/assets/${asset}/samples/${id}?download=1`; };
+  } catch (error) {
+    if (!request.signal.aborted) status.textContent = error.status === 404 ? '采样不存在、已到期或当前账号无权访问。' :
+      error.status === 403 ? '当前账号无权查看该采样。' : `无法读取原始采样。${error.message}`;
+  }
+}
+
+function sampleSection(title, content, open = false) {
+  const section = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  section.open = open;
+  section.append(summary, content);
+  return section;
+}
+
+document.addEventListener('click', event => {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const link = event.target.closest('a[href]');
+  if (!link || link.hasAttribute('download')) return;
+  const url = new URL(link.href);
+  if (url.origin !== location.origin || url.searchParams.get('download') === '1') return;
+  const match = samplePath.exec(url.pathname);
+  if (!match || !sampleUUID.test(match[1]) || !sampleUUID.test(match[2])) return;
+  event.preventDefault();
+  const params = new URLSearchParams({ asset: match[1], sample: match[2], return: location.hash.slice(1) });
+  location.hash = `sample?${params}`;
+});
 
 function showStorageAvailability(available) {
   longTermStoreUnavailable = !available;
@@ -536,6 +634,12 @@ const monitoring = window.DbSphereMonitoring.create($('monitoring-workspace'), {
   api, assetHealth, assetRuntimeLabel, formatTime, openEvent,
   canCaptureWaits: () => currentRole === 'admin',
   canRecordChanges: () => currentRole === 'admin',
+  grafanaPerformance: async ({ asset, time, back, event }) => {
+    if (currentRole !== 'admin' || currentOrganization) return '';
+    const integrations = await api('/api/live/integrations').catch(() => null);
+    return integrations?.grafana ? window.DbSphereLive.grafanaPath({ asset: asset.id, organization: asset.organizationId,
+      cluster: asset.clusterName, event, from: time.from, to: time.to, section: 'waits', back }) : '';
+  },
   openAssets: () => setView('assets'),
   openPlans: id => {
     setView('assets');
@@ -558,7 +662,7 @@ function showOverview(selected) {
 }
 
 function grafanaBack(route) {
-  return /^(?:live|storage|incidents|wallboard)(?:\?|$)/.test(route || '') ? route : 'live';
+  return /^(?:live|monitoring|storage|incidents|wallboard)(?:\?|$)/.test(route || '') ? route : 'live';
 }
 
 function grafanaUnavailable() {

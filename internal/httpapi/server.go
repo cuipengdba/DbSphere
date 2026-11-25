@@ -1486,6 +1486,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 						respond(w, http.StatusNotFound, map[string]string{"error": "Sample not found"})
 						return
 					}
+					if r.URL.Query().Get("download") == "1" {
+						w.Header().Set("Content-Disposition", `attachment; filename="dbsphere-sample-`+match[2]+`.json"`)
+					}
 					respond(w, http.StatusOK, value)
 					return
 				}
@@ -1781,6 +1784,16 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			(path == grafanaPrefix || strings.HasPrefix(path, grafanaPrefix+"/"))
 		if !isGrafana {
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'")
+		}
+		if r.Method == http.MethodGet {
+			if match := rawSamplePath.FindStringSubmatch(path); match != nil {
+				w.Header().Add("Vary", "Accept")
+				if r.URL.Query().Get("download") != "1" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+					w.Header().Set("Cache-Control", "no-store")
+					http.Redirect(w, r, "/#sample?asset="+match[1]+"&sample="+match[2], http.StatusSeeOther)
+					return
+				}
+			}
 		}
 		if administrator != nil && path != "/api/version" && (strings.HasPrefix(path, "/api/") || path == "/metrics" || path == "/v1/traces" || isGrafana && path != grafanaReturnPath) {
 			hash, err := administrator.CurrentAdminPasswordHash(r.Context())

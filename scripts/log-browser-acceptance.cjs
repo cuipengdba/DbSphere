@@ -317,6 +317,40 @@ const runAcceptance = async (page) => {
   await archive.getByRole('button', { name: '关闭', exact: true }).click();
   results.push('v2.24 previewed and saved retention, and listed investigation-protected originals');
 
+  const firstProject = await loc('project').inputValue();
+  const otherProject = await api(base + 'projects', 'POST', { organizationId: org.id, name: 'QA project ' + '长项目名称'.repeat(15) });
+  const stage = await api(base + 'instances', 'POST', { projectId: otherProject.id, environment: 'Stage', name: 'Stage PG', engine: 'postgres', version: '18' });
+  const prod = await api(base + 'instances', 'POST', { projectId: otherProject.id, environment: 'Production', name: 'Production ' + '长实例名称'.repeat(14), engine: 'postgres', version: '18' });
+  const isolatedBatch = await api(base + 'batches', 'POST', { instanceId: prod.id, name: 'Production baseline', coverage: 'slow' });
+  await loc('refresh').click();
+  await loc('project').selectOption(otherProject.id);
+  await loc('environment').selectOption('Stage');
+  await visible(loc('status'), '新建批次后可以上传');
+  assert(await loc('instance').inputValue() === stage.id && await loc('batch').isDisabled(), 'Empty stage scope did not reset batch');
+  await loc('environment').selectOption('Production');
+  await visible(loc('status'), 'Production');
+  assert(await loc('instance').inputValue() === prod.id && await loc('batch').inputValue() === isolatedBatch.id, 'Production did not load the matching batch');
+  await loc('environment').selectOption('');
+  await loc('instance').selectOption(stage.id);
+  await visible(loc('status'), '新建批次后可以上传');
+  await page.reload();
+  await visible(loc('status'), '新建批次后可以上传');
+  assert(await loc('instance').inputValue() === stage.id && await loc('environment').inputValue() === '', 'Refresh lost valid empty-batch scope');
+  await loc('instance').selectOption(prod.id);
+  await visible(loc('status'), 'Production');
+  for (const theme of ['light', 'dark']) {
+    await page.locator('#theme-select').selectOption(theme);
+    await page.setViewportSize({ width: 390, height: 850 });
+    const directory = page.locator('.log-directory');
+    assert(await directory.evaluate(node => [...node.querySelectorAll('select')].every(select =>
+      select.getBoundingClientRect().right <= node.getBoundingClientRect().right + 1)), 'Log dropdowns overflow in ' + theme);
+  }
+  await page.setViewportSize({ width: 1440, height: 880 });
+  await loc('project').selectOption(firstProject);
+  await loc('batch').selectOption(after.id);
+  await visible(loc('status'), 'Acceptance');
+  results.push('Log scope selectors keep their project, environment, instance and batch consistent across switches, empty states, refresh and narrow layouts in both themes');
+
   if (process.env.DBSPHERE_APPROVER_PASSWORD) {
     const { organization } = await api('/api/admin/organizations', 'POST', { name: 'QA without approver ' + scenario });
     const isolatedName = 'Isolated work order fixture ' + scenario;

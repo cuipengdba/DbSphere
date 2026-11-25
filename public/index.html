@@ -70,8 +70,16 @@
       <div class="workspace-main">
       <div class="workspace-heading"><div><h1 id="view-title">总览</h1><p id="view-description">先看异常，再进入资产和证据。</p></div><span class="dev-label" id="edition-label">版本识别中</span></div>
       <div id="notice" role="status" aria-live="polite"></div>
+      <section id="sample-workspace" class="sample-workspace" data-view="sample" hidden>
+        <div class="log-actions">
+          <a id="sample-return" class="monitor-inline-link" href="#monitoring">返回监控工作台</a>
+          <button id="sample-download" type="button" class="ghost" disabled>下载 JSON</button>
+        </div>
+        <p id="sample-status" role="status"></p>
+        <div id="sample-details"></div>
+      </section>
       <section id="log-workspace" class="log-workspace" data-view="logs" aria-label="日志分析工作台" hidden>
-        <div class="log-toolbar">
+        <div class="log-toolbar log-directory">
           <label>项目<select data-logs="project"></select></label>
           <label>环境<select data-logs="environment"></select></label>
           <label>数据库实例<select data-logs="instance"></select></label>

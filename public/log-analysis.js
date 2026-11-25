@@ -145,6 +145,7 @@
       if (!active) return;
       const query = new URLSearchParams();
       if (current) query.set('batch', current);
+      for (const key of ['project', 'environment', 'instance']) if (get(key).value) query.set(key, get(key).value);
       if (comparing && baseline) query.set('baseline', baseline);
       if (caseId) query.set('case', caseId);
       if (sourceId) query.set('source', sourceId);
@@ -152,32 +153,42 @@
       history.replaceState(null, '', '#logs' + (query.size ? '?' + query : ''));
     }
 
-    function configureDirectory() {
-      const selected = batches.find(item => item.id === current);
-      const instance = directory.instances.find(item => item.id === selected?.instanceId);
+    function configureDirectory(preferred = {}) {
+      const instance = directory.instances.find(item => item.id === preferred.instanceId);
+      const previousProject = get('project').value;
       options(get('project'), directory.projects.map(item => [item.id, item.organization + ' · ' + item.name]),
-        instance?.projectId || get('project').value);
+        instance?.projectId || preferred.projectId || previousProject, directory.projects.length ? '' : '暂无项目');
       const instances = directory.instances.filter(item => item.projectId === get('project').value);
       const environments = [...new Set(instances.map(item => item.environment))];
-      options(get('environment'), environments.map(value => [value, value]), instance?.environment || get('environment').value, '全部环境');
+      const environment = preferred.environment ?? (previousProject === get('project').value ? get('environment').value : '');
+      options(get('environment'), environments.map(value => [value, value]),
+        environment && (!instance || instance.environment === environment) ? environment : (preferred.batchOnly ? instance?.environment : ''), '全部环境');
       const visible = instances.filter(item => !get('environment').value || item.environment === get('environment').value);
-      options(get('instance'), visible.map(item => [item.id, item.name + ' · ' + item.version]), instance?.id || get('instance').value);
+      options(get('instance'), visible.map(item => [item.id, item.name + ' · ' + item.version]), instance?.id || get('instance').value,
+        visible.length ? '' : '暂无实例');
+      get('project').disabled = !directory.projects.length;
+      get('environment').disabled = !environments.length;
+      get('instance').disabled = !visible.length;
       get('new-instance').disabled = !get('project').value;
       get('new-batch').disabled = !get('instance').value;
       get('open-health').disabled = !get('project').value;
     }
 
-    async function loadDirectory() {
-      const request = generation;
+    async function loadDirectory(preferred = {}) {
+      const request = ++generation;
       const value = await api(base + 'directory');
       if (!active || request !== generation) return;
       directory = value;
       if (current) {
-        const selected = await api(base + 'batches/' + current);
+        const selected = await api(base + 'batches/' + current).catch(error => {
+          if (![403, 404].includes(error.status)) throw error;
+          return null;
+        });
         if (!active || request !== generation) return;
-        batches = [selected.batch];
+        if (selected) preferred = { ...preferred, instanceId: selected.batch.instanceId };
+        else selectBatch('');
       }
-      configureDirectory();
+      configureDirectory(preferred);
       await loadBatches();
     }
 
@@ -185,19 +196,26 @@
       const request = ++generation;
       const instance = get('instance').value;
       clearTimeout(timer);
+      compareRequest++;
       get('details').hidden = true;
       get('upload').disabled = true;
       get('open-comparison').disabled = true;
+      get('open-comparison').setAttribute('aria-pressed', 'false');
       get('comparison').hidden = true;
+      get('batch').disabled = true;
+      options(get('batch'), [], '', instance ? '正在读取批次…' : '暂无批次');
+      batches = [];
       if (!instance) {
-        options(get('batch'), [], '', '暂无批次');
+        selectBatch('');
         get('status').textContent = '先在项目下登记实例，再新建分析批次。';
         return;
       }
+      get('status').textContent = '正在读取分析批次…';
       const result = await api(base + 'batches?instance=' + instance);
       if (!active || request !== generation) return;
       batches = result.batches;
-      options(get('batch'), batches.map(item => [item.id, item.name]), current);
+      options(get('batch'), batches.map(item => [item.id, item.name]), current, batches.length ? '' : '暂无批次');
+      get('batch').disabled = !batches.length;
       selectBatch(get('batch').value);
       options(get('baseline'), batches.filter(item => item.id !== current).map(item => [item.id, item.name]), baseline);
       get('open-comparison').disabled = batches.length < 2;
@@ -212,10 +230,11 @@
 
     async function loadBatch() {
       const id = current;
+      const request = generation;
       if (!id) return;
       clearTimeout(timer);
       const { batch, files, totals } = await api(base + 'batches/' + id);
-      if (id !== current || !active) return;
+      if (id !== current || !active || request !== generation) return;
       get('status').textContent = [batch.project, batch.environment, batch.instance, batch.version,
         totals.from ? formatTime(totals.from) + ' — ' + formatTime(totals.to) : '等待读取日志时间'].join(' · ');
       get('details').hidden = false;
@@ -740,13 +759,18 @@
 
     for (const name of ['project', 'environment', 'instance']) {
       get(name).addEventListener('change', () => {
+        if (name === 'project') get('environment').value = '';
         selectBatch('');
         configureDirectory();
         run(loadBatches);
       });
     }
     get('batch').addEventListener('change', () => {
+      generation++;
       selectBatch(get('batch').value);
+      options(get('baseline'), batches.filter(item => item.id !== current).map(item => [item.id, item.name]), baseline);
+      get('comparison').hidden = true;
+      get('open-comparison').setAttribute('aria-pressed', 'false');
       run(loadBatch);
     });
     get('refresh').addEventListener('click', () => run(loadDirectory));
@@ -1054,7 +1078,10 @@
         for (const dialog of root.querySelectorAll('dialog[open]')) dialog.close();
         return;
       }
-      current = safeId(params?.get('batch')) || current;
+      const preferred = { projectId: safeId(params?.get('project')), instanceId: safeId(params?.get('instance')),
+        environment: params?.get('environment') ?? (params?.has('project') ? '' : undefined) };
+      preferred.batchOnly = !!params?.get('batch') && !preferred.projectId && !preferred.instanceId;
+      current = safeId(params?.get('batch')) || (preferred.projectId || preferred.instanceId ? '' : current);
       baseline = safeId(params?.get('baseline'));
       comparing = !!baseline;
       caseId = safeId(params?.get('case'));
@@ -1064,7 +1091,7 @@
       if (returnIncident) get('return-incident').href = '#incidents?' + new URLSearchParams({ event: returnIncident });
       const requestedCase = caseId, requestedSource = sourceId;
       run(async () => {
-        await loadDirectory();
+        await loadDirectory(preferred);
         if (active && requestedCase === caseId && caseId) {
           const data = await api(base + 'investigations/' + caseId);
           if (active && requestedCase === caseId) showInvestigation(data);

@@ -92,7 +92,12 @@ function seedSamples(asset) {
       containerStorage: { primary: 'postgres', containers: { postgres: {
         id: 'qa-container', status: 'ok', memory: { active_file: 3145728 * index, inactive_file: 6291456 * index }
       } } },
-      diagnostics: { instanceSessions: { status: 'ok', data: { waiting: index } },
+      diagnostics: { instanceSessions: { status: 'ok', data: { waiting: index, active: index + 1, usedPercent: 42 } },
+        activeWaits: { status: 'ok', data: { groups: [
+          { depth: 1, waitType: 'Lock', sessions: index },
+          { depth: 2, waitType: 'Lock', waitEvent: 'transactionid', sessions: index },
+          { depth: 3, waitType: 'Lock', waitEvent: 'transactionid', queryId: '163', sessions: index }
+        ] } },
         locks: { status: 'ok', data: { blockedSessions: index } },
         transactions: { status: 'ok', data: { longTransactions: index, idleInTransaction: index } } },
       sqlPerformance: { status: 'ok', resetAt: fixedTime, statements: [{
@@ -104,6 +109,9 @@ function seedSamples(asset) {
       'ok', $sample$${JSON.stringify(rows)}$sample$::jsonb)`);
   }
   runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES ${statements.join(',')};`);
+  runFixtureSQL(`INSERT INTO slow_log_entries(id,asset_id,source_key,observed_at,duration_ms,query_id,source_format,imported_at,database_name)
+    SELECT gen_random_uuid(), '${asset}', 'workbench-' || n, now() - interval '6 minutes', (n * 10)::float8,
+      '163', 'csv', now(), 'postgres' FROM generate_series(1,20) n;`);
 }
 
 async function createAsset(page) {
@@ -197,8 +205,22 @@ async function wallboard(page, version) {
   await dialog.waitFor({ state: 'hidden' });
   assert.equal(route(page), pinned);
   await board('raw').waitFor();
-  const raw = await page.request.get(origin + await board('raw').getAttribute('href'));
+  const rawPath = await board('raw').getAttribute('href');
+  const raw = await page.request.get(origin + rawPath);
   assert.equal(raw.status(), 200);
+  const { sample } = await raw.json();
+  await board('raw').click();
+  await visible(page.locator('#sample-details'), sample.id);
+  await page.locator('#sample-details summary').filter({ hasText: 'Linux 主机' }).click();
+  await visible(page.locator('#sample-details'), 'qa-node:9100');
+  await download(page, page.locator('#sample-download'), new RegExp(sample.id + '\\.json$'));
+  await page.locator('#sample-return').click();
+  await page.waitForURL(url => url.hash === pinned);
+  const direct = await page.context().newPage();
+  await direct.goto(origin + rawPath);
+  await visible(direct.locator('#sample-details'), sample.id);
+  assert.equal(new URL(direct.url()).pathname, '/');
+  await direct.close();
   await board('clear').click();
   assert.equal(parameters(page).has('cursor'), false);
 
@@ -336,6 +358,34 @@ async function monitoring(page, asset) {
   await dateFields.first().waitFor({ state: 'hidden' });
   await workbench.getByRole('button', { name: '刷新', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#monitoring-workspace .monitor-content').getAttribute('aria-busy') !== 'true');
+
+  await workbench.getByRole('button', { name: '等待分析', exact: true }).click();
+  const heat = workbench.getByRole('table', { name: '每桶平均活跃会话' });
+  await heat.waitFor();
+  const heatCell = heat.getByRole('button', { name: /合计.*3 会话/ }).first();
+  await heatCell.click();
+  assert.equal(await heatCell.getAttribute('aria-pressed'), 'true');
+  await visible(workbench, '同窗资源趋势');
+  if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'wait-heatmap.png') });
+  const waitChart = workbench.locator('.monitor-focus-chart');
+  const plot = waitChart.locator('.monitor-plot');
+  const waitRoute = route(page);
+  await plot.click();
+  const enlarged = workbench.getByRole('dialog', { name: '平均活跃会话 · 放大查看' });
+  await enlarged.waitFor();
+  await enlarged.locator('.monitor-plot').press('ArrowLeft');
+  await page.keyboard.press('Escape');
+  await enlarged.waitFor({ state: 'hidden' });
+  assert.equal(route(page), waitRoute);
+  assert.equal(await plot.evaluate(node => node === document.activeElement), true);
+  await heatCell.click();
+  await workbench.getByRole('button', { name: '查选中时间桶的锁链', exact: true }).click();
+  await page.waitForFunction(() => new URLSearchParams(location.hash.split('?')[1]).has('lockAt'));
+  await page.goto(origin + waitRoute);
+  await workbench.getByLabel('等待分组').selectOption('query');
+  await workbench.getByRole('button', { name: /163/ }).first().click();
+  await visible(workbench, '同窗慢日志 · 20 条 · P95 190.5 ms · P99 198.1 ms');
+  proof.push('Workbench trend dialog and focus return, synchronized waits-to-locks drill, Query ID and measured percentiles, and readable direct sample links and JSON download');
 
   await page.goto(origin + '/#grafana?panel=dbsphere-overview');
   await visible(page.locator('#grafana-status'), '观测专题暂不可用');
