@@ -177,7 +177,8 @@ body[data-role="operator"] section.panel:has(> #silence-form) { display: none; }
 .monitor-graph-header h3 { margin: 0; }
 .monitor-graph-dialog { box-sizing: border-box; width: min(94vw, 1320px); max-width: none; max-height: 92dvh; overflow: auto; padding: clamp(12px, 2vw, 24px); border: 1px solid var(--control-border); border-radius: 12px; background: var(--surface); color: var(--text); }
 .monitor-graph-dialog::backdrop { background: rgb(0 0 0 / 65%); }
-.monitor-graph-dialog .monitor-plot svg { height: clamp(220px, 54dvh, 720px); }
+dialog.monitor-graph-dialog .monitor-plot svg { height: clamp(220px, 54dvh, 720px); }
+.monitor-graph-dialog .cluster-track svg { height: 35px; }
 .monitor-heatmap table { width: max-content; min-width: 100%; }
 .monitor-heatmap td { padding: 2px; }
 .monitor-heatmap td:first-child { padding-inline: 8px; white-space: nowrap; }

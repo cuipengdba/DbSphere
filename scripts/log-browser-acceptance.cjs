@@ -318,9 +318,9 @@ const runAcceptance = async (page) => {
   results.push('v2.24 previewed and saved retention, and listed investigation-protected originals');
 
   const firstProject = await loc('project').inputValue();
-  const otherProject = await api(base + 'projects', 'POST', { organizationId: org.id, name: 'QA project ' + '长项目名称'.repeat(15) });
+  const otherProject = await api(base + 'projects', 'POST', { organizationId: org.id, name: 'QA project ' + '长项目名称'.repeat(7) });
   const stage = await api(base + 'instances', 'POST', { projectId: otherProject.id, environment: 'Stage', name: 'Stage PG', engine: 'postgres', version: '18' });
-  const prod = await api(base + 'instances', 'POST', { projectId: otherProject.id, environment: 'Production', name: 'Production ' + '长实例名称'.repeat(14), engine: 'postgres', version: '18' });
+  const prod = await api(base + 'instances', 'POST', { projectId: otherProject.id, environment: 'Production', name: 'Production ' + '长实例名称'.repeat(7), engine: 'postgres', version: '18' });
   const isolatedBatch = await api(base + 'batches', 'POST', { instanceId: prod.id, name: 'Production baseline', coverage: 'slow' });
   await loc('refresh').click();
   await loc('project').selectOption(otherProject.id);

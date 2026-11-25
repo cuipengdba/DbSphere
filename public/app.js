@@ -592,7 +592,10 @@ document.addEventListener('click', event => {
   const match = samplePath.exec(url.pathname);
   if (!match || !sampleUUID.test(match[1]) || !sampleUUID.test(match[2])) return;
   event.preventDefault();
-  const params = new URLSearchParams({ asset: match[1], sample: match[2], return: location.hash.slice(1) });
+  const active = document.body.dataset.activeView;
+  const origin = active === 'monitoring' ? monitoring.contextRoute() : active === 'live' ? live.route(true) :
+    active === 'wallboard' ? wallboard.route(true) : location.hash.slice(1);
+  const params = new URLSearchParams({ asset: match[1], sample: match[2], return: origin });
   location.hash = `sample?${params}`;
 });
 

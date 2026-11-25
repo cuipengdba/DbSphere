@@ -2751,7 +2751,7 @@
         if (value) { update(); void refreshFleet(); }
         else { request++; fleetRequest++; }
       },
-      route, restore, openInstance, openCluster,
+      route, contextRoute: () => route(activeWindow || fleetTime || fixed), restore, openInstance, openCluster,
       openIncident(event, topic = 'waits', point = null) {
         const asset = assets.find(item => item.id === event.assetId);
         if (!asset) return;
