@@ -42,6 +42,7 @@ jobs:
           DBSPHERE_PORT: 18080
           DBSPHERE_ADMIN_PASSWORD: dbsphere-browser-admin-fixture
           DBSPHERE_VIEWER_PASSWORD: dbsphere-browser-viewer-fixture
+          DBSPHERE_APPROVER_PASSWORD: dbsphere-browser-approver-fixture
           DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-browser-fixture@127.0.0.1:15434/postgres?sslmode=disable
           DBSPHERE_ENABLE_GO_COLLECTOR: 'false'
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}

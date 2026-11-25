@@ -536,13 +536,13 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	for _, service := range services {
 		impactList = append(impactList, *serviceImpacts[service])
 	}
-	historical, err := s.rcaPoliciesAt(ctx, event.StartedAt)
+	historical, err := s.rcaPoliciesAt(ctx, &event.StartedAt)
 	if err != nil {
 		return nil, err
 	}
 	policies := policiesByCode(historical)
 	if replayCode != "" {
-		current, err := s.rcaPoliciesAt(ctx, time.Now().UTC())
+		current, err := s.rcaPoliciesAt(ctx, nil)
 		if err != nil {
 			return nil, err
 		}

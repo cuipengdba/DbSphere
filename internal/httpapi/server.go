@@ -882,6 +882,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				}
 				if result, ok := value.(map[string]any); ok {
 					result["profiles"] = workProfilesForEvent(r.Context(), store, credentials, match[1])
+					result["approvalEnabled"] = workOrderApproverAvailable(r.Context(), store, namedDB, credentials, match[1])
 				}
 				respond(w, http.StatusOK, value)
 				return

@@ -97,9 +97,9 @@ func scanRCAPolicy(row pgx.Row) (rcaPolicy, error) {
 	return p, err
 }
 
-func (s *Postgres) rcaPoliciesAt(ctx context.Context, at time.Time) ([]rcaPolicy, error) {
+func (s *Postgres) rcaPoliciesAt(ctx context.Context, at *time.Time) ([]rcaPolicy, error) {
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (code) `+rcaPolicyColumns+` FROM rca_rule_versions
-		WHERE effective_at<=$1 ORDER BY code,effective_at DESC,version DESC`, at)
+		WHERE effective_at<=COALESCE($1::timestamptz, statement_timestamp()) ORDER BY code,effective_at DESC,version DESC`, at)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (s *Postgres) rcaPoliciesAt(ctx context.Context, at time.Time) ([]rcaPolicy
 
 func (s *Postgres) RCARules(ctx context.Context, code string) (any, error) {
 	if code == "" {
-		rules, err := s.rcaPoliciesAt(ctx, time.Now().UTC())
+		rules, err := s.rcaPoliciesAt(ctx, nil)
 		return map[string]any{"rules": rules}, err
 	}
 	if rcaRuleTitles[code] == "" {

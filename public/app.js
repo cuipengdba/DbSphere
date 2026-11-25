@@ -3696,7 +3696,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const panel = document.createElement('section'); panel.className = 'response-form';
     panel.append(cell('h4', '受控作业 · 双人审批'));
     panel.append(cell('p', '先预检作业范围和期限，独立审批通过后由管理员执行。', 'hint'));
-    if (canRespond && event.status === 'open' && approvalEnabled) {
+    const eventApprovalEnabled = workOrders.approvalEnabled ?? approvalEnabled;
+    if (canRespond && event.status === 'open' && eventApprovalEnabled) {
       const form = document.createElement('form'); form.className = 'response-form operator-action';
       const label = cell('label', '申请原因（5–300 字）');
       const reason = document.createElement('textarea'); reason.required = true; reason.minLength = 5;
@@ -3751,7 +3752,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       });
       panel.append(form);
     }
-    if (currentRole === 'admin' && !approvalEnabled) panel.append(cell('p', '启用独立审批账号后可申请受控只读采样。', 'hint'));
+    if (canRespond && !eventApprovalEnabled) panel.append(cell('p', '为当前资产配置独立审批账号后可申请受控只读采样。', 'hint'));
     if (!workOrders.orders?.length) panel.append(cell('p', '当前事件暂无工单。', 'empty'));
     for (const order of workOrders.orders || []) {
       const row = cell('div', '', 'evidence work-order-entry');
