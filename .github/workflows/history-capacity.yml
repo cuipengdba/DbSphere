@@ -84,7 +84,7 @@ jobs:
           if-no-files-found: warn
 
   collector-load:
-    if: github.ref == 'refs/heads/release/v2.30.0'
+    if: github.ref == 'refs/heads/development/v3.0' || startsWith(github.ref, 'refs/heads/release/v3.')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

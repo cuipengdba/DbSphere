@@ -87,7 +87,7 @@ func startMaintenance(ctx context.Context, run func(context.Context)) (context.C
 }
 
 func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, notifications notify.Config,
-	autoModel *ai.Client, aiDailyLimit int, log *slog.Logger) {
+	aiRuntime *ai.Runtime, log *slog.Logger) {
 	var tasks sync.WaitGroup
 	tasks.Go(func() { runNotifier(ctx, pg, notifications, log) })
 	tasks.Go(func() { runTracePruner(ctx, pg, cfg.TraceDays, log) })
@@ -99,8 +99,6 @@ func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, 
 	if cfg.SampleDays > 0 || cfg.EventDays > 0 {
 		tasks.Go(func() { runDataRetention(ctx, pg, cfg.SampleDays, cfg.EventDays, log) })
 	}
-	if autoModel != nil {
-		tasks.Go(func() { runAutoAI(ctx, pg, autoModel, aiDailyLimit, log) })
-	}
+	tasks.Go(func() { runAutoAI(ctx, pg, aiRuntime.Current, log) })
 	tasks.Wait()
 }

@@ -192,6 +192,7 @@ type AuthConfig struct {
 	OTLPToken            string
 	AI                   *ai.Client
 	AIDailyLimit         int
+	AIRuntime            *ai.Runtime
 	WorkOrderProfiles    map[string]WorkOrderProfile
 	ReplicaID            string
 	OIDC                 *OIDCProvider
@@ -552,11 +553,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 		}
-		if role == "viewer" && r.Method != http.MethodGet {
+		dutyView := dutyViewPath.FindStringSubmatch(r.URL.Path)
+		if role == "viewer" && r.Method != http.MethodGet && dutyView == nil {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
 			return
 		}
-		if role == "approver" && r.Method != http.MethodGet &&
+		if role == "approver" && r.Method != http.MethodGet && dutyView == nil &&
 			!(r.Method == http.MethodPost && workOrderDecisionPath.MatchString(r.URL.Path)) {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Approver account can only review work orders"})
 			return
@@ -564,6 +566,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		scopeIDs, scopeErr := scopedPrincipalIDs(r.Context(), store, credentials, principal, role)
 		if scopeErr != nil {
 			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Organization scope unavailable"})
+			return
+		}
+		if dutyView != nil {
+			handleDutyViews(w, r, store, dutyView, principal, role, scopeIDs)
 			return
 		}
 		actor := role
@@ -808,6 +814,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if handleAssetRisk(w, r, store, role) {
 			return
 		}
+		if handleAISettings(w, r, credentials, role) {
+			return
+		}
 		if handleAIEvidenceReview(w, r, store, credentials, role) {
 			return
 		}
@@ -823,7 +832,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			return
 		}
 		if match := eventHandoffPath.FindStringSubmatch(r.URL.Path); match != nil {
-			handleEventHandoff(w, r, namedDB, role, match[1])
+			handleEventHandoff(w, r, namedDB, role, match[1], match[2], principal.ID)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/access/assets/export" && principal.ID != "" && viewerScope != nil {
@@ -1016,11 +1025,12 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/ai/status" {
-			if credentials.AI == nil {
+			current, err := credentials.activeAI(r.Context())
+			if err != nil || current.Client == nil {
 				respond(w, http.StatusOK, map[string]any{"enabled": false})
 			} else {
-				respond(w, http.StatusOK, map[string]any{"enabled": true, "model": credentials.AI.Model(),
-					"dailyLimit": credentials.AIDailyLimit})
+				respond(w, http.StatusOK, map[string]any{"enabled": true, "model": current.Client.Model(),
+					"dailyLimit": current.Settings.DailyLimit})
 			}
 			return
 		}
@@ -1032,7 +1042,8 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				questionMode = match != nil
 			}
 			if match != nil {
-				if credentials.AI == nil {
+				current, err := credentials.activeAI(r.Context())
+				if err != nil || current.Client == nil {
 					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI model is not configured"})
 					return
 				}
@@ -1075,10 +1086,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				var invocationID string
 				if questionMode {
 					invocationID, err = aiStore.ReserveAIQuestionInvocation(r.Context(), match[1],
-						credentials.AI.Model(), credentials.AIDailyLimit)
+						current.Client.Model(), current.Settings.DailyLimit)
 				} else {
 					invocationID, err = aiStore.ReserveAIInvocation(r.Context(), match[1],
-						credentials.AI.Model(), credentials.AIDailyLimit)
+						current.Client.Model(), current.Settings.DailyLimit)
 				}
 				if errors.Is(err, storepkg.ErrAIBudgetExceeded) {
 					respond(w, http.StatusTooManyRequests, map[string]string{"error": "Daily AI analysis limit reached; rule-based diagnosis remains available"})
@@ -1091,9 +1102,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				var result ai.Result
 				var modelErr error
 				if questionMode {
-					result, modelErr = credentials.AI.Answer(r.Context(), prompt, question, ids)
+					result, modelErr = current.Client.Answer(r.Context(), prompt, question, ids)
 				} else {
-					result, modelErr = credentials.AI.Analyze(r.Context(), prompt, ids)
+					result, modelErr = current.Client.Analyze(r.Context(), prompt, ids)
 				}
 				status := "success"
 				cited := result.EvidenceIDs

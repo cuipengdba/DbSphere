@@ -109,7 +109,7 @@ function setView(route, updateHash = true) {
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
     } else {
-      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers'].includes(section) ? section : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers', 'ai-model'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -152,12 +152,15 @@ function setView(route, updateHash = true) {
 
 function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && currentRole !== 'admin') section = 'storage';
-  if (view === 'settings' && currentOrganization && ['collector', 'platform'].includes(section)) section = 'organizations';
+  if (view === 'settings' && section === 'ai-model' && !nativeOverview) section = 'storage';
+  if (view === 'settings' && currentOrganization && ['collector', 'platform', 'ai-model'].includes(section)) section = 'organizations';
   if (view === 'alerts' && section === 'rca' && (currentRole !== 'admin' || currentOrganization)) section = 'active';
   pageSections[view] = section;
   for (const button of document.querySelectorAll(`[data-view="${view}"] [data-section]`)) {
     button.setAttribute('aria-pressed', String(button.dataset.section === section));
-    if (button.classList.contains('admin-only')) button.hidden = currentRole !== 'admin';
+    button.hidden = (button.classList.contains('admin-only') && currentRole !== 'admin') ||
+      (button.classList.contains('platform-only') && !!currentOrganization) ||
+      (button.dataset.section === 'ai-model' && !nativeOverview);
   }
   for (const panel of document.querySelectorAll(`[data-view="${view}"][data-section-panel], [data-view="${view}"] [data-section-panel]`)) {
     panel.hidden = panel.dataset.sectionPanel !== section || (panel.classList.contains('admin-only') && currentRole !== 'admin');
@@ -165,10 +168,74 @@ function showSection(view, section, eventId, ruleCode) {
   if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
   if (view === 'settings' && section === 'access') void loadAccessDirectory();
   if (view === 'settings' && section === 'platform') void loadPlatformStatus();
+  if (view === 'settings' && section === 'ai-model') void loadAIModelSettings();
   if (view === 'settings' && section === 'organizations') void loadOrganizations();
   if (view === 'settings' && section === 'audit') renderOrganizationAudit();
   if (view === 'settings' && section === 'history-tiers') void loadHistoryPolicies();
 }
+
+let aiModelSettings = null;
+let aiModelRequest = 0;
+const aiModelForm = $('ai-model-form');
+const aiModelFields = aiModelForm.querySelector('fieldset');
+const aiModelPath = '/api/admin/ai-model';
+
+async function loadAIModelSettings(message = '') {
+  const request = ++aiModelRequest;
+  aiModelFields.disabled = true;
+  $('ai-model-status').textContent = '正在读取模型配置';
+  try {
+    const settings = await api(aiModelPath);
+    if (request !== aiModelRequest) return;
+    aiModelSettings = settings;
+    const fields = aiModelForm.elements;
+    for (const key of ['endpoint', 'model', 'dailyLimit', 'reviewSeconds']) fields[key].value = settings[key];
+    for (const key of ['enabled', 'reviewSchema', 'autoSummary']) fields[key].checked = settings[key];
+    fields.apiKey.value = '';
+    fields.apiKey.placeholder = settings.hasKey ? '已配置 · 留空保留原密钥' : '如接口需要，请输入密钥';
+    fields.clearKey.checked = false;
+    fields.clearKey.disabled = !settings.hasKey;
+    $('ai-model-reset').disabled = !settings.overridden;
+    const state = settings.invalid ? '接口来源未获授权' : settings.enabled ? '模型已启用' : '模型未启用';
+    $('ai-model-status').textContent = [message, state, settings.overridden ? '平台配置' : '环境配置'].filter(Boolean).join(' · ');
+    aiModelFields.disabled = false;
+  } catch (error) {
+    if (request === aiModelRequest) $('ai-model-status').textContent = error.message;
+  }
+}
+
+async function updateAIModel(action) {
+  if (!aiModelSettings || aiModelFields.disabled || (action !== 'reset' && !aiModelForm.reportValidity())) return;
+  const request = aiModelRequest;
+  const fields = aiModelForm.elements;
+  const revision = aiModelSettings.revision;
+  const endpoint = fields.endpoint.value.trim();
+  const payload = {revision, endpoint, model: fields.model.value.trim(), apiKey: fields.apiKey.value,
+    keepKey: aiModelSettings.hasKey && !fields.apiKey.value && !fields.clearKey.checked && endpoint === aiModelSettings.endpoint,
+    dailyLimit: fields.dailyLimit.valueAsNumber, reviewSeconds: fields.reviewSeconds.valueAsNumber,
+    enabled: fields.enabled.checked, reviewSchema: fields.reviewSchema.checked, autoSummary: fields.autoSummary.checked};
+  aiModelFields.disabled = true;
+  $('ai-model-status').textContent = action === 'test' ? '正在测试模型接口' : '正在保存配置';
+  try {
+    if (action === 'test') {
+      await api(aiModelPath + '/test', 'POST', payload);
+      if (request === aiModelRequest) $('ai-model-status').textContent = '连通性测试成功 · 接口返回了有效响应';
+    } else {
+      await api(aiModelPath, action === 'reset' ? 'DELETE' : 'PUT', action === 'reset' ? {revision} : payload);
+      if (request === aiModelRequest) await loadAIModelSettings(action === 'reset' ? '已恢复环境配置' : '已保存');
+    }
+  } catch (error) {
+    if (request !== aiModelRequest) return;
+    $('ai-model-status').textContent = error.message;
+  } finally {
+    if (request === aiModelRequest) aiModelFields.disabled = false;
+  }
+}
+
+aiModelForm.addEventListener('submit', event => { event.preventDefault(); void updateAIModel('save'); });
+$('ai-model-test').addEventListener('click', () => void updateAIModel('test'));
+$('ai-model-reset').addEventListener('click', () => void updateAIModel('reset'));
+$('ai-model-refresh').addEventListener('click', () => void loadAIModelSettings());
 
 const accessRoleLabels = { admin: '管理员', operator: '值班员', viewer: '只读查看', approver: '独立审批' };
 const workActionLabels = { collect_once: '只读采样', inspect_once: '运行巡检', verify_restore: '隔离恢复核验', analyze_relation: '单表 ANALYZE' };
@@ -487,9 +554,10 @@ function renderOverview(assets, events) {
 }
 
 async function api(path, method = 'GET', payload, signal) {
-  if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout')
+  const dutyPreferences = /^\/api\/duty-views(?:\/[0-9a-f-]{36})?$/.test(path);
+  if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences)
     throw new Error('只读账号不能修改监控数据。');
-  if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' &&
+  if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences &&
       !(method === 'POST' && /^\/api\/work-orders\/[0-9a-f-]+\/(approve|reject)$/.test(path)))
     throw new Error('审批账号只能审批事件工单。');
   const binary = payload instanceof Blob;
@@ -2589,11 +2657,11 @@ function evidenceReviewPanel(event, showSource) {
     budget_exhausted: '当日模型预算已用完 · 显示规则核查'
   };
   let loaded = false;
-  const load = async (method = 'GET') => {
+  const load = async (input, message = '') => {
     loaded = true;
     try {
-      const review = await api(path, method, method === 'POST' ? {} : undefined);
-      output.replaceChildren(cell('p', status[review.status] || review.status, 'hint'),
+      const review = await api(path, input ? 'POST' : 'GET', input);
+      output.replaceChildren(cell('p', message || status[review.status] || review.status, 'hint'),
         cell('small', '事件证据 ' + review.sources.length + ' 项 · ' + review.inputBytes + '/' + review.maxInputBytes +
           ' 字节 · 每日模型请求上限 ' + review.dailyLimit, 'hint'));
       const sources = new Map(review.sources.map(source => [source.id,source]));
@@ -2616,12 +2684,34 @@ function evidenceReviewPanel(event, showSource) {
       }
       if (review.result.uncertainty) output.append(cell('p', review.result.uncertainty, 'hint'));
       if (review.canRequest && review.status !== 'budget_exhausted') {
+        const preview = cell('details', '', 'settings-details');
+        preview.append(cell('summary', '预览送审证据 · ' + review.endpointModel),
+          cell('pre', JSON.stringify(review.sources, null, 2), 'ai-evidence-preview'));
+        const form = cell('form', '', 'ai-evidence-request');
+        const question = Object.assign(document.createElement('textarea'), {maxLength: 400, rows: 2,
+          value: input?.question || ''});
+        accessField(form, '核查问题（可选）', question);
+        form.append(cell('small', '提交时发送预览中的证据及此处填写的问题。', 'hint'));
         const analyze = cell('button', '请求模型审核', 'ghost small-button');
-        analyze.type = 'button';
-        analyze.addEventListener('click', () => { analyze.disabled = true; analyze.textContent = '审核中'; void load('POST'); });
-        output.append(analyze);
+        analyze.type = 'submit';
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          const text = question.value;
+          analyze.disabled = true;
+          question.disabled = true;
+          analyze.textContent = '审核中';
+          void load({preview: review.preview, question: text});
+        });
+        form.append(analyze);
+        output.append(preview, form);
       }
-    } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); }
+    } catch (error) {
+      if (error.status === 409 && input) return load(undefined, error.message);
+      const retry = cell('button', '重新读取证据', 'ghost small-button');
+      retry.type = 'button';
+      retry.addEventListener('click', () => void load());
+      output.replaceChildren(cell('p', error.message, 'warning'), retry);
+    }
   };
   panel.addEventListener('toggle', () => { if (panel.open && !loaded) void load(); });
   return panel;
@@ -2701,7 +2791,7 @@ function incidentPointSource(event, point, title) {
   return link;
 }
 
-function investigationPanel(event, replay, analysis, scope, grafanaLink) {
+function investigationPanel(event, replay, analysis, scope, grafanaLink, impact) {
   const panel = cell('section', '', 'investigation');
   panel.setAttribute('aria-label', '事件调查工作台');
   const grid = cell('div', '', 'investigation-grid');
@@ -2724,6 +2814,16 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink) {
   const trackWindow = { from: Math.min(eventStart, firstEvidence) - 60000,
     to: Math.max(Date.parse(event.endedAt) || eventStart, lastEvidence) + 60000 };
   const services = [...new Set(orderedPoints.filter(point => point.layer === 'app' && point.source).map(point => point.source))].sort();
+  const coverage = Object.keys(replay.observedLayers || {}).filter(key => replay.observedLayers[key])
+    .map(key => replayLayers[key]).filter(Boolean);
+  const summary = cell('div', '', 'investigation-overview');
+  const affected = new Set(impact?.members?.map(row => row.assetId) || []);
+  affected.add(event.assetId);
+  summary.append(cell('p', `首次触发 ${formatTime(event.startedAt)}`),
+    cell('p', `涉及 ${affected.size} 个实例 · ${coverage.length} 个有证据的层级 · ${orderedPoints.length} 条证据`),
+    cell('small', coverage.join(' / ')));
+  summary.append(makeControl('核对同窗跨层身份', () => openEventStorage(event, trackWindow)));
+  panel.prepend(summary);
   const params = investigationParams(event.id);
   let phase = phases.some(([key]) => key === params.get('focusPhase')) ? params.get('focusPhase') : 'during';
   let layer = layers.some(([key]) => key === params.get('focusLayer')) ? params.get('focusLayer') : 'all';
@@ -3685,7 +3785,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   sectionBar.append(...sectionButtons);
   activate(eventSection);
   target.append(sectionBar, ...content.values());
-  if (replay) evidencePanel.append(investigationPanel(event, replay, analysis, investigation, grafanaLink));
+  if (replay) evidencePanel.append(investigationPanel(event, replay, analysis, investigation, grafanaLink, impact));
   if (investigation?.connectionStages && (investigation.connectionStages.rows.length || event.kind?.includes('pgbouncer'))) {
     evidencePanel.append(connectionStagePanel(investigation.connectionStages, event.assetId));
   }
@@ -3985,6 +4085,19 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     panel.append(cell('h4', '值班交接'));
     const assignment = handoff.assignment;
     panel.append(cell('p', assignment ? `${assignment.assignedBy} 于 ${formatTime(assignment.assignedAt)} 交接给 ${assignment.username}` : '当前事件暂无接班人。', 'hint'));
+    if (assignment) panel.append(cell('p', assignment.acceptedAt ? '已接手 · ' + formatTime(assignment.acceptedAt) : '等待接班人确认', 'hint'));
+    if (event.status === 'open' && assignment && !assignment.acceptedAt && assignment.username === currentUsername && currentRole === 'operator') {
+      const accept = cell('button', '确认接手当前事件', 'ghost small-button');
+      accept.type = 'button';
+      accept.addEventListener('click', async () => {
+        accept.disabled = true;
+        try {
+          await api(`/api/events/${event.id}/handoff/accept`, 'POST', {assignedAt: assignment.assignedAt});
+          await showEvent(event.id);
+        } catch (error) { notice(error.message, true); accept.disabled = false; }
+      });
+      panel.append(accept);
+    }
     if (event.status === 'open' && handoff.eligible?.length) {
       const form = cell('form', '', 'response-form operator-action');
       const assignee = accessSelect(form, '接班人', 'accountId', handoff.eligible.map(account => [account.id, account.username]), [assignment?.accountId]);
@@ -4121,51 +4234,6 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     renderAdminAudit(eventAudit?.entries, auditList);
     auditDetails.append(auditList); timelinePanel.append(auditDetails);
   }
-  if (aiStatus.enabled && currentRole === 'admin') {
-    const aiResult = document.createElement('div'); aiResult.className = 'evidence';
-    const showAIResult = result => {
-      aiResult.replaceChildren(cell('h4', 'AI 建议 · 待人工核验'),
-        cell('p', result.summary), cell('p', `证据 ID：${result.evidenceIds.join('、') || '未引用'}`),
-        cell('p', `不确定性：${result.uncertainty || '模型未提供'}`));
-      for (const id of result.evidenceIds) {
-        const point = replay?.points.find(item => item.evidenceId === id);
-        if (!point?.sampleId) continue;
-        const item = cell('p', `${replayLayers[point.layer]} · ${formatTime(point.at)} · `);
-        item.append(replaySampleLink(event.assetId, point.sampleId));
-        aiResult.append(item);
-      }
-      for (const check of result.suggestedChecks) aiResult.append(cell('p', `待检查：${check}`));
-      aiResult.append(cell('small', result.notice));
-    };
-    const analyze = cell('button', `AI 辅助分析 · ${aiStatus.model} · 每日最多 ${aiStatus.dailyLimit ?? 20} 次`, 'ghost small-button write-action');
-    analyze.addEventListener('click', async () => {
-      analyze.disabled = true;
-      aiResult.replaceChildren(cell('p', '正在分析当前事件的脱敏证据…'));
-      try {
-        const { result } = await api(`/api/events/${event.id}/ai-summary`, 'POST');
-        showAIResult(result);
-      } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
-      finally { analyze.disabled = false; }
-    });
-    const questionForm = document.createElement('form'); questionForm.className = 'response-form';
-    const questionLabel = cell('label', '向 AI 询问当前事件（仅发送脱敏证据，5–400 字）');
-    const question = document.createElement('textarea'); question.required = true;
-    question.minLength = 5; question.maxLength = 400; question.rows = 2;
-    question.placeholder = '例如：哪些证据支持锁等待，哪些信号仍缺失？';
-    questionLabel.append(question);
-    const ask = cell('button', '基于证据提问', 'ghost small-button write-action'); ask.type = 'submit';
-    questionForm.append(questionLabel, ask);
-    questionForm.addEventListener('submit', async e => {
-      e.preventDefault(); ask.disabled = true;
-      aiResult.replaceChildren(cell('p', '正在根据当前事件的脱敏证据回答…'));
-      try {
-        const { result } = await api(`/api/events/${event.id}/ai-question`, 'POST', { question: question.value.trim() });
-        showAIResult(result);
-      } catch (error) { aiResult.replaceChildren(cell('p', error.message, 'warning')); }
-      finally { ask.disabled = false; }
-    });
-    evidencePanel.append(analyze, questionForm, aiResult);
-  }
   if (event.acknowledgedAt) responsePanel.prepend(cell('p', `事件已于 ${formatTime(event.acknowledgedAt)} 确认。`));
   else if (event.status === 'open' && canRespond) {
     const acknowledge = cell('button', '确认事件', 'ghost small-button write-action operator-action');
@@ -4177,6 +4245,13 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   const responseForm = document.createElement('form'); responseForm.className = 'response-form operator-action';
   responseForm.append(cell('h4', '处置与恢复验证'));
+  const recoverySamples = cell('div', '', 'actions');
+  const comparison = new Map((replay?.comparison || []).map(point => [point.phase, point]));
+  const verifiedAfter = [replay?.recovery, comparison.get('after')].find(point => point?.sampleId);
+  for (const [label, point] of [['故障前采样', comparison.get('before')], ['峰值采样', replay?.peak], ['恢复后采样', verifiedAfter]]) {
+    if (point?.sampleId) recoverySamples.append(incidentPointSource(event, point, label));
+  }
+  if (recoverySamples.childElementCount) responseForm.append(recoverySamples);
   const phaseLabel = cell('label', '记录类型');
   const phase = document.createElement('select');
   for (const [value, label] of [['diagnosis', '诊断记录'], ['mitigation', '处置记录'], ['handoff', '值班交接'], ['false_positive', '误报复核'],
@@ -4191,7 +4266,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   note.rows = 3; note.placeholder = '记录核查、处置或恢复验证依据'; noteLabel.append(note);
   const sampleLabel = cell('label', '成功采样 ID');
   const sample = document.createElement('input'); sample.placeholder = '恢复后成功采样的 UUID';
-  sample.value = [...event.evidence].reverse().find(item =>
+  sample.value = verifiedAfter?.sampleId || [...event.evidence].reverse().find(item =>
     ['collection_recovered', 'alert_recovered'].includes(item.kind) && item.payload?.sampleId)?.payload.sampleId || '';
   sampleLabel.append(sample);
   const syncPhase = () => { sampleLabel.hidden = phase.value !== 'recovery_verification';
@@ -4280,7 +4355,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_evidence_review') text = (evidence.payload.result?.model || '模型') + ' · ' +
       (evidence.payload.result?.claims?.length || 0) + ' 条带引用的审核结论';
-    if (evidence.kind === 'event_handoff') text = `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
+    if (evidence.kind === 'event_handoff') text = evidence.payload.action === 'accepted' ?
+      `${evidence.payload.actor} 已确认接手` : `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
     if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
     if (evidence.kind === 'work_order_decision') text = `${evidence.payload.actor || '独立审批账号'} ${evidence.payload.decision === 'approved' ? '批准' : '驳回'}工单 ${evidence.payload.workOrderId}`;
     if (evidence.kind === 'work_order_executed') text = `${evidence.payload.actor || '管理员'} 执行工单 ${evidence.payload.workOrderId} · ${evidence.payload.status === 'completed' ? '已完成' : workErrorLabels[evidence.payload.errorCode] || '执行失败'}${evidence.payload.sampleId ? ' · 样本 ' + evidence.payload.sampleId : ''}`;
@@ -4335,6 +4411,11 @@ async function boot() {
     organizations = [];
   }
   if (session.csrf !== csrf) {
+    aiModelRequest++;
+    aiModelSettings = null;
+    aiModelForm.reset();
+    aiModelFields.disabled = true;
+    $('ai-model-status').textContent = '';
     readinessRetry = [];
     readinessSelection.clear();
     $('asset-readiness-results').replaceChildren();

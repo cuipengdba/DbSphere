@@ -221,7 +221,9 @@ func TestAutomaticAIWorkerKeepsValidatedAdvice(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAutoAI(ctx, stub, client, 20, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		runAutoAI(ctx, stub, func(context.Context) (ai.ActiveSettings, error) {
+			return ai.ActiveSettings{Client: client, Settings: ai.Settings{AutoSummary: true, DailyLimit: 20}}, nil
+		}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 	select {
 	case result := <-stub.completed:

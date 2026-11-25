@@ -443,8 +443,13 @@
         });
         timeline.push(link);
       }
-      for (const row of buckets.filter(item => item.identityChanged || item.counterReset).slice(-8)) {
-        timeline.push(node('span', `${formatTime(row.at)}  ${row.identityChanged ? '容器实例变更' : '计数器重置'}`));
+      for (const row of buckets.filter(item => item.changeSampleId).slice(-8)) {
+        const changes = [row.identityChanged && '容器实例变更', row.counterReset && '计数器重置', row.podChanged && 'Pod UID 变更',
+          row.nodeChanged && '节点 UID 变更', row.hostRebooted && 'Linux 重启'].filter(Boolean);
+        const link = node('a', `${formatTime(row.at)}  ${changes.join(' · ')}`);
+        link.href = `/api/assets/${route.asset}/samples/${row.changeSampleId}`;
+        link.target = '_blank'; link.rel = 'noopener';
+        timeline.push(link);
       }
       get('events').replaceChildren(...(timeline.length ? timeline : [node('p', '当前时段没有记录到存储相关事件。', 'storage-empty')]));
       showGrafana();
@@ -524,24 +529,38 @@
     }
 
     function renderIdentity(asset, latest, sample) {
-      const storage = latest?.storage, parts = [];
+      const storage = latest?.storage;
+      const chain = node('div', '', 'storage-topology');
+      const actions = node('div', '', 'storage-topology-actions');
       const add = (label, value, detail, action) => {
         if (!value) return;
         const item = node(action ? 'button' : 'span', null, 'storage-identity-item');
         item.append(node('small', label), node('strong', value));
         if (detail) item.append(node('small', detail));
         if (action) { item.type = 'button'; item.onclick = action; }
-        parts.push(item);
+        chain.append(item);
       };
       const openResources = () => { route.topic = 'resources'; restart(); render(); };
       const pod = storage?.pod || asset?.pod;
       const host = storage?.node || asset?.linuxHost;
-      add('PostgreSQL 实例', asset?.name, latest?.at ? formatTime(latest.at) : '暂无采样');
+      const returnToEvent = route.return?.startsWith('incidents?') ? route.return : '';
+      const monitoring = new URLSearchParams({ instance: route.asset, tab: 'infra' });
+      if (result?.from && result?.to) {
+        monitoring.set('from', result.from);
+        monitoring.set('to', result.to);
+      }
+      if (route.event && returnToEvent) {
+        monitoring.set('event', route.event);
+        monitoring.set('incidentReturn', returnToEvent);
+      }
+      add('数据库实例', asset?.name, latest?.at ? '窗口内最近一次采样 · ' + formatTime(latest.at) : '暂无采样', () => {
+        location.hash = 'monitoring?' + monitoring;
+      });
       add('容器', route.container || storage?.primary, sample?.id ? `容器 ID ${sample.id}` : '容器身份未核对', () => {
         route.topic = 'containers'; restart(); render();
       });
-      add('Pod', pod, storage?.podUID ? `${storage.namespace || ''} · UID ${storage.podUID}` : 'Pod UID 未核对', openResources);
-      add(host && pod ? '节点' : 'Linux 主机', host || latest?.host?.endpoint,
+      add('Kubernetes Pod', pod, storage?.podUID ? `${storage.namespace || ''} · UID ${storage.podUID}` : 'Pod UID 未核对', openResources);
+      add(host && pod ? 'Kubernetes Node' : 'Linux 主机', host || latest?.host?.endpoint,
         storage?.nodeUID ? `UID ${storage.nodeUID}` : latest?.host?.endpoint || '节点采集源未知', openResources);
       for (const link of (sample?.deviceLinks || []).slice(0, 4)) {
         add('节点块设备', link.nodeDevice, `已核对设备号 ${link.device} · ${formatTime(link.to)}`, () => {
@@ -558,22 +577,32 @@
           route.pvc = claim.name; route.pvcUid = claim.uid || ''; route.topic = 'claims'; restart(); render();
         });
       }
-      if (asset && result?.from && result?.to) {
-        const panel = node('a', '查看环境同窗');
-        panel.href = '#monitoring?' + new URLSearchParams({ instance: asset.id, tab: 'infra', from: result.from, to: result.to });
-        parts.push(panel);
-      }
       if (asset && latest?.sampleId) {
         const raw = node('a', '原始采样');
         raw.href = `/api/assets/${asset.id}/samples/${latest.sampleId}`;
         raw.target = '_blank'; raw.rel = 'noopener';
-        parts.push(raw);
+        actions.append(raw);
       }
       const cursor = node('a', '查看游标采样', 'monitor-link');
       cursor.dataset.storage = 'cursor-sample';
       cursor.hidden = true;
-      parts.push(cursor);
-      get('identity').replaceChildren(...parts);
+      actions.append(cursor);
+      const buckets = result?.buckets || [];
+      const total = buckets.reduce((sum, row) => sum + row.samples, 0);
+      const coverage = node('div', '', 'storage-topology-coverage');
+      const candidates = [['hosts', 'Linux / node_exporter', latest?.host?.status],
+        ['pods', 'Kubernetes API', latest?.kubernetes?.status],
+        ['available', '容器 / cgroup', sample?.status || storage?.status]];
+      for (const [key, label, state] of candidates) {
+        if (!state && !(key === 'pods' && asset?.runtime === 'k8s')) continue;
+        const valid = buckets.reduce((sum, row) => sum + (row[key] || 0), 0);
+        coverage.append(node('small', `${label} · ${valid}/${total} 有效 · ${statusNames[state] || '缺采'}`));
+      }
+      if (sample?.observedAt && latest?.at) {
+        const skew = Math.round((Date.parse(latest.at) - Date.parse(sample.observedAt)) / 1000);
+        if (Number.isFinite(skew)) coverage.append(node('small', `容器采样与平台采样相差 ${Math.abs(skew)} 秒`));
+      }
+      get('identity').replaceChildren(node('h3', '跨层身份与采集覆盖'), chain, coverage, actions);
     }
 
     function draw() {

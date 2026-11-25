@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { createServer } = require('node:http');
 const { execFileSync } = require('node:child_process');
 const { join } = require('node:path');
-const { randomUUID } = require('node:crypto');
 const { chromium } = require('playwright');
 
 const origin = 'http://127.0.0.1:18080';
@@ -68,7 +69,7 @@ function runFixtureSQL(sql) {
   const native = process.env.DBSPHERE_BROWSER_PSQL;
   execFileSync(native || 'docker', native ? ['-h', '127.0.0.1', '-p', '15434', ...args] :
     ['exec', '-i', process.env.POSTGRES_CONTAINER, 'psql', ...args], {
-    env: { ...process.env, PGPASSWORD: 'dbsphere-browser-fixture' }, input: sql
+    env: { ...process.env, PGPASSWORD: native ? process.env.PGPASSWORD : 'dbsphere-browser-fixture' }, input: sql
   });
 }
 
@@ -431,7 +432,7 @@ async function savedDutyView(page, asset) {
   await board('metric-group').selectOption('all');
   await board('compare').selectOption('');
   await page.reload();
-  await board('saved-view').selectOption(label);
+  await board('saved-view').selectOption({label});
   await visible(board('baseline-status'), '虚线基线');
   assert.equal(await board('layout').inputValue(), 'host');
   assert.equal(await board('metric-group').inputValue(), 'infra');
@@ -440,7 +441,12 @@ async function savedDutyView(page, asset) {
   await visible(board('view-status'), '已复制视图链接');
   const shared = await page.evaluate(() => navigator.clipboard.readText());
   assert.equal(new URLSearchParams(new URL(shared).hash.split('?')[1]).get('compare'), 'day');
-  const guestTab = await page.context().newPage();
+  const guestTab = await page.context().browser().newPage();
+  await guestTab.goto(origin);
+  await login(guestTab, 'admin', process.env.DBSPHERE_ADMIN_PASSWORD);
+  await guestTab.locator('[data-nav=wallboard]').waitFor();
+  await guestTab.locator('[data-board=saved-view]').selectOption({label});
+  await visible(guestTab.locator('[data-board=baseline-status]'), '虚线基线');
   await guestTab.goto(shared);
   await visible(guestTab.locator('[data-board=baseline-status]'), '虚线基线');
   assert.equal(await guestTab.locator('[data-board=metric-group]').inputValue(), 'infra');
@@ -937,6 +943,140 @@ async function grafanaReturn(page, asset, event) {
   proof.push('Same-origin Grafana iframe links return to live, fall back from an empty event, or open the matching event with its time window');
 }
 
+async function v3Investigation(page, asset) {
+  const request = (tab, path, method = 'GET', payload) => tab.evaluate(async ({path, method, payload}) => {
+    const {csrf} = await fetch('/api/session').then(reply => reply.json());
+    const response = await fetch(path, {method, headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'},
+      body: payload ? JSON.stringify(payload) : undefined});
+    return {status: response.status, data: await response.json()};
+  }, {path, method, payload});
+  const event = randomUUID();
+  const evidence = randomUUID();
+  runFixtureSQL(`INSERT INTO event_keys(id,asset_id,started_at) VALUES ('${event}','${asset}',now()-interval '6 minutes');
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+    VALUES ('${event}','${asset}','pg_lock_wait','V3 锁等待调查','open',now()-interval '6 minutes','latency');
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT '${evidence}','${event}','alert_firing',collected_at,jsonb_build_object('sampleId',id,'value',42,'note','DO-NOT-SEND')
+    FROM samples WHERE asset_id='${asset}' ORDER BY collected_at DESC LIMIT 1;`);
+  const calls = [];
+  const key = 'dbsphere-v3-model-fixture';
+  const model = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk.toString();
+    const input = JSON.parse(raw);
+    calls.push({input, key: req.headers.authorization, url: req.url});
+    const probe = input.messages.length === 1;
+    const content = probe ? 'OK' : JSON.stringify({claims: [{kind: 'verification',
+      text: '请核对同一时段的 PostgreSQL 阻塞采样。', evidenceIds: [evidence]}], uncertainty: '还需核对阻塞会话。'});
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({choices: [{finish_reason: 'stop', message: {content}}]}));
+  });
+  await new Promise(resolve => model.listen(0, '127.0.0.1', resolve));
+  const team = await request(page, '/api/admin/teams', 'POST', {name: 'v3 incident duty', project: 'QA v3', assetIds: [asset]});
+  assert.equal(team.status, 201, JSON.stringify(team.data));
+  const teamId = team.data.team.id;
+  const accounts = {};
+  for (const [name, role, teamIds] of [['v3-owner', 'operator', [teamId]], ['v3-recipient', 'viewer', [teamId]], ['v3-outsider', 'viewer', []]]) {
+    const result = await request(page, '/api/admin/accounts', 'POST', {username: name, role, teamIds, password: key});
+    assert.equal(result.status, 201, JSON.stringify(result.data));
+    accounts[name] = result.data.account.id;
+  }
+  const owner = await page.context().browser().newPage();
+  const recipient = await page.context().browser().newPage();
+  const outsider = await page.context().browser().newPage();
+  const settings = '/api/admin/ai-model';
+  const review = '/api/events/' + event + '/ai-evidence-review';
+  const incident = origin + '/#incidents?event=' + event;
+  const fetchSettings = async () => (await request(page, settings)).data;
+  try {
+    await page.goto(incident);
+    await visible(page.locator('#event-detail'), event);
+    assert.equal((await request(page, review)).data.status, 'no_model');
+    await navigate(page, 'settings');
+    await selectSection(page, 'settings', 'ai-model');
+    const form = page.locator('#ai-model-form');
+    await visible(page.locator('#ai-model-status'), '模型未启用');
+    await form.locator('[name=endpoint]').fill(`http://127.0.0.1:${model.address().port}/v1/chat/completions`);
+    await form.locator('[name=model]').fill('v3-fixture-model');
+    await form.locator('[name=apiKey]').fill(key);
+    await form.locator('[name=enabled]').check();
+    await action(page, form.getByRole('button', {name: '测试连通性'}), 'POST', settings + '/test', 200);
+    await visible(page.locator('#ai-model-status'), '连通性测试成功');
+    assert.equal(calls[0].input.messages[0].content, 'DbSphere connection test. Reply OK.');
+    await action(page, form.getByRole('button', {name: '保存配置'}), 'PUT', settings, 200);
+    await visible(page.locator('#ai-model-status'), '模型已启用');
+    const configured = await fetchSettings();
+    assert.equal(configured.hasKey, true);
+    assert(!JSON.stringify(configured).includes(key));
+    await page.goto(incident);
+    await page.locator('.ai-evidence-panel > summary').click();
+    await page.getByText('预览送审证据 · v3-fixture-model', {exact: true}).click();
+    await visible(page.locator('.ai-evidence-preview'), evidence);
+    assert(!(await page.locator('.ai-evidence-preview').textContent()).includes('DO-NOT-SEND'));
+    const outdated = await request(page, review, 'POST', {preview: 'outdated', question: '检查阻塞时长'});
+    assert.equal(outdated.status, 409);
+    assert.equal(calls.length, 1);
+    await page.getByLabel('核查问题（可选）').fill('检查阻塞时长');
+    await action(page, page.getByRole('button', {name: '请求模型审核'}), 'POST', review, 200);
+    await visible(page.locator('.ai-evidence-panel'), '请核对同一时段的 PostgreSQL 阻塞采样。');
+    assert.equal(calls[1].key, 'Bearer ' + key);
+    assert(calls[1].input.messages[1].content.includes('检查阻塞时长'));
+    assert(!calls[1].input.messages[1].content.includes('DO-NOT-SEND'));
+    await page.locator('.ai-evidence-panel').getByRole('button', {name: '证据 ' + evidence.slice(0, 8)}).click();
+    await page.locator('#event-evidence-' + evidence).waitFor();
+    const disabled = await request(page, settings, 'PUT', {
+      revision: configured.revision, endpoint: configured.endpoint, model: configured.model, dailyLimit: configured.dailyLimit,
+      reviewSeconds: configured.reviewSeconds, enabled: false, keepKey: true
+    });
+    assert.equal(disabled.status, 200, JSON.stringify(disabled.data));
+    assert.equal((await request(page, review)).data.status, 'no_model');
+    await page.reload();
+    await page.locator('.ai-evidence-panel > summary').click();
+    await visible(page.locator('.ai-evidence-panel'), '规则核查 · 模型未接入');
+    assert.equal(await page.getByRole('button', {name: '请求模型审核'}).count(), 0);
+    for (const [tab, user] of [[owner, 'v3-owner'], [recipient, 'v3-recipient'], [outsider, 'v3-outsider']]) {
+      await tab.goto(origin);
+      await login(tab, user, key);
+      await tab.locator('[data-nav=wallboard]').waitFor();
+    }
+    assert.equal((await request(recipient, settings)).status, 403);
+    assert.equal((await request(outsider, '/api/duty-views', 'PUT', {name: '非法团队视图', path: 'wallboard?window=15', teamId})).status, 404);
+    const board = name => owner.locator(`[data-board="${name}"]`);
+    await board('view-name').fill('v3 team shift');
+    await board('view-team').selectOption(teamId);
+    await board('layout').selectOption('host');
+    await board('save-view-button').click();
+    await visible(board('view-status'), '已保存 v3 team shift');
+    const saved = (await request(owner, '/api/duty-views')).data.views.find(view => view.teamId === teamId);
+    assert(saved);
+    const teamLink = origin + '/#wallboard?view=' + saved.id;
+    await recipient.goto(teamLink);
+    await visible(recipient.locator('[data-board=view-status]'), '已打开 v3 team shift');
+    assert.equal(await recipient.locator('[data-board=layout]').inputValue(), 'host');
+    assert(await recipient.locator('[data-board=delete-view]').isDisabled());
+    await outsider.goto(teamLink);
+    await visible(outsider.locator('[data-board=view-status]'), '团队视图不可用');
+    await page.goto(incident);
+    await page.getByRole('button', {name: '核对同窗跨层身份'}).click();
+    await visible(page.locator('[data-storage=identity]'), '跨层身份与采集覆盖');
+    await page.getByRole('link', {name: '返回事件证据'}).click();
+    await visible(page.locator('#event-detail'), event);
+    const handoff = '/api/events/' + event + '/handoff';
+    assert.equal((await request(page, handoff, 'POST', {accountId: accounts['v3-owner'], note: '核对阻塞链与原始采样'})).status, 200);
+    await owner.goto(incident);
+    await owner.getByRole('button', {name: '处置', exact: true}).click();
+    const assignment = (await request(owner, handoff)).data.assignment;
+    await action(owner, owner.getByRole('button', {name: '确认接手当前事件'}), 'POST', handoff + '/accept', 200);
+    await visible(owner.locator('#event-detail'), '已接手');
+    assert.equal((await request(owner, handoff + '/accept', 'POST', {assignedAt: assignment.assignedAt})).status, 200);
+    assert((await request(owner, handoff)).data.assignment.acceptedAt);
+    proof.push('Configured and disabled a loopback model from the browser, verified preview and citation, isolated team views, followed cross-layer identity, and accepted the same incident as a named operator');
+  } finally {
+    await Promise.all([owner.close(), recipient.close(), outsider.close()]);
+    await new Promise(resolve => model.close(resolve));
+  }
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -957,6 +1097,7 @@ async function grafanaReturn(page, asset, event) {
     await operations(page, asset);
     await pagination(page, asset);
     await dutyMatrix(page);
+    await v3Investigation(page, asset);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

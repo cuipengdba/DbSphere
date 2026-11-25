@@ -370,7 +370,7 @@ func (s *Postgres) AccessHandoff(ctx context.Context, eventID string) (any, erro
 	}
 	var assignment json.RawMessage
 	err = s.pool.QueryRow(ctx, `SELECT jsonb_build_object('accountId',h.account_id,'username',a.username,
-		'assignedBy',h.assigned_by,'assignedAt',h.assigned_at)
+		'assignedBy',h.assigned_by,'assignedAt',h.assigned_at,'acceptedAt',h.accepted_at)
 		FROM event_handoffs h JOIN access_accounts a ON a.id=h.account_id WHERE h.event_id=$1`, eventID).Scan(&assignment)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -418,12 +418,56 @@ func (s *Postgres) SetAccessHandoff(ctx context.Context, eventID, accountID, not
 	now, actor := time.Now().UTC(), accessActor(ctx, "admin")
 	if _, err = tx.Exec(ctx, `INSERT INTO event_handoffs(event_id,account_id,assigned_by,assigned_at)
 		VALUES($1,$2,$3,$4) ON CONFLICT(event_id) DO UPDATE
-		SET account_id=excluded.account_id,assigned_by=excluded.assigned_by,assigned_at=excluded.assigned_at`,
+		SET account_id=excluded.account_id,assigned_by=excluded.assigned_by,assigned_at=excluded.assigned_at,accepted_at=NULL`,
 		eventID, accountID, actor, now); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]string{"actor": actor, "assignedTo": username, "accountId": accountID, "note": note})
 	if _, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+		VALUES(gen_random_uuid(),$1,'event_handoff',$2,$3)`, eventID, now, payload); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Postgres) AcceptAccessHandoff(ctx context.Context, eventID, accountID string, assignedAt time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status, assetID string
+	err = tx.QueryRow(ctx, `SELECT status,asset_id::text FROM events WHERE id=$1
+		ORDER BY started_at DESC LIMIT 1 FOR UPDATE`, eventID).Scan(&status, &assetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrEventNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != "open" {
+		return ErrWorkOrderConflict
+	}
+	var username string
+	var accepted *time.Time
+	err = tx.QueryRow(ctx, `SELECT a.username,h.accepted_at FROM event_handoffs h
+		JOIN access_accounts a ON a.id=h.account_id AND a.enabled AND a.role='operator'
+		WHERE h.event_id=$1 AND h.account_id=$2 AND h.assigned_at=$3 AND EXISTS(
+			SELECT FROM access_memberships m JOIN access_team_assets t USING(team_id)
+			WHERE m.account_id=a.id AND t.asset_id=$4) FOR UPDATE OF h`, eventID, accountID, assignedAt, assetID).
+		Scan(&username, &accepted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAccessMissing
+	}
+	if err != nil || accepted != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if _, err := tx.Exec(ctx, `UPDATE event_handoffs SET accepted_at=$2 WHERE event_id=$1`, eventID, now); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"action": "accepted", "actor": username, "assignedTo": username, "accountId": accountID})
+	if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 		VALUES(gen_random_uuid(),$1,'event_handoff',$2,$3)`, eventID, now, payload); err != nil {
 		return err
 	}

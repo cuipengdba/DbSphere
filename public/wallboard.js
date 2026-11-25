@@ -57,6 +57,10 @@
     let snapshot, historyData, currentRange, pending, timer, active = false, paused = false;
     let baselineData, baselineError = false;
     let savedView = '';
+    let viewDirectory = {views: [], teams: [], canSave: false};
+    let viewGeneration = 0;
+    let viewRequest;
+    const viewAPI = '/api/duty-views';
     let snapshotKey = '', historyKey = '', renderedAssets = '', renderedEvents = '';
     let lastStatus = '', integrationsReady = false, checkIntegrationAfter = 0;
     const renderedHealth = new Map();
@@ -162,7 +166,7 @@
     }
 
     const savedKey = () => 'dbsphere.wallboard.views.' + JSON.stringify(account());
-    function savedViews() {
+    function browserViews() {
       try {
         const values = JSON.parse(localStorage.getItem(savedKey()));
         return Array.isArray(values) ? values.filter(row => typeof row?.name === 'string' && row.name.length <= 72 &&
@@ -172,18 +176,65 @@
 
     function renderSavedViews() {
       const select = get('saved-view');
-      const names = savedViews().map(row => row.name);
-      const labelKey = JSON.stringify(names);
+      const {views, teams, canSave} = viewDirectory;
+      const labelKey = JSON.stringify(views.map(({id, name, team}) => [id, name, team]));
       if (select.dataset.options !== labelKey) {
-        select.replaceChildren(new Option('选择视图', ''), ...names.map(name => new Option(name, name)));
+        select.replaceChildren(new Option('选择视图', ''), ...views.map(view =>
+          new Option(view.team ? view.name + ' · ' + view.team : view.name, view.id)));
         select.dataset.options = labelKey;
       }
-      if (!names.includes(savedView)) savedView = '';
+      const teamSelect = get('view-team');
+      const teamKey = JSON.stringify(teams);
+      if (teamSelect.dataset.options !== teamKey) {
+        const selected = teamSelect.value;
+        teamSelect.replaceChildren(new Option('个人', ''), ...teams.map(team => new Option(team.name, team.id)));
+        teamSelect.dataset.options = teamKey;
+        if (teams.some(team => team.id === selected)) teamSelect.value = selected;
+      }
+      const selected = views.find(view => view.id === savedView);
       select.value = savedView;
-      get('delete-view').disabled = !savedView;
+      get('delete-view').disabled = !selected?.canEdit;
+      get('save-view-button').disabled = !canSave;
+      get('import-views').hidden = !canSave || !browserViews().some(view =>
+        !views.some(existing => !existing.teamId && existing.name === view.name));
+      get('share-team-view').hidden = !selected?.teamId;
+    }
+
+    function fetchViews() {
+      if (viewRequest) return viewRequest;
+      const generation = viewGeneration;
+      viewRequest = api(viewAPI).then(result => {
+        if (generation !== viewGeneration) return;
+        viewDirectory = {views: result.views || [], teams: result.teams || [], canSave: result.canSave};
+        renderSavedViews();
+      }).finally(() => { if (generation === viewGeneration) viewRequest = undefined; });
+      return viewRequest;
+    }
+
+    function openSavedView(view) {
+      savedView = view.id;
+      get('view-name').value = view.name;
+      get('view-team').value = view.teamId || '';
+      get('view-status').textContent = `已打开 ${view.name}`;
+      renderSavedViews();
+      location.hash = view.path;
     }
 
     function restore(params) {
+      const shared = id(params.get('view'));
+      if (shared) {
+        const source = location.hash;
+        const generation = viewGeneration;
+        void fetchViews().then(() => {
+          if (generation !== viewGeneration || location.hash !== source) return;
+          const view = viewDirectory.views.find(row => row.id === shared && row.teamId);
+          if (view) openSavedView(view);
+          else get('view-status').textContent = '团队视图不可用或当前账号无权打开。';
+        }).catch(error => {
+          if (generation === viewGeneration && location.hash === source) get('view-status').textContent = error.message;
+        });
+        return;
+      }
       const next = currentState();
       for (const [key, limit] of Object.entries(scopeFields)) next[key] = (params.get(key) || '').slice(0, limit);
       if (boardStates.has(params.get('state'))) next.state = params.get('state');
@@ -226,6 +277,7 @@
       if (visible === active) return;
       active = visible;
       if (visible) {
+        void fetchViews().catch(error => { if (active) get('view-status').textContent = error.message; });
         void refresh(true);
         return;
       }
@@ -243,6 +295,9 @@
       baselineData = undefined;
       baselineError = false;
       savedView = '';
+      viewGeneration++;
+      viewRequest = undefined;
+      viewDirectory = {views: [], teams: [], canSave: false};
       get('view-name').value = '';
       get('view-status').textContent = '';
       get('view-url').hidden = true;
@@ -988,42 +1043,71 @@
       selection.change = '';
       saveRoute(); refreshSelection();
     });
-    get('save-view').addEventListener('submit', event => {
+    get('save-view').addEventListener('submit', async event => {
       event.preventDefault();
       const name = get('view-name').value.trim();
       if (!name) { get('view-status').textContent = '请输入视图名称。'; return; }
-      const views = savedViews();
-      const prior = views.filter(row => row.name !== name);
-      if (prior.length >= 20) { get('view-status').textContent = '可保存 20 个视图，请先删除一个已有视图。'; return; }
-      const entry = { name, path: savedPath() };
+      const teamId = get('view-team').value;
+      const generation = viewGeneration;
+      const button = get('save-view-button');
+      button.disabled = true;
       try {
-        localStorage.setItem(savedKey(), JSON.stringify([entry, ...prior]));
-        savedView = name;
-        renderSavedViews();
-        get('view-status').textContent = `已保存 ${name}`;
-      } catch { get('view-status').textContent = '浏览器存储暂不可用，可以复制视图链接。'; }
+        const result = await api(viewAPI, 'PUT', {name, path: savedPath(), teamId});
+        if (generation !== viewGeneration) return;
+        savedView = result.id;
+        await fetchViews();
+        if (generation === viewGeneration) get('view-status').textContent = `已保存 ${name}`;
+      } catch (error) {
+        if (generation === viewGeneration) get('view-status').textContent = error.message;
+      } finally {
+        if (generation === viewGeneration) button.disabled = !viewDirectory.canSave;
+      }
     });
     get('saved-view').addEventListener('change', () => {
       savedView = get('saved-view').value;
-      const view = savedViews().find(row => row.name === savedView);
+      const view = viewDirectory.views.find(row => row.id === savedView);
       renderSavedViews();
-      if (!view) return;
-      get('view-name').value = view.name;
-      get('view-status').textContent = `已打开 ${view.name}`;
-      location.hash = view.path;
+      if (view) openSavedView(view);
     });
-    get('delete-view').addEventListener('click', () => {
-      if (!savedView) return;
+    get('delete-view').addEventListener('click', async () => {
+      const selected = viewDirectory.views.find(view => view.id === savedView && view.canEdit);
+      if (!selected) return;
+      const generation = viewGeneration;
+      get('delete-view').disabled = true;
       try {
-        localStorage.setItem(savedKey(), JSON.stringify(savedViews().filter(row => row.name !== savedView)));
-        get('view-status').textContent = `已删除 ${savedView}`;
-        savedView = '';
-        get('view-name').value = '';
-        renderSavedViews();
-      } catch { get('view-status').textContent = '浏览器存储暂不可用。'; }
+        await api(viewAPI + '/' + selected.id, 'DELETE');
+        if (generation !== viewGeneration) return;
+        if (savedView === selected.id) { savedView = ''; get('view-name').value = ''; }
+        await fetchViews();
+        if (generation === viewGeneration) get('view-status').textContent = `已删除 ${selected.name}`;
+      } catch (error) {
+        if (generation === viewGeneration) { renderSavedViews(); get('view-status').textContent = error.message; }
+      }
     });
-    get('share-view').addEventListener('click', async () => {
-      const url = new URL(location.href); url.hash = savedPath();
+    get('import-views').addEventListener('click', async () => {
+      const generation = viewGeneration;
+      const button = get('import-views');
+      const names = new Set(viewDirectory.views.filter(view => !view.teamId).map(view => view.name));
+      button.disabled = true;
+      let count = 0;
+      let failure = '';
+      try {
+        for (const view of browserViews()) {
+          if (generation !== viewGeneration) return;
+          if (names.has(view.name)) continue;
+          await api(viewAPI, 'PUT', {...view, import: true});
+          names.add(view.name);
+          count++;
+        }
+      } catch (error) { failure = error.message; }
+      if (generation !== viewGeneration) return;
+      await fetchViews().catch(error => { failure ||= error.message; });
+      if (generation !== viewGeneration) return;
+      button.disabled = false;
+      get('view-status').textContent = [`已导入 ${count} 个视图`, failure].filter(Boolean).join(' · ');
+    });
+    async function copyView(path) {
+      const url = new URL(location.href); url.hash = path;
       try {
         await navigator.clipboard.writeText(url.href);
         get('view-status').textContent = '已复制视图链接';
@@ -1032,6 +1116,10 @@
         field.value = url.href; field.hidden = false; field.focus(); field.select();
         get('view-status').textContent = '可复制下方的视图链接。';
       }
+    }
+    get('share-view').addEventListener('click', () => void copyView(savedPath()));
+    get('share-team-view').addEventListener('click', () => {
+      if (viewDirectory.views.some(view => view.id === savedView && view.teamId)) void copyView('wallboard?view=' + savedView);
     });
     get('event-list').addEventListener('change', () => renderEvents(snapshot?.events || []));
     get('pause').addEventListener('click', () => {

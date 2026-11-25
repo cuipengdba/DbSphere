@@ -33,7 +33,7 @@ const accessUUID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 
 var accessAccountPath = regexp.MustCompile("^/api/admin/accounts/(" + accessUUID + ")(/rotate)?$")
 var accessTeamPath = regexp.MustCompile("^/api/admin/teams/(" + accessUUID + ")$")
-var eventHandoffPath = regexp.MustCompile("^/api/events/(" + accessUUID + ")/handoff$")
+var eventHandoffPath = regexp.MustCompile("^/api/events/(" + accessUUID + ")/handoff(/accept)?$")
 
 func accessDigest(master []byte, token string) string {
 	return security.CSRFToken(master, "named-session:"+token)
@@ -215,9 +215,29 @@ func prepareOIDCBinding(input *storepkg.AccessAccountInput, config *AuthConfig) 
 	return true
 }
 
-func handleEventHandoff(w http.ResponseWriter, r *http.Request, db accessStore, role, eventID string) {
+func handleEventHandoff(w http.ResponseWriter, r *http.Request, db accessStore, role, eventID, accept, accountID string) {
 	if db == nil || (role != "admin" && role != "operator") {
 		respond(w, http.StatusForbidden, map[string]string{"error": "Operator access required"})
+		return
+	}
+	if accept != "" {
+		type handoffAcceptance interface {
+			AcceptAccessHandoff(context.Context, string, string, time.Time) error
+		}
+		storage, ok := db.(handoffAcceptance)
+		if r.Method != http.MethodPost || !ok || role != "operator" || accountID == "" {
+			respond(w, http.StatusForbidden, map[string]string{"error": "仅当前接班人可确认交接"})
+			return
+		}
+		var input struct {
+			AssignedAt time.Time `json:"assignedAt"`
+		}
+		if readJSONLimit(w, r, &input, 256) != nil || input.AssignedAt.IsZero() {
+			respond(w, http.StatusBadRequest, map[string]string{"error": "请刷新事件后再确认交接"})
+			return
+		}
+		err := storage.AcceptAccessHandoff(r.Context(), eventID, accountID, input.AssignedAt)
+		writeAccessResult(w, http.StatusOK, map[string]bool{"ok": true}, err)
 		return
 	}
 	switch r.Method {

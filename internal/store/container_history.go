@@ -141,6 +141,15 @@ const containerHistorySQL = `WITH observations AS (
 		WHEN $5<>'' AND c->>'status'='ok' THEN jsonb_path_query_first(c->'deviceLinks',
 			'$[*] ? (@.device == $dev && @.scope == "node_device")',jsonb_build_object('dev',$5::text))->>'nodeDevice'
 		END AS name) d
+), identity AS (
+	SELECT *, c->>'id' <> previous#>>ARRAY['containerStorage','containers',coalesce(nullif($4,''),storage->>'primary'),'id']
+		OR c->>'identityChanged'='true' AS container_changed,
+		coalesce(storage->>'podUID', metrics#>>'{k8s,pod,uid}') <>
+			coalesce(previous#>>'{containerStorage,podUID}',previous#>>'{k8s,pod,uid}') AS pod_changed,
+		coalesce(storage->>'nodeUID', metrics#>>'{k8s,node,uid}') <>
+			coalesce(previous#>>'{containerStorage,nodeUID}',previous#>>'{k8s,node,uid}') AS node_changed,
+		metrics#>>'{linux,bootTimeSeconds}' <> previous#>>'{linux,bootTimeSeconds}' AS host_rebooted
+	FROM points
 ), pg_delta AS (
 	SELECT bucket,m.name,to_jsonb(CASE WHEN m.rate THEN (numbers.current-numbers.prior)/extract(epoch FROM collected_at-previous_at)
 		ELSE numbers.current-numbers.prior END) AS v
@@ -196,10 +205,14 @@ const containerHistorySQL = `WITH observations AS (
 		count(*) FILTER (WHERE metrics#>>'{k8s,status}'='ok') AS pods,
 		count(*) FILTER (WHERE pvc IS NOT NULL) AS claims,
 		(array_agg(id ORDER BY collected_at DESC,id DESC))[1] AS sample_id,max(collected_at) AS sample_at,
-		coalesce(bool_or(c->'identityChanged'='true'::jsonb),false) OR count(DISTINCT c->>'id')>1 AS changed,
-		bool_or(c->'counterReset'='true'::jsonb) AS reset
-	FROM points GROUP BY bucket
+		coalesce(bool_or(container_changed),false) AS changed,
+		coalesce(bool_or(pod_changed),false) AS pod_changed,coalesce(bool_or(node_changed),false) AS node_changed,
+		coalesce(bool_or(host_rebooted),false) AS host_rebooted,coalesce(bool_or(c->>'counterReset'='true'),false) AS reset,
+		(array_agg(id ORDER BY collected_at DESC,id DESC) FILTER(
+			WHERE container_changed OR pod_changed OR node_changed OR host_rebooted OR c->>'counterReset'='true'))[1] AS change_sample
+	FROM identity GROUP BY bucket
 )
 SELECT jsonb_build_object('at',c.bucket,'samples',c.samples,'available',c.available,'identityChanged',c.changed,'counterReset',c.reset,
+	'podChanged',c.pod_changed,'nodeChanged',c.node_changed,'hostRebooted',c.host_rebooted,'changeSampleId',c.change_sample,
 	'hosts',c.hosts,'pods',c.pods,'claims',c.claims,'latestSampleId',c.sample_id,'latestAt',c.sample_at,'series',coalesce(b.series,'{}'::jsonb))
 FROM coverage c LEFT JOIN bucket_series b USING(bucket) ORDER BY c.bucket`

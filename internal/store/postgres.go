@@ -507,6 +507,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateLogRetests(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log retest results: %w", err)
 	}
+	if err := migrateDutyViews(ctx, tx); err != nil {
+		return fmt.Errorf("migrate duty views and handoff: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

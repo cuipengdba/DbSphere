@@ -208,12 +208,6 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	aiClient, err := ai.New(ai.Config{URL: os.Getenv("DBSPHERE_AI_CHAT_URL"),
-		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"),
-		AllowRemote: remoteAI == "true", ReviewSchema: reviewSchema == "true", ReviewTimeout: reviewTimeout})
-	if err != nil {
-		return err
-	}
 	aiDailyLimit := 20
 	if raw := os.Getenv("DBSPHERE_AI_DAILY_LIMIT"); raw != "" {
 		aiDailyLimit, err = strconv.Atoi(raw)
@@ -225,8 +219,12 @@ func run(log *slog.Logger) error {
 	if autoAI != "" && autoAI != "true" && autoAI != "false" {
 		return fmt.Errorf("DBSPHERE_AI_AUTO_SUMMARY must be true or false")
 	}
-	if autoAI == "true" && aiClient == nil {
-		return fmt.Errorf("automatic AI analysis requires a configured model")
+	aiRuntime, err := ai.NewRuntime(pg, cfg.MasterKey, ai.Settings{Endpoint: os.Getenv("DBSPHERE_AI_CHAT_URL"),
+		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"), DailyLimit: aiDailyLimit,
+		ReviewSeconds: int(reviewTimeout / time.Second), ReviewSchema: reviewSchema == "true", AutoSummary: autoAI == "true"},
+		remoteAI == "true", os.Getenv("DBSPHERE_AI_ALLOWED_ORIGINS"))
+	if err != nil {
+		return err
 	}
 	collectorRuntime := collectorstate.New(cfg.AutoCollect, time.Duration(cfg.CollectEvery)*time.Second,
 		cfg.CollectWorkers, time.Now())
@@ -234,10 +232,6 @@ func run(log *slog.Logger) error {
 	pg.SetPlatformReplica(replica.ID)
 	if targets := os.Getenv("DBSPHERE_PROMETHEUS_TARGETS_FILE"); targets != "" && observability.PrometheusURL != nil {
 		go runPrometheusDiscovery(ctx, pg, targets, log)
-	}
-	writeTimeout := 45 * time.Second
-	if aiClient != nil {
-		writeTimeout = max(writeTimeout, reviewTimeout+10*time.Second)
 	}
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: httpapi.New(pg,
 		httpapi.AuthConfig{MasterKey: cfg.MasterKey, PasswordHash: passwordHash,
@@ -255,9 +249,9 @@ func run(log *slog.Logger) error {
 			Operations:           operations,
 			Observability:        observability,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
-			OTLPToken:            cfg.OTLPToken, AI: aiClient, AIDailyLimit: aiDailyLimit}),
+			OTLPToken:            cfg.OTLPToken, AIRuntime: aiRuntime, AIDailyLimit: aiDailyLimit}),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: writeTimeout, IdleTimeout: 60 * time.Second}
+		WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return err
@@ -279,14 +273,10 @@ func run(log *slog.Logger) error {
 		runLogAnalysis(ctx, pg, log)
 	}()
 	maintenanceDone := make(chan struct{})
-	var autoModel *ai.Client
-	if autoAI == "true" {
-		autoModel = aiClient
-	}
 	go func() {
 		defer close(maintenanceDone)
 		runPlatform(ctx, pg, replica, collectorRuntime, func(leaderCtx context.Context) {
-			runMaintenance(leaderCtx, pg, cfg, notifyConfig, autoModel, aiDailyLimit, log)
+			runMaintenance(leaderCtx, pg, cfg, notifyConfig, aiRuntime, log)
 		}, log)
 	}()
 	if cfg.AutoCollect {
@@ -363,19 +353,29 @@ type autoAIStore interface {
 	CompleteAutomaticAIInvocation(context.Context, string, string, *ai.Result) error
 }
 
-func runAutoAI(ctx context.Context, pg autoAIStore, model *ai.Client, dailyLimit int, log *slog.Logger) {
+func runAutoAI(ctx context.Context, pg autoAIStore, settings func(context.Context) (ai.ActiveSettings, error), log *slog.Logger) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		ids, err := pg.AutoAIEventIDs(ctx, 5)
-		if err != nil && ctx.Err() == nil {
-			log.Error("automatic AI event scan failed", "error", err)
+		var ids []string
+		config, err := settings(ctx)
+		if err == nil && config.Client != nil && config.Settings.AutoSummary {
+			ids, err = pg.AutoAIEventIDs(ctx, 5)
+			if err != nil && ctx.Err() == nil {
+				log.Error("automatic AI event scan failed", "error", err)
+			}
 		}
 		for _, eventID := range ids {
 			analyzeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			config, err := settings(analyzeCtx)
+			if err != nil || config.Client == nil || !config.Settings.AutoSummary {
+				cancel()
+				break
+			}
+			model, dailyLimit := config.Client, config.Settings.DailyLimit
 			prompt, evidenceIDs, err := pg.EventAIEvidence(analyzeCtx, eventID)
 			if err != nil || len(evidenceIDs) == 0 {
 				cancel()

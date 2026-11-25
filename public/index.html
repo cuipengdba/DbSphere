@@ -267,10 +267,13 @@
           <label>值班视图<select data-board="saved-view" aria-label="值班视图"><option value="">选择视图</option></select></label>
           <form data-board="save-view" class="wallboard-view-form">
             <label>视图名称<input data-board="view-name" aria-label="视图名称" maxlength="72" required></label>
-            <button type="submit" class="ghost">保存视图</button>
+            <label>保存到<select data-board="view-team" aria-label="视图保存范围"><option value="">个人</option></select></label>
+            <button type="submit" class="ghost" data-board="save-view-button" disabled>保存视图</button>
           </form>
+          <button type="button" class="ghost" data-board="import-views" hidden>导入浏览器视图</button>
           <button type="button" class="ghost" data-board="delete-view" disabled>删除视图</button>
           <button type="button" class="ghost" data-board="share-view">复制当前视图链接</button>
+          <button type="button" class="ghost" data-board="share-team-view" hidden>复制团队视图链接</button>
           <input type="url" data-board="view-url" aria-label="当前视图链接" readonly hidden>
           <small data-board="view-status" role="status"></small>
         </div>
@@ -598,7 +601,32 @@
         <section class="panel" data-section-panel="templates"><div class="section-head"><h2>巡检模板与阈值</h2></div><div id="inspection-templates" class="list"></div></section>
         <section class="panel" data-section-panel="history"><div class="section-head"><div><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
       </div>
-      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="history-tiers">指标保留</button><button type="button" class="admin-only platform-only" data-section="collector">采集器</button><button type="button" class="admin-only platform-only" data-section="platform">平台副本</button><button type="button" class="admin-only" data-section="organizations">组织管理</button><button type="button" class="admin-only" data-section="access">账号和团队</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="history-tiers">指标保留</button><button type="button" class="admin-only platform-only" data-section="collector">采集器</button><button type="button" class="admin-only platform-only" data-section="ai-model">模型接入</button><button type="button" class="admin-only platform-only" data-section="platform">平台副本</button><button type="button" class="admin-only" data-section="organizations">组织管理</button><button type="button" class="admin-only" data-section="access">账号和团队</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <section class="panel admin-only platform-only" data-view="settings" data-section-panel="ai-model" id="ai-model-panel" hidden>
+        <div class="section-head"><h2>模型接入</h2><button id="ai-model-refresh" class="ghost" type="button">刷新</button></div>
+        <form id="ai-model-form">
+          <fieldset class="ai-model-fields" disabled>
+            <label>接口地址<input name="endpoint" type="url" maxlength="2048" placeholder="http://localhost:8000/v1/chat/completions"></label>
+            <label>模型名称<input name="model" maxlength="128"></label>
+            <label>API 密钥<input name="apiKey" type="password" maxlength="4096" autocomplete="new-password"></label>
+            <label>每日请求上限<input name="dailyLimit" type="number" min="1" max="1000" required></label>
+            <label>证据审核超时（秒）<input name="reviewSeconds" type="number" min="1" max="120" required></label>
+            <div class="ai-model-options">
+              <label><input name="enabled" type="checkbox">启用模型</label>
+              <label><input name="reviewSchema" type="checkbox">要求结构化响应</label>
+              <label><input name="autoSummary" type="checkbox">对严重告警自动生成摘要</label>
+              <label><input name="clearKey" type="checkbox">移除已保存的密钥</label>
+            </div>
+            <div class="actions">
+              <button type="submit">保存配置</button>
+              <button id="ai-model-test" type="button" class="ghost">测试连通性</button>
+              <button id="ai-model-reset" type="button" class="ghost">恢复环境配置</button>
+            </div>
+          </fieldset>
+          <p id="ai-model-status" class="hint" role="status"></p>
+          <p class="hint">测试只发送固定测试文本。使用远端接口时，请先在部署配置中授权该 HTTPS 来源。</p>
+        </form>
+      </section>
       <section class="panel admin-only platform-only" data-view="settings" data-section-panel="platform" id="platform-panel" hidden><div class="section-head"><h2>平台副本和维护任务</h2><button id="platform-refresh" type="button" class="ghost">刷新</button></div><div id="platform-status-detail" class="list" aria-live="polite"></div></section>
       <section class="panel admin-only" data-view="settings" data-section-panel="organizations" hidden><div class="section-head"><h2>组织管理</h2></div><div id="organization-list" class="list"></div><form id="organization-form" class="response-form platform-only"><label>组织名称<input name="name" required minlength="2" maxlength="80"></label><button type="submit">创建组织</button></form></section>
       <section class="panel admin-only" data-view="settings" data-section-panel="access" id="access-directory" hidden><div class="section-head"><h2>账号和团队</h2></div><p class="hint">团队授予指定资产的访问范围，账号角色决定可以执行的动作。</p><div id="access-directory-content" class="list"></div></section>

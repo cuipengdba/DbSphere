@@ -372,3 +372,33 @@ body[data-active-view="monitoring"] #view-description { display: none; }
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.ai-model-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 12px 18px;
+  min-inline-size: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.ai-model-options, .ai-model-fields .actions { grid-column: 1 / -1; }
+.ai-model-options { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+.ai-model-options label { display: inline-flex; align-items: center; gap: 8px; }
+.ai-model-options input[type="checkbox"] { width: auto; min-height: 0; }
+.ai-evidence-preview {
+  max-block-size: 18rem;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-evidence-request { display: grid; gap: 8px; }
+.ai-evidence-request button { justify-self: start; }
+.investigation-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-block-end: 14px;
+}
+.investigation-overview p { margin: 0; }
