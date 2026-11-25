@@ -32,7 +32,7 @@ async function selectSection(page, view, section) {
 
 async function action(page, locator, method, path, status) {
   const pending = page.waitForResponse(response => response.request().method() === method &&
-    new URL(response.url()).pathname === path);
+    (path instanceof RegExp ? path.test(new URL(response.url()).pathname) : new URL(response.url()).pathname === path));
   await locator.click();
   const response = await pending;
   assert.equal(response.status(), status, method + ' ' + path + ' ' + await response.text());
@@ -101,10 +101,17 @@ async function createAsset(page) {
   await search.fill(primary);
   await page.locator('#asset-runtime').selectOption('managed');
   await visible(page.locator('#asset-list'), primary);
+  const assetRow = page.locator('#asset-list article').filter({ hasText: primary });
+  await assetRow.getByRole('button', { name: '查看', exact: true }).click();
+  await visible(page.locator('#detail'), primary);
+  await assetRow.getByRole('button', { name: '编辑', exact: true }).click();
+  assert.equal(await formField(page, 'asset-form', 'name').inputValue(), primary);
+  await page.locator('#cancel-edit').click();
+  await page.locator('#asset-dialog').waitFor({ state: 'hidden' });
   await page.locator('#asset-import-panel > summary').click();
   const file = await Promise.all([page.waitForEvent('download'), page.locator('#asset-import-export').click()]);
   assert.match(file[0].suggestedFilename(), /\.ya?ml$/i);
-  proof.push('Asset creation, runtime-dependent fields, search, runtime filter, and YAML export');
+  proof.push('Asset creation, details, editing and cancellation, search, runtime filter, and YAML export');
   return asset.id;
 }
 
@@ -139,6 +146,7 @@ async function wallboard(page, version) {
     const large = await board('chart-plot').boundingBox();
     assert(large.width > original.width && large.height > original.height, title + ' did not grow');
     assert.equal(await dialog.getAttribute('data-available'), 'true');
+    assert.equal(await board('chart-scale').locator('span').count(), 3);
     assert.equal(await board('chart-values').innerText(),
       await plot.locator('..').locator('.wallboard-chart-values').innerText());
     await board('chart-close').click();
@@ -186,6 +194,8 @@ async function wallboard(page, version) {
   await page.setViewportSize({ width: 1440, height: 880 });
   await theme.selectOption('dark');
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  await board('window').selectOption('15');
+  await page.waitForFunction(() => document.querySelectorAll('[data-board=charts] [data-available=true]').length === 12);
   await mini.first().click();
   if (process.env.DBSPHERE_BROWSER_OUTPUT) {
     await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'expanded-wallboard.png') });
@@ -268,14 +278,30 @@ async function monitoring(page, asset) {
 }
 
 async function operations(page, asset) {
+  await navigate(page, 'assets');
+  const row = page.locator('#asset-list article').filter({ hasText: primary });
+  const checked = await action(page, row.getByRole('button', { name: '采集', exact: true }),
+    'POST', '/api/assets/' + asset + '/check', 200);
+  assert.equal((await checked.json()).result.status, 'ok');
+
   await navigate(page, 'alerts');
   for (const section of ['active', 'rules', 'rca', 'delivery', 'silences']) await selectSection(page, 'alerts', section);
+  await selectSection(page, 'alerts', 'rules');
+  const rule = page.locator('#rule-list details').filter({ has: page.locator('form') }).first();
+  await rule.locator('summary').click();
+  const enabled = rule.getByRole('checkbox', { name: '启用' });
+  await enabled.setChecked(!(await enabled.isChecked()));
+  await action(page, rule.getByRole('button', { name: '保存规则' }), 'PATCH', /^\/api\/alert-rules\//, 200);
+  await selectSection(page, 'alerts', 'silences');
   const reason = 'Browser acceptance maintenance';
   await formField(page, 'silence-form', 'assetId').selectOption(asset);
   await formField(page, 'silence-form', 'kind').selectOption('maintenance');
   await formField(page, 'silence-form', 'reason').fill(reason);
   await action(page, page.locator('#silence-form button[type=submit]'), 'POST', '/api/silences', 201);
   await visible(page.locator('#silence-list'), reason);
+  const silence = page.locator('#silence-list article').filter({ hasText: reason });
+  await action(page, silence.getByRole('button', { name: '撤销' }), 'DELETE', /^\/api\/silences\//, 200);
+  await visible(silence, '已撤销');
 
   await navigate(page, 'inspections');
   await selectSection(page, 'inspections', 'schedules');
@@ -310,7 +336,31 @@ async function operations(page, asset) {
   await page.locator('#event-status').selectOption('open');
   await page.locator('#event-search').fill('The QA event search');
   await page.waitForFunction(() => document.getElementById('event-filter-summary').textContent.length > 0);
-  proof.push('Alert topics and maintenance, inspection scheduling and manual run, Markdown download, all system settings sections, organization creation, and incident filters');
+  proof.push('Alert topics and rule updates, maintenance creation and revocation, inspection scheduling and manual run, Markdown download, all system settings sections, organization creation, and incident filters');
+}
+
+async function pagination(page) {
+  const session = await (await page.request.get(origin + '/api/session')).json();
+  const organizations = await (await page.request.get(origin + '/api/admin/organizations')).json();
+  const organizationId = organizations.organizations.find(row => row.name !== 'Browser QA organization').id;
+  for (let i = 1; i <= 24; i++) {
+    const response = await page.request.post(origin + '/api/assets', {
+      headers: { 'X-CSRF-Token': session.csrf },
+      data: { organizationId, runtime: 'managed', sslMode: 'disable', environment: 'pagination',
+        name: 'Pagination asset ' + i, host: '127.0.0.1', port: 15434, database: 'postgres', username: 'postgres' }
+    });
+    assert.equal(response.status(), 201, await response.text());
+  }
+  await page.goto(origin + '/#wallboard');
+  const pageNumber = page.locator('[data-board=page]');
+  await visible(pageNumber, '1 / 2');
+  await page.locator('[data-board=next]').click();
+  await visible(pageNumber, '2 / 2');
+  assert(await page.locator('[data-board=next]').isDisabled());
+  await page.locator('[data-board=prev]').click();
+  await visible(pageNumber, '1 / 2');
+  assert(await page.locator('[data-board=prev]').isDisabled());
+  proof.push('Wallboard asset pagination with 25 registered assets and both boundary controls');
 }
 
 (async () => {
@@ -326,6 +376,7 @@ async function operations(page, asset) {
     const asset = await wallboard(page, process.env.DBSPHERE_TEST_VERSION);
     await monitoring(page, asset);
     await operations(page, asset);
+    await pagination(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

@@ -32,16 +32,30 @@ const runAcceptance = async (page) => {
     sslMode: 'disable', runtime: 'managed'
   });
   assert(asset?.id, 'Asset creation did not return an asset ID');
-  const project = await api(base + 'projects', 'POST', { organizationId: org.id, name: 'Browser acceptance' });
-  const instance = await api(base + 'instances', 'POST', {
-    projectId: project.id, assetId: asset.id, environment: 'Acceptance', name: 'PostgreSQL 18',
-    engine: 'postgres', version: '18'
-  });
-  const createBatch = name => api(base + 'batches', 'POST', {
-    instanceId: instance.id, name, coverage: 'full', coverageNote: 'Browser acceptance controlled generator'
-  });
+  await page.goto(root + '/#logs');
+  async function create(kind, fields) {
+    await loc('new-' + kind).click();
+    const dialog = loc(kind + '-dialog');
+    await dialog.waitFor();
+    for (const [name, value] of Object.entries(fields)) {
+      const field = dialog.locator('[name="' + name + '"]');
+      if (await field.evaluate(element => element.tagName === 'SELECT')) await field.selectOption(value);
+      else await field.fill(value);
+    }
+    const path = kind === 'batch' ? 'batches' : kind + 's';
+    const pending = page.waitForResponse(response => response.url() === root + base + path && response.request().method() === 'POST');
+    await dialog.locator('button[type=submit]').click();
+    const response = await pending;
+    assert(response.status() === 201, 'Create ' + kind + ' failed ' + await response.text());
+    await dialog.waitFor({ state: 'hidden' });
+    return response.json();
+  }
+  await create('project', { organizationId: org.id, name: 'Browser acceptance' });
+  await create('instance', { assetId: asset.id, environment: 'Acceptance', name: 'PostgreSQL 18', engine: 'postgres', version: '18' });
+  const createBatch = name => create('batch', { name, coverage: 'full', coverageNote: 'Browser acceptance controlled generator' });
   const before = await createBatch('Baseline');
   const after = await createBatch('Retest');
+  results.push('browser forms saved the project, instance and both batches');
   const now = Date.now() - 600000;
   const line = (at, duration, table) => new Date(at).toISOString().replace('T', ' ').replace('Z', ' UTC') +
     ' [123] app=orders-api LOG: duration: ' + duration + ' ms statement: select id from ' + table +
@@ -79,6 +93,13 @@ const runAcceptance = async (page) => {
   const baselineRecords = await waitRecords(before, 25);
   const currentRecords = await waitRecords(after, 26);
   results.push('browser file picker, PostgreSQL 18 storage, and async parsing');
+
+  await loc('open-comparison').click();
+  await loc('baseline').selectOption(before.id);
+  await visible(loc('compare-rows'), 'qa_orders');
+  await loc('open-comparison').click();
+  await loc('comparison').waitFor({ state: 'hidden' });
+  results.push('browser compared the two complete log batches');
 
   const pending = await api(base + 'batches/' + after.id + '/files', 'POST', {
     name: 'pending-acceptance.log', size: 1048577, format: 'text'
@@ -137,6 +158,11 @@ const runAcceptance = async (page) => {
   await study.getByRole('link', { name: '打开事件及 AI 证据问答' }).click();
   const event = page.locator('#event-detail');
   await visible(event, investigation.eventId);
+  for (const label of ['处置', '时间线与报告', '根因与证据']) {
+    const tab = event.locator('.incident-nav').getByRole('button', { name: label, exact: true });
+    await tab.click();
+    assert(await tab.getAttribute('aria-pressed') === 'true', 'Event tab did not select ' + label);
+  }
   const matchPanel = event.locator('.event-log-search');
   if (!(await matchPanel.evaluate(element => element.open))) await visible(matchPanel, '查找同窗日志');
   await matchPanel.locator('summary').click();

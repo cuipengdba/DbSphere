@@ -168,6 +168,16 @@ body[data-active-view="wallboard"] .workspace-main { max-width: 1920px; padding:
 .wallboard-chart-dialog-heading .ghost { flex: none; min-height: 36px; }
 .wallboard-chart-dialog-meta { flex-wrap: wrap; margin: 12px 0; color: var(--wall-muted); font-size: 12px; }
 .wallboard-chart-dialog-meta .wallboard-chart-values { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.wallboard-chart-dialog-plot { display: flex; gap: 7px; }
+.wallboard-chart-dialog-plot > div:last-child { flex: 1; min-width: 0; }
+.wallboard-chart-scale {
+  display: grid; grid-template-rows: 12fr 39fr 39fr 10fr; padding-bottom: 14px;
+  color: var(--wall-muted); text-align: right; font: 12px ui-monospace, monospace;
+}
+.wallboard-chart-scale > span { align-self: start; transform: translateY(-50%); }
+.wallboard-chart-scale > span:first-child { grid-row: 2; }
+.wallboard-chart-scale > span:nth-child(2) { grid-row: 3; }
+.wallboard-chart-scale > span:last-child { grid-row: 4; }
 .wallboard .wallboard-chart-dialog .wallboard-plot { height: clamp(145px, 52dvh, 510px); }
 .wallboard-chart-dialog .wallboard-chart-empty, .wallboard-chart-dialog .wallboard-axis { font-size: 12px; }
 @media (max-width: 1180px) {

@@ -597,7 +597,7 @@ jobs:
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
           previous_version='2.24.0'
-          previous_arm_sha='271f2af7a8db9385c41d29059db165bb934202733ddcf57f78c8408a65cf96b0'
+          previous_arm_sha='1b140753c0e382dbf92436e01be125d3705d12b6eab0842b694311320f3ce0b5'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then

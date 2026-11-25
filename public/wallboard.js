@@ -57,7 +57,8 @@
     const largePlot = get('chart-plot');
     const largeChart = {
       card: chartDialog, canvas: largePlot.querySelector('canvas'), values: get('chart-values'),
-      empty: get('chart-empty'), start: get('chart-start'), end: get('chart-end'), source: get('chart-source')
+      empty: get('chart-empty'), start: get('chart-start'), end: get('chart-end'),
+      source: get('chart-source'), scale: get('chart-scale')
     };
 
     const charts = chartSpecs.map(([title, source, series, maximum]) => {
@@ -531,7 +532,7 @@
     }
 
     function paint(chart, colors) {
-      const { card, canvas, values, empty, start, end, source, series, maximum } = chart;
+      const { card, canvas, values, empty, start, end, source, scale, series, maximum } = chart;
       const points = historyData?.points || [];
       const point = nearestPoint();
       const entries = series.map(([key, label], i) => {
@@ -555,7 +556,7 @@
       const ctx = canvas.getContext('2d');
       ctx.scale(ratio, ratio);
       ctx.strokeStyle = colors.grid;
-      for (const tick of [0.16, 0.5, 0.84]) {
+      for (const tick of scale ? [0.12, 0.51, 0.9] : [0.16, 0.5, 0.84]) {
         ctx.beginPath();
         ctx.moveTo(0, height * tick);
         ctx.lineTo(width, height * tick);
@@ -565,6 +566,7 @@
       end.textContent = currentRange ? short(currentRange.to) : '';
       const hasData = points.some(row => series.some(([key]) => finite(row.values[key])));
       card.dataset.available = String(hasData);
+      if (scale) scale.hidden = !hasData;
       empty.hidden = hasData;
       empty.textContent = !snapshot ? '等待读取' : !selection.asset ? '请选择实例' : !historyData ? '等待趋势数据'
         : series[0][0] === 'activeFile' && !historyData.containerObserved ? '未观测到数据库容器'
@@ -573,6 +575,7 @@
       if (!currentRange) return;
       const x = at => Math.max(0, Math.min(width, width * (at - currentRange.from) / (currentRange.to - currentRange.from)));
       const max = Math.max(maximum || 0, ...points.flatMap(row => series.map(([key]) => metric(key, row.values[key]) ?? 0)), 0.01);
+      if (scale && hasData) scale.replaceChildren(...[max, max / 2, 0].map(value => node('span', '', countLabel(value))));
       function marker(at, color, dash = []) {
         if (!finite(at) || at < currentRange.from || at > currentRange.to) return;
         ctx.beginPath();
