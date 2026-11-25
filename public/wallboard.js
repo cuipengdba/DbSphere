@@ -25,6 +25,7 @@
   const statuses = { ok: '正常', stale: '陈旧', error: '失联', pending: '待首采', degraded: '部分缺采' };
   const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例' };
   const boardStates = new Set(['affected', 'missing', 'maintenance', 'recovered', 'healthy']);
+  const baselineModes = new Set(['previous', 'day', 'week']);
   const watchKey = 'dbsphere.wallboard.watch';
   const scopeFields = { organization: 36, environment: 80, cluster: 256 };
   const finite = v => typeof v === 'number' && Number.isFinite(v);
@@ -33,7 +34,8 @@
   const metric = (key, raw) => !finite(raw) ? null : mebi.has(key) ? raw / 1048576 : raw;
   const countLabel = v => finite(v) ? number.format(v) : '—';
   const id = v => uuid.test(v || '') ? v : '';
-  const currentState = () => ({ organization: '', environment: '', cluster: '', state: '', window: 60, page: 0, asset: '', event: '', cursor: null, fixed: null });
+  const currentState = () => ({ organization: '', environment: '', cluster: '', state: '', window: 60, page: 0,
+    asset: '', event: '', cursor: null, fixed: null, layout: 'cluster', metrics: 'all', compare: '', change: '' });
   const historyPath = asset => '/api/assets/' + asset + '/wallboard-history';
 
   function node(tag, className, label) {
@@ -49,10 +51,12 @@
     return icon;
   }
 
-  function create(root, { api, openEvent, formatTime }) {
+  function create(root, { api, openEvent, formatTime, account }) {
     const get = key => root.querySelector('[data-board="' + key + '"]');
     let selection = currentState();
     let snapshot, historyData, currentRange, pending, timer, active = false, paused = false;
+    let baselineData, baselineError = false;
+    let savedView = '';
     let snapshotKey = '', historyKey = '', renderedAssets = '', renderedEvents = '';
     let lastStatus = '', integrationsReady = false, checkIntegrationAfter = 0;
     const renderedHealth = new Map();
@@ -69,8 +73,9 @@
       source: get('chart-source'), scale: get('chart-scale')
     };
 
-    const charts = chartSpecs.map(([title, source, series, maximum]) => {
+    const charts = chartSpecs.map(([title, source, series, maximum], index) => {
       const card = node('section', 'wallboard-chart');
+      card.dataset.group = index <= 3 || index === chartSpecs.length - 1 ? 'infra' : 'pg';
       const caption = node('header', 'wallboard-chart-title');
       const info = node('div');
       info.append(node('h3', '', title), node('span', 'wallboard-chart-source', source));
@@ -137,12 +142,45 @@
       if (event) params.set('event', event);
       if (selection.page) params.set('page', String(selection.page));
       params.set('window', String(selection.window));
+      if (selection.layout !== 'cluster') params.set('layout', selection.layout);
+      if (selection.metrics !== 'all') params.set('metrics', selection.metrics);
+      if (selection.compare) params.set('compare', selection.compare);
+      if (selection.change) params.set('change', selection.change);
       if (range) {
         params.set('from', iso(range.from));
         params.set('end', iso(range.to));
       }
       if (finite(cursor)) params.set('cursor', iso(cursor));
       return 'wallboard?' + params;
+    }
+
+    function savedPath() {
+      const params = new URLSearchParams(route().split('?')[1]);
+      params.set('pins', '1');
+      for (const watch of watches) params.append('watch', watch);
+      return 'wallboard?' + params;
+    }
+
+    const savedKey = () => 'dbsphere.wallboard.views.' + JSON.stringify(account());
+    function savedViews() {
+      try {
+        const values = JSON.parse(localStorage.getItem(savedKey()));
+        return Array.isArray(values) ? values.filter(row => typeof row?.name === 'string' && row.name.length <= 72 &&
+          typeof row.path === 'string' && row.path.length <= 4000 && row.path.startsWith('wallboard?')).slice(0, 20) : [];
+      } catch { return []; }
+    }
+
+    function renderSavedViews() {
+      const select = get('saved-view');
+      const names = savedViews().map(row => row.name);
+      const labelKey = JSON.stringify(names);
+      if (select.dataset.options !== labelKey) {
+        select.replaceChildren(new Option('选择视图', ''), ...names.map(name => new Option(name, name)));
+        select.dataset.options = labelKey;
+      }
+      if (!names.includes(savedView)) savedView = '';
+      select.value = savedView;
+      get('delete-view').disabled = !savedView;
     }
 
     function restore(params) {
@@ -154,14 +192,19 @@
       next.page = Math.max(0, Math.min(10000, Number.parseInt(params.get('page'), 10) || 0));
       next.asset = id(params.get('asset'));
       next.event = id(params.get('event'));
+      if (params.get('layout') === 'host') next.layout = 'host';
+      if (['pg', 'infra'].includes(params.get('metrics'))) next.metrics = params.get('metrics');
+      if (baselineModes.has(params.get('compare'))) next.compare = params.get('compare');
+      if (next.compare === 'previous' && Number.isFinite(Date.parse(params.get('change')))) next.change = params.get('change');
       const from = Date.parse(params.get('from')), to = Date.parse(params.get('end'));
       if (finite(from) && to > from && to - from <= 1440 * minute) next.fixed = { from, to };
       const cursor = Date.parse(params.get('cursor'));
       next.cursor = finite(cursor) ? cursor : null;
+      if (params.get('pins') === '1') watches = [...new Set(params.getAll('watch').map(id).filter(Boolean))].slice(0, 4);
       if (JSON.stringify(selection) !== JSON.stringify(next)) {
         selection = next;
         if (active) refreshSelection();
-      }
+      } else if (active && params.get('pins') === '1') render();
     }
 
     function saveRoute() {
@@ -197,6 +240,12 @@
       setVisible(false);
       selection = currentState();
       snapshot = historyData = currentRange = undefined;
+      baselineData = undefined;
+      baselineError = false;
+      savedView = '';
+      get('view-name').value = '';
+      get('view-status').textContent = '';
+      get('view-url').hidden = true;
       renderedAssets = renderedEvents = snapshotKey = historyKey = '';
       integrationsReady = paused = false;
       renderedHealth.clear();
@@ -217,6 +266,8 @@
         status('pending', '正在读取选定范围');
       }
       historyData = currentRange = undefined;
+      baselineData = undefined;
+      baselineError = false;
       historyKey = '';
       render();
       void refresh(true);
@@ -249,18 +300,24 @@
         status(paused ? 'paused' : 'ok', (paused ? '已暂停 · ' : '更新于 ') + short(snapshot.observedAt));
         const end = Date.parse(snapshot.observedAt);
         const range = selection.fixed || { from: end - selection.window * minute, to: end };
-        const key = selection.asset + '/' + range.from + '/' + range.to;
+        const key = selection.asset + '/' + range.from + '/' + range.to + '/' + selection.compare;
         if (!selection.asset) {
           historyData = undefined;
+          baselineData = undefined;
           currentRange = range;
         }
         render();
         if (selection.asset && key !== historyKey) {
-          const rangeQuery = new URLSearchParams({ from: iso(range.from), to: iso(range.to) });
-          const data = await api(historyPath(selection.asset) + '?' + rangeQuery, 'GET', undefined, signal);
+          const target = selection.asset;
+          const loadHistory = window => api(historyPath(target) + '?' + new URLSearchParams({ from: iso(window.from), to: iso(window.to) }),
+            'GET', undefined, signal);
+          const reference = baselineWindow(range);
+          const [data, baseline] = await Promise.all([loadHistory(range), reference ? loadHistory(reference).catch(() => null) : undefined]);
           if (signal.aborted) return;
           currentRange = range;
           historyData = data;
+          baselineData = baseline;
+          baselineError = !!reference && !baseline;
           historyKey = key;
           render();
         }
@@ -290,6 +347,16 @@
           if (active && !paused) timer = setTimeout(refresh, 15000);
         }
       }
+    }
+
+    function baselineWindow(range) {
+      if (!selection.compare) return null;
+      const length = range.to - range.from;
+      const shifted = new Date(range.from);
+      if (selection.compare === 'day') shifted.setDate(shifted.getDate() - 1);
+      if (selection.compare === 'week') shifted.setDate(shifted.getDate() - 7);
+      const from = selection.compare === 'previous' ? range.from - length : shifted.getTime();
+      return { from, to: from + length };
     }
 
     function fillOptions(key, entries) {
@@ -555,6 +622,11 @@
       fillOptions('environment', [['', '全部环境'], ...sorted(orgOptions.filter(item => item.environment).map(item => [item.environment, item.environment]))]);
       fillOptions('cluster', [['', '全部集群'], ...sorted(envOptions.map(item => [item.clusterKey, item.cluster]))]);
       get('window').value = selection.fixed ? 'fixed' : String(selection.window);
+      get('layout').value = selection.layout;
+      get('metric-group').value = selection.metrics;
+      get('compare').value = selection.compare;
+      for (const chart of charts) chart.card.hidden = selection.metrics !== 'all' && selection.metrics !== chart.card.dataset.group;
+      renderSavedViews();
       get('dates').hidden = !selection.fixed && get('dates').dataset.editing !== 'true';
       if (!get('dates').hidden && selection.fixed && get('dates').dataset.editing !== 'true') fillDates(selection.fixed);
       get('pause').textContent = paused ? '继续' : '暂停';
@@ -570,6 +642,7 @@
       get('focus').textContent = selected ? selected.name : '';
       renderContext();
       renderLinks();
+      renderBaseline();
       drawAll();
     }
 
@@ -602,19 +675,65 @@
       }
     }
 
-    function nearestPoint() {
-      const points = historyData?.points || [];
-      if (!finite(selection.cursor)) return points.at(-1);
-      const maximum = (historyData?.bucketMinutes || 1) * minute;
+    function nearestPoint(data = historyData, at = selection.cursor) {
+      const points = data?.points || [];
+      if (!finite(at)) return points.at(-1);
+      const maximum = (data?.bucketMinutes || 1) * minute;
       let closest, distance = maximum + 1;
       for (const point of points) {
-        const delta = Math.abs(Date.parse(point.at) - selection.cursor);
+        const delta = Math.abs(Date.parse(point.at) - at);
         if (delta < distance) {
           closest = point;
           distance = delta;
         }
       }
       return closest;
+    }
+
+    function baselineShift() { return currentRange ? currentRange.from - Date.parse(baselineData?.from) : NaN; }
+
+    function baselinePoint() {
+      const at = selection.cursor ?? Date.parse(nearestPoint()?.at);
+      const shift = baselineShift();
+      return finite(at) && finite(shift) ? nearestPoint(baselineData, at - shift) : null;
+    }
+
+    function renderBaseline() {
+      const panel = get('baseline');
+      panel.hidden = !selection.compare;
+      if (panel.hidden) return;
+      const raw = get('baseline-raw'), eventLink = get('baseline-event');
+      raw.hidden = eventLink.hidden = true;
+      if (!baselineData) {
+        get('baseline-status').textContent = baselineError ? '基线读取失败，保留当前窗口。' :
+          selection.asset ? '正在读取基线窗口…' : '选择实例后可对比历史基线。';
+        return;
+      }
+      const coverage = data => {
+        if (!data) return '—';
+        const minutes = data.bucketMinutes || 1;
+        const buckets = Math.ceil((Date.parse(data.to) - Date.parse(data.from)) / (minutes * minute));
+        const observed = data.points.filter(row => Object.keys(row.values).length).length;
+        const changes = data.points.filter(row => row.boundary).length;
+        return `${observed}/${buckets} 桶有效${changes ? ` · ${changes} 处重启、统计重置或身份变化` : ''}`;
+      };
+      const point = baselinePoint();
+      const caption = [selection.change ? `变更时刻 ${formatTime(selection.change)}` : '',
+        `虚线基线 ${formatTime(baselineData.from)} 至 ${formatTime(baselineData.to)}`,
+        `${baselineData.bucketMinutes} 分钟一桶`, `当前 ${coverage(historyData)}`, `基线 ${coverage(baselineData)}`,
+        point ? `对齐采样 ${formatTime(point.at)}` : '对齐时刻缺采'].filter(Boolean);
+      get('baseline-status').textContent = caption.join(' · ');
+      if (point?.sampleId) {
+        raw.href = `${historyPath(selection.asset).replace('/wallboard-history', '/samples')}/${point.sampleId}`;
+        raw.hidden = false;
+        const at = Date.parse(point.at);
+        const event = (baselineData.events || []).find(item => Date.parse(item.startedAt) <= at && (!item.endedAt || Date.parse(item.endedAt) >= at));
+        if (event) {
+          eventLink.textContent = '基线事件 · ' + event.title;
+          eventLink.href = '#incidents?' + new URLSearchParams({ event: event.id, return: route(true) });
+          eventLink.hidden = false;
+        }
+      }
     }
 
     function renderContext() {
@@ -628,6 +747,7 @@
         const hostTime = node('span', '', '主机采样 ' + formatTime(point.hostAt));
         context.append(hostTime);
       }
+      if (point?.boundary) context.append(node('span', '', point.boundary));
       const events = historyData?.events || [];
       const event = events.find(item => item.id === selection.event);
       if (event) {
@@ -653,6 +773,20 @@
         });
         context.append(markers);
       }
+      if (historyData?.changes?.length) {
+        const changes = node('select');
+        changes.setAttribute('aria-label', '选择变更前后对比');
+        changes.append(new Option('变更前后对比', ''), ...historyData.changes.map(item => new Option(`${short(item.at)} · ${item.label}`, item.at)));
+        changes.addEventListener('change', () => {
+          const from = Date.parse(changes.value);
+          if (!finite(from)) return;
+          const to = Math.min(Date.now(), from + selection.window * minute);
+          if (to - from < minute) { status('error', '变更后时段不足一分钟'); return; }
+          Object.assign(selection, { fixed: {from, to}, change: iso(from), compare: 'previous', cursor: null, event: '' });
+          saveRoute(); refreshSelection();
+        });
+        context.append(changes);
+      }
       get('clear').hidden = selection.cursor == null;
     }
 
@@ -660,8 +794,15 @@
       const { card, canvas, values, empty, start, end, source, scale, series, maximum } = chart;
       const points = historyData?.points || [];
       const point = nearestPoint();
+      const prior = baselinePoint();
+      const previousPoints = baselineData?.points || [];
       const entries = series.map(([key, label], i) => {
-        const entry = node('span', 'wallboard-series', label + ' ' + countLabel(metric(key, point?.values[key])));
+        const current = metric(key, point?.values[key]);
+        const reference = metric(key, prior?.values[key]);
+        const change = finite(current) && finite(reference) ? current - reference : null;
+        const value = label + ' ' + countLabel(current) + (baselineData ? ` · 基线 ${countLabel(reference)}` +
+          (change == null ? '' : ` · ${change > 0 ? '+' : ''}${countLabel(change)}`) : '');
+        const entry = node('span', 'wallboard-series', value);
         entry.dataset.series = String(i);
         return entry;
       });
@@ -699,7 +840,8 @@
         : series[0][0] === 'diskReadMs' ? '无连续设备采样或已完成 I/O' : '此时段缺采';
       if (!currentRange) return;
       const x = at => Math.max(0, Math.min(width, width * (at - currentRange.from) / (currentRange.to - currentRange.from)));
-      const max = Math.max(maximum || 0, ...points.flatMap(row => series.map(([key]) => metric(key, row.values[key]) ?? 0)), 0.01);
+      const max = Math.max(maximum || 0, ...[...points, ...previousPoints]
+        .flatMap(row => series.map(([key]) => metric(key, row.values[key]) ?? 0)), 0.01);
       if (scale && hasData) scale.replaceChildren(...[max, max / 2, 0].map(value => node('span', '', countLabel(value))));
       function marker(at, color, dash = []) {
         if (!finite(at) || at < currentRange.from || at > currentRange.to) return;
@@ -716,33 +858,37 @@
         marker(Date.parse(event.endedAt), colors.ok, [3, 3]);
       }
       for (const change of historyData?.changes || []) marker(Date.parse(change.at), colors.change, [2, 3]);
-      const gap = (historyData?.bucketMinutes || 1) * 1.05 * minute;
-      for (const [index, [key]] of series.entries()) {
-        let previous = null;
-        ctx.strokeStyle = ctx.fillStyle = colors.series[index];
-        ctx.lineWidth = 1.65;
-        for (const row of points) {
-          const value = metric(key, row.values[key]);
-          if (!finite(value)) {
-            previous = null;
-            continue;
+      for (const point of points) if (point.boundary) marker(Date.parse(point.at), colors.change, [1, 4]);
+      function drawSeries(rows, shift, width, dashed) {
+        const gap = (width || 1) * 1.05 * minute;
+        ctx.setLineDash(dashed ? [5, 3] : []);
+        ctx.globalAlpha = dashed ? 0.58 : 1;
+        for (const [index, [key]] of series.entries()) {
+          let previous = null;
+          ctx.strokeStyle = ctx.fillStyle = colors.series[index];
+          ctx.lineWidth = 1.65;
+          for (const row of rows) {
+            const value = metric(key, row.values[key]);
+            if (!finite(value)) { previous = null; continue; }
+            const bucket = Date.parse(row.bucket);
+            const y = height * (0.9 - 0.78 * value / max);
+            const left = x(Date.parse(row.at) + shift);
+            ctx.beginPath();
+            if (previous && !row.boundary && bucket - previous.bucket <= gap) {
+              ctx.moveTo(previous.left, previous.y);
+              ctx.lineTo(left, y);
+              ctx.stroke();
+            } else {
+              ctx.arc(left, y, dashed ? 1.3 : 1.75, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            previous = { left, y, bucket };
           }
-          const at = Date.parse(row.at);
-          const bucket = Date.parse(row.bucket);
-          const y = height * (0.9 - 0.78 * value / max);
-          const left = x(at);
-          ctx.beginPath();
-          if (previous && bucket - previous.bucket <= gap) {
-            ctx.moveTo(previous.left, previous.y);
-            ctx.lineTo(left, y);
-            ctx.stroke();
-          } else {
-            ctx.arc(left, y, 1.75, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          previous = { left, y, bucket };
         }
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
       }
+      if (baselineData) drawSeries(previousPoints, baselineShift(), baselineData.bucketMinutes, true);
+      drawSeries(points, 0, historyData?.bucketMinutes, false);
       ctx.lineWidth = 1;
       marker(selection.cursor, colors.cursor);
     }
@@ -820,7 +966,7 @@
         return;
       }
       delete get('dates').dataset.editing;
-      Object.assign(selection, { window: Number(value), fixed: null, cursor: null, event: '' });
+      Object.assign(selection, { window: Number(value), fixed: null, cursor: null, event: '', change: '' });
       saveRoute();
       refreshSelection();
     });
@@ -829,12 +975,63 @@
       const from = Date.parse(get('from').value), to = Date.parse(get('to').value);
       if (!(to > from && to - from <= 1440 * minute)) return status('error', '请选择有效时段，跨度最多 24 小时');
       delete get('dates').dataset.editing;
-      Object.assign(selection, { fixed: { from, to }, cursor: null, event: '' });
+      Object.assign(selection, { fixed: { from, to }, cursor: null, event: '', change: '' });
       saveRoute();
       refreshSelection();
     });
     get('clear').addEventListener('click', () => setCursor(null));
-    get('layout').addEventListener('change', () => renderAssets(snapshot?.assets || []));
+    get('layout').addEventListener('change', () => { selection.layout = get('layout').value; saveRoute(); render(); });
+    get('metric-group').addEventListener('change', () => { selection.metrics = get('metric-group').value; saveRoute(); render(); });
+    get('compare').addEventListener('change', () => {
+      selection.compare = get('compare').value;
+      selection.change = '';
+      saveRoute(); refreshSelection();
+    });
+    get('save-view').addEventListener('submit', event => {
+      event.preventDefault();
+      const name = get('view-name').value.trim();
+      if (!name) { get('view-status').textContent = '请输入视图名称。'; return; }
+      const views = savedViews();
+      const prior = views.filter(row => row.name !== name);
+      if (prior.length >= 20) { get('view-status').textContent = '可保存 20 个视图，请先删除一个已有视图。'; return; }
+      const entry = { name, path: savedPath() };
+      try {
+        localStorage.setItem(savedKey(), JSON.stringify([entry, ...prior]));
+        savedView = name;
+        renderSavedViews();
+        get('view-status').textContent = `已保存 ${name}`;
+      } catch { get('view-status').textContent = '浏览器存储暂不可用，可以复制视图链接。'; }
+    });
+    get('saved-view').addEventListener('change', () => {
+      savedView = get('saved-view').value;
+      const view = savedViews().find(row => row.name === savedView);
+      renderSavedViews();
+      if (!view) return;
+      get('view-name').value = view.name;
+      get('view-status').textContent = `已打开 ${view.name}`;
+      location.hash = view.path;
+    });
+    get('delete-view').addEventListener('click', () => {
+      if (!savedView) return;
+      try {
+        localStorage.setItem(savedKey(), JSON.stringify(savedViews().filter(row => row.name !== savedView)));
+        get('view-status').textContent = `已删除 ${savedView}`;
+        savedView = '';
+        get('view-name').value = '';
+        renderSavedViews();
+      } catch { get('view-status').textContent = '浏览器存储暂不可用。'; }
+    });
+    get('share-view').addEventListener('click', async () => {
+      const url = new URL(location.href); url.hash = savedPath();
+      try {
+        await navigator.clipboard.writeText(url.href);
+        get('view-status').textContent = '已复制视图链接';
+      } catch {
+        const field = get('view-url');
+        field.value = url.href; field.hidden = false; field.focus(); field.select();
+        get('view-status').textContent = '可复制下方的视图链接。';
+      }
+    });
     get('event-list').addEventListener('change', () => renderEvents(snapshot?.events || []));
     get('pause').addEventListener('click', () => {
       paused = !paused;

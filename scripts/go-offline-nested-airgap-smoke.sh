@@ -33,6 +33,7 @@ fi
 
 image='dbsphere/airgap-dind:local'
 ha_test="${DBSPHERE_HA_SMOKE:-false}"
+evidence_test="${DBSPHERE_EVIDENCE_SMOKE:-false}"
 container="dbsphere-airgap-dind-$$"
 log="$(mktemp "${TMPDIR:-/tmp}/dbsphere-airgap.XXXXXX")"
 cleanup() {
@@ -102,6 +103,15 @@ check_administrator() {
     exit 1
   fi
 }
+check_evidence() {
+  local count
+  count="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
+    psql -U dbsphere -d dbsphere -Atqc \
+    "SELECT count(*) FROM events e JOIN evidence v ON e.id=v.event_id JOIN samples s ON s.id::text=v.payload_json->>'sampleId'
+       WHERE e.id='9b7d8499-9a82-4e9b-95a6-54ac2af1ceb1' AND s.asset_id=e.asset_id
+       AND s.metrics_json->>'fixture'='offline-upgrade-original';")"
+  test "$count" = 1
+}
 if [[ -n "$previous_archive" ]]; then
   install "/previous/$previous_name"
   check_health "$previous_version"
@@ -119,9 +129,28 @@ fi
 docker exec "$container" docker exec dbsphere-go-dev-store-1 \
   psql -U dbsphere -d dbsphere -v ON_ERROR_STOP=1 -Atqc \
   "CREATE TABLE dbsphere_airgap_probe (value text PRIMARY KEY); INSERT INTO dbsphere_airgap_probe VALUES ('persisted-before-reinstall');" >/dev/null
+if [[ "$evidence_test" == true ]]; then
+  docker exec -i "$container" docker exec -i dbsphere-go-dev-store-1 \
+    psql -U dbsphere -d dbsphere -v ON_ERROR_STOP=1 -q <<'SQL'
+INSERT INTO assets(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,created_at)
+VALUES ('3953d046-27f8-4af0-b3e9-42f662986945','Offline evidence fixture','store',5432,'dbsphere','dbsphere','','disable','managed',now());
+INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+VALUES ('367697f5-447b-4738-9cdf-76117de21b04','3953d046-27f8-4af0-b3e9-42f662986945',now(),'ok','{"fixture":"offline-upgrade-original"}');
+INSERT INTO event_keys(id,asset_id,started_at)
+VALUES ('9b7d8499-9a82-4e9b-95a6-54ac2af1ceb1','3953d046-27f8-4af0-b3e9-42f662986945',now());
+INSERT INTO events(id,asset_id,kind,title,status,started_at,ended_at,event_group)
+SELECT id,asset_id,'collection_failure','Offline evidence fixture','resolved',started_at,started_at,'availability'
+FROM event_keys WHERE id='9b7d8499-9a82-4e9b-95a6-54ac2af1ceb1';
+INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+VALUES (gen_random_uuid(),'9b7d8499-9a82-4e9b-95a6-54ac2af1ceb1','collection_recovered',now(),
+        '{"sampleId":"367697f5-447b-4738-9cdf-76117de21b04"}');
+SQL
+  check_evidence
+fi
 install "/bundle/$archive_name"
 check_health "$version"
 check_administrator
+if [[ "$evidence_test" == true ]]; then check_evidence; fi
 marker="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
   psql -U dbsphere -d dbsphere -Atqc 'SELECT value FROM dbsphere_airgap_probe')"
 if [[ "$marker" != persisted-before-reinstall ]]; then
@@ -136,6 +165,7 @@ if [[ -n "$previous_archive" ]]; then
   install "/previous/$previous_name"
   check_health "$previous_version"
   check_administrator
+  if [[ "$evidence_test" == true ]]; then check_evidence; fi
   marker="$(docker exec "$container" docker exec dbsphere-go-dev-store-1 \
     psql -U dbsphere -d dbsphere -Atqc 'SELECT value FROM dbsphere_airgap_probe')"
   if [[ "$marker" != persisted-before-reinstall ]]; then

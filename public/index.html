@@ -263,6 +263,17 @@
           <label>结束<input type="datetime-local" data-board="to" required></label>
           <button class="ghost" type="submit">应用</button>
         </form>
+        <div class="wallboard-view-tools">
+          <label>值班视图<select data-board="saved-view" aria-label="值班视图"><option value="">选择视图</option></select></label>
+          <form data-board="save-view" class="wallboard-view-form">
+            <label>视图名称<input data-board="view-name" aria-label="视图名称" maxlength="72" required></label>
+            <button type="submit" class="ghost">保存视图</button>
+          </form>
+          <button type="button" class="ghost" data-board="delete-view" disabled>删除视图</button>
+          <button type="button" class="ghost" data-board="share-view">复制当前视图链接</button>
+          <input type="url" data-board="view-url" aria-label="当前视图链接" readonly hidden>
+          <small data-board="view-status" role="status"></small>
+        </div>
         <div class="wallboard-kpis" data-board="kpis"></div>
         <div class="wallboard-overview">
           <section class="wallboard-panel">
@@ -277,7 +288,14 @@
         </div>
         <div class="wallboard-trends-heading">
           <div><h2>关键指标趋势</h2><span data-board="focus"></span></div>
-          <div class="wallboard-tools"><button class="ghost" type="button" data-board="clear" hidden>清除游标</button><a data-board="raw" hidden>原始样本 ↗</a><a data-board="live" hidden>实时观测 ↗</a><a data-board="grafana" hidden>Grafana 专题 ↗</a></div>
+          <div class="wallboard-tools">
+            <select data-board="metric-group" aria-label="指标组"><option value="all">全部指标</option><option value="pg">数据库指标</option><option value="infra">主机与容器</option></select>
+            <select data-board="compare" aria-label="历史基线"><option value="">仅当前窗口</option><option value="previous">前一等长窗口</option><option value="day">昨日同时段</option><option value="week">上周同时段</option></select>
+            <button class="ghost" type="button" data-board="clear" hidden>清除游标</button><a data-board="raw" hidden>原始样本 ↗</a><a data-board="live" hidden>实时观测 ↗</a><a data-board="grafana" hidden>Grafana 专题 ↗</a>
+          </div>
+        </div>
+        <div class="wallboard-baseline" data-board="baseline" aria-label="历史基线详情" hidden>
+          <span data-board="baseline-status" role="status"></span><a data-board="baseline-raw" hidden>基线原始采样 ↗</a><a data-board="baseline-event" hidden>基线关联事件 ↗</a>
         </div>
         <div class="wallboard-context" data-board="context"></div>
         <div class="wallboard-charts" data-board="charts"></div>

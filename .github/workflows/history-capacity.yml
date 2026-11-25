@@ -82,3 +82,67 @@ jobs:
           name: dbsphere-history-capacity
           path: ${{ runner.temp }}/dbsphere-history-proof
           if-no-files-found: warn
+
+  collector-load:
+    if: github.ref == 'refs/heads/release/v2.30.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Verify 100 assets with two collectors and three PostgreSQL versions
+        env:
+          DBSPHERE_HOST: 127.0.0.1
+          DBSPHERE_ADMIN_PASSWORD: dbsphere-load-admin-fixture
+          DBSPHERE_LOAD_ADMIN_PASSWORD: dbsphere-load-admin-fixture
+          DBSPHERE_LOAD_MONITOR_PASSWORD: dbsphere-load-monitor-fixture
+          DBSPHERE_DATABASE_URL: postgres://postgres:dbsphere-load-test@127.0.0.1:15434/postgres?sslmode=disable
+          DBSPHERE_ENABLE_GO_COLLECTOR: 'true'
+          DBSPHERE_COLLECT_INTERVAL_SECONDS: '30'
+          DBSPHERE_COLLECT_WORKERS: '8'
+        run: |
+          proof="$RUNNER_TEMP/dbsphere-collector-proof"
+          mkdir -p "$proof"
+          docker run -d --name dbsphere-load-history -p 15434:5432 \
+            -e POSTGRES_PASSWORD=dbsphere-load-test postgres:18-bookworm
+          for pg in 14 16 18; do
+            port=$((15430 + pg))
+            docker run -d --name "dbsphere-load-pg$pg" -p "$port:5432" \
+              -e POSTGRES_PASSWORD=dbsphere-load-target postgres:$pg-bookworm \
+              postgres -c shared_preload_libraries=pg_stat_statements
+          done
+          for host in dbsphere-load-history dbsphere-load-pg14 dbsphere-load-pg16 dbsphere-load-pg18; do
+            for attempt in $(seq 1 60); do
+              docker exec "$host" pg_isready -h 127.0.0.1 -U postgres && break
+              sleep 1
+            done
+            docker exec "$host" pg_isready -h 127.0.0.1 -U postgres
+          done
+          for pg in 14 16 18; do
+            docker exec "dbsphere-load-pg$pg" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres -c \
+              "CREATE EXTENSION pg_stat_statements; CREATE ROLE dbsphere_collector LOGIN PASSWORD 'dbsphere-load-monitor-fixture'; GRANT pg_monitor TO dbsphere_collector;"
+          done
+          go build -o "$RUNNER_TEMP/dbsphere" ./cmd/dbsphere
+          export DBSPHERE_MASTER_KEY="$(openssl rand -base64 32)"
+          DBSPHERE_PORT=18090 "$RUNNER_TEMP/dbsphere" >"$proof/collector-1.log" 2>&1 &
+          first=$!
+          trap 'kill "$first" ${second:-} 2>/dev/null || true' EXIT
+          curl -fsS --retry 35 --retry-connrefused --retry-delay 1 http://127.0.0.1:18090/readyz
+          DBSPHERE_PORT=18091 "$RUNNER_TEMP/dbsphere" >"$proof/collector-2.log" 2>&1 &
+          second=$!
+          curl -fsS --retry 35 --retry-connrefused --retry-delay 1 http://127.0.0.1:18091/readyz
+          jq -n --arg report "$proof/load.json" '{site:"http://127.0.0.1:18090",storeContainer:"dbsphere-load-history",
+            assetCount:100,intervalSeconds:30,durationSeconds:120,report:$report,
+            targets:([14,16,18]|map({host:"127.0.0.1",port:(15430+.),container:("dbsphere-load-pg"+tostring)}))}' > "$proof/config.json"
+          node scripts/drill-collector-load.mjs "$proof/config.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dbsphere-collector-load-proof
+          path: ${{ runner.temp }}/dbsphere-collector-proof
+          if-no-files-found: warn

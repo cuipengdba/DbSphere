@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 || "$1" != /* || "$2" != /* ]]; then
-  echo 'Usage: bash scripts/go-offline-observability-smoke.sh /absolute/bundle.run /absolute/test-directory' >&2
+if [[ $# -lt 2 || $# -gt 3 || "$1" != /* || "$2" != /* || ( $# -eq 3 && "$3" != /* ) ]]; then
+  echo 'Usage: bash scripts/go-offline-observability-smoke.sh /absolute/bundle.run /absolute/test-directory [/absolute/previous.run]' >&2
   exit 1
 fi
 bundle="$(realpath -- "$1")"
+previous="${3:-}"
 root="$(realpath -m -- "$2")"
 test "$root" != /
 mkdir -p -- "$root/config" "$root/stage"
@@ -38,14 +39,17 @@ RUN apk add --no-cache bash coreutils
 DOCKERFILE
 docker pull "$fixture" >/dev/null
 docker image rm "$image" >/dev/null
-install() {
+install_bundle() {
+  local file="$1"
+  shift
   docker run --rm --network none --entrypoint bash \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$(dirname -- "$bundle"):$(dirname -- "$bundle"):ro" -v "$root:$root" \
+    -v "$(dirname -- "$file"):$(dirname -- "$file"):ro" -v "$root:$root" \
     -e "TMPDIR=$root/stage" -e "DBSPHERE_GO_CONFIG_DIR=$root/config" -e "COMPOSE_PROJECT_NAME=$project" \
-    dbsphere/observability-airgap-harness:ci -c 'umask 077; exec bash "$@"' _ "$bundle" "$@"
+    dbsphere/observability-airgap-harness:ci -c 'umask 077; exec bash "$@"' _ "$file" "$@"
 }
-install
+install() { install_bundle "$bundle" "$@"; }
+install_bundle "${previous:-$bundle}"
 prom="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=prometheus)"
 test -n "$prom"
 test -z "$(docker port "$prom")"
@@ -76,7 +80,15 @@ asset_config="$(jq -nc --arg password "$store" '{name:"Offline observability",ho
     linuxExporterPort:9100,clusterName:"offline-ci"}')"
 asset="$(printf '%s' "$asset_config" |
   api -H 'Content-Type: application/json' --data-binary @- "$base/api/assets" | jq -er .asset.id)"
-api -X POST "$base/api/assets/$asset/check" | jq -e '.result.sampleId!=null' >/dev/null
+sample="$(api -X POST "$base/api/assets/$asset/check" | jq -er .result.sampleId)"
+if [[ -n "$previous" ]]; then
+  install
+  prom="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=prometheus)"
+  test -n "$prom"
+  curl -fsS "$base/api/version" | jq -e --arg version "$(jq -er .version package.json)" '.version==$version' >/dev/null
+  api "$base/api/assets/$asset/samples/$sample" | jq -e --arg id "$sample" '.sample.id==$id' >/dev/null
+  echo 'Enhanced offline upgrade preserved the administrator session, monitored asset and original sample.'
+fi
 metric_url() {
   docker exec "$prom" /bin/wget -q -O - "http://127.0.0.1:9090/$1"
 }

@@ -21,6 +21,7 @@ type wallboardPoint struct {
 	Bucket   time.Time          `json:"bucket"`
 	HostAt   string             `json:"hostAt,omitempty"`
 	SQLCount int                `json:"sqlCount,omitempty"`
+	Boundary string             `json:"boundary,omitempty"`
 	Values   map[string]float64 `json:"values"`
 }
 
@@ -129,6 +130,21 @@ func readWallboardPoint(sample, previous wallboardSample, host, containerID stri
 	metrics := sample.metrics
 	elapsed := sample.at.Sub(previous.at).Seconds()
 	bounded := elapsed >= 1 && elapsed <= 600
+	if bounded {
+		started, priorStart := stringValue(metrics["postgresStartedAt"]), stringValue(previous.metrics["postgresStartedAt"])
+		dbReset := stringValue(object(object(object(metrics["diagnostics"])["database"])["data"])["statsReset"])
+		priorReset := stringValue(object(object(object(previous.metrics["diagnostics"])["database"])["data"])["statsReset"])
+		container, _ := wallboardContainer(metrics)
+		priorContainer, _ := wallboardContainer(previous.metrics)
+		switch {
+		case started != "" && priorStart != "" && started != priorStart:
+			point.Boundary = "PostgreSQL 实例重启"
+		case dbReset != "" && priorReset != "" && dbReset != priorReset:
+			point.Boundary = "数据库统计重置"
+		case container != "" && priorContainer != "" && container != priorContainer:
+			point.Boundary = "容器身份变化"
+		}
+	}
 
 	linux := object(metrics["linux"])
 	if host != "" && wallboardHost(metrics) == host && linux["status"] == "ok" {

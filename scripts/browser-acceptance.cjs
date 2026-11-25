@@ -397,6 +397,63 @@ async function monitoring(page, asset) {
   proof.push({ monitoring: labels, exercised: 'Overview and live scopes, metrics, fullscreens, preset and custom periods, storage mode and comparison, workbench refresh, and Grafana offline fallback' });
 }
 
+async function savedDutyView(page, asset) {
+  const now = Date.now();
+  const from = new Date(now - 10 * 60000).toISOString(), to = new Date(now).toISOString();
+  const change = new Date(now - 4 * 60000).toISOString();
+  const label = 'Browser QA on-call view';
+  runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json)
+    SELECT gen_random_uuid(),asset_id,collected_at-interval '1 day',status,
+      jsonb_set(metrics_json,'{linux,cpu,usedPercent}','20'::jsonb)
+    FROM samples WHERE asset_id='${asset}' AND collected_at BETWEEN '${from}' AND '${to}';
+    INSERT INTO asset_changes(asset_id,kind,label,source,occurred_at)
+    VALUES ('${asset}','configuration','Browser QA sampled change','operator','${change}');`);
+  const board = name => page.locator(`[data-board="${name}"]`);
+  const windows = new URLSearchParams({ asset, from, end: to, window: '15' });
+  await page.goto(origin + '/#wallboard?' + windows);
+  await visible(board('focus'), primary);
+  await board('compare').selectOption('day');
+  await visible(board('baseline-status'), '虚线基线');
+  await visible(board('charts'), '基线 20');
+  assert.equal(parameters(page).get('compare'), 'day');
+  const previousRoute = route(page);
+  await board('baseline-raw').click();
+  await visible(page.locator('#sample-details'), asset);
+  await page.locator('#sample-return').click();
+  await page.waitForURL(url => url.hash === previousRoute);
+  await board('layout').selectOption('host');
+  await board('metric-group').selectOption('infra');
+  assert.equal(await page.locator('.wallboard-chart:visible').count(), 5);
+  await board('view-name').fill(label);
+  await board('save-view').getByRole('button', { name: '保存视图' }).click();
+  await visible(board('view-status'), '已保存 ' + label);
+  await board('metric-group').selectOption('all');
+  await board('compare').selectOption('');
+  await page.reload();
+  await board('saved-view').selectOption(label);
+  await visible(board('baseline-status'), '虚线基线');
+  assert.equal(await board('layout').inputValue(), 'host');
+  assert.equal(await board('metric-group').inputValue(), 'infra');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await board('share-view').click();
+  await visible(board('view-status'), '已复制视图链接');
+  const shared = await page.evaluate(() => navigator.clipboard.readText());
+  assert.equal(new URLSearchParams(new URL(shared).hash.split('?')[1]).get('compare'), 'day');
+  const guestTab = await page.context().newPage();
+  await guestTab.goto(shared);
+  await visible(guestTab.locator('[data-board=baseline-status]'), '虚线基线');
+  assert.equal(await guestTab.locator('[data-board=metric-group]').inputValue(), 'infra');
+  await guestTab.close();
+  if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'duty-baseline.png') });
+  await board('delete-view').click();
+  await visible(board('view-status'), '已删除 ' + label);
+  await page.getByLabel('选择变更前后对比').selectOption(change);
+  await visible(board('baseline-status'), '变更时刻');
+  assert.equal(parameters(page).get('compare'), 'previous');
+  assert.equal(parameters(page).get('from'), change);
+  proof.push('Named duty views survive reload, share the selected layout and metrics, compare a real same-time baseline and change window, and reopen the measured raw sample');
+}
+
 async function storageInvestigation(page) {
   const asset = randomUUID(), bare = randomUUID();
   const now = Date.now();
@@ -893,6 +950,7 @@ async function grafanaReturn(page, asset, event) {
     await login(page, 'admin', process.env.DBSPHERE_ADMIN_PASSWORD);
     await page.locator('[data-nav=wallboard]').waitFor();
     const asset = await wallboard(page, process.env.DBSPHERE_TEST_VERSION);
+    await savedDutyView(page, asset);
     await monitoring(page, asset);
     await storageInvestigation(page);
     await operations(page, asset);

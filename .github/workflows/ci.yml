@@ -521,19 +521,33 @@ jobs:
       - name: Install with a network-isolated Docker 27 daemon and preserve PG18 data
         env:
           DBSPHERE_HA_SMOKE: 'true'
+          DBSPHERE_EVIDENCE_SMOKE: ${{ github.ref == 'refs/heads/release/v2.30.0' }}
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-previous-airgap"
           mkdir -p "$previous_dir"
-          previous_version='2.28.0'
-          previous_sha='56cd5a2173654ef64845deb8f9fec06bd5b058743d0c33284415d242585454a5'
+          previous_version='2.29.0'
+          previous_sha='cd42a208ed03827f61b8fe4ba4daeeb60f22976d6e5410979403cadbdcd5e75e'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-amd64.run"
           curl -fL --retry 3 --output "$previous" \
             "https://github.com/cuipengdba/DbSphere/releases/download/v$previous_version/$(basename "$previous")"
           printf '%s  %s\n' "$previous_sha" "$(basename "$previous")" > "$previous.sha256"
           (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous"
+      - name: Upgrade and roll back the v2.25 baseline with its original evidence
+        if: github.ref == 'refs/heads/release/v2.30.0'
+        env:
+          DBSPHERE_EVIDENCE_SMOKE: 'true'
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-offline-output/DbSphere-go-offline-*.run)
+          previous_dir="$RUNNER_TEMP/dbsphere-v225-baseline"
+          mkdir -p "$previous_dir"
+          name=DbSphere-go-offline-2.25.0-linux-amd64.run
+          curl -fL --retry 3 -o "$previous_dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v2.25.0/$name"
+          printf '%s  %s\n' d92d9ac4ee7c51c2adb5350e6547742da929c24b27572e25fda0515bded0e97f "$name" > "$previous_dir/$name.sha256"
+          (cd "$previous_dir" && sha256sum --check --strict "$name.sha256")
+          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous_dir/$name"
       - name: Switch to systemd with the same external PostgreSQL 18 store
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-native/DbSphere-go-systemd-*.run)
@@ -592,12 +606,14 @@ jobs:
           bash scripts/build-go-systemd-bundle.sh "$binary" "$out"
           (cd "$out" && sha256sum --check --strict ./*.sha256)
       - name: Upgrade and roll back arm64 with an offline Docker daemon
+        env:
+          DBSPHERE_EVIDENCE_SMOKE: ${{ github.ref == 'refs/heads/release/v2.30.0' }}
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
           test "${#archive[@]}" -eq 1
           previous_dir="$RUNNER_TEMP/dbsphere-arm64-previous"
-          previous_version='2.28.0'
-          previous_arm_sha='c04a112c78fa17c349856c0e8f63bab5854cbd61e0dc7ad5d8abe2a3cee14f8b'
+          previous_version='2.29.0'
+          previous_arm_sha='49ab8932e2f01466d8e17e271d548c69066df84dce367bf7a6f1c2edf2412139'
           previous="$previous_dir/DbSphere-go-offline-$previous_version-linux-arm64.run"
           mkdir -p "$previous_dir"
           if [[ -n "$previous_arm_sha" ]]; then
@@ -616,6 +632,19 @@ jobs:
           fi
           (cd "$previous_dir" && sha256sum --check --strict "$(basename "$previous.sha256")")
           bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous" | tee "$RUNNER_TEMP/arm64-airgap-proof.log"
+      - name: Upgrade and roll back the arm64 v2.25 baseline with its original evidence
+        if: github.ref == 'refs/heads/release/v2.30.0'
+        env:
+          DBSPHERE_EVIDENCE_SMOKE: 'true'
+        run: |
+          archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-offline-*.run)
+          previous_dir="$RUNNER_TEMP/dbsphere-arm64-v225-baseline"
+          mkdir -p "$previous_dir"
+          name=DbSphere-go-offline-2.25.0-linux-arm64.run
+          curl -fL --retry 3 -o "$previous_dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v2.25.0/$name"
+          printf '%s  %s\n' 8daccc81eaa8bb944bffd038711a4f1c71970448437f9fb45c42f7be0c44950a "$name" > "$previous_dir/$name.sha256"
+          (cd "$previous_dir" && sha256sum --check --strict "$name.sha256")
+          bash scripts/go-offline-nested-airgap-smoke.sh "${archive[0]}" "$previous_dir/$name"
       - name: Switch arm64 to systemd with the same external PostgreSQL 18 store
         run: |
           archive=("$RUNNER_TEMP"/dbsphere-go-arm64/DbSphere-go-systemd-*.run)
@@ -667,11 +696,29 @@ jobs:
         shell: bash
         env:
           ARCH: ${{ matrix.arch }}
+          CHECK_BASELINE: ${{ github.ref == 'refs/heads/release/v2.30.0' }}
         run: |
           version="$(jq -er .version package.json)"
+          baseline=()
+          if [[ "$CHECK_BASELINE" == true ]]; then
+            dir="$RUNNER_TEMP/previous-enhanced"
+            mkdir -p "$dir"
+            if [[ "$ARCH" == amd64 ]]; then
+              old=2.25.0
+              digest=0ccfab80e7b008a297433bc4fb642b2e3d924ea861d48b243a862ae57465d6a5
+            else
+              old=2.29.0
+              digest=ecb21dfc93c90beda8caa0eec862d3523ea6a5090331b18255d872544738bc13
+            fi
+            name="DbSphere-go-observability-$old-linux-$ARCH.run"
+            curl -fL --retry 3 -o "$dir/$name" "https://github.com/cuipengdba/DbSphere/releases/download/v$old/$name"
+            printf '%s  %s\n' "$digest" "$name" > "$dir/$name.sha256"
+            (cd "$dir" && sha256sum --check --strict "$name.sha256")
+            baseline=("$dir/$name")
+          fi
           bash scripts/go-offline-observability-smoke.sh \
             "$RUNNER_TEMP/enhanced/DbSphere-go-observability-$version-linux-$ARCH.run" \
-            "$RUNNER_TEMP/observability-proof" | tee "$RUNNER_TEMP/observability-$ARCH.log"
+            "$RUNNER_TEMP/observability-proof" "${baseline[@]}" | tee "$RUNNER_TEMP/observability-$ARCH.log"
       - uses: actions/upload-artifact@v4
         with:
           name: dbsphere-observability-${{ matrix.arch }}-tested-packages

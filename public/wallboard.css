@@ -48,6 +48,13 @@ body[data-active-view="wallboard"] .workspace-main { max-width: 2880px; padding:
 .wallboard-header { align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .wallboard-tools { flex-wrap: wrap; font-size: 12px; }
 .wallboard-tools select { max-width: 160px; }
+.wallboard-view-tools, .wallboard-view-form, .wallboard-baseline { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: end; }
+.wallboard-view-tools { padding: 8px 10px; border: 1px solid var(--wall-grid); border-radius: 8px; }
+.wallboard-view-tools label { display: grid; gap: 4px; color: var(--wall-muted); font-size: 11px; }
+.wallboard-view-tools :is(input, select) { max-width: min(240px, 75vw); min-height: 35px; padding: 6px 8px; background: var(--surface); color: var(--wall-text); border: 1px solid var(--control-border); border-radius: 7px; }
+.wallboard-view-tools small, .wallboard-baseline { color: var(--wall-muted); font-size: 11px; }
+.wallboard-baseline { padding: 6px 9px; border: 1px dashed var(--control-border); border-radius: 7px; }
+.wallboard-baseline a { white-space: nowrap; }
 .wallboard-status { margin-top: 5px; color: var(--wall-muted); font-size: 11px; }
 .wallboard-status [data-board="version"] { margin-left: 4px; }
 .wallboard-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--wall-change); }
