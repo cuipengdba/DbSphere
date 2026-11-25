@@ -12,6 +12,8 @@
   const topics = ['resources', 'containers', 'cache', 'claims'];
   const rangeHours = [0.25, 1, 6, 24, 168];
   const cacheFields = [['active', '活跃文件页', 'active'], ['inactive', '非活跃文件页', 'write']];
+  const cacheEvidence = [['refault', '重读', 'ops'], ['reclaims', '回收', 'ops'], ['dirty', '脏页', 'bytes'],
+    ['writeback', '写回', 'bytes'], ['ioPressure', 'I/O PSI', 'percent'], ['memoryPressure', '内存 PSI', 'percent']];
   const cacheKey = /^[0-9a-f-]{36}:.{0,63}$/i;
   const dayClock = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const charts = [
@@ -31,6 +33,18 @@
     ['Pod 内存 · metrics.k8s.io', 'bytes', [['podMemory', '内存', 'inactive']]]
   ];
   const claimCharts = [['所选 PVC 容量 · Kubelet', 'bytes', [['pvcUsed', '已用', 'write'], ['pvcCapacity', '容量', 'blue']]]];
+  const deviceCharts = [
+    ['节点设备延迟', 'ms', [['nodeReadMs', '读', 'blue'], ['nodeWriteMs', '写', 'write']]],
+    ['节点设备 IOPS', 'ops', [['nodeReadIops', '读', 'blue'], ['nodeWriteIops', '写', 'write']]],
+    ['节点设备吞吐', 'throughput', [['nodeReadBps', '读', 'blue'], ['nodeWriteBps', '写', 'write']]],
+    ['节点设备平均队列深度', 'count', [['queueDepth', '队列深度', 'inactive']]],
+    ['节点设备忙碌比例', 'percent', [['nodeBusy', '设备忙碌', 'active']]]
+  ];
+  const pgCharts = [
+    ['PostgreSQL WAL 产生速率', 'throughput', [['walBps', 'WAL', 'active']]],
+    ['PostgreSQL 临时写入增量', 'bytes', [['tempDelta', '临时写入', 'blue']]],
+    ['PostgreSQL 检查点同步增量', 'ms', [['checkpointDelta', '同步耗时', 'write']]]
+  ];
 
   function node(tag, text, className) {
     const result = document.createElement(tag);
@@ -45,7 +59,7 @@
       const power = Math.min(4, Math.floor(Math.log(Math.max(value, 1)) / Math.log(1024)));
       return number.format(value / 1024 ** power) + ' ' + ['B', 'KiB', 'MiB', 'GiB', 'TiB'][power] + (unit === 'throughput' ? '/s' : '');
     }
-    return number.format(value) + ({ percent: '%', ops: ' /s', count: '' }[unit] || '');
+    return number.format(value) + ({ percent: '%', ops: ' /s', ms: ' ms' }[unit] || '');
   }
 
   function selectOptions(control, choices, selected) {
@@ -63,9 +77,10 @@
     let capacityAt = 0, capacity = [];
     let cachePins = [], cacheSeries = [], cacheLoadedAt = 0;
     const cacheViews = new Map();
-    let route = { mode: 'live', topic: 'resources', hours: 1, asset: '', container: '', device: '', pvc: '', pvcUid: '', event: '', from: '', to: '' };
+    let route = { mode: 'live', topic: 'resources', hours: 1, asset: '', container: '', device: '', nodeDevice: '', pvc: '', pvcUid: '', event: '', from: '', to: '', cursor: '' };
     const viewSpecs = [...charts.slice(0, -1).map(spec => ['containers', spec]), ['', charts.at(-1)],
-      ...resourceCharts.map(spec => ['resources', spec]), ...claimCharts.map(spec => ['claims', spec])];
+      ...resourceCharts.map(spec => ['resources', spec]), ...claimCharts.map(spec => ['claims', spec]),
+      ...deviceCharts.map(spec => ['device', spec]), ...pgCharts.map(spec => ['containers', spec])];
     const views = viewSpecs.map(([topic, [title, unit, fields]]) => {
       const card = node('section', null, 'storage-chart');
       const hdr = node('header');
@@ -79,13 +94,7 @@
       const summary = node('p', '暂无样本', 'storage-chart-readout');
       card.append(hdr, canvas, summary);
       get('charts').append(card);
-      canvas.addEventListener('pointermove', event => {
-        if (!result?.buckets?.length) return;
-        const fraction = Math.min(1, Math.max(0, (event.offsetX - 61) / Math.max(1, canvas.clientWidth - 72)));
-        focus = Date.parse(result.from) + fraction * (Date.parse(result.to) - Date.parse(result.from));
-        draw();
-      });
-      canvas.addEventListener('pointerleave', () => { focus = null; draw(); });
+      bindCursor(canvas, () => result);
       canvas.addEventListener('dblclick', () => {
         if (!focus || !result) return;
         const duration = Date.parse(result.to) - Date.parse(result.from);
@@ -97,6 +106,38 @@
       });
       return { card, canvas, summary, unit, fields, topic };
     });
+
+    function bindCursor(canvas, source) {
+      canvas.tabIndex = 0;
+      const pointAt = event => {
+        const data = source();
+        if (!data?.buckets?.length) return null;
+        const fraction = Math.min(1, Math.max(0, (event.offsetX - 61) / Math.max(1, canvas.clientWidth - 72)));
+        return Date.parse(data.from) + fraction * (Date.parse(data.to) - Date.parse(data.from));
+      };
+      const pin = at => {
+        if (at !== null && !Number.isFinite(at)) return;
+        focus = at;
+        route.cursor = at == null ? '' : new Date(at).toISOString();
+        history.replaceState(null, '', '#' + routeHash());
+        draw();
+      };
+      canvas.addEventListener('pointermove', event => {
+        if (!route.cursor) { focus = pointAt(event); draw(); }
+      });
+      canvas.addEventListener('pointerleave', () => { focus = route.cursor ? Date.parse(route.cursor) : null; draw(); });
+      canvas.addEventListener('click', event => pin(pointAt(event)));
+      canvas.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && route.cursor) { event.preventDefault(); pin(null); return; }
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        const data = source();
+        if (!data?.buckets?.length) return;
+        event.preventDefault();
+        const step = data.stepSeconds * 1000;
+        const at = Number.isFinite(focus) ? focus + (event.key === 'ArrowLeft' ? -step : step) : Date.parse(data.buckets.at(-1).at);
+        pin(Math.min(Date.parse(data.to), Math.max(Date.parse(data.from), at)));
+      });
+    }
 
     function routeHash() {
       const params = new URLSearchParams();
@@ -136,12 +177,15 @@
         hours: rangeHours.includes(Number(params.get('hours'))) ? Number(params.get('hours')) : requestedTopic === 'cache' ? 24 : 1,
         asset: uuid.test(params.get('asset') || '') ? params.get('asset') : '',
         container: (params.get('container') || '').slice(0, 63), device: (params.get('device') || '').slice(0, 128),
+        nodeDevice: params.get('device') ? '' : (params.get('nodeDevice') || '').slice(0, 128),
         pvc: (params.get('pvc') || '').slice(0, 253),
         pvcUid: (params.get('pvcUid') || '').slice(0, 128),
         return: back.length <= 5200 && (/^(overview|monitoring|live)(?:\?|$)/.test(back) ||
           back.startsWith('incidents?') && uuid.test(params.get('event') || '') && new URLSearchParams(back.slice(10)).get('event') === params.get('event')) ? back : '',
         event: uuid.test(params.get('event') || '') ? params.get('event') : '',
-        from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '' };
+        from: custom ? new Date(start).toISOString() : '', to: custom ? new Date(end).toISOString() : '',
+        cursor: Number.isFinite(Date.parse(params.get('cursor'))) ? new Date(params.get('cursor')).toISOString() : '' };
+      focus = route.cursor ? Date.parse(route.cursor) : null;
       result = comparison = undefined;
       cachePins = [...new Set(params.getAll('watch').filter(value => cacheKey.test(value) && uuid.test(value.slice(0, 36))))].slice(0, 5);
       cacheSeries = [];
@@ -174,7 +218,7 @@
       const to = route.to ? Date.parse(route.to) : Date.now();
       const from = route.from ? Date.parse(route.from) : to - route.hours * hour;
       const params = (a, b) => new URLSearchParams({ from: new Date(a).toISOString(), to: new Date(b).toISOString(),
-        container: route.container, device: route.device, pvcUid: route.pvcUid });
+        container: route.container, device: route.device, nodeDevice: route.nodeDevice, pvcUid: route.pvcUid });
       try {
         if (route.topic === 'cache') {
           cacheLoadedAt = Date.now();
@@ -215,7 +259,7 @@
       if (!active) return;
       generation++;
       pending = false;
-      focus = null;
+      focus = route.cursor ? Date.parse(route.cursor) : null;
       capacityAt = 0; capacity = [];
       if (clear) { result = comparison = undefined; cacheSeries = []; render(); }
       settings();
@@ -250,9 +294,12 @@
       const containerNames = Object.keys(storage?.containers || {}).sort();
       const containerName = route.container || storage?.primary;
       const sample = storage?.containers?.[containerName];
+      const bareHost = asset?.runtime === 'linux' && !storage?.runtime;
       const devices = Object.entries(sample?.deviceRates || {}).sort(([, a], [, b]) => (b.readBps || 0) + (b.writeBps || 0) - (a.readBps || 0) - (a.writeBps || 0));
       selectOptions(get('container'), [['', 'PostgreSQL 容器'], ...containerNames.map(name => [name, name])], route.container);
-      selectOptions(get('device'), [['', '全部可比设备'], ...Object.keys(sample?.devices || {}).sort().map(name => [name, name])], route.device);
+      const deviceChoices = Object.keys(bareHost ? latest?.nodeRates || {} : sample?.devices || {}).sort().map(name => [name, name]);
+      selectOptions(get('device'), [['', '全部可比设备'], ...deviceChoices], route.nodeDevice || route.device);
+      get('device').dataset.scope = bareHost ? 'node' : 'container';
       const outdated = route.mode === 'live' && Date.now() - Date.parse(sample?.observedAt) > Math.max(30, 2 * (storage?.cadenceSeconds || 60)) * 1000;
       const resourceState = (asset?.runtime === 'k8s' ? latest?.kubernetes?.status : latest?.host?.status) || 'unbound';
       const resourceStale = route.mode === 'live' && Date.now() - Date.parse(latest?.at) > Math.max(30, 2 * (storage?.cadenceSeconds || 60)) * 1000;
@@ -268,14 +315,13 @@
       root.dataset.topic = route.topic;
       get('heading').textContent = route.topic === 'cache' ? '文件页缓存' : '主机、容器与存储';
       get('cache-board').hidden = route.topic !== 'cache';
+      renderIdentity(asset, latest, sample);
       if (route.topic === 'cache') {
-        get('identity').replaceChildren();
         renderCache();
         return;
       }
-      for (const view of views) view.card.hidden = !!view.topic && (view.topic !== route.topic ||
-        (view.fields[0][0].startsWith('pod') && source !== 'Kubernetes') || (view.topic === 'claims' && !route.pvcUid));
-      renderIdentity(asset, latest, sample);
+      for (const view of views) view.card.hidden = view.topic === 'device' ? !((route.nodeDevice || route.device) && ['resources', 'containers'].includes(route.topic)) :
+        !!view.topic && (view.topic !== route.topic || (view.fields[0][0].startsWith('pod') && source !== 'Kubernetes') || (view.topic === 'claims' && !route.pvcUid));
       const values = route.device ? sample?.deviceRates?.[route.device] : sample?.rates;
       const claim = storage?.pvcs?.find(item => route.pvcUid && item.uid === route.pvcUid);
       const storageStats = [['读吞吐', values?.readBps, 'throughput', 'blue'], ['写吞吐', values?.writeBps, 'throughput', 'write'],
@@ -343,7 +389,13 @@
       for (const [dev, rates] of ranked.slice(0, 6)) {
         const io = (rates.reads || 0) + (rates.writes || 0);
         const ms = io && Number.isFinite(rates.readSeconds) && Number.isFinite(rates.writeSeconds) ? (rates.readSeconds + rates.writeSeconds) * 1000 / io : null;
-        volumeNodes.push(node('p', `${dev} · 平均 ${fmt(ms, '')} ms · 忙碌 ${fmt(rates.ioSeconds * 100, 'percent')}`));
+        const label = `${dev} · 平均 ${fmt(ms, 'ms')} · 忙碌 ${fmt(rates.ioSeconds * 100, 'percent')}`;
+        if (bareHost) {
+          const button = node('button', label, 'storage-device');
+          button.type = 'button';
+          button.onclick = () => { route.nodeDevice = dev; route.device = ''; route.topic = 'resources'; restart(); render(); };
+          volumeNodes.push(button);
+        } else volumeNodes.push(node('p', label));
       }
       get('volumes').replaceChildren(...(volumeNodes.length ? volumeNodes : [node('p', '暂无节点设备或 PVC 样本。', 'storage-empty')]));
       const finding = storage?.finding;
@@ -408,16 +460,12 @@
       const canvas = node('canvas'); canvas.setAttribute('role', 'img');
       const summary = node('p', '暂无样本', 'storage-chart-readout');
       const source = node('small', '', 'cache-sample');
-      card.append(header, readings, canvas, summary, source);
-      const view = { card, title, identity, remove, values, source, canvas, summary, fields: cacheFields, unit: 'bytes', cache: true };
-      canvas.onpointermove = event => {
-        if (!view.data) return;
-        const prop = Math.max(0, Math.min(1, (event.offsetX - 61) / Math.max(1, canvas.clientWidth - 72)));
-        const start = Date.parse(view.data.from);
-        focus = start + prop * (Date.parse(view.data.to) - start);
-        draw();
-      };
-      canvas.onpointerleave = () => { focus = null; draw(); };
+      const evidence = node('p', '', 'cache-note');
+      const raw = node('a', '查看时间桶原始采样', 'monitor-link');
+      raw.hidden = true;
+      card.append(header, readings, canvas, summary, evidence, source, raw);
+      const view = { card, title, identity, remove, values, source, canvas, summary, evidence, raw, fields: cacheFields, unit: 'bytes', cache: true };
+      bindCursor(canvas, () => view.data);
       return view;
     }
 
@@ -425,7 +473,7 @@
       const area = get('cache-tiles');
       const current = `${route.asset}:${route.container}`;
       const first = cacheSeries.find(item => item.data)?.data;
-      get('cache-window').textContent = first ? `${formatTime(first.from)} — ${formatTime(first.to)}` : '等待文件缓存采样';
+      get('cache-window').textContent = first ? `${formatTime(first.from)} — ${formatTime(first.to)} · 所有容器同一纵轴` : '等待文件缓存采样';
       get('pin-cache').disabled = !route.asset || cachePins.includes(current) || cachePins.length >= 5;
       get('only-cache').disabled = !cachePins.length;
       const identities = new Set();
@@ -467,12 +515,39 @@
 
     function renderIdentity(asset, latest, sample) {
       const storage = latest?.storage, parts = [];
-      const add = (label, value) => { if (value) parts.push(node('span', `${label} ${value}`)); };
-      add('工作负载', storage?.workload?.name || (typeof storage?.workload === 'string' ? storage.workload : latest?.kubernetes?.owner?.name));
-      add('Pod UID', storage?.podUID);
-      add('Node UID', storage?.nodeUID);
-      add('容器 ID', sample?.id);
-      add('PVC UID', route.pvcUid);
+      const add = (label, value, detail, action) => {
+        if (!value) return;
+        const item = node(action ? 'button' : 'span', null, 'storage-identity-item');
+        item.append(node('small', label), node('strong', value));
+        if (detail) item.append(node('small', detail));
+        if (action) { item.type = 'button'; item.onclick = action; }
+        parts.push(item);
+      };
+      const openResources = () => { route.topic = 'resources'; restart(); render(); };
+      const pod = storage?.pod || asset?.pod;
+      const host = storage?.node || asset?.linuxHost;
+      add('PostgreSQL 实例', asset?.name, latest?.at ? formatTime(latest.at) : '暂无采样');
+      add('容器', route.container || storage?.primary, sample?.id ? `容器 ID ${sample.id}` : '容器身份未核对', () => {
+        route.topic = 'containers'; restart(); render();
+      });
+      add('Pod', pod, storage?.podUID ? `${storage.namespace || ''} · UID ${storage.podUID}` : 'Pod UID 未核对', openResources);
+      add(host && pod ? '节点' : 'Linux 主机', host || latest?.host?.endpoint,
+        storage?.nodeUID ? `UID ${storage.nodeUID}` : latest?.host?.endpoint || '节点采集源未知', openResources);
+      for (const link of (sample?.deviceLinks || []).slice(0, 4)) {
+        add('节点块设备', link.nodeDevice, `已核对设备号 ${link.device} · ${formatTime(link.to)}`, () => {
+          route.device = link.device; route.nodeDevice = ''; route.topic = 'containers'; restart(); render();
+        });
+      }
+      if (sample?.id && !(sample.deviceLinks || []).length) add('节点块设备', '映射待核对', '未找到同节点的设备号证据');
+      if (route.nodeDevice) add('节点块设备', route.nodeDevice, 'node_exporter 同节点采样');
+      for (const claim of (storage?.pvcs || []).slice(0, 4)) {
+        const links = (storage.volumeLinks || []).filter(link => link.pvc === claim.name && link.container === (route.container || storage.primary));
+        const verified = claim.uid && links.some(link => link.status === 'claim_verified');
+        const scope = [verified ? `已核对 UID ${claim.uid}` : '挂载归属待核对', links.some(link => link.sharedInPod) ? '同 Pod 共享' : ''].filter(Boolean).join(' · ');
+        add('持久卷声明', claim.name, scope, () => {
+          route.pvc = claim.name; route.pvcUid = claim.uid || ''; route.topic = 'claims'; restart(); render();
+        });
+      }
       if (asset && result?.from && result?.to) {
         const panel = node('a', '查看环境同窗');
         panel.href = '#monitoring?' + new URLSearchParams({ instance: asset.id, tab: 'infra', from: result.from, to: result.to });
@@ -484,6 +559,10 @@
         raw.target = '_blank'; raw.rel = 'noopener';
         parts.push(raw);
       }
+      const cursor = node('a', '查看游标采样', 'monitor-link');
+      cursor.dataset.storage = 'cursor-sample';
+      cursor.hidden = true;
+      parts.push(cursor);
       get('identity').replaceChildren(...parts);
     }
 
@@ -491,12 +570,20 @@
       if (!active) return;
       const styles = getComputedStyle(root);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      for (const { canvas, summary, fields, unit, cache, data } of route.topic === 'cache' ? cacheViews.values() : views) {
+      const cacheMax = Math.max(1, ...cacheSeries.flatMap(({ data }) => (data?.buckets || [])
+        .flatMap(row => cacheFields.map(([key]) => row.series?.[key]?.max || 0))));
+      const cursorRow = rowAt(result);
+      const cursorLink = get('cursor-sample');
+      if (cursorLink) {
+        cursorLink.hidden = !Number.isFinite(focus) || !cursorRow?.latestSampleId;
+        if (!cursorLink.hidden) cursorLink.href = `/api/assets/${route.asset}/samples/${cursorRow.latestSampleId}`;
+      }
+      for (const { canvas, summary, fields, unit, cache, data, evidence, raw } of route.topic === 'cache' ? cacheViews.values() : views) {
         const source = cache ? data : result;
         const rows = source?.buckets || [], prior = cache ? [] : comparison?.buckets || [];
         const start = Date.parse(source?.from), end = Date.parse(source?.to), previousShift = end - start;
         const reading = cache ? 'mean' : 'max';
-        const cadence = cache ? source?.latest?.storage?.cadenceSeconds || 60 : 0;
+        const cadence = source?.latest?.storage?.cadenceSeconds || 60;
         const maxGap = Math.max((source?.stepSeconds || 0) + 4, cadence) * 1500;
         const width = canvas.clientWidth, height = canvas.clientHeight;
         if (width < 80 || !height) continue;
@@ -504,7 +591,8 @@
         canvas.width = width * dpr; canvas.height = height * dpr;
         ctx.scale(dpr, dpr);
         const plot = { left: 61, top: 9, width: width - 72, height: height - 32 };
-        const max = Math.max(1, ...[...rows, ...prior].flatMap(row => fields.map(([key]) => row.series?.[key]?.max || 0)));
+        const max = cache ? cacheMax : Math.max(1, ...[...rows, ...prior].flatMap(row => fields.map(([key]) => row.series?.[key]?.max || 0)));
+        canvas.dataset.scaleMax = String(max);
         const x = at => plot.left + (at - start) / (end - start) * plot.width;
         const y = value => plot.top + (1 - value / max) * plot.height;
         ctx.strokeStyle = styles.getPropertyValue('--live-line'); ctx.fillStyle = styles.getPropertyValue('--live-muted'); ctx.font = '11px system-ui';
@@ -543,18 +631,31 @@
             ctx.stroke(); ctx.setLineDash([]);
           }
         }
-        if (Number.isFinite(focus) && start < end) {
+        if (Number.isFinite(focus) && focus >= start && focus <= end) {
           ctx.strokeStyle = styles.getPropertyValue('--live-muted'); ctx.lineWidth = 1;
           ctx.beginPath(); ctx.moveTo(x(focus), plot.top); ctx.lineTo(x(focus), plot.top + plot.height); ctx.stroke();
         }
-        const nearest = focus ? rows.reduce((a, b) => !a || Math.abs(Date.parse(b.at) - focus) < Math.abs(Date.parse(a.at) - focus) ? b : a, null) : rows.at(-1);
-        summary.textContent = nearest ? [formatTime(nearest.at), ...fields.map(([key, label]) => `${label} ${fmt(nearest.series?.[key]?.[reading], unit)}`)].join(' · ') : '暂无样本';
+        const nearest = rowAt(source);
+        summary.textContent = nearest ? [formatTime(nearest.at), ...fields.map(([key, label]) => `${label} ${fmt(nearest.series?.[key]?.[reading], unit)}`)].join(' · ') :
+          Number.isFinite(focus) ? `${formatTime(focus)} · 该时间桶无采样` : '暂无样本';
+        if (cache) {
+          evidence.textContent = nearest ? [...cacheEvidence.map(([key, label, unit]) => `${label} ${fmt(nearest.series?.[key]?.mean, unit)}`),
+            nearest.identityChanged ? '容器身份变化' : '', nearest.counterReset ? '计数器重置' : ''].filter(Boolean).join(' · ') : '';
+          raw.hidden = !nearest?.latestSampleId;
+          if (!raw.hidden) raw.href = `/api/assets/${source.assetId}/samples/${nearest.latestSampleId}`;
+        }
       }
+    }
+
+    function rowAt(source) {
+      if (!Number.isFinite(focus)) return source?.buckets?.at(-1);
+      const step = source?.stepSeconds * 1000;
+      return source?.buckets?.find(row => { const at = Date.parse(row.at); return focus >= at && focus < at + step; });
     }
 
     for (const mode of ['live', 'history']) get(mode).onclick = () => {
       route.mode = mode;
-      if (mode === 'live') { route.from = route.to = ''; route.hours = 1; }
+      if (mode === 'live') { route.from = route.to = route.cursor = ''; route.hours = 1; }
       restart();
     };
     for (const topic of topics) get(topic).onclick = () => { route.topic = topic; restart(); render(); };
@@ -572,11 +673,17 @@
       route.from = route.to = '';
       restart(true);
     };
-    for (const key of ['asset', 'container', 'device']) get(key).onchange = () => {
+    for (const key of ['asset', 'container']) get(key).onchange = () => {
       route[key] = get(key).value;
-      if (key === 'asset') { route.event = route.container = route.device = route.pvc = route.pvcUid = ''; }
-      if (key === 'container') route.device = '';
+      if (key === 'asset') { route.event = route.container = route.pvc = route.pvcUid = ''; }
+      route.device = route.nodeDevice = '';
       restart(true);
+    };
+    get('device').onchange = () => {
+      const device = get('device');
+      route.nodeDevice = device.dataset.scope === 'node' ? device.value : '';
+      route.device = route.nodeDevice ? '' : device.value;
+      restart(); render();
     };
     get('range').onchange = () => {
       if (get('range').value === 'custom') { get('dates').hidden = false; get('from').focus(); return; }
@@ -599,7 +706,12 @@
     resize.observe(get('charts'));
     resize.observe(get('cache-tiles'));
     new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    return { show, setAssets(value) { assets = value; if (active) { refreshOptions(); void load(); } } };
+    return { show, contextRoute() {
+      const params = new URLSearchParams(routeHash().split('?')[1]);
+      if (result?.from && result?.to) { params.set('from', result.from); params.set('to', result.to); }
+      if (Number.isFinite(focus)) params.set('cursor', new Date(focus).toISOString());
+      return 'storage?' + params;
+    }, setAssets(value) { assets = value; if (active) { refreshOptions(); void load(); } } };
   }
 
   window.DbSphereContainerStorage = { create };

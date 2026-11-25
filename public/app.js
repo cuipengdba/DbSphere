@@ -593,7 +593,7 @@ document.addEventListener('click', event => {
   if (!match || !sampleUUID.test(match[1]) || !sampleUUID.test(match[2])) return;
   event.preventDefault();
   const active = document.body.dataset.activeView;
-  const origin = active === 'monitoring' ? monitoring.contextRoute() : active === 'live' ? live.route(true) :
+  const origin = active === 'monitoring' ? monitoring.contextRoute() : active === 'live' ? live.route(true) : active === 'storage' ? containerStorage.contextRoute() :
     active === 'wallboard' ? wallboard.route(true) : location.hash.slice(1);
   const params = new URLSearchParams({ asset: match[1], sample: match[2], return: origin });
   location.hash = `sample?${params}`;

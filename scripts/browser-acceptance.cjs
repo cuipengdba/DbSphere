@@ -397,6 +397,83 @@ async function monitoring(page, asset) {
   proof.push({ monitoring: labels, exercised: 'Overview and live scopes, metrics, fullscreens, preset and custom periods, storage mode and comparison, workbench refresh, and Grafana offline fallback' });
 }
 
+async function storageInvestigation(page) {
+  const asset = randomUUID(), bare = randomUUID();
+  const now = Date.now();
+  const from = new Date(now - 10 * 60000).toISOString(), to = new Date(now).toISOString();
+  const samples = [];
+  for (let i = 0; i < 4; i++) {
+    const at = new Date(now - (4 - i) * 60000).toISOString();
+    const rates = { reads: 100 + i, writes: 20, readSeconds: .202, writeSeconds: .08, readBytes: 120000,
+      writtenBytes: 480000, ioSeconds: .31, weightedIOSeconds: 2.5 };
+    const diagnostics = { wal: { data: { bytes: String(1024 + i * 60000), statsReset: fixedTime } },
+      checkpoints: { data: { syncMs: i * 20, statsReset: fixedTime } }, database: { data: { tempBytes: i * 4096, statsReset: fixedTime } } };
+    const pg = { postgresStartedAt: fixedTime, role: 'primary', diagnostics,
+      linux: { status: 'ok', endpoint: 'lab-node:9100', deviceRates: { disk: { sda: rates } }, deviceNumbers: { sda: { number: '8:0' } } } };
+    const containers = {};
+    for (const [name, scale] of [['postgres', 1], ['sidecar', 10]]) {
+      containers[name] = { id: `${name}-${i < 2 ? 'old' : 'current'}`, status: 'ok', observedAt: at, identityChanged: i === 2,
+        memory: { active_file: (i + 1) * (1 << 20) * scale, inactive_file: (i + 1) * (1 << 19) * scale,
+          file_dirty: 2048 * i, file_writeback: 40 * i }, rates: { refaultPerSecond: i * 5, reclaimsPerSecond: i * 3 },
+        pressure: { io_some_avg10: i * 2, memory_some_avg10: i * 3 }, devices: { '8:0': {} }, deviceRates: { '8:0': { readIops: 3, readBps: 1000 } },
+        deviceLinks: [{ device: '8:0', nodeDevice: 'sda', scope: 'node_device', to: at, queueDepth: rates.weightedIOSeconds }] };
+    }
+    const k8s = { ...pg, k8s: { status: 'ok' }, containerStorage: { status: 'ok', runtime: 'k8s', primary: 'postgres',
+      node: 'lab-node', nodeUID: 'lab-node-uid', pod: 'pg-observability-0', podUID: 'lab-pod-uid', namespace: 'storage-lab',
+      cadenceSeconds: 60, pgIOWait: i, containers, pvcs: [{ name: 'pg-data', uid: 'lab-pvc-uid', phase: 'Bound',
+        usage: { status: 'ok', usedBytes: 100000 + i * 40000, capacityBytes: 10000000, observedAt: at } }],
+      volumeLinks: [{ container: 'postgres', pvc: 'pg-data', status: 'claim_verified', sharedInPod: true }] } };
+    for (const [id, metrics] of [[asset, k8s], [bare, pg]]) {
+      samples.push(`(gen_random_uuid(), '${id}', '${at}', 'ok', $data$${JSON.stringify(metrics)}$data$::jsonb)`);
+    }
+  }
+  runFixtureSQL(`INSERT INTO assets(id,name,host,port,database_name,username,password_enc,ssl_mode,runtime,environment,created_at)
+    VALUES ('${asset}','Storage QA Kubernetes','127.0.0.1',15434,'postgres','postgres','','disable','k8s','storage-acceptance',now()),
+      ('${bare}','Storage QA Linux','127.0.0.1',15434,'postgres','postgres','','disable','linux','storage-acceptance',now());
+    INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES ${samples.join(',')};`);
+  const storage = name => page.locator(`[data-storage="${name}"]`);
+  const scope = (id, topic) => '/#storage?' + new URLSearchParams({ asset: id, topic, mode: 'history', from, to });
+  try {
+    await page.goto(origin + scope(asset, 'containers'));
+    await visible(storage('identity'), 'lab-pod-uid');
+    await visible(storage('identity'), '同 Pod 共享');
+    await storage('identity').getByRole('button', { name: /节点块设备 sda/ }).first().click();
+    const latency = storage('charts').locator('.storage-chart').filter({ hasText: '节点设备延迟' });
+    await visible(latency.locator('.storage-chart-readout'), '读 2 ms');
+    await visible(storage('charts'), '队列深度 2.5');
+    await visible(storage('charts'), 'WAL 1,000 B/s');
+    await storage('identity').getByRole('button', { name: /持久卷声明 pg-data/ }).click();
+    await visible(storage('stats'), 'PVC 容量');
+    assert.equal(parameters(page).get('pvcUid'), 'lab-pvc-uid');
+    await storage('cache').click();
+    await storage('pin-cache').click();
+    await storage('container').selectOption('sidecar');
+    const cards = storage('cache-tiles').locator('.cache-card');
+    await page.waitForFunction(() => document.querySelectorAll('.cache-card canvas[data-scale-max]').length === 2);
+    const plots = cards.locator('canvas');
+    assert.equal(await plots.nth(0).getAttribute('data-scale-max'), await plots.nth(1).getAttribute('data-scale-max'));
+    await plots.first().press('ArrowLeft');
+    assert(parameters(page).has('cursor'));
+    await visible(cards.nth(0), '重读 15');
+    await visible(cards.nth(1), '重读 15');
+    const cursor = parameters(page).get('cursor');
+    await cards.first().getByRole('link', { name: '查看时间桶原始采样' }).click();
+    await visible(page.locator('#sample-details'), asset);
+    await page.locator('#sample-return').click();
+    assert.equal(parameters(page).get('cursor'), cursor);
+    await cards.nth(1).waitFor();
+    if (process.env.DBSPHERE_BROWSER_OUTPUT) await page.screenshot({ path: join(process.env.DBSPHERE_BROWSER_OUTPUT, 'shared-cache-scale.png') });
+    await page.goto(origin + scope(bare, 'resources'));
+    await storage('device').selectOption('sda');
+    await visible(latency.locator('.storage-chart-readout'), '读 2 ms');
+    assert.equal(parameters(page).get('nodeDevice'), 'sda');
+    assert.equal(parameters(page).has('device'), false);
+    proof.push('Container and bare Linux device attribution, PVC UID, WAL / disk correlation, shared cache scale and cursor, and original evidence return');
+  } finally {
+    runFixtureSQL(`DELETE FROM assets WHERE id IN ('${asset}','${bare}');`);
+  }
+}
+
 async function operations(page, asset) {
   await navigate(page, 'assets');
   const row = page.locator('#asset-list article').filter({ hasText: primary });
@@ -791,6 +868,7 @@ async function grafanaReturn(page, asset, event) {
     await page.locator('[data-nav=wallboard]').waitFor();
     const asset = await wallboard(page, process.env.DBSPHERE_TEST_VERSION);
     await monitoring(page, asset);
+    await storageInvestigation(page);
     await operations(page, asset);
     await pagination(page, asset);
     await dutyMatrix(page);

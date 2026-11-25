@@ -45,6 +45,10 @@ body[data-active-view="storage"] .workspace-heading { display: none; }
 .storage-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: .78rem; color: var(--live-muted); }
 .storage-identity :is(span, a) { border: 1px solid var(--live-line); border-radius: 7px; padding: 5px 8px; overflow-wrap: anywhere; }
 .storage-identity a { color: var(--live-accent); }
+.storage-identity .storage-identity-item { display: grid; align-content: center; gap: 3px; flex: 1 1 10rem; min-height: 66px; max-width: 24rem; padding: 8px 10px; border: 1px solid var(--live-line); border-radius: 8px; background: var(--live-panel); color: var(--live-muted); text-align: left; overflow-wrap: anywhere; }
+.storage-identity-item strong { color: var(--text); }
+.storage-identity button.storage-identity-item:hover { border-color: var(--live-accent); }
+.storage-chart canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
 .storage-toolbar select, .storage-toolbar input:not([type="checkbox"]) { box-sizing: border-box; max-width: 230px; min-height: 38px; padding: 7px; }
 .storage-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
 .storage-stat { display: grid; gap: 6px; padding: 15px; border: 1px solid var(--live-line); border-top: 2px solid var(--stat, var(--live-accent)); border-radius: 12px; background: var(--live-panel); }

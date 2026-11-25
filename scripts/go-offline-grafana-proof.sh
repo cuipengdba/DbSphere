@@ -49,6 +49,7 @@ done
 echo 'Grafana dashboard provisioning passed for all six topics.'
 for topic in io cache volumes rca; do
   panels=4
+  if [[ "$topic" == io ]]; then panels=6; fi
   if [[ "$topic" == volumes ]]; then panels=5; fi
   api "$base/grafana/api/dashboards/uid/dbsphere-container-$topic" |
     jq -e --arg uid "dbsphere-container-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and

@@ -382,6 +382,134 @@
           }
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "节点设备平均等待",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_node_device_wait_seconds{asset_id=~\"${asset:raw}\",device_number=~\"${device:raw}\"}",
+          "legendFormat": "{{node}} · {{device}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ],
+      "description": "来自 node_exporter 的节点设备观察值。共享设备的负载可能来自多个工作负载。"
+    },
+    {
+      "id": 6,
+      "title": "节点设备平均队列深度",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dbsphere-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "links": [
+            {
+              "title": "在 DbSphere 查看相同事件和时段",
+              "url": "/grafana/dbsphere-return?view=storage&asset=${asset:percentencode}&container=${container:percentencode}&event=${event:percentencode}&from=${__from:date:iso}&to=${__to:date:iso}&device=${device:percentencode}",
+              "targetBlank": false
+            }
+          ],
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "dbsphere_container_node_device_average_queue{asset_id=~\"${asset:raw}\",device_number=~\"${device:raw}\"}",
+          "legendFormat": "{{node}} · {{device}}",
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dbsphere-prometheus"
+          }
+        }
+      ],
+      "description": "来自 node_exporter 的节点设备观察值。共享设备的负载可能来自多个工作负载。"
     }
   ]
 }
