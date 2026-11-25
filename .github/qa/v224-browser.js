@@ -115,9 +115,9 @@ const runAcceptance = async (page) => {
   });
   await page.goto(root + '/#logs?batch=' + after.id + '&case=' + investigation.id);
   const study = loc('investigation-dialog');
-  await study.getByLabel('基线批次', { exact: true }).selectOption(before.id);
-  await study.getByLabel('复测批次', { exact: true }).selectOption(after.id);
-  await study.getByLabel('目标 P95（毫秒）').fill('1500');
+  await study.locator('select[name=before]').selectOption(before.id);
+  await study.locator('select[name=after]').selectOption(after.id);
+  await study.locator('input[name=target]').fill('1500');
   await dialogButton(study, '保存复测结果').click();
   await visible(study, '已达标');
   const [download] = await Promise.all([
@@ -183,7 +183,19 @@ const runAcceptance = async (page) => {
   try {
     const page = await browser.newPage();
     await page.goto('http://127.0.0.1:18080');
-    const results = await runAcceptance(page);
+    const results = await runAcceptance(page).catch(async error => {
+      console.error(JSON.stringify(await page.evaluate(() => ({
+        view: document.body.dataset.activeView,
+        hash: location.hash,
+        status: document.querySelector('[data-logs="status"]')?.textContent,
+        dialogs: [...document.querySelectorAll('dialog[open]')].map(dialog => ({
+          heading: dialog.querySelector('h2')?.textContent,
+          fields: [...dialog.querySelectorAll('select')].map(select => select.name),
+          message: dialog.querySelector('[role=status]')?.textContent
+        }))
+      }))));
+      throw error;
+    });
     console.log(JSON.stringify(results, null, 2));
   } finally {
     await browser.close();
