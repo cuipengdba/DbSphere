@@ -40,6 +40,7 @@ echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql; do
   panels=8
+  if [[ "$topic" == waits ]]; then panels=10; fi
   if [[ "$topic" == infrastructure ]]; then panels=12; fi
   api "$base/grafana/api/dashboards/uid/dbsphere-$topic" |
     jq -e --arg uid "dbsphere-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and
