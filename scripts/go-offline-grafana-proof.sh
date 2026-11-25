@@ -39,9 +39,11 @@ if grep -Eqi '^(Location:.*login|Set-Cookie:)' "$scratch/frame.headers"; then ex
 echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql dm8 kingbase redis etcd; do
-  panels=8
-  if [[ "$topic" == waits ]]; then panels=10; fi
-  if [[ "$topic" == infrastructure ]]; then panels=12; fi
+  case "$topic" in
+    waits|dm8|kingbase) panels=10 ;;
+    infrastructure) panels=12 ;;
+    *) panels=8 ;;
+  esac
   api "$base/grafana/api/dashboards/uid/dbsphere-$topic" |
     jq -e --arg uid "dbsphere-$topic" --argjson panels "$panels" '.dashboard.uid==$uid and (.dashboard.panels|length)==$panels and
       (.dashboard.links|any(.url? // ""|startswith("/grafana/dbsphere-return?view=event")))' >/dev/null
