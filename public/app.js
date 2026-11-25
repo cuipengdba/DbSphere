@@ -1725,7 +1725,9 @@ function renderNativeHA(detail, asset, samples, engine, ha) {
   const labels = {primary:'主库', standby:'备库', normal:'单实例', VALID:'有效', INVALID:'失效',
     ASYNC_SEND:'正在同步', streaming:'流式复制', catchup:'追平中', downstream:'下游', upstream:'上游'};
   const label = value => labels[value] || value || '未观测';
-  const delta = value => Number.isFinite(value) ? (ha.unit === 'bytes' ? size(value) : `${numeric(value)} LSN`) : '未采集';
+  const format = new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 2});
+  const delta = value => Number.isFinite(value)
+    ? (ha.unit === 'bytes' ? format.format(value / 1048576) + ' MiB' : format.format(value) + ' LSN') : '未采集';
   panel.append(cell('p', [ha.node, label(ha.role), ha.watchGroup, ha.watchState, ha.state].filter(Boolean).join(' · '), 'hint'));
   const fields = [['当前位点', ha.current], ['接收位点', ha.received], ['已落盘', ha.flushed],
     ['回放位点', ha.replayed], ['本地回放差距', delta(ha.replayGap)], ['守护切换计数', ha.switches]];
@@ -1969,7 +1971,8 @@ function renderMySQLAsset(detail, asset, samples) {
   ])));
   detail.append(coverage);
   const available = key => report.signals.some(signal => signal.key === key && signal.status === 'ok');
-  const value = reading => Number.isFinite(reading) ? numeric(reading) : '未采集';
+  const format = new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 2});
+  const value = reading => Number.isFinite(reading) ? format.format(reading) : '未采集';
   const live = cell('a', '查看 MySQL 实时趋势', 'monitor-link');
   live.href = '#live?' + new URLSearchParams({engine:'mysql',asset:asset.id});
   detail.append(live);
