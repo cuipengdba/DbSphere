@@ -1144,8 +1144,7 @@ async function dm8Monitoring(page) {
   await visible(page.locator('#event-detail'), event);
   await navigate(page,'assets');
   await page.locator('#asset-runtime').selectOption('dm8');
-  const listing=page.locator('#asset-list');
-  await visible(listing,'Browser QA DM8');
+  const listing=page.locator('#asset-list .list-item').filter({hasText:'Browser QA DM8'});
   await listing.getByRole('button',{name:'查看',exact:true}).click();
   await visible(page.locator('#detail'),'事务锁阻塞链');
   await visible(page.locator('#detail'),'MAIN');
