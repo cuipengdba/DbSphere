@@ -6,15 +6,15 @@
 
 目标机需要 Bash、Docker Engine 和 Compose v2。标准包和增强包都自带 Go 服务、静态前端和独立 PostgreSQL 18 监控库。增强包另外提供 Prometheus 和 Grafana OSS。安装阶段可以断网，运行时需要能访问被监控实例。
 
-在能联网的机器打开[最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest)，下载对应架构的 `.run` 和同名 `.run.sha256`，复制到 Linux 服务器的同一个目录。`uname -m` 显示 `x86_64` 时选 `amd64`，显示 `aarch64` 时选 `arm64`。以下以 v2.30.0 的标准包为例，按手头的安装包调整文件名。
+在能联网的机器打开[最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest)，下载对应架构的 `.run` 和同名 `.run.sha256`，复制到 Linux 服务器的同一个目录。`uname -m` 显示 `x86_64` 时选 `amd64`，显示 `aarch64` 时选 `arm64`。以下以 v3.0.0 的标准包为例，按手头的安装包调整文件名。
 
 ```bash
-bundle=DbSphere-go-offline-2.30.0-linux-amd64.run
+bundle=DbSphere-go-offline-3.0.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
 
-就绪响应中应包含 `"status":"ready"` 和 `"storage":"postgresql18"`。使用增强版时，将 `bundle` 改成 `DbSphere-go-observability-2.30.0-linux-amd64.run`。已有独立 PG18 或需要原生 systemd 安装时，见[部署手册](OFFLINE_DEPLOYMENT.md)。
+就绪响应中应包含 `"status":"ready"` 和 `"storage":"postgresql18"`。使用增强版时，将 `bundle` 改成 `DbSphere-go-observability-3.0.0-linux-amd64.run`。已有独立 PG18 或需要原生 systemd 安装时，见[部署手册](OFFLINE_DEPLOYMENT.md)。
 
 ## 2. 首次登录
 
@@ -48,7 +48,7 @@ GRANT CONNECT ON DATABASE postgres TO dbsphere_monitor;
 2. 发现异常后点击「优先处理」中的事件，或进入「问题事件」筛选。记下事件 ID，在「根因与证据」对照触发点、阻塞、SQL、采样以及可用的主机或应用证据。
 3. 打开原始采样或日志上下文，再返回同一事件。管理员可展开「查找同窗日志」，采纳一条相关日志并点击「查看原文」。在「处置」记录核查结论，在「时间线与报告」核对恢复证据并导出报告。AI 可选，规则分析可直接使用。
 4. 在大屏选择「历史基线」对照前一窗口、昨日或上周。用「选择变更前后对比」按变更记录对齐两个等长窗口。虚线表示基线，可以打开对齐时刻的原始采样。
-5. 设置资产范围、指标组和布局后保存值班视图。命名视图保存在当前浏览器的登录账号下。用「复制当前视图链接」发给同事，接收者按自己的资产权限查看。
+5. 设置资产范围、指标组和布局后，将值班视图保存到个人或团队。个人视图随账号跨浏览器恢复，团队视图可通过「复制团队视图链接」分享给团队成员。接收者按自己的资产权限查看。已有浏览器视图可通过「导入浏览器视图」迁移。
 
 增强包可从「实时观测」进入 Grafana 观测专题。分析日志文件时，管理员打开「日志分析」，依次新建项目、登记实例、建立批次，再上传日志。实例关联已有资产后，可从日志调查进入同一事件。
 

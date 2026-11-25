@@ -6,6 +6,6 @@
 
 未接模型、模型不可用、引用验证失败或预算用完时，可查看同一事件的规则核查。证据不足在调用模型前反馈。证据助手沿用现有只读诊断权限，受控作业继续使用申请、审批和执行流程。
 
-通过 **设置 → 模型接入** 管理模型。审核超时默认 28 秒，可设为 1–120 秒。兼容 JSON Schema 的接口可启用结构化响应。部署配置见[模型接入说明](AI_INTEGRATION.md)。
+通过 **系统状态 → 模型接入** 管理模型。审核超时默认 28 秒，可设为 1–120 秒。兼容 JSON Schema 的接口可启用结构化响应。部署配置见[模型接入说明](AI_INTEGRATION.md)。
 
 [llama.cpp Chat Completions 接口](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#post-v1chatcompletions-openai-compatible-chat-completions-api)
