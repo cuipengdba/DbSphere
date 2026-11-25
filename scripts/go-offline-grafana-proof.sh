@@ -40,7 +40,7 @@ echo 'Grafana private network and DbSphere access roles passed.'
 
 for topic in overview postgres waits replication infrastructure mysql dm8 kingbase redis etcd; do
   case "$topic" in
-    waits|dm8|kingbase) panels=10 ;;
+    waits|mysql|dm8|kingbase) panels=10 ;;
     infrastructure) panels=12 ;;
     *) panels=8 ;;
   esac

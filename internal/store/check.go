@@ -173,13 +173,13 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("decrypt monitoring credential: %w", err)
 	}
-	if runtime == assets.RuntimeMySQL {
-		return s.checkMySQL(ctx, id, target, password, lease, interval)
-	}
-	if runtime == assets.RuntimeDM8 || runtime == assets.RuntimeKingbase {
+	if runtime == assets.RuntimeMySQL || runtime == assets.RuntimeDM8 || runtime == assets.RuntimeKingbase {
 		infra := nativeInfraTarget{host: linuxHost, exporterPort: exporterPort, kube: collector.KubernetesTarget{
 			Cluster: dereference(k8sCluster), Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod), Workload: dereference(k8sWorkload),
 		}}
+		if runtime == assets.RuntimeMySQL {
+			return s.checkMySQL(ctx, id, target, password, lease, interval, infra)
+		}
 		if runtime == assets.RuntimeDM8 {
 			return s.checkDM8(ctx, id, target, password, lease, interval, infra)
 		}
@@ -449,6 +449,11 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	}
 	var redisBefore collector.RedisMetrics
 	var redisWindow *redisIntervalMetrics
+	if current, ok := metrics["mysql"].(collector.MySQLMetrics); ok && runtime == assets.RuntimeMySQL {
+		if window := readMySQLInterval(current, previousJSON, now.Sub(previousAt), interval); window != nil {
+			metrics["mysqlInterval"] = window
+		}
+	}
 	if current, ok := metrics["redis"].(collector.RedisMetrics); ok && runtime == assets.RuntimeRedis {
 		redisBefore = priorRedisSample(previousJSON)
 		redisWindow = redisInterval(current, redisBefore, now.Sub(previousAt), interval, previousID)
@@ -613,6 +618,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		if status == "ok" {
 			if err := recordMySQLLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
 				return CheckResult{}, fmt.Errorf("record MySQL lock event: %w", err)
+			}
+			if err := recordMySQLReplicationEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
+				return CheckResult{}, fmt.Errorf("record MySQL replication event: %w", err)
 			}
 		}
 	} else if runtime == assets.RuntimeDM8 {

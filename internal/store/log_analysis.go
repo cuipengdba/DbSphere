@@ -81,7 +81,7 @@ func (s *Postgres) CreateLogProject(ctx context.Context, input LogProjectInput) 
 }
 
 func logsEngine(engine string) bool {
-	return engine == "postgres" || engine == "highgo" || engine == "kingbase" || engine == "dm8"
+	return engine == "postgres" || engine == "highgo" || engine == "kingbase" || engine == "dm8" || engine == "mysql"
 }
 
 func (s *Postgres) CreateLogInstance(ctx context.Context, input LogInstanceInput) (any, error) {

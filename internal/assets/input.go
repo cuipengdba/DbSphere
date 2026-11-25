@@ -116,11 +116,11 @@ func (a Input) Validate() error {
 	if !IsSupportedRuntime(a.Runtime) {
 		return errors.New("invalid runtime")
 	}
-	nativeHA := a.Runtime == RuntimeDM8 || a.Runtime == RuntimeKingbase
+	nativeResources := a.Runtime == RuntimeDM8 || a.Runtime == RuntimeKingbase || a.Runtime == RuntimeMySQL
 	if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
 		return errors.New("DM8 uses an HTTPS probe with a local database connection")
 	}
-	if !IsPostgreSQLRuntime(a.Runtime) && !nativeHA {
+	if !IsPostgreSQLRuntime(a.Runtime) && !nativeResources {
 		if a.Runtime == RuntimeEtcd && (len(a.K8sCluster) > 150 || strings.ContainsAny(a.K8sCluster, "\x00\r\n\t")) {
 			return errors.New("invalid etcd Kubernetes context")
 		}
@@ -130,7 +130,7 @@ func (a Input) Validate() error {
 		}
 		return nil
 	}
-	if nativeHA {
+	if nativeResources {
 		if a.PoolerURL != "" || a.PoolerEndpoint != "" || a.PatroniURL != "" {
 			return errors.New("database engine does not support PostgreSQL routing integrations")
 		}
@@ -146,7 +146,7 @@ func (a Input) Validate() error {
 	if a.Runtime == "k8s" && (a.K8sCluster == "" || a.Namespace == "") {
 		return errors.New("Kubernetes cluster and namespace are required")
 	}
-	if a.LinuxExporterPort != 0 && (a.Runtime != "linux" && !nativeHA || !shortHostPattern.MatchString(a.LinuxHost) ||
+	if a.LinuxExporterPort != 0 && (a.Runtime != "linux" && !nativeResources || !shortHostPattern.MatchString(a.LinuxHost) ||
 		int(a.LinuxExporterPort) < 1 || int(a.LinuxExporterPort) > 65535) {
 		return errors.New("invalid Linux exporter endpoint")
 	}

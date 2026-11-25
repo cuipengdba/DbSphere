@@ -127,12 +127,12 @@ const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	LEFT JOIN LATERAL (SELECT
 		CASE WHEN m.sample#>>'{k8s,status}'='ok' AND nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL
 				AND nullif(v.k8s_cluster,'') IS NOT NULL THEN 'node/' || v.k8s_cluster || '/' || (m.sample#>>'{k8s,node,uid}')
-			WHEN v.runtime IN ('linux','dm8','kingbase') AND nullif(v.linux_host,'') IS NOT NULL AND v.linux_exporter_port>0
+			WHEN v.runtime IN ('linux','dm8','kingbase','mysql') AND nullif(v.linux_host,'') IS NOT NULL AND v.linux_exporter_port>0
 				THEN 'linux/' || lower(v.linux_host) || '/' || v.linux_exporter_port
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' AND nullif(m.sample#>>'{containerStorage,node}','') IS NOT NULL
 				THEN 'docker/' || (m.sample#>>'{containerStorage,node}') END AS identity,
 		CASE WHEN nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN m.sample#>>'{k8s,node,name}'
-			WHEN v.runtime IN ('linux','dm8','kingbase') AND v.linux_exporter_port>0 THEN v.linux_host
+			WHEN v.runtime IN ('linux','dm8','kingbase','mysql') AND v.linux_exporter_port>0 THEN v.linux_host
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN m.sample#>>'{containerStorage,node}' END AS name,
 		CASE WHEN nullif(m.sample#>>'{k8s,node,uid}','') IS NOT NULL THEN 'Kubernetes'
 			WHEN m.sample#>>'{containerStorage,runtime}'='docker' THEN 'Docker' ELSE 'Linux' END AS kind,

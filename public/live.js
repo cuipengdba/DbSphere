@@ -9,6 +9,15 @@
     { key: 'averageReplicationLagBytes', title: '复制延迟', unit: ' B', source: 'WAL 差值 · 桶内均值' },
     { key: 'ioPressure', title: '存储 I/O 压力', unit: '%', source: '容器 I/O PSI · 选区内分桶均值' }
   ];
+  const mysqlMetrics = [
+    {key:'mysqlClients',title:'客户端连接',unit:'',source:'MySQL · 桶内均值'},
+    {key:'mysqlRunning',title:'运行线程',unit:'',source:'Threads_running · 桶内均值'},
+    {key:'mysqlWaits',title:'InnoDB 锁等待',unit:'',source:'Performance Schema · 桶内峰值'},
+    {key:'mysqlQueries',title:'客户端语句速率',unit:' /s',source:'Questions 相邻采样差 · 桶内均值'},
+    {key:'mysqlBufferHitPercent',title:'缓冲池命中率',unit:'%',ceiling:100,source:'缓冲池相邻采样读请求 · 桶内均值'},
+    {key:'mysqlDirtyPercent',title:'缓冲池脏页占比',unit:'%',ceiling:100,source:'InnoDB 脏页 / 总页数'},
+    {key:'mysqlPendingIO',title:'待处理 I/O',unit:'',source:'InnoDB 待处理读和写 · 桶内峰值'}
+  ];
   const dm8Metrics = [
     { key: 'dm8Sessions', title: '会话', unit: '', source: 'V$SESSIONS · 窗口均值' },
     { key: 'dm8Active', title: '活动会话', unit: '', source: 'V$SESSIONS · 窗口均值' },
@@ -683,7 +692,7 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const specialized = {etcd:etcdMetrics,redis:redisMetrics,kingbase:kingbaseMetrics,dm8:dm8Metrics,mysql:metrics.slice(0,1)};
+      const specialized = {etcd:etcdMetrics,redis:redisMetrics,kingbase:kingbaseMetrics,dm8:dm8Metrics,mysql:mysqlMetrics};
       const enabled = asset?.engine === 'redis' && asset.engineMetrics?.mode === 'sentinel' ?
         redisMetrics.filter(metric => metric.key === 'redisLatency') : specialized[asset?.engine] || metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
@@ -713,7 +722,7 @@
       const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
         bucketMinutes: String(bucketMinutes) };
       const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
-      if (specialized[asset.engine] && asset.engine !== 'mysql') trend.set('metricProfile', asset.engine);
+      if (specialized[asset.engine]) trend.set('metricProfile', asset.engine);
       const waits = new URLSearchParams({ ...q, group: 'type' });
       if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];

@@ -261,7 +261,11 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 				addCandidate(item.Kind, label+" 已观测到主备角色变化", "high", supports,
 					[]string{"对照切换前后节点身份、角色及恢复采样"}, "同一个节点在相邻两个有效样本中报告了不同角色。", nil, item.ObservedAt, nil)
 			case "replication":
-				addCandidate(item.Kind, label+" 已观测到复制异常或回放积压", "high", supports,
+				title := label + " 已观测到复制异常或回放积压"
+				if engine == "mysql" {
+					title = "MySQL 接收线程、应用线程或复制工作线程报告异常"
+				}
+				addCandidate(item.Kind, title, "high", supports,
 					[]string{"对照发送、落盘和回放位置，再核对同窗主机磁盘 I/O 和存储事件"},
 					"数据库原生视图提供复制状态或日志位点，根因还需核对同窗证据。", nil, item.ObservedAt, nil)
 			case "archive":

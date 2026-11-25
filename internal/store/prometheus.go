@@ -14,6 +14,7 @@ type PrometheusAsset struct {
 	LinuxRX, LinuxTX, LinuxDiskRead, LinuxDiskWrite                       *float64
 	PodCPU, PodMemory                                                     *float64
 	MySQLRunning, MySQLLockWaits                                          *float64
+	MySQLBufferHit, MySQLDirtyPages, MySQLQuestions                       *float64
 	DM8Sessions, DM8Active, DM8Transactions, DM8Waits                     *float64
 	DM8ReplayGap, DM8Switches                                             *float64
 	KingbaseSessions, KingbaseActive, KingbaseTransactions, KingbaseWaits *float64
@@ -39,6 +40,7 @@ func (s *Postgres) PrometheusAssets(ctx context.Context, staleAfter int) ([]Prom
 			&a.SampleAt, &a.Fresh, &a.OpenEvents, &a.Connections, &a.MaxConnections, &a.Blocked,
 			&a.ReplicationLag, &a.Transactions, &a.LinuxCPU, &a.LinuxRAM, &a.PodReady,
 			&a.PGWaiting, &a.PGSQLFingerprints, &a.MySQLRunning, &a.MySQLLockWaits,
+			&a.MySQLBufferHit, &a.MySQLDirtyPages, &a.MySQLQuestions,
 			&a.DM8Sessions, &a.DM8Active, &a.DM8Transactions, &a.DM8Waits,
 			&a.DM8ReplayGap, &a.DM8Switches,
 			&a.KingbaseSessions, &a.KingbaseActive, &a.KingbaseTransactions, &a.KingbaseWaits, &a.KingbaseSize, &a.KingbaseLag,
@@ -82,6 +84,9 @@ SELECT a.id::text,a.name,a.organization_id::text,coalesce(a.cluster_name,''),
 	CASE WHEN raw.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
 		AND jsonb_typeof(raw.metrics_json#>'{mysql,lockWaits}')='array'
 		THEN jsonb_array_length(raw.metrics_json#>'{mysql,lockWaits}')::float8 END,
+	(raw.metrics_json#>>'{mysqlInterval,bufferHitPercent}')::float8,
+	(raw.metrics_json#>>'{mysql,bufferPool,dirtyPages}')::float8,
+	(raw.metrics_json#>>'{mysqlInterval,questionsPerSecond}')::float8,
 	(raw.metrics_json#>>'{dm8,sessions}')::float8,
 	(raw.metrics_json#>>'{dm8,activeSessions}')::float8,
 	(raw.metrics_json#>>'{dm8,transactions}')::float8,

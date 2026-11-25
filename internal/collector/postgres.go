@@ -185,6 +185,11 @@ func (PostgreSQLAdapter) Collect(ctx context.Context, target Target, password st
 	report.Product = postgresProduct(serverVersion)
 	if highGo459 {
 		report.Profile = "highgo-see-4.5.9"
+		waits, signal := collectHighGoWaits(ctx, conn, readStats)
+		report.Signals = append(report.Signals, signal)
+		if waits != nil {
+			metrics["highgoWaits"] = waits
+		}
 	}
 	return collectoradapter.Snapshot{Metrics: metrics, Report: report}, nil
 }

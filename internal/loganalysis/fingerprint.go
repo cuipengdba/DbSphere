@@ -20,6 +20,9 @@ func SQLShape(engine, sql string) (string, string) {
 			_, rest, _ := strings.Cut(sql, "\n")
 			sql = rest
 			continue
+		case engine == "mysql" && char == '#':
+			_, sql, _ = strings.Cut(sql, "\n")
+			continue
 		case strings.HasPrefix(sql, "/*"):
 			sql = afterComment(sql[2:])
 			continue
@@ -34,6 +37,16 @@ func SQLShape(engine, sql string) (string, string) {
 		case char == '\'':
 			shape.WriteByte('?')
 			sql = afterQuoted(sql, '\'')
+		case engine == "mysql" && char == '"':
+			shape.WriteByte('?')
+			sql = afterQuoted(sql, '"')
+		case engine == "mysql" && char == '0' && len(sql) > 2 && strings.ContainsRune("xXbB", rune(sql[1])):
+			end := 2
+			for end < len(sql) && strings.ContainsRune("0123456789abcdefABCDEF", rune(sql[end])) {
+				end++
+			}
+			shape.WriteByte('?')
+			sql = sql[end:]
 		case char == '"' || char == '`':
 			rest := afterQuoted(sql, byte(char))
 			shape.WriteString(sql[:len(sql)-len(rest)])

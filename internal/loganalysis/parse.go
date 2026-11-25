@@ -58,6 +58,9 @@ type Preview struct {
 }
 
 func Detect(sample []byte) Preview {
+	if mysqlSlowHeader.Match(sample) && mysqlSlowDuration.Match(sample) {
+		return Preview{"mysqlslow", "MySQL 慢日志时间和执行耗时"}
+	}
 	first := strings.TrimSpace(strings.SplitN(strings.TrimPrefix(string(sample), "\ufeff"), "\n", 2)[0])
 	if looksLikeDMTrace(first) {
 		return Preview{"dmtrace", "达梦会话头和跟踪字段"}
@@ -96,6 +99,12 @@ func Parse(reader io.Reader, opts Options, accept func(Record) error) (string, e
 		if format == "" && prefix != nil && prefix.Match(sample) {
 			format = "text"
 		}
+	}
+	if format == "mysqlslow" || opts.Engine == "mysql" {
+		if format != "mysqlslow" || opts.Engine != "mysql" {
+			return "", ErrFormat
+		}
+		return format, parseMySQLSlow(source, opts.Zone, accept)
 	}
 	if format != "csvlog" && format != "jsonlog" && format != "text" && format != "dmtrace" {
 		return "", ErrFormat
@@ -390,7 +399,11 @@ func digest(value string) string {
 
 func ValidateOptions(opts Options) error {
 	if opts.Format != "" && opts.Format != "auto" && opts.Format != "text" && opts.Format != "csvlog" &&
-		opts.Format != "jsonlog" && opts.Format != "dmtrace" {
+		opts.Format != "jsonlog" && opts.Format != "dmtrace" && opts.Format != "mysqlslow" {
+		return ErrFormat
+	}
+	if opts.Format == "mysqlslow" && opts.Engine != "mysql" ||
+		opts.Engine == "mysql" && opts.Format != "" && opts.Format != "auto" && opts.Format != "mysqlslow" {
 		return ErrFormat
 	}
 	if len(opts.Prefix) > 400 {

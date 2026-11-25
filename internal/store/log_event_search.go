@@ -46,23 +46,36 @@ func (s *Postgres) LogEventCandidates(ctx context.Context, event string) (any, e
 	if err != nil {
 		return nil, err
 	}
+	var highGoWaits []byte
+	if err := s.pool.QueryRow(ctx, `SELECT coalesce(jsonb_agg(wait),'[]'::jsonb) FROM (
+		SELECT metrics_json FROM samples WHERE asset_id=$1 AND collected_at BETWEEN $2::timestamptz-interval '10 seconds' AND $2::timestamptz+interval '10 seconds'
+		AND jsonb_typeof(metrics_json->'highgoWaits')='array'
+		ORDER BY abs(extract(epoch FROM collected_at-$2::timestamptz)),id LIMIT 3
+	) readings CROSS JOIN LATERAL jsonb_array_elements(metrics_json->'highgoWaits') AS wait`, window.asset, window.anchor).Scan(&highGoWaits); err != nil {
+		return nil, err
+	}
 	const limit = 50
 	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',r.id,'batchId',b.id,'batch',b.name,
 		'at',r.observed_at,'application',r.application,'database',r.database_name,'process',r.process_id,
 		'blocker',r.blocker_id,'kind',r.kind,'sqlState',r.sqlstate,'fingerprint',r.fingerprint,'sql',r.sql_shape,
-		'durationMs',r.duration_ms,'retained',f.archive_expired_at IS NULL AND f.stored_size>0,'caseId',linked.id)`+
+		'durationMs',r.duration_ms,'retained',f.archive_expired_at IS NULL AND f.stored_size>0,'caseId',linked.id,
+		'correlation',CASE matched.rank WHEN 2 THEN 'highgo_pid_fingerprint' WHEN 1 THEN 'highgo_pid_time' END)`+
 		logBatchScope+` JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
 		JOIN log_records r ON r.batch_id=b.id JOIN log_files f ON f.id=r.file_id
 		LEFT JOIN LATERAL (
 			SELECT inv.id FROM log_investigations inv JOIN log_investigation_records j ON j.investigation_id=inv.id
 			WHERE inv.event_id=$1 AND j.record_id=r.id ORDER BY inv.created_at,inv.id LIMIT 1
 		) linked ON true
+		LEFT JOIN LATERAL (SELECT max(CASE WHEN r.fingerprint<>'' AND r.fingerprint=wait->>'fingerprint' THEN 2 ELSE 1 END) AS rank
+			FROM jsonb_array_elements($8::jsonb) wait WHERE i.engine='highgo' AND r.process_id=wait->>'process'
+			AND r.observed_at BETWEEN $6::timestamptz-interval '60 seconds' AND $6::timestamptz+interval '60 seconds'
+		) matched ON true
 		WHERE a.id=$2 AND ($3='' OR p.organization_id::text=$3)
 			AND r.observed_at BETWEEN $4 AND $5
-			AND (r.kind IN ('lock','deadlock','error','temp') OR (r.kind='statement' AND (r.duration_ms>=1000 OR linked.id IS NOT NULL)))
-		ORDER BY linked.id IS NULL, CASE r.kind WHEN 'deadlock' THEN 0 WHEN 'lock' THEN 1 WHEN 'error' THEN 2 ELSE 3 END,
+			AND (r.kind IN ('lock','deadlock','error','temp') OR (r.kind='statement' AND (r.duration_ms>=1000 OR linked.id IS NOT NULL OR matched.rank IS NOT NULL)))
+		ORDER BY linked.id IS NULL, matched.rank DESC NULLS LAST, CASE r.kind WHEN 'deadlock' THEN 0 WHEN 'lock' THEN 1 WHEN 'error' THEN 2 ELSE 3 END,
 			abs(extract(epoch FROM r.observed_at-$6::timestamptz)),r.id LIMIT $7`,
-		event, window.asset, OrganizationFromContext(ctx), window.from, window.to, window.anchor, limit+1)
+		event, window.asset, OrganizationFromContext(ctx), window.from, window.to, window.anchor, limit+1, highGoWaits)
 	if err != nil {
 		return nil, err
 	}

@@ -156,7 +156,7 @@
             <label>实例名称<input name="name" maxlength="120" required></label>
             <label>环境<input name="environment" maxlength="80" required placeholder="生产"></label>
             <label>数据库产品<select name="engine"><option value="postgres">PostgreSQL</option><option value="highgo">瀚高</option>
-              <option value="kingbase">金仓 V9</option><option value="dm8">达梦 DM8</option></select></label>
+              <option value="kingbase">金仓 V9</option><option value="dm8">达梦 DM8</option><option value="mysql">MySQL 8.4</option></select></label>
             <label>版本<input name="version" maxlength="80" required placeholder="18"></label>
             <label class="wide">纳管资产<select name="assetId"><option value="">仅离线日志分析</option></select></label>
             <div class="log-actions wide"><button type="submit">保存实例</button><button type="button" class="ghost" data-log-close>取消</button></div>
@@ -178,7 +178,7 @@
             <label class="wide" data-logs="file-label">日志文件<input name="files" type="file" multiple required></label>
             <div data-logs="preview" class="hint wide"></div>
             <label>格式<select name="format"><option value="auto">自动识别</option><option value="text">文本</option>
-              <option value="csvlog">CSV</option><option value="jsonlog">JSON Lines</option><option value="dmtrace">达梦跟踪</option></select></label>
+              <option value="csvlog">CSV</option><option value="jsonlog">JSON Lines</option><option value="dmtrace">达梦跟踪</option><option value="mysqlslow">MySQL 慢日志</option></select></label>
             <label>日志时区<input name="zone" value="UTC" placeholder="Asia/Shanghai" maxlength="64"></label>
             <label data-logs="node-label">来源节点<input name="node" maxlength="120"></label>
             <label class="wide">文本前缀<input name="prefix" maxlength="400" placeholder="%m [%p] %a %d "></label>
@@ -477,7 +477,7 @@
       <div data-view="assets">
         <section class="panel">
           <div class="section-head"><div><h2>数据库资产</h2></div><div class="section-actions"><a id="scoped-asset-export" href="/api/access/assets/export" hidden>导出授权资产</a><button id="refresh" class="ghost">刷新</button><button id="asset-add" class="write-action" type="button">纳管实例</button></div></div>
-          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索数据库资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux PostgreSQL</option><option value="k8s">Kubernetes PostgreSQL</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 预览</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option><option value="redis">Redis</option><option value="etcd">etcd</option></select></div>
+          <div class="asset-filters"><input id="asset-search" type="search" maxlength="128" aria-label="搜索数据库资产" placeholder="名称、主机或资产 ID"><select id="asset-runtime" aria-label="筛选运行环境"><option value="all">全部环境</option><option value="linux">Linux PostgreSQL</option><option value="k8s">Kubernetes PostgreSQL</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option><option value="redis">Redis</option><option value="etcd">etcd</option></select></div>
           <p id="asset-filter-summary" class="hint" aria-live="polite"></p>
           <details id="asset-readiness-batch" class="settings-details admin-only platform-only">
             <summary>批量纳管体检</summary>
@@ -527,7 +527,7 @@
             <label>监控用户名<input name="username" required placeholder="dbsphere_monitor"></label>
             <label><span id="asset-password-label">密码</span><input name="password" type="password" autocomplete="new-password"></label>
             <label>TLS 模式<select name="sslMode"><option value="require">验证服务器证书</option><option value="disable">关闭 TLS（仅受信网络）</option></select></label>
-            <label>数据库与运行环境<select name="runtime" id="runtime"><option value="linux">PostgreSQL · Linux 主机</option><option value="k8s">PostgreSQL · Kubernetes</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4 · 只读预览</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option><option value="redis">Redis</option><option value="etcd">etcd</option></select></label>
+            <label>数据库与运行环境<select name="runtime" id="runtime"><option value="linux">PostgreSQL · Linux 主机</option><option value="k8s">PostgreSQL · Kubernetes</option><option value="managed">托管 PostgreSQL</option><option value="mysql">MySQL 8.4</option><option value="dm8">达梦 DM8</option><option value="kingbase">金仓 V9</option><option value="redis">Redis</option><option value="etcd">etcd</option></select></label>
             <label class="linux-field">Linux 主机名<input name="linuxHost" placeholder="db-node-01"></label>
             <label class="linux-field">node_exporter 端口（可选）<input name="linuxExporterPort" type="number" min="1" max="65535" placeholder="9100"></label>
             <div id="k8s-fields" class="nested wide" hidden>

@@ -529,7 +529,7 @@ function assetRuntimeLabel(asset) {
   if (asset.runtime === 'redis') return 'Redis';
   if (asset.runtime === 'kingbase') return '金仓 V9';
   if (asset.runtime === 'dm8') return '达梦 DM8';
-  if (asset.runtime === 'mysql') return 'MySQL 8.4 预览';
+  if (asset.runtime === 'mysql') return 'MySQL 8.4';
   if (asset.runtime === 'k8s') return `K8S${asset.namespace ? ' / ' + asset.namespace : ''}`;
   return asset.runtime === 'managed' ? '托管 PG' : 'Linux';
 }
@@ -1236,6 +1236,14 @@ async function showAsset(id, layer, background = false) {
   detail.append(cell('p', `${asset.host}:${asset.port}/${asset.database} · ${location}`));
   if (adapter?.product === 'highgo') {
     detail.append(cell('p', adapter.profile === 'highgo-see-4.5.9' ? '数据库产品 · 瀚高安全版 4.5.9' : '数据库产品 · 瀚高数据库', 'evidence'));
+    const rows = currentSample.metrics.highgoWaits || [];
+    const section = cell('section', '', 'monitor-table');
+    section.append(cell('h4', '瀚高会话等待与日志归因'));
+    if (rows.length) section.append(importTable(['进程', '应用', '等待类别', '等待事件', '阻塞进程', 'SQL 指纹', '证据'],
+      rows.map(row => [row.process, row.application || '—', row.category, row.event, (row.blockers || []).join('、') || '—',
+        row.fingerprint ? cell('code', row.fingerprint.slice(0,16)) : '未采集', replaySampleLink(asset.id,currentSample.id)])));
+    else section.append(cell('p', adapter.signals?.find(signal => signal.key === 'highgoWaitIdentity')?.reason || '当前样本没有活动会话等待。', 'hint'));
+    detail.append(section);
   }
   if (asset.pg14Eol) detail.append(cell('p', 'PostgreSQL 14 已结束上游支持，请规划升级。', 'warning'));
   detail.append(cell('p', `PgBouncer：${asset.poolerConfigured ? '已配置只读统计连接' : '未配置统计连接'}${asset.poolerEndpoint ? ` · 应用端点 ${asset.poolerEndpoint}` : ''}`));
@@ -1926,7 +1934,7 @@ function renderEtcdAsset(detail, asset, samples) {
 
 function renderMySQLAsset(detail, asset, samples) {
   detail.replaceChildren(cell('h3', asset.name),
-    cell('p', `${asset.host}:${asset.port}/${asset.database} · MySQL 8.4 只读预览`),
+    cell('p', `${asset.host}:${asset.port}/${asset.database} · MySQL 8.4`),
     cell('p', `采集状态：${assetHealth(asset).label} · ${formatTime(asset.lastSampleAt)}${asset.lastError ? ' · ' + asset.lastError : ''}`));
   const sample = samples[0];
   const metrics = sample?.status === 'ok' && sample.collectedAt === asset.lastSampleAt ? sample.metrics : null;
@@ -1948,7 +1956,8 @@ function renderMySQLAsset(detail, asset, samples) {
   detail.append(grid, cell('p', `采集会话 · ${transport.readOnly ? '只读' : '只读状态异常'} · ${tls}`, 'hint'));
   const coverage = cell('details', '', 'settings-details');
   coverage.append(cell('summary', '采集能力与缺口'));
-  const labels = { connections: '连接状态', lockWaits: 'InnoDB 锁等待', sqlPerformance: 'Top SQL 指纹', replication: '复制状态' };
+  const labels = {connections:'连接状态',lockWaits:'InnoDB 锁等待',sqlPerformance:'Top SQL 指纹',replication:'复制状态',
+    innodbBufferPool:'InnoDB 缓冲池',activeTransactions:'活跃事务',replicaWorkers:'复制工作线程'};
   const status = { ok: '已采集', limited_permissions: '权限受限', not_configured: '未启用', unavailable: '采集失败' };
   const table = (headings, rows) => {
     const block = cell('div', '', 'monitor-table');
@@ -1960,6 +1969,19 @@ function renderMySQLAsset(detail, asset, samples) {
   ])));
   detail.append(coverage);
   const available = key => report.signals.some(signal => signal.key === key && signal.status === 'ok');
+  const value = reading => Number.isFinite(reading) ? numeric(reading) : '未采集';
+  const live = cell('a', '查看 MySQL 实时趋势', 'monitor-link');
+  live.href = '#live?' + new URLSearchParams({engine:'mysql',asset:asset.id});
+  detail.append(live);
+  if (data.bufferPool) {
+    const pool = data.bufferPool;
+    detail.append(cell('h3','InnoDB 缓冲池'),table(['总页数','空闲页','脏页','待处理读','待处理写','窗口命中率'],[[
+      value(pool.pages),value(pool.freePages),value(pool.dirtyPages),value(pool.pendingReads),value(pool.pendingWrites),
+      Number.isFinite(metrics.mysqlInterval?.bufferHitPercent) ? value(metrics.mysqlInterval.bufferHitPercent)+'%' : '未采集'
+    ]]));
+  }
+  if (data.activeTransactions?.length) detail.append(cell('h3','活跃事务'),table(['线程','连接','事务毫秒','访问方式','隔离级别'],
+    data.activeTransactions.map(row=>[row.thread,row.session || '—',value(row.ageMs),row.mode,row.isolation])));
   const connectionHistory = samples.slice(0, 12).filter(point => point.metrics?.mysql?.connections != null);
   if (connectionHistory.length) {
     const history = cell('details', '', 'settings-details');
@@ -1984,16 +2006,25 @@ function renderMySQLAsset(detail, asset, samples) {
   } else detail.append(cell('p', available('lockWaits') ? '本次采样未发现 InnoDB 锁等待。' : '本次锁等待信号不可用。', 'empty'));
   detail.append(cell('h3', 'Top SQL 指纹'));
   if (available('sqlPerformance') && data.topSql?.length) {
-    detail.append(table(['指纹', '执行次数', '累计耗时 ms', '平均耗时 ms', '扫描行数'], data.topSql.map(row => [
-      cell('code', row.digest), String(row.calls), row.totalMs.toFixed(2), row.meanMs.toFixed(2), String(row.rowsExamined)
+    detail.append(table(['指纹', '执行次数', '累计耗时 ms', '平均耗时 ms', 'P95 ms','P99 ms','扫描行数','错误'], data.topSql.map(row => [
+      cell('code', row.digest), value(row.calls), value(row.totalMs), value(row.meanMs), value(row.p95Ms), value(row.p99Ms), value(row.rowsExamined),value(row.errors)
     ])));
   } else detail.append(cell('p', available('sqlPerformance') ? '指定数据库暂无指纹数据。' : '本次 SQL 指纹信号不可用。', 'empty'));
   detail.append(cell('h3', '复制通道'));
   if (available('replication') && data.replication?.length) {
-    detail.append(table(['通道', '源实例 UUID', '接收线程', '应用线程', '最近 I/O 错误码'], data.replication.map(row => [
-      row.name || '默认', row.sourceUuid || '未知', row.receiver, row.applier, String(row.lastIoError)
+    detail.append(table(['通道', '源实例 UUID', '接收线程', '应用线程', '最近 I/O 错误码','延迟等待秒'], data.replication.map(row => [
+      row.name || '默认', row.sourceUuid || '未知', row.receiver, row.applier, value(row.lastIoError),value(row.remainingDelaySeconds)
     ])));
+    const workerRows = data.replication.flatMap(channel => (channel.workers || []).map(row => [channel.name || '默认',
+      row.id,row.state,row.applying ? '应用中' : '—',value(row.lastApplyMs),value(row.lastError)]));
+    if (workerRows.length) detail.append(cell('h4','复制工作线程'),table(['通道','工作线程','状态','事务','最近应用毫秒','错误码'],workerRows));
   } else detail.append(cell('p', available('replication') ? '本次采样未发现入站复制通道。' : '本次复制信号不可用。', 'empty'));
+  const replicaEvent = recentEvents.find(event=>event.assetId===asset.id && event.kind==='mysql_ha_replication');
+  if (replicaEvent) {
+    const link=cell('a','查看复制通道事件','monitor-link');
+    link.href='#incidents?'+new URLSearchParams({event:replicaEvent.id});
+    detail.append(link);
+  }
 }
 
 function organizeAssetLayers(detail, asset, preferredLayer, restoreFocus = false) {
@@ -4036,9 +4067,11 @@ function eventLogSearch(event, refreshEvent) {
       matches.replaceChildren(...result.records.map(row => {
         const entry = cell('div', '', 'evidence');
         const state = row.caseId ? '已采纳' : row.retained ? '待核实' : '原文已到期';
+        const correlation = {highgo_pid_fingerprint:'采样进程及 SQL 指纹一致',highgo_pid_time:'同窗采样进程一致'}[row.correlation];
         entry.append(cell('strong', [kinds[row.kind] || row.kind, state, formatTime(row.at)].join(' · ')),
           cell('p', [row.batch, row.database, row.application, row.process && '会话 ' + row.process,
-            row.blocker && '阻塞者 ' + row.blocker, row.sqlState, row.durationMs == null ? '' : row.durationMs.toFixed(2) + ' ms'].filter(Boolean).join(' · ')));
+            row.blocker && '阻塞者 ' + row.blocker, row.sqlState, row.durationMs == null ? '' : row.durationMs.toFixed(2) + ' ms',
+            correlation].filter(Boolean).join(' · ')));
         if (row.sql) entry.append(cell('code', row.sql));
         const actions = cell('div', '', 'log-actions');
         if (row.retained) {
@@ -5024,7 +5057,7 @@ $('runtime').addEventListener('change', (event) => {
   const mysql = event.target.value === 'mysql';
   const dm8 = event.target.value === 'dm8';
   const kingbase = event.target.value === 'kingbase';
-  const nativeHA = dm8 || kingbase;
+  const nativeHA = dm8 || kingbase || mysql;
   const redis = event.target.value === 'redis';
   const etcd = event.target.value === 'etcd';
   const previous = event.target.dataset.previousRuntime;

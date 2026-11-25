@@ -15,24 +15,101 @@ import (
 )
 
 const mysqlLockGroup = "mysql_lock_wait"
+const mysqlReplicaGroup = "mysql_ha_replication"
 
-func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
-	queryStarted := time.Now()
-	if lease != nil {
-		lease.startedAt = queryStarted
+type mysqlInterval struct {
+	QuestionsPerSecond *float64 `json:"questionsPerSecond,omitempty"`
+	BufferHitPercent   *float64 `json:"bufferHitPercent,omitempty"`
+}
+
+func readMySQLInterval(current collector.MySQLMetrics, previousJSON []byte, elapsed, interval time.Duration) *mysqlInterval {
+	maximum := 15 * time.Minute
+	if interval > 0 {
+		maximum = 2 * interval
 	}
-	snapshot, err := (collector.MySQLAdapter{}).Collect(ctx, target, password)
-	lease.recordQueryDuration(queryStarted)
+	var previous struct {
+		MySQL collector.MySQLMetrics `json:"mysql"`
+	}
+	if elapsed <= 0 || elapsed > maximum || json.Unmarshal(previousJSON, &previous) != nil {
+		return nil
+	}
+	old := previous.MySQL
+	if current.ServerUUID == "" || current.ServerUUID != old.ServerUUID || current.UptimeSeconds == nil || old.UptimeSeconds == nil ||
+		*current.UptimeSeconds < *old.UptimeSeconds || float64(*current.UptimeSeconds-*old.UptimeSeconds)+5 < elapsed.Seconds() {
+		return nil
+	}
+	result := &mysqlInterval{}
+	if before, after := old.Questions, current.Questions; before != nil && after != nil && *after >= *before {
+		rate := float64(*after-*before) / elapsed.Seconds()
+		result.QuestionsPerSecond = &rate
+	}
+	a, b := current.BufferPool, old.BufferPool
+	if a != nil && b != nil && a.PhysicalReads != nil && b.PhysicalReads != nil && a.ReadRequests != nil && b.ReadRequests != nil &&
+		*a.PhysicalReads >= *b.PhysicalReads && *a.ReadRequests > *b.ReadRequests {
+		misses, reads := *a.PhysicalReads-*b.PhysicalReads, *a.ReadRequests-*b.ReadRequests
+		if misses <= reads {
+			hits := 100 * float64(reads-misses) / float64(reads)
+			result.BufferHitPercent = &hits
+		}
+	}
+	if result.QuestionsPerSecond == nil && result.BufferHitPercent == nil {
+		return nil
+	}
+	return result
+}
+
+func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
+		return (collector.MySQLAdapter{}).Collect(ctx, target, password)
+	})
 	group, reason := "", ""
 	metrics := snapshot.Metrics
 	if err != nil {
 		group, reason = mysqlCollectionError(err)
-		metrics = map[string]any{"collector": map[string]any{"mysqlStatus": group}}
+		metrics["collector"] = map[string]any{"mysqlStatus": group}
 	} else {
 		metrics["adapter"] = snapshot.Report
 		metrics["collector"] = map[string]any{"mysqlStatus": "ok"}
 	}
 	return s.recordCheckWithLease(ctx, id, metrics, group, reason, time.Now().UTC(), lease, interval)
+}
+
+func recordMySQLReplicationEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID string, metrics map[string]any, now time.Time) error {
+	details, ok := metrics["mysql"].(collector.MySQLMetrics)
+	report, haveReport := metrics["adapter"].(collectoradapter.Report)
+	if !ok || !haveReport || len(details.Replication) == 0 {
+		return nil
+	}
+	source, workObserved := "", false
+	for _, signal := range report.Signals {
+		if signal.Key == "replication" && signal.Status == "ok" {
+			source = signal.Source
+		}
+		if signal.Key == "replicaWorkers" && signal.Status == "ok" {
+			workObserved = true
+		}
+	}
+	if source == "" {
+		return nil
+	}
+	abnormal := make([]collector.MySQLReplicationChannel, 0)
+	allHealthy := !details.ReplicationTruncated
+	for _, channel := range details.Replication {
+		workerError := false
+		for _, worker := range channel.Workers {
+			workerError = workerError || (worker.LastError != 0 && worker.State == "OFF")
+		}
+		if channel.Receiver != "ON" || (channel.Applier != "ON" && channel.Applier != "UNKNOWN") || workerError {
+			abnormal = append(abnormal, channel)
+		}
+		allHealthy = allHealthy && channel.Receiver == "ON" && channel.Applier == "ON" && !workerError
+	}
+	if len(abnormal) == 0 && (!allHealthy || !workObserved) {
+		return nil
+	}
+	return recordEngineObservationEvent(ctx, tx, assetID, sampleID, now, mysqlReplicaGroup, "MySQL 复制通道异常", source,
+		len(abnormal) > 0, map[string]any{"channels": abnormal, "serverUuid": details.ServerUUID},
+		map[string]any{"channels": details.Replication, "serverUuid": details.ServerUUID})
 }
 
 func mysqlCollectionError(err error) (string, string) {

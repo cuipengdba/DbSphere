@@ -26,7 +26,10 @@
     mysql: [
       ['客户端连接', 'MySQL 连接状态 · 个', [['mysqlClients','连接'],['mysqlRunning','活动']]],
       ['InnoDB 锁等待', 'performance_schema · 组', [['mysqlWaits','阻塞']]],
-      ['复制通道', '可见入站复制通道 · 个', [['mysqlChannels','通道']]]
+      ['复制通道', '可见入站复制通道 · 个', [['mysqlChannels','通道']]],
+      ['客户端语句速率', 'Questions · 每秒', [['mysqlQueries','语句']]],
+      ['缓冲池命中与脏页', 'InnoDB · %', [['mysqlBufferHit','命中率'],['mysqlDirtyPercent','脏页占比']]],
+      ['待处理 I/O', 'InnoDB · 次', [['mysqlPendingReads','读取'],['mysqlPendingWrites','写入']]]
     ],
     dm8: [
       ['会话', 'V$SESSIONS · 个', [['dm8Sessions','会话'],['dm8Active','活动']]],

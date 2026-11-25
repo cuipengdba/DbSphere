@@ -72,6 +72,9 @@ func (s *Postgres) collectNativeObservation(ctx context.Context, asset string, p
 
 func nativeHAEvent(kind string) (engine, action string) {
 	engine, action, _ = strings.Cut(kind, "_ha_")
+	if kind == mysqlReplicaGroup {
+		return "mysql", "replication"
+	}
 	if (engine == "kingbase" || engine == "dm8") && (action == "role" || action == "replication" || action == "archive") {
 		return engine, action
 	}
@@ -81,6 +84,9 @@ func nativeHAEvent(kind string) (engine, action string) {
 func nativeHALabel(engine string) string {
 	if engine == "dm8" {
 		return "达梦 DM8"
+	}
+	if engine == "mysql" {
+		return "MySQL"
 	}
 	return "金仓 V9"
 }

@@ -43,6 +43,8 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 	var values []json.RawMessage
 	var query string
 	switch params.Get("metricProfile") {
+	case "mysql":
+		query = mysqlSeriesSQL
 	case "redis":
 		query = redisSeriesSQL
 	case "dm8":
@@ -85,6 +87,22 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 	}
 	return result, nil
 }
+
+const mysqlSeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'mysqlClients',avg((s.metrics_json#>>'{mysql,connections}')::numeric),
+	'mysqlRunning',avg((s.metrics_json#>>'{mysql,running}')::numeric),
+	'mysqlWaits',max(CASE WHEN s.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(s.metrics_json#>'{mysql,lockWaits}')='array' THEN jsonb_array_length(s.metrics_json#>'{mysql,lockWaits}') END),
+	'mysqlBufferHitPercent',avg((s.metrics_json#>>'{mysqlInterval,bufferHitPercent}')::numeric),
+	'mysqlQueries',avg((s.metrics_json#>>'{mysqlInterval,questionsPerSecond}')::numeric),
+	'mysqlDirtyPercent',avg(100*(s.metrics_json#>>'{mysql,bufferPool,dirtyPages}')::numeric /
+		nullif((s.metrics_json#>>'{mysql,bufferPool,pages}')::numeric,0)),
+	'mysqlPendingIO',max((s.metrics_json#>>'{mysql,bufferPool,pendingReads}')::numeric+(s.metrics_json#>>'{mysql,bufferPool,pendingWrites}')::numeric),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='mysql'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'mysql'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 const dm8SeriesSQL = `SELECT jsonb_build_object(
 	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),

@@ -246,6 +246,14 @@ func wallboardNativeValues(values map[string]float64, metrics map[string]any) bo
 	case metrics["mysql"] != nil:
 		m := object(metrics["mysql"])
 		copyValues(m, map[string]string{"mysqlClients": "connections", "mysqlRunning": "running"})
+		copyValues(object(metrics["mysqlInterval"]), map[string]string{"mysqlQueries": "questionsPerSecond", "mysqlBufferHit": "bufferHitPercent"})
+		pool := object(m["bufferPool"])
+		if total, ok := numeric(pool["pages"]); ok && total > 0 {
+			if dirty, ok := numeric(pool["dirtyPages"]); ok {
+				values["mysqlDirtyPercent"] = 100 * dirty / total
+			}
+		}
+		copyValues(pool, map[string]string{"mysqlPendingReads": "pendingReads", "mysqlPendingWrites": "pendingWrites"})
 		putWaits("mysqlWaits", m["lockWaits"])
 		if channels, ok := m["replication"].([]any); ok && signalOK("replication") {
 			values["mysqlChannels"] = float64(len(channels))
