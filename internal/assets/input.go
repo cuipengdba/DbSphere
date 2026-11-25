@@ -19,6 +19,11 @@ var poolerHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
 // RuntimeMySQL reserves a separate collection route for this preview. Older
 // DbSphere versions skip these assets when they run against the same store.
 const RuntimeMySQL = "mysql"
+const RuntimeDM8 = "dm8"
+
+func IsPostgreSQLRuntime(runtime string) bool {
+	return runtime == "linux" || runtime == "k8s" || runtime == "managed"
+}
 
 type OptionalPort int
 
@@ -100,13 +105,16 @@ func (a Input) Validate() error {
 	if a.SSLMode != "disable" && a.SSLMode != "require" {
 		return errors.New("invalid database TLS mode")
 	}
-	if a.Runtime != "linux" && a.Runtime != "k8s" && a.Runtime != "managed" && a.Runtime != RuntimeMySQL {
+	if !IsPostgreSQLRuntime(a.Runtime) && a.Runtime != RuntimeMySQL && a.Runtime != RuntimeDM8 {
 		return errors.New("invalid runtime")
 	}
-	if a.Runtime == RuntimeMySQL {
+	if a.Runtime == RuntimeMySQL || a.Runtime == RuntimeDM8 {
+		if a.Runtime == RuntimeDM8 && a.SSLMode != "disable" {
+			return errors.New("DM8 uses an HTTPS probe with a local database connection")
+		}
 		if a.LinuxHost != "" || a.LinuxExporterPort != 0 || a.K8sCluster != "" || a.Namespace != "" ||
 			a.Workload != "" || a.Pod != "" || a.Node != "" || a.PoolerURL != "" || a.PoolerEndpoint != "" || a.PatroniURL != "" {
-			return errors.New("MySQL preview accepts database connection settings without PostgreSQL infrastructure mappings")
+			return errors.New("database engine does not support PostgreSQL infrastructure mappings")
 		}
 		return nil
 	}

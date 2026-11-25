@@ -244,6 +244,23 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 		}
 	}
 	for _, item := range event.Evidence {
+		if item.Kind == dm8LockGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {
+				wait := object(list(payload["waits"])[0])
+				title := "已观测到达梦 DM8 事务锁阻塞"
+				if holder, waiter := stringValue(wait["blockingSession"]), stringValue(wait["waitingSession"]); holder != "" && waiter != "" {
+					title = fmt.Sprintf("达梦会话 %s 持锁，阻塞会话 %s", holder, waiter)
+				}
+				supports := []string{item.ID}
+				if id := stringValue(payload["sampleId"]); id != "" {
+					supports = append(supports, "sample:"+id)
+				}
+				addCandidate("dm8_transaction_lock", title, "high", supports,
+					[]string{"核对持锁事务的开始时间和提交路径"}, "事务等待视图确认了采样瞬间的阻塞关系。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == mysqlLockGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {

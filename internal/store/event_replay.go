@@ -150,6 +150,9 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 		if item.Kind == mysqlLockGroup || point.Source == "go_mysql_collector" ||
 			(event.Kind == mysqlLockGroup && item.Kind == "collection_recovered") {
 			point.Layer = "mysql"
+		} else if item.Kind == dm8LockGroup || point.Source == "go_dm8_collector" ||
+			(event.Kind == dm8LockGroup && item.Kind == "collection_recovered") {
+			point.Layer = "dm8"
 		}
 		if point.Layer == "" {
 			continue
@@ -163,7 +166,7 @@ func incidentReplay(event *eventRecord, samples map[string]sampleObservation, ca
 			layers[point.Layer] = true
 		}
 		switch item.Kind {
-		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup:
+		case "collection_error", "alert_firing", "alert_unsuppressed", mysqlLockGroup, dm8LockGroup:
 			point.Stage = "detection"
 			if detection == nil || (detection.SampleID == "" && point.SampleID != "") {
 				value := point
@@ -217,7 +220,7 @@ func candidateEvidenceStrength(candidate map[string]any, samples map[string]samp
 	}
 	if hasRawSample {
 		switch stringValue(candidate["code"]) {
-		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down", "mysql_innodb_lock_wait":
+		case "lock_chain", "trace_lock_pid_matched", "wal_receiver_down", "mysql_innodb_lock_wait", "dm8_transaction_lock":
 			return "direct"
 		}
 		return "correlated"

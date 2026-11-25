@@ -9,6 +9,13 @@
     { key: 'averageReplicationLagBytes', title: '复制延迟', unit: ' B', source: 'WAL 差值 · 桶内均值' },
     { key: 'ioPressure', title: '存储 I/O 压力', unit: '%', source: '容器 I/O PSI · 选区内分桶均值' }
   ];
+  const dm8Metrics = [
+    { key: 'dm8Sessions', title: '会话', unit: '', source: 'V$SESSIONS · 窗口均值' },
+    { key: 'dm8Active', title: '活动会话', unit: '', source: 'V$SESSIONS · 窗口均值' },
+    { key: 'dm8Transactions', title: '事务', unit: '', source: 'V$TRX · 窗口均值' },
+    { key: 'dm8Waits', title: '已观测锁等待', unit: '', source: 'V$TRXWAIT · 窗口峰值' }
+  ];
+  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8'};
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
   const freshnessLabels = { ok: '采样正常', error: '采集失败', pending: '待采样', stale: '采样陈旧' };
@@ -22,6 +29,7 @@
 
   const grafanaPages = { overview: 'dbsphere-overview', postgres: 'dbsphere-postgres', waits: 'dbsphere-waits',
     replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
+    dm8: 'dbsphere-dm8',
     containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
 
   function grafanaPath({ asset, organization, cluster, engine, event, eventContext, container, device, pvc, pvcUid, from, to, section, night, back }) {
@@ -121,7 +129,7 @@
         organization: validId(params.get('organization')) ? params.get('organization') : '',
         environment: (params.get('environment') || '').slice(0, 80),
         cluster: (params.get('cluster') || '').slice(0, 256),
-        engine: ['postgres', 'mysql'].includes(engine) ? engine : '',
+        engine: Object.hasOwn(engineNames, engine) ? engine : '',
         minutes: [5, 15, 60, 360].includes(minutes) ? minutes : 60,
         asset: validId(params.get('asset')) ? params.get('asset') : '',
         event: validId(params.get('event')) ? params.get('event') : '',
@@ -230,7 +238,7 @@
       get('grafana').href = grafanaPath({ asset: asset?.id, organization: asset?.organizationId || selection.organization,
         cluster: asset?.cluster, engine: asset?.engine, event: incident?.id, from, to, night: root.dataset.night === 'true',
         back: route(true),
-        section: asset?.engine === 'mysql' ? 'mysql' : asset ? 'postgres' : 'overview' });
+        section: asset?.engine || 'overview' });
     }
 
     function connect() {
@@ -505,7 +513,7 @@
         return;
       }
       const values = [
-        [asset.engine === 'mysql' ? 'MySQL' : 'PostgreSQL', freshnessLabels[asset.freshness]],
+        [engineNames[asset.engine] || '数据库', freshnessLabels[asset.freshness]],
         ['Linux', asset.linux === 'ok' ? '已采样' : asset.linux ? '信号不可用' : '暂无信号'],
         ['Kubernetes', asset.k8s === 'ok' ? '已采样' : asset.k8s ? '信号不可用' : '暂无信号']
       ];
@@ -569,7 +577,9 @@
       parent.replaceChildren();
       label.textContent = '';
       if (!asset || !asset.sampleId || asset.engine !== 'postgres') {
-        parent.append(element('p', asset?.engine === 'mysql' ? '在资产详情查看 MySQL SQL 指纹。' : '暂无 PostgreSQL SQL 指纹样本。', 'live-empty'));
+        const message = asset?.engine === 'dm8' ? '达梦实例和原始锁等待请查看资产详情。' :
+          asset?.engine === 'mysql' ? '在资产详情查看 MySQL SQL 指纹。' : '暂无 PostgreSQL SQL 指纹样本。';
+        parent.append(element('p', message, 'live-empty'));
         return;
       }
       parent.append(element('p', '正在读取 SQL 指纹…', 'live-empty'));
@@ -608,7 +618,7 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const enabled = asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
+      const enabled = asset?.engine === 'dm8' ? dm8Metrics : asset?.engine === 'mysql' ? metrics.slice(0, 1) : metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];
       const metricKey = enabled.map(metric => metric.key).join();
       if (list.dataset.metrics !== metricKey) {
@@ -636,6 +646,7 @@
       const q = { from: new Date(compare ? comparisonStart : from).toISOString(), to: new Date(to).toISOString(),
         bucketMinutes: String(bucketMinutes) };
       const trend = new URLSearchParams({ ...q, asset: asset.id, changes: 'true' });
+      if (asset.engine === 'dm8') trend.set('metricProfile', 'dm8');
       const waits = new URLSearchParams({ ...q, group: 'type' });
       if (points[0]?.assetId !== asset.id || points.range !== selectedTimescale || points.anchor !== selection.end || points.start !== selection.start) {
         points = [];

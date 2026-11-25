@@ -185,6 +185,8 @@ func makeImportPlan(items []assets.Declaration, known []importAsset, profiles []
 			row.Action, row.Reason = "invalid", item.Issue
 		case item.Input.Runtime == assets.RuntimeMySQL:
 			row.Action, row.Reason = "invalid", "MySQL 预览资产使用单实例纳管入口"
+		case item.Input.Runtime == assets.RuntimeDM8:
+			row.Action, row.Reason = "invalid", "达梦 DM8 资产使用单实例纳管入口"
 		case item.ID != "" && !evidenceUUID.MatchString(item.ID) || item.Input.Validate() != nil:
 			row.Action, row.Reason = "invalid", "资产标识或连接参数无效"
 		case !sameExplicitTarget && (len(matched) > 1 || len(matched) == 1 && matched[0].ID != row.ID):
@@ -307,7 +309,7 @@ func (s *Postgres) ExportAssets(ctx context.Context, after string) (any, error) 
 	if after != "" && !evidenceUUID.MatchString(after) {
 		return nil, assets.ErrInvalidImport
 	}
-	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime<>'mysql' AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
+	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime IN ('linux','k8s','managed') AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
 	if err != nil {
 		return nil, err
 	}

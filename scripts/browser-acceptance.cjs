@@ -1106,6 +1106,52 @@ async function v3Investigation(page, asset) {
   }
 }
 
+async function dm8Monitoring(page) {
+  await navigate(page, 'assets');
+  await page.locator('#asset-add').click();
+  await formField(page, 'asset-form', 'runtime').selectOption('dm8');
+  assert.equal(await formField(page, 'asset-form', 'port').inputValue(), '5236');
+  await formField(page, 'asset-form', 'name').fill('Browser QA DM8');
+  await formField(page, 'asset-form', 'host').fill('127.0.0.1');
+  await formField(page, 'asset-form', 'username').fill('DBSPHERE_MON');
+  await formField(page, 'asset-form', 'password').fill('dbsphere-dm8-fixture');
+  const created = await action(page,page.locator('#asset-submit'),'POST','/api/assets',201);
+  const asset = (await created.json()).asset.id;
+  const sample = randomUUID(), event = randomUUID();
+  runFixtureSQL(`INSERT INTO samples(id,asset_id,collected_at,status,metrics_json) VALUES
+    ('${sample}','${asset}',now()-interval '15 seconds','ok',
+    '{"adapter":{"signals":[{"key":"lockWaits","status":"ok"}]},"dm8":{"version":"DM Database Server x64 V8",
+    "build":"qa-fixture","status":"OPEN","mode":"NORMAL","sessions":2,"activeSessions":1,"transactions":1,
+    "waits":[{"waitingSession":"101","blockingSession":"102","waitingTransaction":"31","blockingTransaction":"30","waitMs":2500}],
+    "signals":[{"key":"lockWaits","source":"V$TRXWAIT / V$TRX","status":"ok"}],
+    "files":[{"id":"1:0","tablespace":"MAIN","allocatedBytes":104857600,"freeBytes":52428800}]}}');
+    UPDATE assets SET last_status='ok',last_sample_at=(SELECT collected_at FROM samples WHERE id='${sample}'),version_num=80000 WHERE id='${asset}';
+    INSERT INTO event_keys(id,asset_id,started_at) SELECT '${event}',asset_id,collected_at FROM samples WHERE id='${sample}';
+    INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
+    SELECT id,asset_id,'dm8_lock_wait','达梦 QA 事务锁等待','open',started_at,'dm8_lock_wait' FROM event_keys WHERE id='${event}';
+    INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
+    SELECT gen_random_uuid(),'${event}','dm8_lock_wait',collected_at,
+    jsonb_build_object('sampleId',id,'waits',metrics_json#>'{dm8,waits}') FROM samples WHERE id='${sample}';`);
+  await page.goto(origin+'/#live?engine=dm8&asset='+asset);
+  await visible(page.locator('[data-live=metrics]'), '已观测锁等待');
+  await page.locator('[data-live=metrics]').getByRole('button',{name:'已观测锁等待'}).click();
+  await page.goto(origin+'/#incidents?event='+event);
+  await visible(page.locator('#event-detail'), '达梦会话 102 持锁，阻塞会话 101');
+  const raw = page.locator(`#event-detail a[href="/api/assets/${asset}/samples/${sample}"]:visible`).first();
+  await raw.click();
+  await visible(page.locator('#sample-details'), sample);
+  await page.locator('#sample-return').click();
+  await visible(page.locator('#event-detail'), event);
+  await navigate(page,'assets');
+  await page.locator('#asset-runtime').selectOption('dm8');
+  const listing=page.locator('#asset-list');
+  await visible(listing,'Browser QA DM8');
+  await listing.getByRole('button',{name:'查看',exact:true}).click();
+  await visible(page.locator('#detail'),'事务锁阻塞链');
+  await visible(page.locator('#detail'),'MAIN');
+  proof.push('DM8 admission, engine-specific real-time trends, lock evidence, readable source, and same-event return');
+}
+
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 880 }, hasTouch: true });
@@ -1127,6 +1173,7 @@ async function v3Investigation(page, asset) {
     await pagination(page, asset);
     await dutyMatrix(page);
     await v3Investigation(page, asset);
+    await dm8Monitoring(page);
     await page.locator('#logout').click();
     await page.locator('#login-form').waitFor();
     await login(page, 'viewer', process.env.DBSPHERE_VIEWER_PASSWORD);

@@ -44,7 +44,7 @@ const monitoringFleetSQL = `WITH visible AS (
 	LEFT JOIN LATERAL (SELECT count(*)::int AS total,min(k.started_at) AS started_at,
 		(array_agg(k.id ORDER BY k.started_at,k.id))[1] AS first_id
 		FROM open_event_groups g JOIN event_keys k ON k.id=g.event_id WHERE g.asset_id=a.id) e ON true
-	WHERE a.runtime<>'mysql' AND ($1::uuid[] IS NULL OR a.id=ANY($1))
+	WHERE a.runtime IN ('linux','k8s','managed') AND ($1::uuid[] IS NULL OR a.id=ANY($1))
 	AND ($2='' OR strpos(lower(a.name),lower($2))>0 OR strpos(lower(coalesce(a.cluster_name,'')),lower($2))>0)
 	AND ($3='' OR a.runtime=$3) AND ($4='' OR a.environment=$4) AND ($5='' OR $5=ANY(a.tags))
 	AND ($6::int=0 OR a.version_num/10000=$6)

@@ -55,7 +55,7 @@ func (s *Postgres) addUnassignedWallHosts(snapshot json.RawMessage) (json.RawMes
 
 const liveObservationSQL = `WITH visible AS MATERIALIZED (
 	SELECT a.id,a.name,a.cluster_name,a.runtime,a.environment,a.organization_id,o.name AS organization_name,
-		CASE WHEN a.runtime='mysql' THEN 'mysql' ELSE 'postgres' END AS engine,
+		CASE WHEN a.runtime IN ('mysql','dm8') THEN a.runtime ELSE 'postgres' END AS engine,
 		a.role,a.k8s_cluster,a.k8s_namespace,a.k8s_pod,a.k8s_node,a.last_sample_at,a.last_status,a.linux_host,a.linux_exporter_port,
 		CASE WHEN a.last_sample_at IS NULL THEN 'pending'
 			WHEN $3::int>0 AND a.last_sample_at<=now()-make_interval(secs=>$3) THEN 'stale'

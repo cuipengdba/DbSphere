@@ -24,6 +24,13 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) == 2 && os.Args[1] == "dm8-probe" {
+		if err := runDM8Probe(); err != nil {
+			log.Error("DbSphere DM8 probe exited", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "container-agent" {
 		if err := runContainerAgent(); err != nil {
 			log.Error("DbSphere container agent exited", "error", err)

@@ -135,7 +135,7 @@ func updateAsset(ctx context.Context, db assetQueryer, id string, input assets.I
 		pooler_endpoint=$21,cluster_name=CASE WHEN $22::text IS NULL THEN cluster_name ELSE nullif($22,'') END,
 		environment=CASE WHEN $23::text IS NULL THEN environment ELSE nullif($23,'') END,tags=coalesce($24::text[],tags),
 		last_sample_at=NULL,last_status='pending',last_error=NULL,version_num=NULL,role=NULL
-		WHERE id=$20 AND (runtime='mysql')=($8='mysql')
+		WHERE id=$20 AND (runtime=$8 OR (runtime IN ('linux','k8s','managed') AND $8 IN ('linux','k8s','managed')))
 		AND (nullif($25,'')::uuid IS NULL OR organization_id=nullif($25,'')::uuid) RETURNING id`, input.Name, input.Host, input.Port, input.Database, input.Username,
 		password, input.SSLMode, input.Runtime, nullable(input.LinuxHost), nullablePort(input.LinuxExporterPort),
 		input.PoolerClear, pooler, input.PatroniClear, patroni, nullable(input.K8sCluster), nullable(input.Namespace),

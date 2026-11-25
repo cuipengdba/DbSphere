@@ -25,7 +25,7 @@ const assetJSON = `jsonb_build_object(
 	'id',id,'organizationId',organization_id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
 	'environment',environment,'tags',tags,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
-	'engine',CASE WHEN runtime='mysql' THEN 'mysql' ELSE 'postgresql' END,
+	'engine',CASE WHEN runtime IN ('mysql','dm8') THEN runtime ELSE 'postgresql' END,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
 	'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 	'patroniConfigured',patroni_url_enc IS NOT NULL,
@@ -33,7 +33,7 @@ const assetJSON = `jsonb_build_object(
 	'pod',k8s_pod,'node',k8s_node,'createdAt',created_at,
 	'lastSampleAt',last_sample_at,'lastStatus',last_status,
 	'lastError',last_error,'versionNum',version_num,'role',role,
-	'pg14Eol',runtime<>'mysql' AND coalesce(version_num/10000=14,false))`
+	'pg14Eol',runtime IN ('linux','k8s','managed') AND coalesce(version_num/10000=14,false))`
 
 // AssetPage searches all managed assets with a stable (created_at, ID) cursor.
 // A scoped viewer's asset filter is applied before the page limit.
@@ -43,7 +43,7 @@ func (s *Postgres) AssetPage(ctx context.Context, query AssetPageQuery, assetIDs
 		return nil, ErrInvalidAssetPage
 	}
 	if query.Runtime != "" && query.Runtime != "all" && query.Runtime != "linux" &&
-		query.Runtime != "k8s" && query.Runtime != "managed" && query.Runtime != "mysql" {
+		query.Runtime != "k8s" && query.Runtime != "managed" && query.Runtime != "mysql" && query.Runtime != "dm8" {
 		return nil, ErrInvalidAssetPage
 	}
 	var beforeTime time.Time

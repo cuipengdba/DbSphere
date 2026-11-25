@@ -114,7 +114,9 @@ func seedHistoryCapacity(t *testing.T, ctx context.Context, pg *Postgres) any {
 	if _, err := pg.pool.Exec(ctx, "ANALYZE assets; ANALYZE samples"); err != nil {
 		t.Fatal(err)
 	}
-	policy, err := pg.SetHistoryTierPolicy(ctx, HistoryTierPolicy{OrganizationID: a.ID, Metric: "connections", RawDays: 7, HourlyDays: 90})
+	// Seeding and measuring are separate workflow steps. Leave a retention margin so
+	// crossing a UTC hour between them does not trim the measured 90-day window.
+	policy, err := pg.SetHistoryTierPolicy(ctx, HistoryTierPolicy{OrganizationID: a.ID, Metric: "connections", RawDays: 7, HourlyDays: 91})
 	if err != nil {
 		t.Fatal(err)
 	}

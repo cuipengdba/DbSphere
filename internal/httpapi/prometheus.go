@@ -109,6 +109,10 @@ func writeAssetMetrics(w io.Writer, assets []storepkg.PrometheusAsset) {
 		{"asset_k8s_pod_memory_bytes", "Pod memory bytes reported by the Kubernetes resource metrics API.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.PodMemory }},
 		{"asset_mysql_threads_running", "MySQL running threads from Performance Schema.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLRunning }},
 		{"asset_mysql_lock_waits_observed", "MySQL InnoDB lock waits in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.MySQLLockWaits }},
+		{"asset_dm8_sessions", "Dameng sessions excluding the probe session.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Sessions }},
+		{"asset_dm8_active_sessions", "Dameng active sessions excluding the probe session.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Active }},
+		{"asset_dm8_transactions", "Dameng active transactions excluding the probe session.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Transactions }},
+		{"asset_dm8_lock_waits_observed", "Dameng transaction lock waits in the bounded sample.", "gauge", func(a storepkg.PrometheusAsset) *float64 { return a.DM8Waits }},
 	} {
 		name := "dbsphere_" + metric.name
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, metric.help, name, metric.kind)

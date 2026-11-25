@@ -22,7 +22,7 @@ const monitoringInstancesSQL = `SELECT jsonb_build_object(
 		ORDER BY id DESC LIMIT 1
 	) m ON true LEFT JOIN LATERAL (
 		SELECT count(*)::int AS total FROM open_event_groups WHERE asset_id=a.id
-	) e ON true WHERE a.runtime<>'mysql' /*asset_scope*/ ORDER BY a.id`
+	) e ON true WHERE a.runtime IN ('linux','k8s','managed') /*asset_scope*/ ORDER BY a.id`
 
 func monitoringBucketLimit(minutes int) time.Duration {
 	if minutes == 60 {
@@ -40,7 +40,15 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 		to.Sub(from) > monitoringBucketLimit(minutes) {
 		return nil, ErrInvalidRange
 	}
-	values, err := s.readMonitoringBuckets(ctx, ids, from, to, minutes)
+	var values []json.RawMessage
+	if params.Get("metricProfile") == "dm8" {
+		if len(ids) != 1 {
+			return nil, ErrInvalidRange
+		}
+		values, err = s.queryJSON(ctx, dm8SeriesSQL, ids[0], from, to, minutes)
+	} else {
+		values, err = s.readMonitoringBuckets(ctx, ids, from, to, minutes)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +74,18 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 	}
 	return result, nil
 }
+
+const dm8SeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'dm8Sessions',avg((s.metrics_json#>>'{dm8,sessions}')::numeric),
+	'dm8Active',avg((s.metrics_json#>>'{dm8,activeSessions}')::numeric),
+	'dm8Transactions',avg((s.metrics_json#>>'{dm8,transactions}')::numeric),
+	'dm8Waits',max(CASE WHEN s.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(s.metrics_json#>'{dm8,waits}')='array' THEN jsonb_array_length(s.metrics_json#>'{dm8,waits}') END),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='dm8'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'dm8'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 func (s *Postgres) monitoringContext(ctx context.Context, id string, params url.Values) (any, error) {
 	maxRange, eventLimit := 7*24*time.Hour, 12

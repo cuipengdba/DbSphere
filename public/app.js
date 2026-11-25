@@ -525,6 +525,7 @@ async function renderRCAWorkbench(eventId = '', preferredCode = '') {
 }
 
 function assetRuntimeLabel(asset) {
+  if (asset.runtime === 'dm8') return '达梦 DM8';
   if (asset.runtime === 'mysql') return 'MySQL 8.4 预览';
   if (asset.runtime === 'k8s') return `K8S${asset.namespace ? ' / ' + asset.namespace : ''}`;
   return asset.runtime === 'managed' ? '托管 PG' : 'Linux';
@@ -855,7 +856,7 @@ async function refresh(runtimeOverride) {
   $('event-count').closest('.stat').classList.toggle('alerting', eventOverview.openCount > 0);
   allAssets = assets;
   containerStorage.setAssets(assets);
-  monitoring.sync(assets.filter(asset => asset.runtime !== 'mysql'), assetServerPaging,
+  monitoring.sync(assets.filter(asset => databaseRuntimeGroup(asset.runtime) === 'postgres'), assetServerPaging,
     [...new Map([...eventOverview.latestOpen, ...events].map(event => [event.id, event])).values()]);
   if (!nativeOverview) renderOverview(assets, eventOverview.latestOpen);
   $('asset-page-controls').hidden = !assetServerPaging;
@@ -1039,7 +1040,8 @@ function renderAssets(assets, summary = '') {
       info.append(label);
     }
     const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
-      : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
+      : asset.runtime === 'dm8' ? '达梦 DM8'
+        : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
     info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
     const health = assetHealth(asset);
@@ -1187,6 +1189,10 @@ async function showAsset(id, layer, background = false) {
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
     if (readiness) detail.append(readinessPanel(readiness));
+    return;
+  }
+  if (asset.runtime === 'dm8') {
+    renderDM8Asset(detail, asset, samples);
     return;
   }
   const [{ performance }, { entries: slowLogs }, { plans }, settings, capacity] = await Promise.all([
@@ -1527,6 +1533,70 @@ function renderSignalCoverage(target, asset, sample, performance) {
     panel.append(cell('h4', `${kernel} ${compatibility.major} 版本能力${compatibility.lifecycle === 'upstream_eol' ? ' · 上游已停止支持' : ''}`), signals);
   }
   target.append(panel);
+}
+
+function renderDM8Asset(detail, asset, samples) {
+  detail.replaceChildren(cell('h3', asset.name), cell('p', `达梦 DM8 · ${asset.host}:${asset.port}`),
+    cell('p', [assetHealth(asset).label, formatTime(asset.lastSampleAt), asset.lastError].filter(Boolean).join(' · '), 'hint'));
+  const event = recentEvents.find(item => item.assetId === asset.id && item.kind === 'dm8_lock_wait');
+  if (event) {
+    const link = cell('a', '打开达梦锁等待事件', 'monitor-link');
+    link.href = '#incidents?' + new URLSearchParams({event: event.id});
+    detail.append(link);
+  }
+  const origin = samples[0];
+  const data = origin?.status === 'ok' && origin.collectedAt === asset.lastSampleAt ? origin.metrics?.dm8 : null;
+  if (!data) {
+    detail.append(cell('p', '当前还没有成功的达梦采样。请核对探针和监控权限。', 'empty'));
+    return;
+  }
+  const numeric = value => Number.isFinite(value) ? new Intl.NumberFormat('zh-CN').format(value) : '未采集';
+  const size = bytes => Number.isFinite(bytes) ? numeric(bytes / 1048576) + ' MiB' : '未采集';
+  const available = name => data.signals.some(signal => signal.key === name && signal.status === 'ok');
+  const mode = {NORMAL:'单实例', PRIMARY:'主库', STANDBY:'备库'};
+  const tiles = cell('div', '', 'metric-grid');
+  for (const [label, value] of [['运行模式', mode[data.mode] || data.mode], ['实例状态', data.status],
+    ['会话', numeric(data.sessions)], ['活动会话', numeric(data.activeSessions)], ['事务', numeric(data.transactions)],
+    ['锁等待', available('lockWaits') ? numeric(data.waits.length) + (data.waitsTruncated ? '+' : '') : '未采集']]) {
+    const tile = cell('div');
+    tile.append(cell('span', label), cell('strong', value));
+    tiles.append(tile);
+  }
+  detail.append(tiles, cell('small', [data.version, data.build && '构建 ' + data.build, data.startedAt && '启动 ' + data.startedAt].filter(Boolean).join(' · '), 'hint'));
+  if (currentRole === 'admin' && !currentOrganization) {
+    const grafana = cell('a', '打开达梦 Grafana 专题', 'monitor-link');
+    grafana.href = window.DbSphereLive.grafanaPath({section:'dm8', asset:asset.id, organization:asset.organizationId,
+      cluster:asset.clusterName, engine:'dm8', event:event?.id,
+      back:'live?'+new URLSearchParams({engine:'dm8', asset:asset.id}), from:Date.now()-3600000, to:Date.now()});
+    void api('/api/live/integrations').then(state => {
+      if (selectedAsset === asset.id && state.grafana && tiles.isConnected) tiles.after(grafana);
+    }).catch(() => {});
+  }
+  const table = (heading, columns, rows) => {
+    const panel = cell('section', '', 'evidence monitor-table');
+    panel.append(cell('h4', heading));
+    if (rows.length) panel.append(importTable(columns, rows));
+    else panel.append(cell('p', '无可显示记录', 'hint'));
+    detail.append(panel);
+  };
+  if (data.waits.length) table('事务锁阻塞链', ['等待会话', '阻塞会话', '等待事务', '持锁事务', '等待 ms'],
+    data.waits.map(wait => [wait.waitingSession || '未知', wait.blockingSession || '未知', wait.waitingTransaction, wait.blockingTransaction, numeric(wait.waitMs)]));
+  table('表空间与数据文件', ['表空间', '文件 ID', '已分配', '已用', '利用率'], data.files.map(file => [
+    file.tablespace, file.id, size(file.allocatedBytes), size(file.allocatedBytes - file.freeBytes),
+    file.allocatedBytes ? numeric((1 - file.freeBytes / file.allocatedBytes) * 100) + '%' : '未知'
+  ]));
+  if (data.filesTruncated) detail.append(cell('p', '当前展示前 64 个数据文件。', 'hint'));
+  const coverage = cell('details', '', 'settings-details');
+  coverage.append(cell('summary', '采集来源与缺口'), importTable(['来源', '状态'], data.signals.map(signal =>
+    [signal.source, signal.status === 'ok' ? '已采集' : signal.reason || '采集缺口'])));
+  detail.append(coverage);
+  const history = samples.filter(sample => sample.metrics?.dm8).slice(0, 20);
+  table('最近原始采样', ['时间', '会话', '事务', '已观测等待', '证据'], history.map(sample => {
+    const values = sample.metrics.dm8;
+    return [formatTime(sample.collectedAt), numeric(values.sessions), numeric(values.transactions),
+      values.signals.some(signal => signal.key === 'lockWaits' && signal.status === 'ok') ? numeric(values.waits.length) : '未采集',
+      replaySampleLink(asset.id, sample.id)];
+  }));
 }
 
 function renderMySQLAsset(detail, asset, samples) {
@@ -2589,10 +2659,12 @@ function setupAssetImport() {
 
 setupAssetImport();
 
+function databaseRuntimeGroup(runtime) { return ['dm8','mysql'].includes(runtime) ? runtime : 'postgres'; }
+
 function editAsset(asset) {
   editingAsset = asset.id;
   const form = $('asset-form');
-  for (const option of $('runtime').options) option.disabled = (option.value === 'mysql') !== (asset.runtime === 'mysql');
+  for (const option of $('runtime').options) option.disabled = databaseRuntimeGroup(option.value) !== databaseRuntimeGroup(asset.runtime);
   for (const [field, value] of Object.entries({
     name: asset.name, host: asset.host, port: asset.port, database: asset.database,
     username: asset.username, sslMode: asset.sslMode, runtime: asset.runtime,
@@ -2609,7 +2681,8 @@ function editAsset(asset) {
   $('runtime').dispatchEvent(new Event('change'));
   $('asset-submit').textContent = '更新资产';
   $('asset-dialog').dataset.mode = 'edit';
-  $('asset-dialog-title').textContent = asset.runtime === 'mysql' ? '编辑 MySQL 实例' : '编辑 PostgreSQL 实例';
+  $('asset-dialog-title').textContent = asset.runtime === 'dm8' ? '编辑达梦 DM8 实例' :
+    asset.runtime === 'mysql' ? '编辑 MySQL 实例' : '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
@@ -2629,7 +2702,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -2639,7 +2712,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
-  collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', recovery_verified: '人工验证恢复',
+  collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', recovery_verified: '人工验证恢复',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
 
@@ -2801,7 +2874,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
   panel.append(grid);
   const phases = [['before', '故障前'], ['during', '触发时'], ['peak', '峰值'], ['after', '恢复后']];
   const layers = [['all', '全部'], ['app', '应用'], ['pooler', '入口与连接池'], ['postgres', '数据库'], ['infra', 'Linux / Kubernetes'], ['storage', '容器 / 磁盘 / PVC']];
-  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
+  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'sql', 'replication'], infra: ['linux', 'k8s'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
   if (replay.peak) comparisons.set('peak', replay.peak);
   const graph = analysis.graph || { nodes: [], edges: [] };
@@ -3732,6 +3805,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (integrations?.grafana) {
     const asset = allAssets.find(item => item.id === event.assetId);
     const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
+    const dm8 = asset?.runtime === 'dm8' || event.kind?.startsWith('dm8');
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
     const anchor = back ? new URLSearchParams(back.split('?')[1]) : null;
@@ -3739,12 +3813,12 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const end = Date.parse(anchor?.get('end') || anchor?.get('to'));
     const windowMinutes = Number(anchor?.get('window'));
     link.href = window.DbSphereLive.grafanaPath({ asset: event.assetId, organization: asset?.organizationId,
-      cluster: asset?.clusterName, engine: mysql ? 'mysql' : 'postgres', event: event.id,
+      cluster: asset?.clusterName, engine: dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres', event: event.id,
       eventContext: `incidents?${investigationParams(event.id)}`, container: anchor?.get('container'),
       back: `incidents?${investigationParams(event.id)}`,
       from: Number.isFinite(anchorStart) ? anchorStart : Number.isFinite(end) && windowMinutes > 0 ? end - windowMinutes * 60000 : start - 5 * 60000,
       to: Number.isFinite(end) ? end : Math.min(Date.now(), (Date.parse(event.endedAt) || Date.now()) + 5 * 60000),
-      section: mysql ? 'mysql' : storageIncident ? 'containerRCA' : 'waits' });
+      section: dm8 ? 'dm8' : mysql ? 'mysql' : storageIncident ? 'containerRCA' : 'waits' });
     summary.append(link);
     grafanaLink = link;
   }
@@ -4616,16 +4690,25 @@ $('runtime').addEventListener('change', (event) => {
   const k8s = event.target.value === 'k8s';
   const linux = event.target.value === 'linux';
   const mysql = event.target.value === 'mysql';
-  const wasMySQL = event.target.dataset.previousRuntime === 'mysql';
+  const dm8 = event.target.value === 'dm8';
+  const previous = event.target.dataset.previousRuntime;
+  const previousEngine = databaseRuntimeGroup(previous);
+  const nextEngine = databaseRuntimeGroup(event.target.value);
   event.target.dataset.previousRuntime = event.target.value;
   const form = $('asset-form');
-  if (!editingAsset && mysql && !wasMySQL && form.elements.port.value === '5432') form.elements.port.value = '3306';
-  if (!editingAsset && !mysql && wasMySQL && form.elements.port.value === '3306') form.elements.port.value = '5432';
-  if (!editingAsset && mysql && !wasMySQL && form.elements.database.value === 'postgres') form.elements.database.value = '';
-  if (!editingAsset && !mysql && wasMySQL && form.elements.database.value === '') form.elements.database.value = 'postgres';
-  $('asset-integrations').hidden = mysql;
-  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql;
+  if (!editingAsset && previousEngine !== nextEngine) {
+    const ports = {postgres:'5432', mysql:'3306', dm8:'5236'};
+    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG'};
+    if (form.elements.port.value === ports[previousEngine]) form.elements.port.value = ports[nextEngine];
+    if (form.elements.database.value === names[previousEngine]) form.elements.database.value = names[nextEngine];
+    if (previous === 'dm8') form.elements.sslMode.value = 'require';
+  }
+  form.elements.sslMode.closest('label').hidden = dm8;
+  if (dm8) form.elements.sslMode.value = 'disable';
+  $('asset-integrations').hidden = mysql || dm8;
+  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8;
   $('asset-runtime-hint').textContent = mysql ? '数据库名称用于筛选 SQL 指纹。使用专用账号读取 Performance Schema。'
+    : dm8 ? '主机和端口须匹配达梦采集探针的授权目标。使用专用监控账号读取动态性能视图。'
     : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
   $('k8s-fields').hidden = !k8s;
   for (const field of document.querySelectorAll('.linux-field')) {

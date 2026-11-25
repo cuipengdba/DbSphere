@@ -69,23 +69,37 @@ func recordMySQLLockEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID stri
 	if !ok || lockSignal.Status != "ok" {
 		return nil
 	}
+	return recordEngineLockEvent(ctx, tx, assetID, sampleID, now, engineLockEvidence{
+		group: mysqlLockGroup, title: "MySQL InnoDB 锁等待", source: lockSignal.Source,
+		waits: details.LockWaits, count: len(details.LockWaits), truncated: details.LocksTruncated,
+	})
+}
+
+type engineLockEvidence struct {
+	group, title, source string
+	waits                any
+	count                int
+	truncated            bool
+}
+
+func recordEngineLockEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID string, now time.Time, lock engineLockEvidence) error {
 	var eventID string
 	err := tx.QueryRow(ctx, `SELECT event_id::text FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`,
-		assetID, mysqlLockGroup).Scan(&eventID)
+		assetID, lock.group).Scan(&eventID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if len(details.LockWaits) == 0 {
+	if lock.count == 0 {
 		if eventID == "" {
 			return nil
 		}
 		if _, err := tx.Exec(ctx, `UPDATE events SET status='resolved',ended_at=$1 WHERE id=$2`, now, eventID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`, assetID, mysqlLockGroup); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM open_event_groups WHERE asset_id=$1 AND event_group=$2`, assetID, lock.group); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lockSignal.Source, "waitCount": 0})
+		payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lock.source, "waitCount": 0})
 		_, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'collection_recovered',$2,$3)`, eventID, now, payload)
 		return err
@@ -98,15 +112,15 @@ func recordMySQLLockEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID stri
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO events(id,asset_id,kind,title,status,started_at,event_group)
-		VALUES($1,$2,$3,'MySQL InnoDB 锁等待','open',$4,$3)`, eventID, assetID, mysqlLockGroup, now); err != nil {
+		VALUES($1,$2,$3,$4,'open',$5,$3)`, eventID, assetID, lock.group, lock.title, now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES($1,$2,$3)`, assetID, mysqlLockGroup, eventID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO open_event_groups(asset_id,event_group,event_id) VALUES($1,$2,$3)`, assetID, lock.group, eventID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lockSignal.Source,
-		"waits": details.LockWaits, "truncated": details.LocksTruncated})
+	payload, _ := json.Marshal(map[string]any{"sampleId": sampleID, "source": lock.source,
+		"waits": lock.waits, "truncated": lock.truncated})
 	_, err = tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
-		VALUES(gen_random_uuid(),$1,$2,$3,$4)`, eventID, mysqlLockGroup, now, payload)
+		VALUES(gen_random_uuid(),$1,$2,$3,$4)`, eventID, lock.group, now, payload)
 	return err
 }

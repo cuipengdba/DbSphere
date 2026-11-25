@@ -664,7 +664,7 @@
       if (!grafana.hidden) {
         grafana.href = window.DbSphereLive.grafanaPath({ asset: asset.id, organization: asset.organizationId, cluster: asset.cluster,
           engine: asset.engine, event: selection.event, from: currentRange.from, to: currentRange.to,
-          section: asset.engine === 'mysql' ? 'mysql' : 'postgres', back: route(true) });
+          section: asset.engine, back: route(true) });
       }
     }
 
