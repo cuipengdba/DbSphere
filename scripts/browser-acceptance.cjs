@@ -1093,7 +1093,7 @@ async function v3Investigation(page, asset) {
     await visible(owner.locator('#event-detail'), '已恢复');
     await owner.getByRole('button', {name: '处置', exact: true}).click();
     const responseForm = owner.locator('form').filter({has: owner.getByRole('heading', {name: '处置与恢复验证', exact: true})});
-    await responseForm.getByLabel('记录类型', {exact: true}).selectOption('recovery_verification');
+    await responseForm.getByLabel('记录类型').selectOption('recovery_verification');
     assert.equal(await responseForm.getByLabel('成功采样 ID').inputValue(), recovery);
     await responseForm.getByLabel('处理记录（5–500 字）').fill('恢复采样显示连接已恢复正常');
     await action(owner, responseForm.getByRole('button', {name: '保存到事件时间线'}), 'POST', '/api/events/' + event + '/response', 200);
