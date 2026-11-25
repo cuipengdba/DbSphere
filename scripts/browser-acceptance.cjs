@@ -400,7 +400,47 @@ async function operations(page, asset) {
     await tab.click();
     assert.equal(await tab.getAttribute('aria-selected'), 'true');
   }
-  proof.push('Asset refresh and batch onboarding, readiness and JSON evidence, asset editing and confirmed deletion, and instance detail tabs');
+  await action(page, details.getByRole('button', { name: '7 天', exact: true }), 'GET', `/api/assets/${asset}/series`, 200);
+  const historyChart = details.locator('details').filter({ has: page.getByText('分层历史趋势', { exact: true }) });
+  await historyChart.locator('summary').click();
+  await historyChart.locator('[name=period]').selectOption('7');
+  await action(page, historyChart.getByRole('button', { name: '查看历史' }), 'GET', `/api/assets/${asset}/history-tier`, 200);
+  const risk = details.locator('.risk-panel');
+  await risk.locator('summary').click();
+  await action(page, risk.getByRole('button', { name: '运行近 7 天回测' }), 'GET', `/api/assets/${asset}/risk/backtest`, 200);
+  await risk.getByText('证据不足', { exact: true }).waitFor();
+
+  await details.getByRole('tab', { name: '慢 SQL 日志', exact: true }).click();
+  const slow = page.locator('#asset-layer-slow-logs');
+  await slow.locator('select').selectOption('jsonlog');
+  const log = JSON.stringify({ timestamp: new Date().toISOString(), dbname: 'postgres', query_id: 163, pid: 12,
+    application_name: 'ui-acceptance', message: 'duration: 2500 ms statement: select 1' }) + '\n';
+  await slow.locator('input[type=file]').setInputFiles({ name: 'ui-slow.json', mimeType: 'application/json', buffer: Buffer.from(log) });
+  const importedLog = await action(page, slow.getByRole('button', { name: '增量导入' }), 'POST', `/api/assets/${asset}/slow-logs/import`, 200);
+  assert.equal((await importedLog.json()).imported, 1);
+  await visible(slow, 'Query ID 163');
+
+  await details.getByRole('tab', { name: '执行计划', exact: true }).click();
+  const plans = page.locator('#asset-layer-sql-plans');
+  await plans.getByPlaceholder('Query ID').fill('163');
+  const plan = JSON.stringify([{ 'Plan': { 'Node Type': 'Result', 'Actual Total Time': 0.02, 'Actual Rows': 1 }, 'Query Identifier': 163 }]);
+  await plans.locator('input[type=file]').setInputFiles({ name: 'ui-plan.json', mimeType: 'application/json', buffer: Buffer.from(plan) });
+  let resumeRefresh;
+  const holdRefresh = new Promise(resolve => { resumeRefresh = resolve; });
+  await page.route(origin + `/api/assets/${asset}`, async route => { await holdRefresh; await route.continue(); }, { times: 1 });
+  const refreshed = page.waitForResponse(response => response.url() === origin + `/api/assets/${asset}`);
+  try {
+    await action(page, plans.getByRole('button', { name: '导入计划' }), 'POST', `/api/assets/${asset}/sql-plans`, 201);
+    await details.getByRole('tab', { name: '代理与访问入口', exact: true }).click();
+  } finally { resumeRefresh(); }
+  assert((await refreshed).ok());
+  const routing = page.locator('#asset-layer-routing-detail');
+  await routing.getByText('配置只读入口探测', { exact: true }).click();
+  await routing.getByLabel('入口类型').selectOption('haproxy');
+  await routing.getByLabel('入口主机与端口').fill('127.0.0.1:15434');
+  await action(page, routing.getByRole('button', { name: '保存入口配置' }), 'PATCH', `/api/assets/${asset}/routing`, 200);
+  await visible(routing, '等待新配置的首次采样。');
+  proof.push('Asset refresh and bulk onboarding, readiness and JSON export, edit and deletion, history and risk controls, log and plan import, and route editing across a concurrent refresh');
 
   await navigate(page, 'alerts');
   for (const section of ['active', 'rules', 'rca', 'delivery', 'silences']) await selectSection(page, 'alerts', section);

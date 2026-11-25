@@ -13,6 +13,7 @@ let viewerScoped = false;
 let selectedAsset = null;
 let selectedAssetLayer = null;
 let selectedAssetTrendHours = 24;
+let assetDetailRequest = 0;
 let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
@@ -699,7 +700,7 @@ async function refresh(runtimeOverride) {
   }
   renderInspections(assets, templates, schedules, runs);
   if (!document.activeElement || !$('rule-list').contains(document.activeElement)) renderRules(rules);
-  if (selectedAsset) await showAsset(selectedAsset);
+  if (selectedAsset) await showAsset(selectedAsset, undefined, true);
 }
 
 function renderAdminAudit(entries, target = $('admin-audit-list')) {
@@ -996,22 +997,30 @@ $('asset-run-readiness').addEventListener('click', () => {
 });
 $('asset-retry-readiness').addEventListener('click', () => void runAssetReadiness(readinessRetry));
 
-async function showAsset(id, layer) {
-  const preferredLayer = layer ?? (selectedAsset === id ? selectedAssetLayer : null);
-  const restoreLayerFocus = selectedAsset === id && document.activeElement?.getAttribute('role') === 'tab';
+async function showAsset(id, layer, background = false) {
+  const detail = $('detail');
+  const editing = () => detail.contains(document.activeElement) && document.activeElement.closest('form');
+  if (background && editing()) return;
+  const request = ++assetDetailRequest;
+  const valid = () => selectedAsset === id && assetDetailRequest === request && !(background && editing());
+  if (selectedAsset !== id) selectedAssetLayer = null;
   selectedAsset = id;
   const [{ asset }, { samples }, readiness] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
     api(`/api/assets/${id}/readiness`).catch(() => null)]);
-  if (selectedAsset !== id) return;
+  if (!valid()) return;
   if (asset.runtime === 'mysql') {
-    renderMySQLAsset($('detail'), asset, samples);
-    if (readiness) $('detail').append(readinessPanel(readiness));
+    renderMySQLAsset(detail, asset, samples);
+    if (readiness) detail.append(readinessPanel(readiness));
     return;
   }
-  const [{ performance }, { entries: slowLogs }, { plans }] = await Promise.all([
-    api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`), api(`/api/assets/${id}/sql-plans`)]);
-  if (selectedAsset !== id) return;
-  const detail = $('detail'); detail.replaceChildren();
+  const [{ performance }, { entries: slowLogs }, { plans }, settings, capacity] = await Promise.all([
+    api(`/api/assets/${id}/sql`), api(`/api/assets/${id}/slow-logs`), api(`/api/assets/${id}/sql-plans`),
+    pg18Store || viewerScoped ? api(`/api/assets/${id}/routing`).catch(() => null) : null,
+    pg18Store ? api(`/api/assets/${id}/capacity`) : null]);
+  if (!valid()) return;
+  const preferredLayer = layer ?? selectedAssetLayer;
+  const restoreLayerFocus = detail.contains(document.activeElement) && document.activeElement.getAttribute('role') === 'tab';
+  detail.replaceChildren();
   const sample = samples[0];
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
@@ -1053,7 +1062,7 @@ async function showAsset(id, layer) {
       button.addEventListener('click', () => { selectedAssetTrendHours = hours; void loadTrend(hours, bucketHours); }); periods.append(button);
     }
     trendHead.append(periods); detail.append(trendHead, trend);
-    await loadTrend(selectedAssetTrendHours, selectedAssetTrendHours === 168 ? 6 : 1);
+    void loadTrend(selectedAssetTrendHours, selectedAssetTrendHours === 168 ? 6 : 1);
     detail.append(historyTierChart(id));
     detail.append(assetRiskPanel(id));
   }
@@ -1145,12 +1154,9 @@ async function showAsset(id, layer) {
         'evidence'));
     } else detail.append(cell('p', `Patroni 未采集：${patroni.reason || patroni.status}`, 'warning'));
   }
-  if (pg18Store || viewerScoped) {
-    const settings = await api(`/api/assets/${id}/routing`).catch(() => null);
-    if (selectedAsset === id && settings) renderRoutingSettings(detail, asset, settings, currentSample);
-  }
-  if (pg18Store) {
-    const { forecast } = await api(`/api/assets/${id}/capacity`);
+  if (settings) renderRoutingSettings(detail, asset, settings, currentSample);
+  if (capacity) {
+    const { forecast } = capacity;
     const heading = cell('h3', '数据库容量趋势'); heading.id = 'capacity-detail'; detail.append(heading);
     if (forecast.status === 'estimate') {
       const gib = value => `${(value / 1024 ** 3).toFixed(2)} GiB`;
