@@ -2739,20 +2739,26 @@ async function openEvent(id, updateHash = true, monitoringReturn = '') {
 }
 
 let workbenchStatus = 'all';
+const dutyTaskLabels = { accept: '待接班', follow_up: '待跟进', delivery_failed: '投递失败', verify_recovery: '待核验恢复' };
 function renderAlerts(alerts, incidents) {
   const list = $('alert-list'); list.replaceChildren();
   if (incidents) {
     const select = cell('select');
     select.setAttribute('aria-label', '值班事件范围');
-    for (const [value, label] of [['all', '全部事件'], ['open', '处理中'], ['resolved', '最近 72 小时已恢复']]) {
+    const choices = [['all', '全部事件'], ['open', '处理中'], ['resolved', '最近 72 小时已恢复'], ...Object.entries(dutyTaskLabels)];
+    if (currentRole === 'operator') choices.push(['mine', '我的值班待办']);
+    for (const [value, label] of choices) {
       const option = cell('option', label); option.value = value; select.append(option);
     }
-    select.value = workbenchStatus;
+    select.value = choices.some(([value]) => value === workbenchStatus) ? workbenchStatus : 'all';
     const rows = cell('div', '', 'list');
     list.append(select, rows);
     const render = () => {
       rows.replaceChildren();
-      const filtered = incidents.filter(item => select.value === 'all' || item.status === select.value);
+      const filtered = incidents.filter(item => {
+        if (select.value === 'mine') return item.owner === currentUsername && item.tasks?.length;
+        return select.value === 'all' || item.status === select.value || item.tasks?.includes(select.value);
+      });
       if (!filtered.length) { rows.append(cell('p', '此范围没有值班事件。', 'empty')); return; }
       for (const item of filtered) {
         const line = cell('article', '', 'list-item');
@@ -2760,7 +2766,8 @@ function renderAlerts(alerts, incidents) {
         const action = cell('button', `${item.assetName} · ${item.title}`, 'event-button');
         action.addEventListener('click', () => openEvent(item.id));
         const state = item.status === 'resolved' ? '已恢复' : item.recoveringSignals ? '恢复观察中' : item.ack ? '已确认' : '待确认';
-        const tags = [state, item.severity || '级别未知', item.activeSignals > 0 && `${item.activeSignals} 项触发`,
+        const tags = [state, item.owner && `接班人 ${item.owner}`, ...(item.tasks || []).map(task => dutyTaskLabels[task]),
+          item.severity || '级别未知', item.activeSignals > 0 && `${item.activeSignals} 项触发`,
           item.missingSignals > 0 && `${item.missingSignals} 项缺采`, item.mutedSignals > 0 && `${item.mutedSignals} 项静默`,
           item.maintenance && '有维护或静默记录', item.handoff && '已交接', item.falsePositive && '已记录误报'].filter(Boolean);
         const time = `起点 ${formatTime(item.start)} · 最近触发 ${formatTime(item.lastTrigger)} · 恢复 ${formatTime(item.end)}`;
@@ -3712,6 +3719,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   alert_recovery_pending: '开始观察恢复', alert_recovery_cancelled: '异常再次出现',
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
+  external_ticket_receipt: '外部工单回执',
   collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', kingbase_lock_wait: '金仓锁等待', recovery_verified: '人工验证恢复',
   redis_eviction: 'Redis 缓存淘汰', redis_sentinel_failover: 'Sentinel 主节点异常或切换', redis_slots_unhealthy: 'Redis 槽位异常',
   etcd_leader_change: 'etcd Leader 中断或切换', etcd_health_degraded: 'etcd 健康检查异常', etcd_disk_latency: 'etcd 磁盘延迟',
@@ -5063,13 +5071,14 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   const { event, analysis, replay, investigation, relatedEvents = [], waitCaptures = [] } = await api(`/api/events/${id}`);
   const canRespond = ['admin', 'operator'].includes(currentRole);
   const canReviewOrders = canRespond || currentRole === 'approver';
-  const [eventAudit, workOrders, aiStatus, impact, handoff, integrations] = await Promise.all([
+  const [eventAudit, workOrders, aiStatus, impact, handoff, integrations, deliveryData] = await Promise.all([
     currentRole === 'admin' ? api(`/api/events/${id}/audit`).catch(() => null) : null,
     canReviewOrders ? api(`/api/events/${id}/work-orders`).catch(() => ({ orders: [] })) : { orders: [] },
     api('/api/ai/status').catch(() => ({ enabled: false })),
     replay ? api(`/api/events/${id}/impact`).catch(() => null) : null,
     canRespond ? api(`/api/events/${id}/handoff`).catch(() => null) : null,
-    currentRole === 'admin' && !currentOrganization ? api('/api/live/integrations').catch(() => null) : null
+    currentRole === 'admin' && !currentOrganization ? api('/api/live/integrations').catch(() => null) : null,
+    api(`/api/events/${id}/deliveries`).catch(() => null)
   ]);
   if (request !== eventRequest) return;
   if (selectedEvent !== id) eventSection = 'evidence';
@@ -5469,6 +5478,29 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   timelinePanel.append(reports);
   if (canRespond) timelinePanel.append(eventSharingPanel(event.id));
+  if (deliveryData?.deliveries?.length) {
+    const deliveryPanel = cell('section', '', 'response-form');
+    deliveryPanel.append(cell('h4', '本事件的通知投递'));
+    const labels = {pending: '待投递', delivered: '已送达', skipped: '已跳过', failed: '失败'};
+    for (const item of deliveryData.deliveries) {
+      const row = cell('div', '', 'list-item');
+      row.append(cell('p', `${item.channel} · ${labels[item.status]} · ${item.id}`));
+      if (item.status === 'failed' && canRespond) {
+        const retry = cell('button', '重试本次投递', 'ghost small-button'); retry.type = 'button';
+        retry.addEventListener('click', async () => {
+          retry.disabled = true;
+          try {
+            await api(`/api/events/${event.id}/deliveries/${item.id}/retry`, 'POST');
+            await showEvent(event.id);
+            await refresh();
+          } catch (error) { notice(error.message, true); retry.disabled = false; }
+        });
+        row.append(retry);
+      }
+      deliveryPanel.append(row);
+    }
+    responsePanel.append(deliveryPanel);
+  }
   if (handoff) {
     const panel = cell('section', '', 'response-form');
     panel.append(cell('h4', '值班交接'));
@@ -5731,14 +5763,18 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'notification_delivery' || evidence.kind === 'notification_retry') {
       const delivery = evidence.payload;
       const status = {pending: '等待重试', delivered: '已送达', skipped: '已跳过', failed: '失败'}[delivery.status] || delivery.status;
-      text = `${delivery.channel} · ${status} · 投递 ID ${delivery.deliveryId}`;
+      text = [`${delivery.channel} · ${status}`, `投递 ID ${delivery.deliveryId}`,
+        delivery.attempt && `第 ${delivery.attempt} 次`, delivery.nextAttemptAt && `下次 ${formatTime(delivery.nextAttemptAt)}`].filter(Boolean).join(' · ');
     }
-    const external = ['external_alert_firing', 'external_alert_resolved', 'external_ticket_linked'].includes(evidence.kind);
+    const external = ['external_alert_firing', 'external_alert_resolved', 'external_ticket_linked', 'external_ticket_receipt'].includes(evidence.kind);
     const risk = evidence.kind === 'risk_forecast' || evidence.kind === 'risk_forecast_cleared';
     if (risk) text = evidence.payload.title || riskMetricLabels[evidence.payload.metric] || '风险信号';
     if (external) {
       const input = evidence.payload;
-      text = [input.source, input.externalId, input.title].filter(Boolean).join(' · ');
+      const ticketStates = { acknowledged: '已确认', in_progress: '处理中', resolved: '已解决', reopened: '重新打开' };
+      text = [input.source, input.externalId, input.title, ticketStates[input.state],
+        input.receiptId && `回执 ${input.receiptId}`, input.deliveryId && `原投递 ${input.deliveryId}`,
+        input.externalOwner && `外部负责人 ${input.externalOwner}`, input.localOwner && `值班人 ${input.localOwner}`].filter(Boolean).join(' · ');
     }
     if (evidence.kind === 'rca_decision') text = `${evidence.payload.actor || '管理员'} ${evidence.payload.decision === 'confirmed' ? '确认' : '驳回'} ${evidence.payload.code}：${evidence.payload.reason}`;
     if (evidence.kind === 'ai_invocation') text = `${evidence.payload.actor === 'auto' ? '自动' : '手动'}${evidence.payload.purpose === 'question' ? '提问' : '摘要'} · ${evidence.payload.model || '模型'} ${evidence.payload.status === 'success' ? '已给出待核验建议' : evidence.payload.status === 'pending' ? '分析中' : '分析失败'} · 引用证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;

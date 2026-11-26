@@ -57,6 +57,10 @@ type operationsStore interface {
 	RecordExternalIncident(context.Context, string, storepkg.ExternalIncidentInput) (storepkg.ExternalIncidentResult, error)
 }
 
+type ticketReceiptStore interface {
+	RecordTicketReceipt(context.Context, string, storepkg.TicketReceipt) (storepkg.ExternalIncidentResult, error)
+}
+
 func requireOperationsToken(w http.ResponseWriter, r *http.Request, secret string) bool {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if ok && secret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
@@ -72,7 +76,7 @@ func registerOperations(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 	ops, _ := db.(operationsStore)
 	if cfg.Token != "" {
 		for _, route := range []string{"GET /api/v1/assets", "GET /api/v1/assets/{asset}", "GET /api/v1/events",
-			"GET /api/v1/events/{event}", "POST /api/v1/external-incidents"} {
+			"GET /api/v1/events/{event}", "POST /api/v1/external-incidents", "POST /api/v1/ticket-receipts"} {
 			mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 				if !requireOperationsToken(w, r, cfg.Token) {
 					return
@@ -100,6 +104,22 @@ func serveOperations(w http.ResponseWriter, r *http.Request, db operationsStore,
 	status := http.StatusOK
 	ctx := r.Context()
 	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/ticket-receipts":
+		receipts, ok := db.(ticketReceiptStore)
+		if !ok {
+			respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Ticket receipt storage unavailable"})
+			return
+		}
+		var input storepkg.TicketReceipt
+		if readJSONLimit(w, r, &input, 8192) != nil {
+			err = storepkg.ErrExternalInput
+			break
+		}
+		result, writeErr := receipts.RecordTicketReceipt(ctx, organization, input)
+		value, err = result, writeErr
+		if err == nil && !result.Duplicate {
+			status = http.StatusCreated
+		}
 	case r.Method == http.MethodPost:
 		var input storepkg.ExternalIncidentInput
 		if err := readJSONLimit(w, r, &input, 8192); err != nil {

@@ -79,6 +79,8 @@ var inspectionRetryPath = regexp.MustCompile(`^/api/inspection-runs/([0-9a-f]{8}
 var inspectionReportPath = regexp.MustCompile(`^/api/inspection-runs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/report$`)
 var silencePath = regexp.MustCompile(`^/api/silences/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 var notificationRetryPath = regexp.MustCompile(`^/api/notifications/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/retry$`)
+var eventDeliveryRetryPath = regexp.MustCompile(`^/api/events/(` + accessUUID + `)/deliveries/(` + accessUUID + `)/retry$`)
+var eventDeliveriesPath = regexp.MustCompile(`^/api/events/(` + accessUUID + `)/deliveries$`)
 
 type AssetChecker interface {
 	CheckAsset(context.Context, string, []byte) (storepkg.CheckResult, error)
@@ -840,6 +842,22 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			handleEventHandoff(w, r, namedDB, role, match[1], match[2], principal.ID)
 			return
 		}
+		if match := eventDeliveriesPath.FindStringSubmatch(r.URL.Path); match != nil && r.Method == http.MethodGet {
+			deliveryStore, ok := store.(interface {
+				EventDeliveries(context.Context, string) (any, error)
+			})
+			if !ok {
+				respond(w, http.StatusNotImplemented, map[string]string{"error": "Event deliveries unavailable"})
+				return
+			}
+			value, err := deliveryStore.EventDeliveries(r.Context(), match[1])
+			if err != nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Event deliveries unavailable"})
+			} else {
+				respond(w, http.StatusOK, value)
+			}
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/api/access/assets/export" && principal.ID != "" && viewerScope != nil {
 			reader, ok := store.(ScopedCollectionReader)
 			if !ok {
@@ -1326,6 +1344,28 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if r.Method == http.MethodPost {
+			if match := eventDeliveryRetryPath.FindStringSubmatch(r.URL.Path); match != nil {
+				if role != "admin" && role != "operator" {
+					respond(w, http.StatusForbidden, map[string]string{"error": "Operator access required"})
+					return
+				}
+				retry, ok := store.(interface {
+					RetryEventNotification(context.Context, string, string) (bool, error)
+				})
+				if !ok {
+					respond(w, http.StatusNotImplemented, map[string]string{"error": "Notification retry unavailable"})
+					return
+				}
+				queued, err := retry.RetryEventNotification(r.Context(), match[1], match[2])
+				if err != nil {
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Notification storage unavailable"})
+				} else if !queued {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Failed notification not found in this event"})
+				} else {
+					respond(w, http.StatusOK, map[string]bool{"ok": true})
+				}
+				return
+			}
 			if match := notificationRetryPath.FindStringSubmatch(r.URL.Path); match != nil {
 				retryDB, ok := store.(NotificationRetryStore)
 				if !ok {

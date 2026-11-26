@@ -117,10 +117,15 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			_ = tx.Rollback(ctx)
 			return processed, fmt.Errorf("update notification delivery: %w", err)
 		}
+		attempt := attempts
+		if sendErr == nil {
+			attempt++
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'notification_delivery',now(),
-				jsonb_build_object('deliveryId',$2::text,'channel',$3::text,'status',$4::text,'kind',$5::text))`,
-			item.EventID, item.ID, item.Channel, status, item.Kind); err != nil {
+				jsonb_build_object('deliveryId',$2::text,'channel',$3::text,'status',$4::text,'kind',$5::text,
+					'attempt',$6::int,'nextAttemptAt',(SELECT next_attempt_at FROM notification_outbox WHERE id=($2::text)::uuid AND status='pending')))`,
+			item.EventID, item.ID, item.Channel, status, item.Kind, attempt); err != nil {
 			_ = tx.Rollback(ctx)
 			return processed, fmt.Errorf("record notification delivery: %w", err)
 		}
@@ -133,16 +138,41 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 }
 
 func (s *Postgres) RetryNotification(ctx context.Context, id string) (bool, error) {
+	return s.retryNotification(ctx, id, "")
+}
+
+func (s *Postgres) RetryEventNotification(ctx context.Context, eventID, id string) (bool, error) {
+	if !evidenceUUID.MatchString(eventID) {
+		return false, nil
+	}
+	return s.retryNotification(ctx, id, eventID)
+}
+
+func (s *Postgres) EventDeliveries(ctx context.Context, eventID string) (any, error) {
+	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',n.id,'channel',n.channel,'status',n.status,
+		'attempts',n.attempts,'nextAttemptAt',n.next_attempt_at,'deliveredAt',n.delivered_at,'kind',x.kind)
+		FROM notification_outbox n JOIN evidence x ON x.id=n.evidence_id
+		JOIN event_keys k ON k.id=x.event_id JOIN assets a ON a.id=k.asset_id
+		WHERE k.id=$1 AND (nullif($2,'')::uuid IS NULL OR a.organization_id=nullif($2,'')::uuid)
+		ORDER BY (n.status='failed') DESC,x.observed_at DESC,n.id LIMIT 50`, eventID, OrganizationFromContext(ctx))
+	return map[string]any{"deliveries": rows}, err
+}
+
+func (s *Postgres) retryNotification(ctx context.Context, id, eventID string) (bool, error) {
 	if !silenceUUID.MatchString(id) {
 		return false, nil
 	}
 	result, err := s.pool.Exec(ctx, `WITH retried AS (
 		UPDATE notification_outbox SET status='pending',attempts=0,next_attempt_at=now(),last_error=NULL
-		WHERE id=$1 AND status='failed' RETURNING id,evidence_id,channel
+		WHERE id=$1 AND status='failed' AND EXISTS (
+			SELECT 1 FROM evidence x JOIN event_keys k ON k.id=x.event_id JOIN assets a ON a.id=k.asset_id
+			WHERE x.id=notification_outbox.evidence_id AND (nullif($2,'')::uuid IS NULL OR k.id=nullif($2,'')::uuid)
+			AND (nullif($3,'')::uuid IS NULL OR a.organization_id=nullif($3,'')::uuid)
+		) RETURNING id,evidence_id,channel
 	) INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 	SELECT gen_random_uuid(),e.event_id,'notification_retry',now(),
-		jsonb_build_object('deliveryId',r.id,'channel',r.channel,'status','pending')
-	FROM retried r JOIN evidence e ON e.id=r.evidence_id`, id)
+		jsonb_build_object('deliveryId',r.id,'channel',r.channel,'status','pending','actor',$4::text)
+	FROM retried r JOIN evidence e ON e.id=r.evidence_id`, id, eventID, OrganizationFromContext(ctx), accessActor(ctx, "admin"))
 	if err != nil {
 		return false, err
 	}

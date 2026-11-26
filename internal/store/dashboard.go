@@ -49,7 +49,7 @@ func (s *Postgres) readCollection(ctx context.Context, path string, assetIDs []s
 			FROM events e JOIN assets a ON a.id=e.asset_id /*asset_scope*/ ORDER BY e.started_at DESC LIMIT 200`},
 		"/api/alerts": {"alerts", `SELECT jsonb_build_object(
 			'assetId',s.asset_id,'assetName',a.name,'ruleId',s.rule_id,
-			'rule',r.definition_json,'state',s.state_json)
+			'rule',coalesce(s.state_json->'firingRule',r.definition_json),'state',s.state_json)
 			FROM alert_states s JOIN assets a ON a.id=s.asset_id
 			JOIN alert_rules r ON r.id=s.rule_id WHERE s.state_json->>'status'='firing' /*asset_scope*/`},
 		"/api/alert-workbench": {"incidents", alertWorkbenchSQL},

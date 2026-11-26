@@ -77,7 +77,7 @@ func (s *Postgres) OperationsEvent(ctx context.Context, organization, id string)
 			SELECT jsonb_agg(jsonb_build_object('id',x.id,'kind',x.kind,'observedAt',x.observed_at,'payload',x.payload_json)
 			                ORDER BY x.observed_at DESC,x.id)
 			FROM (SELECT id,kind,observed_at,payload_json FROM evidence WHERE event_id=e.id
-			      AND kind IN ('external_alert_firing','external_alert_resolved','external_ticket_linked')
+			      AND kind IN ('external_alert_firing','external_alert_resolved','external_ticket_linked','external_ticket_receipt')
 			      ORDER BY observed_at DESC,id LIMIT 100) x
 		),'[]'::jsonb))
 		FROM event_keys k JOIN events e ON e.id=k.id AND e.started_at=k.started_at

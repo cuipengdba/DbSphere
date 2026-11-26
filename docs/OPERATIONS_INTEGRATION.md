@@ -23,6 +23,7 @@
 | GET | `/api/v1/events` | 事件列表，支持 `status`。 |
 | GET | `/api/v1/events/{event}` | 事件状态、时间、控制台路径和最近 100 条外部证据。 |
 | POST | `/api/v1/external-incidents` | 记录外部告警触发、恢复或工单关联，返回 `eventId`、`evidenceId` 和状态。 |
+| POST | `/api/v1/ticket-receipts` | 保存已关联工单的状态回执，关联原事件、原投递和工单号。 |
 
 外部告警发出 `kind=alert`、`state=firing`，并传入来源、外部告警发生 ID、资产 ID 和标题。可指定已有 DbSphere `eventId`，也可由 DbSphere 创建事件。恢复时传入相同的来源、发生 ID 和资产，并使用 `state=resolved`。由外部告警创建的事件随该恢复消息关闭。已有数据库告警从自身规则判断恢复。一条外部告警恢复后再发生时使用新的外部发生 ID。
 
@@ -42,6 +43,14 @@
 ```
 
 首次记录返回 201。同一组织、来源、外部 ID、类型和生命周期阶段的重复请求返回原事件及证据 ID。将相同外部 ID 指向另一个资产或事件时返回 409。组织范围外的资源返回 404。
+
+## 工单回执与值班待办
+
+工单关联成功后，向 `/api/v1/ticket-receipts` 提交状态变更。必填字段为 `source`、`externalId`、`receiptId`、`deliveryId`、`assetId`、`eventId` 和 `state`。状态可用 `acknowledged`、`in_progress`、`resolved` 或 `reopened`。同一回执重试使用原 `receiptId` 和原请求内容，返回原事件与证据 ID。收到相同回执 ID 但字段不一致时返回 409。
+
+`externalOwner` 可记录工单平台上的负责人。`localOwner` 可填写在本组织有资产权限的 DbSphere 值班账号。回执和负责人映射写入事件时间线，事件交接仍由值班人员在原事件确认。
+
+在「告警与通知 → 当前告警」按待接班、待跟进、投递失败或待核验恢复筛选，并从列表打开原事件。事件「处置」页支持重试该事件的失败投递，时间线保留原投递 ID、每次投递结果及工单回执。
 
 ## 签名 Webhook
 

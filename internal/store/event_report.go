@@ -130,7 +130,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	for _, item := range data.Event.Evidence {
 		if !strings.HasPrefix(item.Kind, "ai_") &&
 			item.Kind != "operator_response" && item.Kind != "rca_decision" && item.Kind != "event_handoff" &&
-			!strings.HasPrefix(item.Kind, "work_order_") {
+			!strings.HasPrefix(item.Kind, "work_order_") && item.Kind != "external_ticket_receipt" {
 			ids = append(ids, item.ID)
 		}
 	}
@@ -161,7 +161,7 @@ func (s *Postgres) EventAIEvidence(ctx context.Context, id string) (string, []st
 	filtered := data.Event.Evidence[:0]
 	for _, item := range data.Event.Evidence {
 		if !strings.HasPrefix(item.Kind, "ai_") && item.Kind != "event_handoff" &&
-			!strings.HasPrefix(item.Kind, "work_order_") {
+			!strings.HasPrefix(item.Kind, "work_order_") && item.Kind != "external_ticket_receipt" {
 			filtered = append(filtered, item)
 		}
 	}
@@ -554,11 +554,41 @@ func renderEventMarkdown(data eventReportData) string {
 			out.WriteString("## 通知投递记录\n\n")
 		}
 		deliveries++
-		fmt.Fprintf(&out, "- %s · %s · %s · 投递 ID %s · %s\n", reportTime(&evidence.ObservedAt), evidence.Kind,
+		fmt.Fprintf(&out, "- %s · %s · %s · 投递 ID %s · %s", reportTime(&evidence.ObservedAt), evidence.Kind,
 			reportText(stringValue(payload["channel"])), reportText(stringValue(payload["deliveryId"])), reportText(stringValue(payload["status"])))
+		if attempt := number(payload["attempt"]); attempt > 0 {
+			fmt.Fprintf(&out, " · 第 %.0f 次", attempt)
+		}
+		out.WriteByte('\n')
 	}
 	if deliveries > 0 {
 		out.WriteString("\n")
+	}
+	tickets := 0
+	for _, evidence := range event.Evidence {
+		if evidence.Kind != "external_ticket_linked" && evidence.Kind != "external_ticket_receipt" {
+			continue
+		}
+		var ticket TicketReceipt
+		if json.Unmarshal(evidence.Payload, &ticket) != nil {
+			continue
+		}
+		if tickets == 0 {
+			out.WriteString("## 外部工单\n\n")
+		}
+		tickets++
+		fmt.Fprintf(&out, "- %s · %s/%s · %s · 证据 %s", reportTime(&evidence.ObservedAt), reportText(ticket.Source),
+			reportText(ticket.ExternalID), reportText(ticket.State), evidence.ID)
+		if ticket.ReceiptID != "" {
+			fmt.Fprintf(&out, " · 回执 %s · 投递 %s", reportText(ticket.ReceiptID), ticket.DeliveryID)
+		}
+		if ticket.LocalOwner != "" {
+			fmt.Fprintf(&out, " · 值班人 %s", reportText(ticket.LocalOwner))
+		}
+		out.WriteByte('\n')
+	}
+	if tickets > 0 {
+		out.WriteByte('\n')
 	}
 	out.WriteString("## 信号缺口\n\n")
 	if len(data.Analysis.MissingSignals) == 0 {

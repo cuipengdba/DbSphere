@@ -205,6 +205,27 @@ func TestPG18OperationsWebhookRetryAndExternalIncident(t *testing.T) {
 	if linked.EventID != original.EventID || !repeated.Duplicate || linked.EvidenceID != repeated.EvidenceID {
 		t.Fatalf("ticket did not return the original event: %+v %+v", linked, repeated)
 	}
+	receipt := store.TicketReceipt{Source: ticket.Source, ExternalID: ticket.ExternalID, ReceiptID: "status-change-1",
+		DeliveryID: original.DeliveryID, AssetID: asset, EventID: original.EventID, State: "in_progress", ExternalOwner: "support-desk"}
+	const receiptsPath = "/api/v1/ticket-receipts"
+	call("POST", receiptsPath, metricsToken, receipt, 401)
+	accepted := call("POST", receiptsPath, opsToken, receipt, 201)
+	duplicate := call("POST", receiptsPath, opsToken, receipt, 200)
+	var recorded, deduped struct{ Data store.ExternalIncidentResult }
+	if err := json.Unmarshal(accepted.Body.Bytes(), &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(duplicate.Body.Bytes(), &deduped); err != nil || !deduped.Data.Duplicate ||
+		recorded.Data.EvidenceID == "" || deduped.Data.EvidenceID != recorded.Data.EvidenceID || recorded.Data.EventID != original.EventID {
+		t.Fatalf("receipt did not preserve one incident and evidence ID: %+v %+v %v", recorded, deduped, err)
+	}
+	receipt.State = "resolved"
+	call("POST", receiptsPath, opsToken, receipt, 409)
+	receipt.ReceiptID = "status-change-2"
+	receipt.LocalOwner = "unmapped-operator"
+	call("POST", receiptsPath, opsToken, receipt, 404)
+	receipt.LocalOwner = ""
+	call("POST", receiptsPath, opsToken, receipt, 201)
 	external := store.ExternalIncidentInput{Source: "prometheus", ExternalID: "external-episode-1", Kind: "alert",
 		State: "firing", AssetID: asset, Title: "External alert fixture"}
 	opened := post(external, 201)
@@ -216,7 +237,8 @@ func TestPG18OperationsWebhookRetryAndExternalIncident(t *testing.T) {
 	external.AssetID = foreignAsset
 	post(external, 404)
 	event := call("GET", "/api/v1/events/"+linked.EventID, opsToken, nil, 200).Body.String()
-	if !strings.Contains(event, "DB-41") || !strings.Contains(event, linked.EvidenceID) || !strings.Contains(event, "/#incidents?event="+original.EventID) {
+	if !strings.Contains(event, "DB-41") || !strings.Contains(event, linked.EvidenceID) || !strings.Contains(event, "/#incidents?event="+original.EventID) ||
+		!strings.Contains(event, recorded.Data.EvidenceID) || !strings.Contains(event, original.DeliveryID) {
 		t.Fatal("event lookup omitted the attached receipt evidence")
 	}
 	call("GET", "/metrics", opsToken, nil, 401)
