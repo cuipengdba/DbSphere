@@ -128,16 +128,29 @@ func TestPG18HistoryTierPreservesEvidenceAndExactBuckets(t *testing.T) {
 	}
 	var result struct {
 		Buckets []struct {
-			Samples           int
-			Average, Min, Max float64
-			Hourly, Raw       bool
+			Samples                   int
+			Average, Min, Max         float64
+			Hourly, Raw               bool
+			RawSamples, HourlySamples int64
+		}
+		Coverage struct {
+			CoveredHours, MixedHours, EmptyHours int
+			RawSamples, HourlySamples            int64
+			Policy                               *HistoryTierPolicy
 		}
 	}
 	if err := json.Unmarshal(raw, &result); err != nil || len(result.Buckets) != 2 ||
 		result.Buckets[0].Samples != 3 || result.Buckets[0].Average != 23.333 || result.Buckets[0].Min != 10 ||
 		result.Buckets[0].Max != 40 || !result.Buckets[0].Hourly || !result.Buckets[0].Raw ||
-		result.Buckets[1].Average != 12 || result.Buckets[1].Hourly {
+		result.Buckets[0].RawSamples != 1 || result.Buckets[0].HourlySamples != 2 ||
+		result.Buckets[1].Average != 12 || result.Buckets[1].Hourly ||
+		result.Coverage.CoveredHours != 2 || result.Coverage.MixedHours != 1 || result.Coverage.EmptyHours != 47 ||
+		result.Coverage.RawSamples != 2 || result.Coverage.HourlySamples != 2 ||
+		result.Coverage.Policy == nil || result.Coverage.Policy.RawDays != 1 {
 		t.Fatalf("mixed-tier result changed units, totals or sample coverage: %s", raw)
+	}
+	if _, err := pg.ReadHistoryTier(tenant, other, "connections", params); !errors.Is(err, ErrAssetNotFound) {
+		t.Fatalf("cross-organization history access must return not found: %v", err)
 	}
 	if _, err := pg.PruneSamples(ctx, now.Add(-24*time.Hour), 1000); err != nil {
 		t.Fatal(err)

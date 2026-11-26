@@ -2953,6 +2953,53 @@ async function loadHistoryPolicies() {
   } catch (error) { target.replaceChildren(cell('p', error.message, 'warning')); }
 }
 
+$('recovery-inventory-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget, output = $('recovery-inventory-result');
+  const submit = form.querySelector('button');
+  const requested = form.elements.event.value.trim();
+  submit.disabled = true;
+  output.replaceChildren(cell('p', '正在核对监控库。', 'hint'));
+  try {
+    const result = await api('/api/admin/recovery-inventory?' + new URLSearchParams({event: requested}));
+    const {inventory, event: incident} = result;
+    const labels = {assets:'资产', rules:'告警规则', ruleRevisions:'规则修订', collectionJobs:'采集任务',
+      inspectionSchedules:'巡检计划', events:'事件', samples:'采样', hourlyBuckets:'小时汇总', logFiles:'日志文件',
+      logRecords:'日志记录', logArchives:'日志原档'};
+    output.replaceChildren(cell('p', `PostgreSQL ${inventory.serverVersion} · 架构版本 ${inventory.schemaVersion} · 核对于 ${formatTime(inventory.observedAt)}`),
+      cell('p', `采样时间范围 ${formatTime(inventory.sampleFrom)} 至 ${formatTime(inventory.sampleThrough)}`),
+      importTable(['核对项', '记录数'], Object.entries(labels).map(([key, label]) => [label, inventory.counts[key]])));
+    if (incident) {
+      const eventLink = cell('a', '打开原事件', 'monitor-link');
+      eventLink.href = '#incidents?' + new URLSearchParams({event: incident.id});
+      const sampleRows = incident.samples.slice(0, 100).map(sample => {
+        const link = cell('a', '查看原始采样', 'monitor-link');
+        link.href = '#sample?' + new URLSearchParams({asset: incident.assetId, sample: sample.id, return: 'incidents?' + new URLSearchParams({event: incident.id})});
+        return [sample.id, sample.available ? link : '原始采样缺失'];
+      });
+      const logRows = incident.logs.slice(0, 100).map(record => {
+        const link = cell('a', '查看原始日志', 'monitor-link');
+        link.href = '#logs?' + new URLSearchParams({batch: record.batchId, source: record.id, incident: incident.id});
+        return [record.id, record.available ? link : record.indexed ? '仅存日志索引' : '日志索引缺失'];
+      });
+      output.append(cell('p', `事件 ${incident.id} · ${incident.status === 'resolved' ? '已恢复' : '处理中'}`), eventLink);
+      if (sampleRows.length || logRows.length) output.append(importTable(['证据 ID', '状态'], [...sampleRows, ...logRows]));
+      else output.append(cell('p', '此事件没有已登记的原始采样或日志引用。', 'hint'));
+      if (incident.samples.length > 100 || incident.logs.length > 100) output.append(cell('p', '本页每类证据显示前 100 条。', 'hint'));
+    } else if (requested) output.append(cell('p', `当前监控库缺少事件 ${requested}。`, 'warning'));
+    const download = cell('button', '下载核对清单 JSON', 'ghost small-button');
+    download.type = 'button';
+    download.addEventListener('click', () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], {type: 'application/json'}));
+      const link = cell('a');
+      link.href = url; link.download = `dbsphere-recovery-${Date.now()}.json`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    output.append(download);
+  } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); }
+  finally { submit.disabled = false; }
+});
+
 function historyTierChart(assetId) {
   const panel = cell('details', '', 'settings-details');
   panel.append(cell('summary', '分层历史趋势'));
@@ -2972,12 +3019,17 @@ function historyTierChart(assetId) {
     output.replaceChildren(cell('p', '正在读取分层历史。', 'empty'));
     const query = new URLSearchParams({ metric: key, from: new Date(from).toISOString(), to: new Date(to).toISOString() });
     try {
-      const { buckets } = await api('/api/assets/' + assetId + '/history-tier?' + query);
+      const { buckets, coverage } = await api('/api/assets/' + assetId + '/history-tier?' + query);
       if (!output.isConnected || sequence !== request) return;
       const format = key === 'linuxCpuPercent' ? value => value.toFixed(1) + '%' :
         key.endsWith('Bytes') ? value => (value / (1024 * 1024)).toFixed(1) + ' MiB' :
         value => value.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
       output.replaceChildren(window.DbSphereMonitoring.historyChart(historyMetrics[key], buckets, from, to, format, load));
+      if (coverage) {
+        const {policy} = coverage;
+        output.prepend(cell('p', `覆盖 ${coverage.coveredHours} 小时 · 空白 ${coverage.emptyHours} 小时 · 混合 ${coverage.mixedHours} 小时 · 原始 ${coverage.rawSamples} 条 · 汇总 ${coverage.hourlySamples} 条 · 查询 ${Math.round(coverage.queryMs)} ms`, 'hint'),
+          cell('p', policy ? `原始保留 ${policy.rawDays} 天 · 小时汇总保留 ${policy.hourlyDays} 天 · 归档推进至 ${formatTime(policy.archiveThrough)}` : '此指标未配置分层保留。', 'hint'));
+      }
     } catch (error) {
       if (sequence === request) output.replaceChildren(cell('p', error.message, 'warning'));
     }

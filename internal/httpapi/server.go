@@ -815,6 +815,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if handleHistoryTier(w, r, store, role) {
 			return
 		}
+		if handleRecoveryInventory(w, r, store, role) {
+			return
+		}
 		if handleAssetRisk(w, r, store, role) {
 			return
 		}

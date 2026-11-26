@@ -186,6 +186,42 @@ func TestLogAnalysisUploadParseArchiveAndScope(t *testing.T) {
 		strings.Contains(reportText, "fixture-private") {
 		t.Fatalf("event failed to preserve sanitized log evidence: %s %v", reportText, err)
 	}
+	checkInventory := func(wantOriginal bool) {
+		t.Helper()
+		inventory, err := pg.RecoveryInventory(ctx, *event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var incident struct {
+			ID   string
+			Logs []struct {
+				ID                 string
+				Indexed, Available bool
+			}
+		}
+		if err := json.Unmarshal(inventory.(map[string]any)["event"].(json.RawMessage), &incident); err != nil {
+			t.Fatal(err)
+		}
+		if incident.ID != *event || len(incident.Logs) != 2 {
+			t.Fatalf("recovery inventory lost event or log references: %+v", incident)
+		}
+		for _, record := range incident.Logs {
+			if !record.Indexed || record.Available != (record.ID != id || wantOriginal) {
+				t.Fatalf("incorrect recovery evidence state: %+v", record)
+			}
+		}
+	}
+	checkInventory(true)
+	if _, err := pg.pool.Exec(ctx, `UPDATE log_files SET archive_expired_at=now() WHERE id=$1`, file); err != nil {
+		t.Fatal(err)
+	}
+	checkInventory(false)
+	if _, err := pg.pool.Exec(ctx, `UPDATE log_files SET archive_expired_at=NULL WHERE id=$1`, file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.RecoveryInventory(outOfScope, *event); !errors.Is(err, ErrRecoveryInventoryInput) {
+		t.Fatalf("organization-scoped recovery inventory was accepted: %v", err)
+	}
 	if _, err := pg.LogInvestigation(outOfScope, caseID); !errors.Is(err, ErrLogNotFound) {
 		t.Fatalf("cross-organization investigation exposed: %v", err)
 	}

@@ -60,6 +60,8 @@ func handleHistoryTier(w http.ResponseWriter, r *http.Request, store HealthStore
 		respond(w, http.StatusOK, value)
 	case errors.Is(err, storepkg.ErrHistoryTierInput):
 		respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid history metric or retention"})
+	case errors.Is(err, storepkg.ErrAssetNotFound):
+		respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
 	default:
 		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "History storage unavailable"})
 	}

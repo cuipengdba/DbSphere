@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"time"
@@ -184,6 +185,7 @@ func (s *Postgres) AdvanceHistoryTier(ctx context.Context, now time.Time, limit 
 }
 
 func (s *Postgres) ReadHistoryTier(ctx context.Context, asset, metric string, params url.Values) (any, error) {
+	started := time.Now()
 	from, to, err := timeRange(params, 0, 90*24*time.Hour)
 	if err != nil || !evidenceUUID.MatchString(asset) || !historyTierMetric(metric) ||
 		params.Get("to") == "" || !from.Equal(from.Truncate(time.Hour)) || !to.Equal(to.Truncate(time.Hour)) {
@@ -191,22 +193,66 @@ func (s *Postgres) ReadHistoryTier(ctx context.Context, asset, metric string, pa
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
+	var policy *HistoryTierPolicy
+	var rawDays, hourlyDays *int
+	var archiveThrough *time.Time
+	var organization string
+	err = s.pool.QueryRow(ctx, `SELECT a.organization_id::text,p.raw_days,p.hourly_days,p.archive_through
+		FROM assets a LEFT JOIN history_tier_policy p ON p.organization_id=a.organization_id AND p.metric=$2
+		WHERE a.id=$1 AND ($3::uuid IS NULL OR a.organization_id=$3)`, asset, metric, nullable(OrganizationFromContext(ctx))).
+		Scan(&organization, &rawDays, &hourlyDays, &archiveThrough)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAssetNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	effectiveFrom := from
+	if hourlyDays != nil {
+		policy = &HistoryTierPolicy{OrganizationID: organization, Metric: metric, RawDays: *rawDays,
+			HourlyDays: *hourlyDays, ArchiveThrough: *archiveThrough}
+		cutoff := started.UTC().Truncate(time.Hour).AddDate(0, 0, -*hourlyDays)
+		if cutoff.After(to) {
+			effectiveFrom = to
+		} else if cutoff.After(from) {
+			effectiveFrom = cutoff
+		}
+	}
 	values, err := s.queryJSON(ctx, `WITH bounds AS (
-		SELECT greatest($3::timestamptz,coalesce(date_trunc('hour',now(),'UTC')-make_interval(days=>p.hourly_days),$3)) AS start
-		FROM assets a LEFT JOIN history_tier_policy p ON p.organization_id=a.organization_id AND p.metric=$2 WHERE a.id=$1
+		SELECT dbsphere_tier_path($2) AS metric_path
 	), raw AS (
-		SELECT date_trunc('hour',s.collected_at,'UTC') AS bucket,(s.metrics_json#>dbsphere_tier_path($2))::numeric AS value
-		FROM samples s WHERE s.asset_id=$1 AND s.collected_at>=(SELECT start FROM bounds) AND s.collected_at<$4
-		AND jsonb_typeof(s.metrics_json#>dbsphere_tier_path($2))='number'
+		SELECT date_trunc('hour',s.collected_at,'UTC') AS bucket,(s.metrics_json#>b.metric_path)::numeric AS value
+		FROM samples s CROSS JOIN bounds b WHERE s.asset_id=$1 AND s.collected_at>=$3 AND s.collected_at<$4
+		AND jsonb_typeof(s.metrics_json#>b.metric_path)='number'
 	), partial AS (
 		SELECT bucket,count(*)::integer AS samples,sum(value) AS total,min(value) AS low,max(value) AS peak,
-		  true AS has_raw,false AS has_archive FROM raw GROUP BY bucket
+		  count(*) AS raw_samples,0::bigint AS hourly_samples FROM raw GROUP BY bucket
 		UNION ALL
-		SELECT bucket,samples,total,low,peak,false,true FROM history_tier_hours
-		WHERE asset_id=$1 AND metric=$2 AND bucket>=(SELECT start FROM bounds) AND bucket<$4
+		SELECT bucket,samples,total,low,peak,0::bigint,samples::bigint FROM history_tier_hours
+		WHERE asset_id=$1 AND metric=$2 AND bucket>=$3 AND bucket<$4
 	)
 	SELECT jsonb_build_object('bucket',bucket,'samples',sum(samples),'average',round(sum(total)/sum(samples),3),
-		'min',min(low),'max',max(peak),'raw',bool_or(has_raw),'hourly',bool_or(has_archive))
-	FROM partial GROUP BY bucket ORDER BY bucket`, asset, metric, from, to)
-	return map[string]any{"assetId": asset, "metric": metric, "buckets": values}, err
+		'min',min(low),'max',max(peak),'raw',sum(raw_samples)>0,'hourly',sum(hourly_samples)>0,
+		'rawSamples',sum(raw_samples),'hourlySamples',sum(hourly_samples))
+	FROM partial GROUP BY bucket ORDER BY bucket`, asset, metric, effectiveFrom, to)
+	if err != nil {
+		return nil, err
+	}
+	var rawSamples, hourlySamples int64
+	var mixed int
+	for _, value := range values {
+		var counts struct{ RawSamples, HourlySamples int64 }
+		if err := json.Unmarshal(value, &counts); err != nil {
+			return nil, err
+		}
+		rawSamples += counts.RawSamples
+		hourlySamples += counts.HourlySamples
+		if counts.RawSamples > 0 && counts.HourlySamples > 0 {
+			mixed++
+		}
+	}
+	coverage := map[string]any{"from": from, "to": to, "effectiveFrom": effectiveFrom, "policy": policy,
+		"coveredHours": len(values), "emptyHours": int(to.Sub(from)/time.Hour) - len(values), "mixedHours": mixed,
+		"rawSamples": rawSamples, "hourlySamples": hourlySamples, "queryMs": float64(time.Since(started).Microseconds()) / 1000}
+	return map[string]any{"assetId": asset, "metric": metric, "buckets": values, "coverage": coverage}, nil
 }
