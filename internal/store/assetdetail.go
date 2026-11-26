@@ -22,6 +22,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 		return s.collectionHistory(ctx, id, params)
 	case "pg-performance":
 		return s.pgPerformanceHistory(ctx, id, params)
+	case "engine-diagnosis":
+		return s.engineDiagnosis(ctx, id, params)
 	case "samples":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',id,'assetId',asset_id,'collectedAt',collected_at,'status',status,
