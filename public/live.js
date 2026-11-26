@@ -643,6 +643,16 @@
       parent.replaceChildren();
       label.textContent = '';
       if (!asset || !asset.sampleId || asset.engine !== 'postgres') {
+        if (['mysql', 'redis', 'etcd'].includes(asset?.engine)) {
+          const end = selection.end || Date.now();
+          const start = Math.max(selection.start || end - selection.minutes * minute, end - 24 * 60 * minute);
+          const point = points[focused] || points.findLast(row => row.latestSampleId);
+          const query = new URLSearchParams({asset: asset.id, from: new Date(start).toISOString(), to: new Date(end).toISOString()});
+          if (validId(point?.latestSampleId)) query.set('sample', point.latestSampleId);
+          const link = element('a', `打开 ${engineNames[asset.engine]} 专项诊断`, 'monitor-link');
+          link.href = '#engine-diagnosis?' + query;
+          parent.append(link);
+        }
         const name = {redis:'查看 Redis 慢命令和拓扑',kingbase:'查看金仓 SQL 指纹与锁链',etcd:'查看 etcd 成员和存储延迟'}[asset?.engine];
         if (name) {
           const button = element('button', name, 'ghost small-button');

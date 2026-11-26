@@ -16,6 +16,7 @@ let selectedAssetTrendHours = 24;
 let assetDetailRequest = 0;
 let sampleRequest;
 let collectionHistoryRequest;
+let engineDiagnosisRequest;
 let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
@@ -62,6 +63,7 @@ const views = {
   live: ['实时观测', ''],
   sample: ['原始采样', '查看采样时的指标、来源与采集状态。'],
   collection: ['采集历史', '核对计划任务、采集副本和原始采样。'],
+  'engine-diagnosis': ['引擎专项诊断', '按采样时间核对异常、同期指标和恢复证据。'],
   logs: ['日志分析', '按项目、实例与批次查看日志和原始证据。'],
   grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
@@ -124,6 +126,7 @@ function setView(route, updateHash = true) {
   showGrafanaView(selected === 'grafana' ? params : null);
   showSample(selected === 'sample' && currentRole ? params : null);
   void showCollectionHistory(selected === 'collection' && currentRole ? params : null);
+  void showEngineDiagnosis(selected === 'engine-diagnosis' && currentRole ? params : null);
   if (selected === 'assets' && currentRole === 'admin' && !currentOrganization) {
     $('asset-import-panel').dispatchEvent(new CustomEvent('onboarding-route', {detail: params.get('batch')}));
   }
@@ -601,6 +604,155 @@ function attachCollectionHistory(detail, assetID) {
   const heading = detail.querySelector('h3');
   if (heading) heading.after(link);
   else detail.prepend(link);
+}
+
+const engineDiagnosisNames = { mysql: 'MySQL', redis: 'Redis', etcd: 'etcd' };
+
+function attachEngineDiagnosis(detail, asset) {
+  if (!pg18Store) return;
+  const link = cell('a', `打开 ${engineDiagnosisNames[asset.runtime]} 专项诊断`, 'monitor-link');
+  link.href = '#engine-diagnosis?' + new URLSearchParams({asset: asset.id});
+  detail.querySelector('h3').after(link);
+}
+
+function renderEngineDiagnosisSample(engine, sample) {
+  const metrics = sample.data || {};
+  const interval = sample.interval || {};
+  const signals = new Map((sample.signals || []).map(signal => [signal.key, signal]));
+  const format = new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 2});
+  const reading = (value, unit = '') => Number.isFinite(value) ? format.format(value) + unit : '未采集';
+  const mib = value => reading(Number.isFinite(value) ? value / 1048576 : null, ' MiB');
+  const block = cell('div', '', 'monitor-table');
+  const table = (heading, columns, rows, signal) => {
+    block.append(cell('h4', heading));
+    if (rows?.length) block.append(importTable(columns, rows));
+    else block.append(cell('p', signal?.status === 'ok' ? '本次采样无记录。' : '采集缺口。', 'hint'));
+    if (signal?.status !== 'ok' && signal?.reason) block.append(cell('p', signal.reason, 'hint'));
+  };
+  if (engine === 'mysql') {
+    table('InnoDB 锁等待', ['等待线程', '阻塞线程', '对象', '锁模式'], metrics.lockWaits?.map(wait => [
+      wait.waitingThread || '未采集', wait.blockingThread || '未采集',
+      [wait.schema, wait.table].filter(Boolean).join('.') || '未采集', wait.mode || '未采集'
+    ]), signals.get('lockWaits'));
+    if (metrics.locksTruncated) block.append(cell('p', '原始采样只保留了部分锁等待。', 'hint'));
+    table('同期活跃事务', ['线程', '连接', '事务时长'], metrics.activeTransactions?.map(row => [
+      row.thread, row.session ?? '未采集', reading(row.ageMs, ' ms')
+    ]), signals.get('activeTransactions'));
+    table('同期累计 SQL 统计', ['指纹', '调用', '平均耗时', 'P95'], metrics.topSql?.map(row => [
+      row.digest, reading(row.calls), reading(row.meanMs, ' ms'), reading(row.p95Ms, ' ms')
+    ]), signals.get('sqlPerformance'));
+    table('同期复制状态', ['通道', '接收线程', '应用线程', '延迟等待', '最近 I/O 错误码'], metrics.replication?.map(row => [
+      row.name || '默认', row.receiver || '未采集', row.applier || '未采集',
+      reading(row.remainingDelaySeconds, ' s'), row.lastIoError ?? '未采集'
+    ]), signals.get('replication'));
+  } else if (engine === 'redis') {
+    const states = {baseline_missing: '缺少窗口基线', sample_gap: '上一采样失败', process_changed: 'Redis 进程已更换',
+      window_missing: '计数窗口不可用', counter_reset: '检测到计数器重置', observed: '已核对相邻采样'};
+    table('内存、淘汰与观测往返', ['指标', '观测值'], [
+      ['采样模式', metrics.mode || '未采集'], ['内存', mib(metrics.memoryBytes)],
+      ['内存上限', metrics.maxMemoryBytes === 0 ? '未限制' : mib(metrics.maxMemoryBytes)],
+      ['窗口淘汰', reading(interval.evicted, ' 次')], ['窗口命中率', reading(interval.hitPercent, '%')],
+      ['窗口拒绝连接', reading(interval.rejected, ' 次')], ['窗口长度', reading(interval.seconds, ' s')],
+      ['客户端 INFO 往返', reading(metrics.latencyMs, ' ms')], ['等待客户端', reading(metrics.blocked)],
+      ['窗口状态', states[sample.redisWindowState] || '未采集']
+    ]);
+  } else {
+    const health = metrics.health === true ? '通过' : metrics.health === false ? '异常' : '未采集';
+    table('成员与 Raft', ['指标', '观测值'], [
+      ['成员健康', health], ['采样成员', metrics.memberId || '未采集'],
+      ['Leader', metrics.leaderId || (metrics.hasLeader === 0 ? '暂无 Leader' : '未采集')],
+      ['提案积压', reading(metrics.proposalsPending)]
+    ]);
+    table('存储延迟与 API Server 同窗观测', ['来源', '窗口操作数', '平均耗时', 'P95 桶上界'], [
+      ['WAL fsync', interval.wal], ['后端提交', interval.backend],
+      [`Kubernetes API Server${metrics.apiContext ? ` · ${metrics.apiContext}` : ''}`, interval.kubernetes]
+    ].map(([label, metric]) => [label, reading(metric?.observations), reading(metric?.meanMs, ' ms'), reading(metric?.p95UpperMs, ' ms')]));
+  }
+  const missing = [...signals.values()].filter(signal => signal.status !== 'ok');
+  if (missing.length) table('采集缺口', ['来源', '状态', '原因'], missing.map(signal => [
+    signal.source || signal.key, signal.status || '未知', signal.reason || '未记录'
+  ]));
+  return block;
+}
+
+async function showEngineDiagnosis(params) {
+  engineDiagnosisRequest?.abort();
+  engineDiagnosisRequest = null;
+  if (!params) return;
+  const target = $('engine-diagnosis-content');
+  const id = params.get('asset');
+  if (!sampleUUID.test(id || '')) {
+    target.replaceChildren(cell('p', '缺少有效的资产 ID。', 'warning'));
+    return;
+  }
+  $('engine-diagnosis-return').href = '#assets?' + new URLSearchParams({asset: id});
+  const request = new AbortController();
+  engineDiagnosisRequest = request;
+  const range = new URLSearchParams();
+  for (const key of ['from', 'to']) if (params.get(key)) range.set(key, params.get(key));
+  target.replaceChildren(cell('p', '正在读取时段内的原始采样…', 'hint'));
+  try {
+    const [{asset}, history] = await Promise.all([
+      api(`/api/assets/${id}`, 'GET', undefined, request.signal),
+      api(`/api/assets/${id}/engine-diagnosis?${range}`, 'GET', undefined, request.signal)
+    ]);
+    if (request.signal.aborted) return;
+    const engine = engineDiagnosisNames[asset.runtime];
+    if (!engine) {
+      target.replaceChildren(cell('p', '此资产没有 MySQL、Redis 或 etcd 专项诊断。', 'empty'));
+      return;
+    }
+    const selected = history.samples.find(sample => sample.sampleId === params.get('sample')) ||
+      history.samples.find(sample => sample.events.length) || history.samples[0];
+    const windowRoute = new URLSearchParams({asset: id, from: history.from, to: history.to});
+    const toolbar = cell('div', '', 'log-actions');
+    for (const [hours, label] of [[1, '最近 1 小时'], [6, '最近 6 小时'], [24, '最近 24 小时']]) {
+      const to = new Date();
+      const from = new Date(to.getTime() - hours * 3600000);
+      const link = cell('a', label, 'monitor-inline-link');
+      link.href = '#engine-diagnosis?' + new URLSearchParams({asset: id, from: from.toISOString(), to: to.toISOString()});
+      toolbar.append(link);
+    }
+    target.replaceChildren(cell('h2', `${asset.name} · ${engine}`), toolbar,
+      cell('p', `${formatTime(history.from)} 至 ${formatTime(history.to)} · 同期指标按采样时刻对照。`, 'hint'));
+    if (!selected) {
+      target.append(cell('p', '此时段缺少留存采样。', 'empty'));
+      return;
+    }
+    if (history.truncated) target.append(cell('p', '显示时段内最近 100 条采样，可缩短时间窗查看。', 'hint'));
+    const picker = document.createElement('select');
+    picker.setAttribute('aria-label', '选择诊断采样');
+    const display = cell('section', '', 'evidence');
+    const describe = sample => {
+      const phases = new Set(sample.events.map(event => event.phase === 'recovery' ? '恢复证据' : '异常证据'));
+      return sample.status === 'ok' ? [...phases].join(' / ') || '已采样' : '采集失败';
+    };
+    for (const sample of history.samples) picker.add(new Option(`${formatTime(sample.at)} · ${describe(sample)}`, sample.sampleId));
+    const render = sample => {
+      const back = 'engine-diagnosis?' + new URLSearchParams([...windowRoute, ['sample', sample.sampleId]]);
+      display.replaceChildren(cell('h3', `${formatTime(sample.at)} · ${describe(sample)}`),
+        cell('p', [sample.version, sample.role || sample.adapterRole, sample.error].filter(Boolean).join(' · '), 'hint'));
+      const raw = cell('a', '查看原始采样', 'monitor-link');
+      raw.href = '#sample?' + new URLSearchParams({asset: id, sample: sample.sampleId, return: back});
+      display.append(raw);
+      for (const event of sample.events) {
+        const link = cell('a', `打开原事件 · ${event.title}`, 'monitor-link');
+        link.href = '#incidents?' + new URLSearchParams({event: event.id, return: back});
+        display.append(link);
+      }
+      if (sample.status === 'ok') display.append(renderEngineDiagnosisSample(asset.runtime, sample));
+      else display.append(cell('p', '本次采集缺少引擎指标。可在原始采样查看失败记录。', 'hint'));
+    };
+    picker.value = selected.sampleId;
+    picker.addEventListener('change', () => {
+      const sample = history.samples.find(row => row.sampleId === picker.value);
+      if (sample) render(sample);
+    });
+    target.append(picker, display);
+    render(selected);
+  } catch (error) {
+    if (!request.signal.aborted) target.replaceChildren(cell('p', error.message, 'warning'));
+  }
 }
 
 async function showCollectionHistory(params) {
@@ -1285,6 +1437,7 @@ async function showAsset(id, layer, background = false) {
   if (!valid()) return;
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
+    attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness));
     return;
@@ -1304,6 +1457,7 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'redis') {
     renderRedisAsset(detail, asset, samples);
+    attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
@@ -1311,6 +1465,7 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'etcd') {
     renderEtcdAsset(detail, asset, samples);
+    attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
@@ -3424,7 +3579,7 @@ function investigationParams(eventId) {
 }
 
 function eventMonitoringReturn(value) {
-  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs)(?:\?|$)/.test(value)) return '';
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs|engine-diagnosis)(?:\?|$)/.test(value)) return '';
   const [view, query] = value.split('?', 2);
   const params = new URLSearchParams(query);
   params.delete('incidentReturn');
@@ -4567,7 +4722,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (back) {
     const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' :
       back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' :
-        back.startsWith('logs') ? '返回日志调查' : '返回集群同窗', 'monitor-link incident-monitor-return');
+        back.startsWith('logs') ? '返回日志调查' : back.startsWith('engine-diagnosis') ?
+          '返回引擎专项诊断' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
