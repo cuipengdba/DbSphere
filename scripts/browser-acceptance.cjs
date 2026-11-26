@@ -579,9 +579,10 @@ async function operations(page, asset) {
   const preview = await action(page, manifest.getByRole('button', { name: '预览变更' }), 'POST', '/api/assets/import/preview', 200);
   assert((await preview.json()).canApply, await preview.text());
   await visible(page.locator('#asset-import-status'), '可应用');
-  await action(page, page.locator('#asset-import-apply'), 'POST', '/api/assets/import/apply', 200);
+  const applied = await action(page, page.locator('#asset-import-apply'), 'POST', '/api/assets/import/apply', 200);
+  const { batchId } = await applied.json();
   await visible(page.locator('#asset-import-status'), '已应用 1 项');
-  await action(page, page.locator('#asset-import-probe'), 'POST', '/api/assets/import/probe', 200);
+  await action(page, page.locator('#asset-import-probe'), 'POST', `/api/assets/import/batches/${batchId}/check`, 200);
   await page.locator('#asset-search').fill(importedName);
   const imported = page.locator('#asset-list article').filter({ hasText: importedName });
   await imported.getByRole('button', { name: '编辑', exact: true }).click();

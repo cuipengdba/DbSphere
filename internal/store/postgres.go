@@ -516,6 +516,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateCollectionFleetHealth(ctx, tx); err != nil {
 		return fmt.Errorf("migrate collection fleet health: %w", err)
 	}
+	if err := migrateAssetOnboarding(ctx, tx); err != nil {
+		return fmt.Errorf("migrate asset onboarding: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

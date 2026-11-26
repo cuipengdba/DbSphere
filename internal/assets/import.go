@@ -19,6 +19,7 @@ type ImportRequest struct {
 	Format        string `json:"format"`
 	Content       string `json:"content"`
 	Revision      string `json:"revision,omitempty"`
+	BatchID       string `json:"batchId,omitempty"`
 	CredentialRef string `json:"credentialRef,omitempty"`
 	Username      string `json:"username,omitempty"`
 	Discover      bool   `json:"discover,omitempty"`
@@ -67,20 +68,37 @@ func ParseImport(request ImportRequest) ([]Declaration, error) {
 		item := &declarations[i]
 		item.ID = strings.ToLower(strings.TrimSpace(item.ID))
 		item.Name, item.Host = strings.TrimSpace(item.Name), strings.TrimSpace(item.Host)
+		if item.Runtime == "" {
+			item.Runtime = "managed"
+		}
 		if item.Port == 0 {
-			item.Port = 5432
+			item.Port = map[string]int{RuntimeMySQL: 3306, RuntimeRedis: 6379, RuntimeEtcd: 2379, RuntimeDM8: 5236, RuntimeKingbase: 54321}[item.Runtime]
+			if item.Port == 0 {
+				item.Port = 5432
+			}
 		}
 		if item.Database == "" {
-			item.Database = "postgres"
+			switch item.Runtime {
+			case RuntimeRedis:
+				item.Database = "0"
+			case RuntimeEtcd:
+				item.Database = "etcd"
+			case RuntimeDM8:
+				item.Database = "DAMENG"
+			case RuntimeMySQL:
+				item.Database = "mysql"
+			default:
+				item.Database = "postgres"
+			}
 		}
 		if item.Username == "" {
 			item.Username = request.Username
 		}
 		if item.SSLMode == "" {
 			item.SSLMode = "require"
-		}
-		if item.Runtime == "" {
-			item.Runtime = "managed"
+			if item.Runtime == RuntimeDM8 {
+				item.SSLMode = "disable"
+			}
 		}
 		if item.CredentialRef == "" || request.CredentialRef != "" && item.ID != "" && item.CredentialRef == "asset:"+item.ID {
 			item.CredentialRef = request.CredentialRef

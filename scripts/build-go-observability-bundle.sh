@@ -23,11 +23,15 @@ tail -n +"$payload" "$archive" | tar -xz -C "$stage"
 source "$stage/bundle.env"
 version="$DBSPHERE_GO_OFFLINE_VERSION"
 arch="$DBSPHERE_GO_OFFLINE_ARCH"
-case "$(uname -m):$arch" in x86_64:amd64|aarch64:arm64|arm64:arm64) ;; *) exit 1 ;; esac
+case "$arch" in amd64|arm64) ;; *) exit 1 ;; esac
 test "$(basename -- "$archive")" = "DbSphere-go-offline-$version-linux-$arch.run"
 
 prom_version=3.13.5
-prom_source="prom/prometheus:v$prom_version@sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9"
+case "$arch" in
+  amd64) prom_digest=dc30314819e04a1a3d18d0b37eaa9c8e4e18f33f026e3e2d81bf127c7cddcd55 ;;
+  arm64) prom_digest=1ced961cbefad14f6c04f564ebf3902b7ba963cf1604cb1666bacdcd540e78bc ;;
+esac
+prom_source="prom/prometheus@sha256:$prom_digest"
 prom_image="dbsphere/offline-prometheus:$prom_version"
 docker pull --platform "linux/$arch" "$prom_source"
 docker image tag "$prom_source" "$prom_image"
@@ -44,7 +48,11 @@ printf 'Prometheus v%s\nContainer %s\nSource https://github.com/prometheus/prome
 printf 'DBSPHERE_OFFLINE_PROM_IMAGE=%s\n' "$prom_image" >> "$stage/bundle.env"
 if [[ -d "$repo_dir/deploy/observability/grafana" ]]; then
   grafana_version=13.3.1
-  grafana_source="grafana/grafana:$grafana_version@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf"
+  case "$arch" in
+    amd64) grafana_digest=1c88285f1dd391a62232c010e6c224846e6a73bdc583b3365be2eba614b7919e ;;
+    arm64) grafana_digest=dd3f1c1880a26ef8871476613b919864065a51c842f3cd85d280193e6e25c241 ;;
+  esac
+  grafana_source="grafana/grafana@sha256:$grafana_digest"
   grafana_image="dbsphere/offline-grafana:$grafana_version"
   docker pull --platform "linux/$arch" "$grafana_source"
   docker image tag "$grafana_source" "$grafana_image"

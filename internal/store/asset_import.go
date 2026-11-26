@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,7 @@ type importPlan struct {
 	Rows     []importRow `json:"rows"`
 	Revision string      `json:"revision"`
 	CanApply bool        `json:"canApply"`
+	BatchID  string      `json:"batchId,omitempty"`
 }
 
 func (s *Postgres) ImportAssets(ctx context.Context, request assets.ImportRequest, apply bool, key []byte) (any, error) {
@@ -52,14 +54,36 @@ func (s *Postgres) ImportAssets(ctx context.Context, request assets.ImportReques
 	if err != nil {
 		return nil, err
 	}
+	if request.BatchID != "" && (!apply || !evidenceUUID.MatchString(request.BatchID)) {
+		return nil, assets.ErrInvalidImport
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	var requestDigest string
 	if apply {
 		if _, err := tx.Exec(ctx, "LOCK TABLE assets IN SHARE ROW EXCLUSIVE MODE"); err != nil {
 			return nil, err
+		}
+		if request.BatchID != "" {
+			content, err := json.Marshal(request)
+			if err != nil {
+				return nil, err
+			}
+			requestDigest = importDigest(key, content)
+			var priorDigest string
+			var prior json.RawMessage
+			err = tx.QueryRow(ctx, `SELECT request_digest,plan FROM asset_onboarding_batches WHERE id=$1`, request.BatchID).Scan(&priorDigest, &prior)
+			switch {
+			case err == nil && hmac.Equal([]byte(priorDigest), []byte(requestDigest)):
+				return prior, nil
+			case err == nil:
+				return nil, ErrAssetImportConflict
+			case !errors.Is(err, pgx.ErrNoRows):
+				return nil, err
+			}
 		}
 	}
 	known, err := importAssetRows(ctx, tx, items)
@@ -89,6 +113,12 @@ func (s *Postgres) ImportAssets(ctx context.Context, request assets.ImportReques
 					return nil, ErrAssetImportConflict
 				}
 				plan.Rows[i].ID = placed.ID
+			}
+		}
+		if request.BatchID != "" {
+			plan.BatchID = request.BatchID
+			if err := recordOnboardingBatch(ctx, tx, plan, requestDigest); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -160,12 +190,33 @@ func importEndpoint(input assets.Input) string {
 	return fmt.Sprintf("%s:%d/%s", strings.ToLower(input.Host), input.Port, input.Database)
 }
 
+func importEngine(runtime string) string {
+	if assets.IsPostgreSQLRuntime(runtime) {
+		return "postgres"
+	}
+	return runtime
+}
+
+func importTarget(input assets.Input) string {
+	org := input.OrganizationID
+	if org == "" {
+		org = DefaultOrganizationID
+	}
+	return org + "/" + importEngine(input.Runtime) + "/" + importEndpoint(input)
+}
+
+func importDigest(key, raw []byte) string {
+	digest := hmac.New(sha256.New, key)
+	digest.Write(raw)
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
 func makeImportPlan(items []assets.Declaration, known []importAsset, profiles []assets.Input, key []byte) importPlan {
 	byID := map[string]importAsset{}
 	byEndpoint := map[string][]importAsset{}
 	for _, entry := range known {
 		byID[entry.ID] = entry
-		endpoint := importEndpoint(entry.Input)
+		endpoint := importTarget(entry.Input)
 		byEndpoint[endpoint] = append(byEndpoint[endpoint], entry)
 	}
 	plan := importPlan{CanApply: true, Rows: make([]importRow, len(items))}
@@ -174,30 +225,29 @@ func makeImportPlan(items []assets.Declaration, known []importAsset, profiles []
 	for i, item := range items {
 		row := importRow{Index: i + 1, ID: item.ID, Name: item.Name, Endpoint: importEndpoint(item.Input), Runtime: item.Runtime}
 		current := byID[item.ID]
-		matched := byEndpoint[row.Endpoint]
+		if item.OrganizationID == "" && current.ID != "" {
+			item.OrganizationID = current.OrganizationID
+		}
+		target := importTarget(item.Input)
+		matched := byEndpoint[target]
 		if item.ID == "" && len(matched) == 1 {
 			current = matched[0]
 			row.ID = current.ID
 		}
-		sameExplicitTarget := item.ID != "" && current.ID != "" && importEndpoint(current.Input) == row.Endpoint
+		sameExplicitTarget := item.ID != "" && current.ID != "" && importTarget(current.Input) == target
 		switch {
 		case item.Issue != "":
 			row.Action, row.Reason = "invalid", item.Issue
-		case item.Input.Runtime == assets.RuntimeMySQL:
-			row.Action, row.Reason = "invalid", "MySQL 预览资产使用单实例纳管入口"
-		case item.Input.Runtime == assets.RuntimeDM8:
-			row.Action, row.Reason = "invalid", "达梦 DM8 资产使用单实例纳管入口"
-		case item.Input.Runtime == assets.RuntimeKingbase:
-			row.Action, row.Reason = "invalid", "金仓 V9 资产使用单实例纳管入口"
-		case item.Input.Runtime == assets.RuntimeRedis:
-			row.Action, row.Reason = "invalid", "Redis 资产使用单实例纳管入口"
-		case item.Input.Runtime == assets.RuntimeEtcd:
-			row.Action, row.Reason = "invalid", "etcd 资产使用单实例纳管入口"
 		case item.ID != "" && !evidenceUUID.MatchString(item.ID) || item.Input.Validate() != nil:
 			row.Action, row.Reason = "invalid", "资产标识或连接参数无效"
+		case item.OrganizationID != "" && !evidenceUUID.MatchString(item.OrganizationID):
+			row.Action, row.Reason = "invalid", "组织标识无效"
+		case current.ID != "" && (importEngine(current.Runtime) != importEngine(item.Runtime) ||
+			item.OrganizationID != "" && current.OrganizationID != "" && current.OrganizationID != item.OrganizationID):
+			row.Action, row.Reason = "conflict", "原资产的数据库类型或所属组织不同"
 		case !sameExplicitTarget && (len(matched) > 1 || len(matched) == 1 && matched[0].ID != row.ID):
 			row.Action, row.Reason = "conflict", "目标连接已对应其他资产或有多个匹配"
-		case !sameExplicitTarget && used["endpoint/"+row.Endpoint] || row.ID != "" && used["id/"+row.ID]:
+		case !sameExplicitTarget && used["endpoint/"+target] || row.ID != "" && used["id/"+row.ID]:
 			row.Action, row.Reason = "conflict", "清单中重复声明同一连接或资产 ID"
 		default:
 			profile, changes, err := importProfile(item, current, byID, key)
@@ -214,15 +264,15 @@ func makeImportPlan(items []assets.Declaration, known []importAsset, profiles []
 		}
 		plan.CanApply = plan.CanApply && row.Action != "conflict" && row.Action != "invalid"
 		plan.Rows[i] = row
-		used["endpoint/"+row.Endpoint] = true
+		used["endpoint/"+target] = true
 		if row.ID != "" {
 			used["id/"+row.ID] = true
 		}
-		fingerprints[i] = []any{row, canonicalProfile(current.Input), canonicalProfile(profiles[i]), item.CredentialRef}
+		fingerprints[i] = []any{row, canonicalProfile(current.Input), canonicalProfile(profiles[i]), item.CredentialRef,
+			importDigest(key, []byte(profiles[i].Password))}
 	}
 	raw, _ := json.Marshal(fingerprints)
-	digest := sha256.Sum256(raw)
-	plan.Revision = hex.EncodeToString(digest[:])
+	plan.Revision = importDigest(key, raw)
 	return plan
 }
 
@@ -293,6 +343,9 @@ func importProfile(item assets.Declaration, current importAsset, byID map[string
 
 func canonicalProfile(profile assets.Input) map[string]any {
 	profile.Password = ""
+	if profile.OrganizationID == "" {
+		profile.OrganizationID = DefaultOrganizationID
+	}
 	profile.ClusterName, profile.Environment = profile.MonitoringClusterName(), profile.MonitoringEnvironment()
 	if profile.ClusterName != nil && *profile.ClusterName == "" {
 		profile.ClusterName = nil
@@ -315,7 +368,7 @@ func (s *Postgres) ExportAssets(ctx context.Context, after string) (any, error) 
 	if after != "" && !evidenceUUID.MatchString(after) {
 		return nil, assets.ErrInvalidImport
 	}
-	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime IN ('linux','k8s','managed') AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
+	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd') AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
 	if err != nil {
 		return nil, err
 	}
