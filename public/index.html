@@ -102,9 +102,30 @@
           <button type="button" class="ghost" data-logs="open-comparison" aria-pressed="false">跨批次对比</button>
           <button type="button" class="ghost" data-logs="open-health">项目健康</button>
           <button type="button" class="ghost" data-logs="open-tasks">导入任务</button>
+          <button type="button" class="ghost" data-logs="open-sources">持续接入</button>
           <a class="monitor-link" data-logs="return-incident" hidden>返回同一事件</a>
         </div>
         <p data-logs="status" class="hint" role="status"></p>
+        <dialog data-logs="source-dialog" class="log-dialog">
+          <h2>持续接入</h2>
+          <p data-logs="source-status" class="hint" role="status"></p>
+          <div data-logs="source-list" class="log-scroll"></div>
+          <form data-logs="source-form" class="form-grid">
+            <label>来源名称<input name="name" required maxlength="120"></label>
+            <label>日志格式<select name="format" required></select></label>
+            <label>日志时区<input name="zone" value="UTC" maxlength="64" required></label>
+            <label>文本日志前缀<input name="prefix" maxlength="400"></label>
+            <button type="submit">生成来源凭据</button>
+          </form>
+          <div data-logs="source-credential" hidden>
+            <p>请保存本次生成的凭据。关闭窗口后只显示来源 ID。</p>
+            <label>来源凭据<textarea readonly rows="3"></textarea></label>
+          </div>
+          <div class="log-actions">
+            <button type="button" class="ghost" data-logs="refresh-sources">刷新游标</button>
+            <button type="button" class="ghost" data-logs="close-sources">关闭</button>
+          </div>
+        </dialog>
         <section class="panel log-section log-comparison" data-logs="comparison" hidden>
           <div class="log-comparison-top">
             <label>基线批次<select data-logs="baseline"></select></label>

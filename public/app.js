@@ -4549,6 +4549,96 @@ function eventLogSearch(event, refreshEvent) {
   return panel;
 }
 
+function eventLogRetest(event) {
+  const panel = cell('details', '', 'settings-details');
+  const output = cell('div');
+  const message = cell('p', '', 'hint');
+  message.setAttribute('role', 'status');
+  const route = `/api/log-analysis/events/${event.id}/retests`;
+  panel.append(cell('summary', '事件内 SQL 复测'), message, output);
+  const statuses = {met: '已达标', missed: '未达标', regressed: '性能回退', insufficient: '覆盖不足'};
+  const select = (name, label) => {
+    const wrapper = cell('label', label);
+    const input = document.createElement('select');
+    input.name = name;
+    wrapper.append(input);
+    return [wrapper, input];
+  };
+  const showResult = result => {
+    const report = cell('section', '', 'evidence monitor-table');
+    report.append(cell('h4', `${statuses[result.status]} · ${result.reason}`));
+    report.append(cell('p', [`指纹 ${result.fingerprint || '未记录'}`, result.database, result.application,
+      `P95 目标 ${result.targetP95Ms} ms`].filter(Boolean).join(' · '), 'hint'));
+    report.append(importTable(['批次', '采样时间窗', '采集口径', '日志调用数 / 已计时', '平均 / P95', '原始记录'],
+      [['基线', result.baseline], ['复测', result.current]].map(([label, sample]) => {
+        let original = '原文缺失';
+        if (sampleUUID.test(sample.recordId || '')) {
+          original = cell('a', `查看${label}原文`, 'monitor-link');
+          original.href = '#logs?' + new URLSearchParams({batch: sample.batchId, source: sample.recordId, incident: event.id});
+        }
+        const milliseconds = value => Number.isFinite(value) ? `${value.toFixed(2)} ms` : '缺采';
+        return [label, sample.from && sample.to ? `${formatTime(sample.from)} – ${formatTime(sample.to)}` : '缺采',
+          [sample.coverage, sample.coverageNote].filter(Boolean).join(' · ') || '待确认',
+          `${sample.calls ?? '—'} / ${sample.timed}`, `${milliseconds(sample.meanMs)} / ${milliseconds(sample.p95Ms)}`, original];
+      })));
+    return report;
+  };
+  let loaded = false;
+  panel.addEventListener('toggle', async () => {
+    if (!panel.open || loaded) return;
+    loaded = true;
+    message.textContent = '正在读取本事件的 SQL 调查…';
+    try {
+      const {cases} = await api(route);
+      if (!panel.isConnected) return;
+      message.textContent = cases.length ? '选择已采纳的 SQL 及同实例的两个批次。' : '请先从同窗日志采纳 SQL 到本事件。';
+      if (!cases.length) { loaded = false; return; }
+      const form = cell('form', '', 'log-toolbar');
+      const [sqlField, sql] = select('caseId', '复测 SQL');
+      const [beforeField, before] = select('baselineBatchId', '基线批次');
+      const [afterField, after] = select('currentBatchId', '复测批次');
+      const targetField = cell('label', 'P95 目标（毫秒）');
+      const target = document.createElement('input');
+      target.name = 'targetP95Ms'; target.type = 'number'; target.required = true;
+      target.min = '0.01'; target.max = '3600000'; target.step = 'any';
+      targetField.append(target);
+      const save = cell('button', '保存到原事件');
+      save.type = 'submit';
+      const resultPanel = cell('div');
+      const setBatches = () => {
+        const item = cases.find(candidate => candidate.id === sql.value);
+        const choice = batch => new Option([batch.name, batch.coverageNote].filter(Boolean).join(' · '), batch.id);
+        before.replaceChildren(...item.batches.map(choice));
+        after.replaceChildren(...item.batches.map(choice));
+        if (item.batches.some(batch => batch.id === item.baselineBatchId)) before.value = item.baselineBatchId;
+        const other = item.batches.find(batch => batch.id !== before.value);
+        if (other) after.value = other.id;
+        save.disabled = item.batches.length < 2;
+        resultPanel.replaceChildren();
+      };
+      sql.replaceChildren(...cases.map(item => new Option(item.sql || item.fingerprint, item.id)));
+      sql.addEventListener('change', setBatches);
+      setBatches();
+      form.append(sqlField, beforeField, afterField, targetField, save);
+      form.addEventListener('submit', async e => {
+        e.preventDefault();
+        if (before.value === after.value) { message.textContent = '请选择两个不同的批次。'; return; }
+        save.disabled = true;
+        try {
+          const result = await api(route, 'POST', {caseId: sql.value, baselineBatchId: before.value,
+            currentBatchId: after.value, targetP95Ms: Number(target.value)});
+          if (!panel.isConnected) return;
+          message.textContent = '复测结果已保存到当前事件。';
+          resultPanel.replaceChildren(showResult(result));
+        } catch (error) { message.textContent = error.message; }
+        finally { save.disabled = false; }
+      });
+      output.replaceChildren(form, resultPanel);
+    } catch (error) { message.textContent = error.message; loaded = false; }
+  });
+  return panel;
+}
+
 function incidentDependencyPanel(data, event) {
   const panel = cell('section', '', 'incident-dependency');
   panel.append(cell('h4', '跨数据库调用与基础设施证据'));
@@ -4766,7 +4856,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
         notice('日志已采纳到当前事件。');
       }
     });
-    evidencePanel.append(search);
+    evidencePanel.append(search, eventLogRetest(event));
   }
   const responsePanel = content.get('response');
   const timelinePanel = content.get('timeline');

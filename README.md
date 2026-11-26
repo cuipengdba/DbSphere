@@ -2,18 +2,20 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.14.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.15.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.14.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.14.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.15.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.15.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵)
 
 ## 支持矩阵
 
 | 纳管数据源 | 兼容版本或模式 | 主要采集与诊断能力 |
 | --- | --- | --- |
 | PostgreSQL | 14–19 | 连接、事务、锁与等待、WAL、复制、容量及 SQL 统计。 |
+| PostgreSQL 日志持续接入 | v3.15.0 新增 | 按文件代次和确认偏移接收完整日志记录。格式和验收范围见详细矩阵。 |
 | MySQL | 8.4 LTS | InnoDB 缓冲池、事务等待、SQL 指纹及复制通道。 |
+| MySQL 日志持续接入 | 8.4 LTS · v3.15.0 新增 | 接收 FILE 慢日志，按来源确认偏移，保留原文与事件复测证据。 |
 | 瀚高数据库 | 安全版 4.5.9，兼容内核 12.7 | 产品识别、会话等待及 SQL 指纹。 |
 | 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |
 | 金仓 KingbaseES | V9，PostgreSQL 兼容模式 | 会话等待、SQL 指纹、归档及流复制状态。 |
