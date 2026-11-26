@@ -6,7 +6,24 @@
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.11.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.11.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.11.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.11.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵)
+
+## 支持矩阵
+
+| 纳管数据源 | 兼容版本或模式 | 主要采集与诊断能力 |
+| --- | --- | --- |
+| PostgreSQL | 14–19 | 连接、事务、锁与等待、WAL、复制、容量及 SQL 统计。 |
+| MySQL | 8.4 LTS | InnoDB 缓冲池、事务等待、SQL 指纹及复制通道。 |
+| 瀚高数据库 | 安全版 4.5.9，兼容内核 12.7 | 产品识别、会话等待及 SQL 指纹。 |
+| 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |
+| 金仓 KingbaseES | V9，PostgreSQL 兼容模式 | 会话等待、SQL 指纹、归档及流复制状态。 |
+| Redis OSS | 6.2 · v3.11.0 新增 | OPS、内存、命中与淘汰、慢命令及 Cluster 槽位。Redis 6.2.24 已验收单节点和三主节点 Cluster。 |
+| Redis OSS | 7.2、8.4 | 单节点、主从、Sentinel 和 Cluster 指标，按 ACL 权限读取。 |
+| etcd | 3.5、3.6 | 成员、Raft、WAL 与后端提交指标，可与 API Server 指标同窗对照。 |
+| Linux 与 Docker | Linux 主机、Docker 容器 | 主机 CPU、内存、磁盘与网络，以及容器 I/O 和文件缓存。 |
+| Kubernetes | 只读 API 与指标源 | Pod、Node、PVC、事件及容器资源观测，已验收的环境见详细矩阵。 |
+
+各项能力取决于数据源版本、部署拓扑和采集权限。长期监控数据保存在独立 PostgreSQL 18。验收范围、权限要求和接入方式见[详细支持与验收矩阵](docs/SUPPORT_MATRIX.md)。
 
 ## 界面预览
 
@@ -38,7 +55,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 
 | 领域 | 功能 |
 | --- | --- |
-| 资产纳管 | 支持 PostgreSQL 14–19、MySQL 8.4、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis 6.2、7.2、8.4 和 etcd 3.5、3.6。支持 Linux、Docker、Kubernetes 和托管数据库。批量接入后可以保存首采结果、查看原始证据并复检原资产。 |
+| 资产纳管 | 按支持矩阵接入数据源。批量接入后可以保存首采结果、查看原始证据并复检原资产。 |
 | 监控工作台 | 从集群下钻到实例、数据库和 SQL。对照连接、事务、等待、锁、WAL、复制、检查点和容量，支持同窗多实例对比、短时等待采样、历史阻塞树回放和原始样本。 |
 | 监控大屏 | 按引擎查看资产数、影响范围、近期采样、缺采、失败和端点失联。趋势图随资产引擎切换，支持放大、同步游标、固定时段、历史基线和原始采样。个人和团队值班视图可跨浏览器恢复。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |
