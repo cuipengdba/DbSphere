@@ -50,3 +50,37 @@ func TestInvestigationUsesOnlyTheFiringLockSample(t *testing.T) {
 		t.Fatalf("the exact trigger and its lock relationship were not retained: %+v", result)
 	}
 }
+
+func TestAdjacentLockSamplesRequireStableSessionAndInstanceIdentity(t *testing.T) {
+	const start = "2026-11-26T07:00:00Z"
+	const later = "2026-11-26T07:01:00Z"
+	pair := investigationBlocker{WaitingPID: 10, BlockerPID: 11, WaitingBackendStart: start, BlockerBackendStart: start}
+	observation := func(instanceStart, waitingStart, blockingStart string) sampleObservation {
+		return sampleObservation{Status: "ok", Metrics: map[string]any{
+			"postgresStartedAt": instanceStart,
+			"postgresEndpoint": map[string]any{"address": "127.0.0.1", "port": 5432},
+			"diagnostics": map[string]any{"lockChain": map[string]any{"status": "ok", "data": []any{
+				map[string]any{"waitingPid": 10, "blockerPid": 11, "waitingBackendStart": waitingStart, "blockerBackendStart": blockingStart},
+			}}},
+		}}
+	}
+	trigger := observation(start, start, start)
+	for _, test := range []struct {
+		name, instanceStart, waitingStart, blockerStart, sampleStatus, pairStatus string
+	}{
+		{"same sessions", start, start, start, "observed", "same_sessions"},
+		{"waiter reused", start, later, start, "observed", "pid_reused"},
+		{"blocker reused", start, start, later, "observed", "pid_reused"},
+		{"older sample without identity", start, "", start, "observed", "unknown_identity"},
+		{"new instance", later, start, start, "instance_changed", ""},
+		{"missing instance", "", start, start, "unverified_instance", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			status, matches := compareLockNeighbor(trigger, observation(test.instanceStart, test.waitingStart, test.blockerStart), []investigationBlocker{pair})
+			if status != test.sampleStatus || (test.pairStatus != "" && (len(matches) != 1 || matches[0].Status != test.pairStatus)) ||
+				(test.pairStatus == "" && len(matches) != 0) {
+				t.Fatalf("sample status %s, matches %+v", status, matches)
+			}
+		})
+	}
+}

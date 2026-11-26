@@ -601,8 +601,14 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	if err := s.enrichIncidentReplay(ctx, event, replay, samples, traceReplay, edges); err != nil {
 		return nil, err
 	}
+	locks := investigationLockEvidence(replay["points"].([]replayPoint), samples)
+	if locks != nil {
+		if err := s.adjacentLockSamples(ctx, event.AssetID, samples[locks.SampleID], locks); err != nil {
+			return nil, err
+		}
+	}
 	investigation := map[string]any{"database": sqlDatabase,
-		"locks":            investigationLockEvidence(replay["points"].([]replayPoint), samples),
+		"locks":            locks,
 		"connectionStages": connectionStages(requestSpans, samples, traceCount == 100),
 		"collectionGaps":   incidentCollectionGaps(samples)}
 	return map[string]any{"event": event, "analysis": analysis, "relatedEvents": related, "replay": replay,

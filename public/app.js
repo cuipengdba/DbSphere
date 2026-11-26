@@ -3610,6 +3610,20 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
       pairs.append(line);
     }
     diagnosis.append(pairs);
+    const sampleLabels = { previous: '前一采样', next: '后一采样' };
+    const sampleStatus = { missing: '缺少可比锁链', unverified_instance: '实例身份未核对', instance_changed: '实例身份或启动时刻变化' };
+    const pairStatus = { same_sessions: '同一对会话再次出现', pid_reused: 'PID 对应的会话已变化',
+      unknown_identity: '缺少会话启动时间', not_observed: '未观测到这对 PID' };
+    if (locks.adjacent?.length) {
+      diagnosis.append(cell('h5', '相邻锁链采样'));
+      for (const sample of locks.adjacent) {
+        const entry = cell('p', `${sampleLabels[sample.position]} · ${formatTime(sample.at)} · `);
+        if (sample.sampleId) entry.append(incidentPointSource(event, sample, '查看相邻原始采样'), ' · ');
+        entry.append(sampleStatus[sample.status] || sample.pairs.map(pair =>
+          `${pair.waitingPid} → ${pair.blockerPid} ${pairStatus[pair.status]}`).join('；'));
+        diagnosis.append(entry);
+      }
+    }
   }
   const conflicts = replay.points.filter(point => point.strength === 'conflict');
   const reasons = [...(primary?.missing || []), primary?.limitation].filter(Boolean);
@@ -3739,11 +3753,16 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
       if (row?.sampleId) container.append(' · ', replaySampleLink(event.assetId, row.sampleId));
       return container;
     });
-    const values = [['connections', '连接'], ['blockedSessions', '阻塞会话'], ['poolWaiting', '连接池等待'], ['replicationLagBytes', '复制差距（字节）']];
+    const values = [['connections', '纳管库连接'], ['connectionUtilization', '连接告警信号（%）'],
+      ['waitingSessions', '有等待事件的活跃会话'], ['blockedSessions', '纳管库阻塞会话'],
+      ['sqlRegressionRatio', 'SQL 退化比值'], ['poolWaiting', '连接池等待'], ['replicationLagBytes', '复制差距（字节）']];
     const rows = values.map(([key, title]) => {
       const a = before?.metrics?.[key], b = after?.metrics?.[key];
-      return [title, a ?? '—', b ?? '—', Number.isFinite(a) && Number.isFinite(b) ? `${b > a ? '+' : ''}${b - a}` : '—'];
+      const format = value => Number.isFinite(value) ? Number(value.toFixed(2)) : '缺采';
+      const comparable = Number.isFinite(a) && Number.isFinite(b) && key !== 'sqlRegressionRatio';
+      return [title, format(a), format(b), comparable ? `${b > a ? '+' : ''}${format(b - a)}` : '—'];
     });
+    rows.push(['样本中的 SQL 退化 Query ID', before?.queryId || '无对应观测', after?.queryId || '无对应观测', '—']);
     const sources = cell('div', '', 'investigation-comparison-sources'); sources.append(...provenance);
     diffGrid.replaceChildren(sources, importTable(['信号', ...labels, '变化'], rows));
   }

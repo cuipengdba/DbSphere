@@ -272,6 +272,7 @@ type replayComparison struct {
 	SampleID string             `json:"sampleId,omitempty"`
 	At       *time.Time         `json:"at,omitempty"`
 	Metrics  map[string]float64 `json:"metrics,omitempty"`
+	QueryID  string             `json:"queryId,omitempty"`
 }
 
 func (s *Postgres) enrichIncidentReplay(ctx context.Context, event *eventRecord, replay map[string]any,
@@ -373,10 +374,19 @@ func compareReplaySample(phase string, sample sampleObservation) replayCompariso
 		result.Metrics["connections"] = value
 	}
 	for name, metric := range map[string]string{"blockedSessions": "pg.blocked_sessions", "poolWaiting": "pgbouncer.waiting_clients",
-		"replicationLagBytes": "pg.replication_lag_bytes", "podUnready": "k8s.pod_not_ready"} {
+		"replicationLagBytes": "pg.replication_lag_bytes", "podUnready": "k8s.pod_not_ready",
+		"connectionUtilization": "pg.connection_utilization", "sqlRegressionRatio": "pg.sql_regression_ratio"} {
 		if signal := readGoSignal(metric, sample.Metrics, sample.At); signal.Available {
 			result.Metrics[name] = signal.Value
 		}
+	}
+	if sessions := object(object(sample.Metrics["diagnostics"])["instanceSessions"]); sessions["status"] == "ok" {
+		if waiting, ok := numeric(object(sessions["data"])["waiting"]); ok {
+			result.Metrics["waitingSessions"] = waiting
+		}
+	}
+	if sample.Metrics["sqlRegression"] != nil {
+		result.QueryID = stringValue(object(object(sample.Metrics["sqlRegression"])["worst"])["queryId"])
 	}
 	return result
 }

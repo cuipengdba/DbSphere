@@ -127,7 +127,7 @@
     ].filter(point => point.at >= time.from && point.at <= time.to));
   }
 
-  function graph(title, window, buckets, events, format, stacked = false) {
+  function graph(title, window, buckets, events, format, stacked = false, inspect = null) {
     const card = panel(title);
     const frame = el('div', null, 'monitor-plot');
     const header = el('div', null, 'monitor-graph-header');
@@ -140,6 +140,7 @@
     const area = width - left - right;
     const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' });
     const detail = el('p', null, 'monitor-cursor-value');
+    const sources = inspect ? el('div', null, 'monitor-wait-controls') : null;
     const pointCount = buckets.length;
     const x = index => left + (index + .5) * area / pointCount;
     const maximum = Math.max(0, ...buckets.map(point => point ? (stacked ?
@@ -228,6 +229,7 @@
       const values = point?.values.map(value => `${value.label} ${format(value.value)}`);
       const observed = point?.observed == null ? '' : ` · 有效采样 ${point.observed}/${point.samples}`;
       detail.textContent = `${timestamp} · ${point ? (values.join(' / ').trim() || format(0)) + observed : '该时间桶无可用采样'}`;
+      if (sources) sources.replaceChildren(...inspect(point?.evidence));
     };
     let start = null, drag = false, startX;
     const indexAt = event => {
@@ -282,6 +284,7 @@
       show(selected >= 0 ? selected : 0);
       frame.append(chart, axis);
       content.append(frame, detail);
+      if (sources) content.append(sources);
     } else content.append(el('p', '所选时段暂无此指标。', 'monitor-empty'));
     return card;
   }
@@ -2496,6 +2499,33 @@
       return result;
     }
 
+    function performancePeaks(asset, data, time) {
+      const card = panel('性能峰值调查');
+      const charts = el('div', null, 'monitor-charts');
+      for (const [signal, label, format, color] of [
+        ['pg.blocked_sessions', '阻塞会话峰值', number, palette[3]],
+        ['pg.connection_utilization', '连接告警信号峰值', percent, palette[0]],
+        ['pg.sql_regression_ratio', 'SQL 耗时退化峰值', value => value > 0 ? `${number(value, 2)} 倍` : '未达退化条件', palette[2]],
+      ]) {
+        const rows = data.series.filter(row => row.signal === signal);
+        const buckets = aligned(rows, time, row => ({ values: [{ label: '', value: row.value, color }], evidence: row }));
+        const chart = graph(label, time, buckets, [], format, false, row => {
+          if (!row) return [];
+          const links = [sampleLink(asset.id, row.sampleId, '查看峰值原始采样')];
+          if (row.eventId) links.push(button('打开原事件', () => time.openEvent(row.eventId), 'monitor-link'));
+          else if (row.trigger) links.push(
+            sampleLink(asset.id, row.trigger.sampleId, '查看同桶触发采样'),
+            button('打开同桶告警的原事件', () => time.openEvent(row.trigger.eventId), 'monitor-link'));
+          else links.push(el('span', '该样本无关联告警记录', 'monitor-note'));
+          if (row.queryId) links.push(button(`Query ID ${row.queryId}`, () => openQuery(row.queryId), 'monitor-link'));
+          return links;
+        });
+        charts.append(chart);
+      }
+      card.append(charts);
+      return card;
+    }
+
     async function load(asset, time) {
       const key = ++request;
       if (mode !== 'changes' && time.to - time.from > 10080 * minute) {
@@ -2563,7 +2593,7 @@
       body.replaceChildren(el('p', '正在读取所选时间范围…', 'monitor-note'));
       try {
         const showWaitCaptures = ['waits', 'locks'].includes(mode);
-        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture, catalog, resources, waitReplication] = await Promise.all([
+        const [context, data, waits, slow, plans, replication, prior, traces, topology, captures, capture, catalog, resources, waitReplication, performance] = await Promise.all([
           api(`${path}monitoring-context?${contextParams}`), section ? api(`${path}${section}?${query}`) : null,
           mode === 'metrics' ? api(`${path}wait-history?${time.params}&group=type`).catch(() => null) : null,
           linkedSQL ? api(`${path}slow-logs?${time.params}&queryId=${encodeURIComponent(queryId)}`).catch(() => null) : null,
@@ -2577,7 +2607,8 @@
           showWaitCaptures && waitCapturePick ? api(`${path}wait-captures?id=${encodeURIComponent(waitCapturePick)}`).catch(() => null) : null,
           linkedSQL && dbOid ? api(`${path}catalog?${time.params}`).catch(() => null) : null,
           mode === 'waits' ? api(`${path}instance-history?${time.params}`).catch(() => null) : null,
-          mode === 'waits' ? api(`${path}series?${time.params}`).catch(() => null) : null
+          mode === 'waits' ? api(`${path}series?${time.params}`).catch(() => null) : null,
+          ['metrics', 'waits', 'sql'].includes(mode) ? api(`${path}pg-performance?${time.params}`).catch(() => null) : null
         ]);
         if (key !== request || !visible) return;
         const events = context.events.map(event => ({ ...event, assetName: asset.name }));
@@ -2591,6 +2622,7 @@
           if (focusSample) context.append(sampleLink(asset.id, focusSample));
           fragment.append(context);
         }
+        if (performance) fragment.append(performancePeaks(asset, performance, time));
         if (mode === 'metrics') {
           const latest = context.snapshot;
           const current = data.series.at(-1)?.values;
