@@ -1023,6 +1023,61 @@
       });
     }
     get('upload').addEventListener('click', () => showUpload());
+    const sourceDialog = get('source-dialog'), sourceForm = get('source-form');
+    let sourceBatch = '';
+    const sourceEndpoint = () => base + 'batches/' + sourceBatch + '/sources';
+    const sourceStatus = get('source-status');
+    const sourceCredential = get('source-credential');
+    async function loadSources() {
+      const batch = sourceBatch;
+      const {sources} = await api(sourceEndpoint());
+      if (!sourceDialog.open || batch !== sourceBatch) return;
+      get('source-list').replaceChildren(table(['来源', '当前文件与代次', '确认偏移', '发送端积压', '缺口', '最近接收 / 解析', '待解析 / 异常', '操作'],
+        sources.map(source => [source.name + ' · ' + source.id, `${source.filename || '待接收'} · ${source.generation}${source.final ? ' · 可轮转' : ''}`,
+          number.format(source.nextOffset), source.senderSize > source.nextOffset ? bytes(source.senderSize - source.nextOffset) : '—',
+          source.gapOffset == null ? '—' : `发送方从 ${source.gapOffset} 字节继续，需补送前段`,
+          [source.lastReceivedAt, source.lastParsedAt].map(at => at ? formatTime(at) : '—').join(' / '),
+          `${source.pendingFiles} / ${source.failedFiles}`, source.revokedAt ? '已撤销' : button('撤销凭据', () => run(async () => {
+            await api(base + 'sources/' + source.id + '/revoke', 'POST');
+            sourceCredential.hidden = true;
+            sourceCredential.querySelector('textarea').value = '';
+            await loadSources();
+          }, sourceStatus))]), '此批次尚无接入来源。'));
+    }
+    get('open-sources').addEventListener('click', () => run(async () => {
+      sourceStatus.textContent = '';
+      if (!current) { get('status').textContent = '请选择分析批次。'; return; }
+      sourceBatch = current;
+      const engine = directory.instances.find(item => item.id === get('instance').value)?.engine;
+      sourceForm.hidden = !['postgres', 'mysql'].includes(engine);
+      options(sourceForm.elements.format, engine === 'mysql' ? [['mysqlslow', 'MySQL FILE 慢日志']] :
+        [['jsonlog', 'PostgreSQL JSON Lines'], ['csvlog', 'PostgreSQL CSV'], ['text', 'PostgreSQL 文本']], '');
+      if (sourceForm.hidden) sourceStatus.textContent = '持续接入适用于 PostgreSQL 和 MySQL。';
+      sourceDialog.showModal();
+      await loadSources();
+    }, sourceStatus));
+    get('refresh-sources').addEventListener('click', () => run(loadSources, sourceStatus));
+    get('close-sources').addEventListener('click', () => sourceDialog.close());
+    sourceDialog.addEventListener('close', () => {
+      sourceForm.reset();
+      sourceCredential.hidden = true;
+      sourceCredential.querySelector('textarea').value = '';
+    });
+    sourceForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const submit = event.submitter;
+      const batch = sourceBatch;
+      submit.disabled = true;
+      run(async () => {
+        try {
+          const {id, token} = await api(sourceEndpoint(), 'POST', Object.fromEntries(new FormData(sourceForm)));
+          if (!sourceDialog.open || sourceBatch !== batch) return;
+          sourceCredential.querySelector('textarea').value = `来源 URL ${location.origin}/v1/log-sources/${id}\n来源令牌 ${token}`;
+          sourceCredential.hidden = false;
+          await loadSources();
+        } finally { submit.disabled = false; }
+      }, sourceStatus);
+    });
     get('upload-form').elements.files.addEventListener('change', () => {
       const request = ++previewRequest;
       const files = [...get('upload-form').elements.files.files];

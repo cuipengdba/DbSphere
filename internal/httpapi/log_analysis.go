@@ -130,6 +130,16 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 		}
 	case len(sections) >= 2 && sections[0] == "batches" && opsUUID.MatchString(sections[1]):
 		switch {
+		case len(sections) == 3 && sections[2] == "sources" && r.Method == http.MethodGet:
+			value, err = pg.LogStreams(ctx, sections[1])
+		case len(sections) == 3 && sections[2] == "sources" && r.Method == http.MethodPost:
+			var input storepkg.LogStreamInput
+			if readJSONLimit(w, r, &input, 4096) != nil {
+				err = storepkg.ErrLogInput
+				break
+			}
+			status = http.StatusCreated
+			value, err = pg.CreateLogStream(ctx, sections[1], input)
 		case len(sections) == 2 && r.Method == http.MethodGet:
 			value, err = pg.LogBatch(ctx, sections[1])
 		case len(sections) == 3 && sections[2] == "files" && r.Method == http.MethodPost:
@@ -157,6 +167,10 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 		default:
 			err = storepkg.ErrLogNotFound
 		}
+	case len(sections) == 3 && sections[0] == "sources" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "revoke" && r.Method == http.MethodPost:
+		err = pg.RevokeLogStream(ctx, sections[1])
+		value = map[string]bool{"revoked": err == nil}
 	case len(sections) == 3 && sections[0] == "files" && opsUUID.MatchString(sections[1]):
 		switch {
 		case sections[2] == "status" && r.Method == http.MethodGet:
@@ -208,6 +222,28 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 	case len(sections) == 3 && sections[0] == "events" && opsUUID.MatchString(sections[1]) &&
 		sections[2] == "candidates" && r.Method == http.MethodGet:
 		value, err = pg.LogEventCandidates(ctx, sections[1])
+	case len(sections) == 3 && sections[0] == "events" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "retests" && r.Method == http.MethodGet:
+		value, err = pg.EventLogRetestCases(ctx, sections[1])
+	case len(sections) == 3 && sections[0] == "events" && opsUUID.MatchString(sections[1]) &&
+		sections[2] == "retests" && r.Method == http.MethodPost:
+		var input struct {
+			CaseID string
+			storepkg.LogRetestInput
+		}
+		if readJSONLimit(w, r, &input, 4096) != nil || !opsUUID.MatchString(input.CaseID) ||
+			!opsUUID.MatchString(input.BaselineBatchID) || !opsUUID.MatchString(input.CurrentBatchID) {
+			err = storepkg.ErrLogInput
+			break
+		}
+		var audit string
+		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
+		if err == nil {
+			value, err = pg.SaveEventLogRetest(ctx, sections[1], input.CaseID, input.LogRetestInput)
+			if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(status, err)); auditErr != nil {
+				err = auditErr
+			}
+		}
 	case len(sections) == 3 && sections[0] == "events" && opsUUID.MatchString(sections[1]) &&
 		sections[2] == "records" && r.Method == http.MethodPost:
 		var input struct{ RecordID string }

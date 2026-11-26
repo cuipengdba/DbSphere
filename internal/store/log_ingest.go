@@ -36,7 +36,7 @@ type LogFileInput struct {
 
 type LogParseInput struct{ Format, Prefix, Zone string }
 
-func logOptions(format, prefix, zone string) (loganalysis.Options, error) {
+func logOptionsForEngine(format, prefix, zone, engine string) (loganalysis.Options, error) {
 	if format == "" {
 		format = "auto"
 	}
@@ -50,7 +50,7 @@ func logOptions(format, prefix, zone string) (loganalysis.Options, error) {
 	if err != nil {
 		return loganalysis.Options{}, ErrLogInput
 	}
-	options := loganalysis.Options{Format: format, Prefix: prefix, Zone: location}
+	options := loganalysis.Options{Format: format, Prefix: prefix, Zone: location, Engine: engine}
 	if loganalysis.ValidateOptions(options) != nil {
 		return loganalysis.Options{}, ErrLogInput
 	}
@@ -58,8 +58,7 @@ func logOptions(format, prefix, zone string) (loganalysis.Options, error) {
 }
 
 func (s *Postgres) CreateLogFile(ctx context.Context, batch string, input LogFileInput) (any, error) {
-	options, err := logOptions(input.Format, input.Prefix, input.Zone)
-	if err != nil || !analysisLabel(input.Name, 255) || strings.ContainsAny(input.Name, "/\\") ||
+	if !analysisLabel(input.Name, 255) || strings.ContainsAny(input.Name, "/\\") ||
 		len(input.Node) > 120 || strings.ContainsAny(input.Node, "\x00\r\n") || input.Size <= 0 || input.Size > LogFileLimit {
 		return nil, ErrLogInput
 	}
@@ -68,10 +67,14 @@ func (s *Postgres) CreateLogFile(ctx context.Context, batch string, input LogFil
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	var org string
-	if err := tx.QueryRow(ctx, `SELECT p.organization_id::text`+logBatchScope+
-		`WHERE b.id=$1 AND ($2='' OR p.organization_id::text=$2)`, batch, OrganizationFromContext(ctx)).Scan(&org); err != nil {
+	var org, engine string
+	if err := tx.QueryRow(ctx, `SELECT p.organization_id::text,i.engine`+logBatchScope+
+		`WHERE b.id=$1 AND ($2='' OR p.organization_id::text=$2)`, batch, OrganizationFromContext(ctx)).Scan(&org, &engine); err != nil {
 		return nil, logWriteError(err)
+	}
+	options, err := logOptionsForEngine(input.Format, input.Prefix, input.Zone, engine)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,56))", org); err != nil {
 		return nil, err
@@ -151,11 +154,11 @@ func (s *Postgres) QueueLogFile(ctx context.Context, file string, override *LogP
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	var state, batch, instance, node, format, prefix, zone string
+	var state, batch, instance, node, format, prefix, zone, engine string
 	var received, expected int64
-	err = tx.QueryRow(ctx, `SELECT f.state,b.id::text,i.id::text,f.node,f.format,f.prefix,f.zone,f.raw_size,f.expected_size`+
+	err = tx.QueryRow(ctx, `SELECT f.state,b.id::text,i.id::text,f.node,f.format,f.prefix,f.zone,f.raw_size,f.expected_size,i.engine`+
 		logFileScope+`WHERE f.id=$1 AND f.archive_expired_at IS NULL AND ($2='' OR p.organization_id::text=$2) FOR UPDATE OF f`,
-		file, OrganizationFromContext(ctx)).Scan(&state, &batch, &instance, &node, &format, &prefix, &zone, &received, &expected)
+		file, OrganizationFromContext(ctx)).Scan(&state, &batch, &instance, &node, &format, &prefix, &zone, &received, &expected, &engine)
 	if err != nil {
 		return nil, logWriteError(err)
 	}
@@ -166,7 +169,7 @@ func (s *Postgres) QueueLogFile(ctx context.Context, file string, override *LogP
 		if override == nil {
 			return map[string]any{"state": state, "batchId": batch}, nil
 		}
-		opts, err := logOptions(override.Format, override.Prefix, override.Zone)
+		opts, err := logOptionsForEngine(override.Format, override.Prefix, override.Zone, engine)
 		if err != nil {
 			return nil, err
 		}
@@ -309,11 +312,10 @@ func (s *Postgres) ProcessNextLogFile(ctx context.Context) (processed bool, resu
 	if err != nil {
 		return false, err
 	}
-	options, err := logOptions(format, prefix, zone)
+	options, err := logOptionsForEngine(format, prefix, zone, engine)
 	if err != nil {
 		return false, err
 	}
-	options.Engine = engine
 	if _, err := tx.Exec(ctx, "CREATE TEMPORARY TABLE ingest_log_records (LIKE log_records INCLUDING DEFAULTS) ON COMMIT DROP"); err != nil {
 		return false, err
 	}

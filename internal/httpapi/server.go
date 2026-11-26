@@ -239,6 +239,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 	if credentials != nil {
 		registerOperations(mux, store, credentials)
 		registerGrafana(mux, store, credentials)
+		registerLogStreams(mux, store)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		respond(w, http.StatusOK, map[string]string{"status": "ok"})

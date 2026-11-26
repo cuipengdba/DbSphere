@@ -45,6 +45,15 @@ Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。�
 
 读取 InnoDB 缓冲池、等待和事务、SQL 指纹和原生复制通道及工作线程，支持文件慢日志。Linux x86_64 验收使用 MySQL Community Server 8.4.13，普通实例和两节点异步复制均保留原始与恢复证据。 [接入与权限](MYSQL_PREVIEW.md)
 
+## 日志持续接入
+
+| 兼容项 | 首次交付 | 格式与权限 |
+| --- | --- | --- |
+| PostgreSQL 日志持续接入 | v3.15.0 | JSON Lines、CSV 或带日志前缀的文本。发送端需要日志文件读取权限和绑定批次的来源令牌。 |
+| MySQL 8.4 FILE 慢日志持续接入 | v3.15.0 | MySQL FILE 慢日志。发送端需要慢日志文件读取权限和绑定批次的来源令牌。 |
+
+[配置与使用](LOG_ANALYSIS.md#持续接入)
+
 ## 部署与依赖
 
 混合采集负载记录纳管资产与物理实例的数量。100 个健康资产覆盖 PostgreSQL 14、16、18、MySQL 8.4、Redis OSS 7.2 和 etcd 3.6，另外观察认证失败与端点不可达。达梦、金仓、瀚高按各节的实库构建和拓扑验收。长期历史压测用 300 个资产、90 天合成样本，另验证 PostgreSQL 18 备份和独立恢复。 [规模采集](COLLECTOR_LOAD_ACCEPTANCE.md) · [历史留存](HISTORY_STORAGE.md)

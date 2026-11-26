@@ -35,10 +35,35 @@ type LogRetestInput struct {
 }
 
 type logRetestSample struct {
-	BatchID  string   `json:"batchId"`
-	RecordID string   `json:"recordId"`
-	Timed    int64    `json:"timed"`
-	P95      *float64 `json:"p95Ms"`
+	BatchID      string     `json:"batchId"`
+	RecordID     string     `json:"recordId"`
+	Calls        int64      `json:"calls"`
+	Timed        int64      `json:"timed"`
+	Mean         *float64   `json:"meanMs"`
+	P95          *float64   `json:"p95Ms"`
+	From         *time.Time `json:"from"`
+	To           *time.Time `json:"to"`
+	Coverage     string     `json:"coverage"`
+	CoverageNote string     `json:"coverageNote"`
+}
+
+func (s *Postgres) EventLogRetestCases(ctx context.Context, event string) (any, error) {
+	if _, err := s.logEventWindow(ctx, event); err != nil {
+		return nil, err
+	}
+	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',q.id,'sql',r.sql_shape,
+		'fingerprint',r.fingerprint,'database',r.database_name,'application',r.application,'baselineBatchId',r.batch_id,
+		'batches',coalesce(c.options,'[]'::jsonb))
+	FROM log_investigations q JOIN log_records r ON r.id=q.primary_record
+	JOIN log_instances i ON i.id=q.instance_id JOIN log_projects p ON p.id=i.project_id
+	JOIN event_keys k ON k.id=q.event_id JOIN assets a ON a.id=k.asset_id AND a.id=i.asset_id AND a.organization_id=p.organization_id
+	LEFT JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('id',candidate.id,'name',candidate.name,'coverage',candidate.coverage,
+		'coverageNote',candidate.coverage_note) ORDER BY candidate.created_at DESC,candidate.id) AS options
+		FROM (SELECT b.id,b.name,b.coverage,b.coverage_note,b.created_at FROM log_batches b WHERE b.instance_id=i.id
+		ORDER BY b.created_at DESC,b.id LIMIT 100) candidate) c ON true
+	WHERE q.event_id=$1 AND ($2='' OR a.organization_id::text=$2) AND r.kind='statement' AND r.fingerprint<>''
+	ORDER BY q.created_at DESC,q.id LIMIT 30`, event, OrganizationFromContext(ctx))
+	return map[string]any{"cases": rows}, err
 }
 
 func logRetestDecision(reason string, base, current logCompareMeasure, target float64) (string, string) {
@@ -59,6 +84,14 @@ func logRetestDecision(reason string, base, current logCompareMeasure, target fl
 }
 
 func (s *Postgres) SaveLogRetest(ctx context.Context, investigation string, input LogRetestInput) (any, error) {
+	return s.saveLogRetest(ctx, "", investigation, input)
+}
+
+func (s *Postgres) SaveEventLogRetest(ctx context.Context, event, investigation string, input LogRetestInput) (any, error) {
+	return s.saveLogRetest(ctx, event, investigation, input)
+}
+
+func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigation string, input LogRetestInput) (any, error) {
 	if input.BaselineBatchID == input.CurrentBatchID || input.TargetP95MS <= 0 || input.TargetP95MS > 3600000 || math.IsNaN(input.TargetP95MS) {
 		return nil, ErrLogInput
 	}
@@ -74,8 +107,9 @@ func (s *Postgres) SaveLogRetest(ctx context.Context, investigation string, inpu
 		JOIN log_records r ON r.id=q.primary_record
 		LEFT JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
 		LEFT JOIN event_keys k ON k.id=q.event_id AND k.asset_id=a.id
-		WHERE q.id=$1 AND ($2='' OR p.organization_id::text=$2) AND r.kind='statement' AND r.fingerprint<>''`,
-		investigation, OrganizationFromContext(ctx)).Scan(&primary, &instance, &fingerprint, &database, &application, &event)
+		WHERE q.id=$1 AND ($2='' OR p.organization_id::text=$2) AND r.kind='statement' AND r.fingerprint<>''
+		AND ($3='' OR k.id::text=$3)`, investigation, OrganizationFromContext(ctx), requiredEvent).
+		Scan(&primary, &instance, &fingerprint, &database, &application, &event)
 	if err != nil {
 		return nil, logWriteError(err)
 	}
@@ -98,31 +132,56 @@ func (s *Postgres) SaveLogRetest(ctx context.Context, investigation string, inpu
 			return nil, ErrLogNotFound
 		}
 		summaries[index] = summary
-		query := `SELECT b.archive_revision,r.id::text FROM log_investigation_records j
-			JOIN log_records r ON r.id=j.record_id JOIN log_batches b ON b.id=r.batch_id
-			WHERE j.investigation_id=$1 AND b.id=$2 AND r.fingerprint=$3 AND r.database_name=$4 AND r.application=$5
-			ORDER BY (r.id=$6) DESC,r.observed_at DESC NULLS LAST,r.id LIMIT 1`
-		err = tx.QueryRow(ctx, query, investigation, batch, fingerprint, database, application, primary).
+		query := `SELECT b.archive_revision,coalesce(selected.id::text,'') FROM log_batches b LEFT JOIN LATERAL (
+			SELECT r.id FROM log_records r JOIN log_files f ON f.id=r.file_id
+			WHERE r.batch_id=b.id AND r.kind='statement' AND r.fingerprint=$3 AND r.database_name=$4 AND r.application=$5
+			AND f.archive_expired_at IS NULL AND f.stored_size>0 AND
+			($7<>'' OR EXISTS(SELECT 1 FROM log_investigation_records j WHERE j.investigation_id=$1 AND j.record_id=r.id))
+			ORDER BY (r.id=$6) DESC,r.observed_at DESC NULLS LAST,r.id LIMIT 1
+		) selected ON true WHERE b.id=$2`
+		err = tx.QueryRow(ctx, query, investigation, batch, fingerprint, database, application, primary, requiredEvent).
 			Scan(&revisions[index], &samples[index].RecordID)
 		if err != nil {
 			return nil, logWriteError(err)
 		}
 		measure := &measures[index]
-		err = tx.QueryRow(ctx, `SELECT calls,timed,slow,p95 FROM log_issue_rollups
+		if samples[index].RecordID == "" && requiredEvent == "" {
+			return nil, ErrLogNotFound
+		}
+		err = tx.QueryRow(ctx, `SELECT calls,timed,slow,mean,p95 FROM log_issue_rollups
 			WHERE batch_id=$1 AND kind='statement' AND issue=$2 AND database_name=$3 AND application=$4`,
-			batch, fingerprint, database, application).Scan(&measure.Count, &measure.Timed, &measure.Slow, &measure.P95)
+			batch, fingerprint, database, application).Scan(&measure.Count, &measure.Timed, &measure.Slow, &measure.Mean, &measure.P95)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
-		samples[index].BatchID, samples[index].Timed, samples[index].P95 = batch, measure.Timed, measure.P95
+		samples[index].BatchID, samples[index].Calls, samples[index].Timed = batch, measure.Count, measure.Timed
+		samples[index].Mean, samples[index].P95, samples[index].From, samples[index].To = measure.Mean, measure.P95, summary.From, summary.To
+		samples[index].Coverage, samples[index].CoverageNote = summary.Coverage, summary.Note
+	}
+	if requiredEvent != "" {
+		for _, sample := range samples {
+			if sample.RecordID == "" {
+				continue
+			}
+			// Pin the original block with its investigation so retention and retest
+			// use the same evidence ownership.
+			if _, err := tx.Exec(ctx, `INSERT INTO log_investigation_records(investigation_id,record_id)
+				VALUES($1,$2) ON CONFLICT DO NOTHING`, investigation, sample.RecordID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	reason := logComparisonCoverage(summaries[0], summaries[1])
+	if samples[0].RecordID == "" || samples[1].RecordID == "" {
+		reason = "两批次需保留同指纹、同数据库、同应用的原始记录。"
+	}
 	if summaries[0].From != nil && summaries[1].From != nil && summaries[1].From.Before(*summaries[0].From) {
 		return nil, ErrLogInput
 	}
 	status, reason := logRetestDecision(reason, measures[0], measures[1], input.TargetP95MS)
 	result := map[string]any{"status": status, "reason": reason, "caseId": investigation, "eventId": event,
-		"baseline": samples[0], "current": samples[1], "targetP95Ms": input.TargetP95MS}
+		"baseline": samples[0], "current": samples[1], "targetP95Ms": input.TargetP95MS,
+		"fingerprint": fingerprint, "database": database, "application": application}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
