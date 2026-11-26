@@ -55,16 +55,16 @@ func migrateLogRetestPlans(ctx context.Context, tx pgx.Tx) error {
 }
 
 type logRetestSample struct {
-	BatchID      string     `json:"batchId"`
-	RecordID     string     `json:"recordId"`
-	Calls        int64      `json:"calls"`
-	Timed        int64      `json:"timed"`
-	Mean         *float64   `json:"meanMs"`
-	P95          *float64   `json:"p95Ms"`
-	From         *time.Time `json:"from"`
-	To           *time.Time `json:"to"`
-	Coverage     string     `json:"coverage"`
-	CoverageNote string     `json:"coverageNote"`
+	BatchID      string          `json:"batchId"`
+	RecordID     string          `json:"recordId"`
+	Calls        int64           `json:"calls"`
+	Timed        int64           `json:"timed"`
+	Mean         *float64        `json:"meanMs"`
+	P95          *float64        `json:"p95Ms"`
+	From         *time.Time      `json:"from"`
+	To           *time.Time      `json:"to"`
+	Coverage     string          `json:"coverage"`
+	CoverageNote string          `json:"coverageNote"`
 	Plan         json.RawMessage `json:"plan,omitempty"`
 }
 
