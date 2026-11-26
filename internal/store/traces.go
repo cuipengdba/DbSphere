@@ -244,9 +244,10 @@ func (s *Postgres) verifyTracePods(ctx context.Context, spans []trace.Span) {
 			if !entry.verified {
 				return
 			}
-			verified, err := json.Marshal(map[string]any{"namespace": entry.identity.Namespace,
+			verified, err := json.Marshal(map[string]any{"cluster": group.cluster, "namespace": entry.identity.Namespace,
 				"name": entry.identity.Name, "uid": entry.identity.UID, "node": entry.identity.Node,
 				"pvcs": entry.identity.PVCs, "pvcStates": entry.identity.PVCStates,
+				"containers": entry.identity.Containers,
 				"createdAt":  entry.identity.CreatedAt,
 				"observedAt": entry.observedAt})
 			if err != nil {

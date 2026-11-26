@@ -4390,10 +4390,10 @@ function connectionStagePanel(report, assetId) {
   return panel;
 }
 
-function traceRequestEvidence(paths, assetId, limited) {
+function traceRequestEvidence(paths, event, limited) {
   const section = cell('details', '', 'evidence');
   section.append(cell('summary', `查看数据库请求路径（${paths.length}）`));
-  const parentStates = { complete: '父 Span 齐全', database_root: '数据库调用是当前根节点', missing_parent: '上游父 Span 未取得', cycle: '父子关系出现循环', depth_limit: '达到路径深度上限' };
+  const parentStates = { complete: '父 Span 齐全', database_root: '数据库调用是当前根节点', missing_parent: '上游父 Span 未取得', cycle: '父子关系出现循环', depth_limit: '达到路径深度上限', time_conflict: '父子 Span 时间冲突' };
   const backendStates = { matched: '等待 PID 匹配', mismatch: '调用 PID 与所见等待 PID 不符', no_lock_evidence: '调用窗内无可核对的锁样本', pid_unreported: '应用未上报后端 PID', time_unreliable: '数据库 Span 时间异常' };
   const poolerStates = { mapped_endpoint: '命中配置的 PgBouncer 入口', pool_sample_observed: '命中 PgBouncer 入口且调用窗内有连接池采样', time_unreliable: '代理采样的时间关联待核对' };
   for (const path of paths) {
@@ -4405,8 +4405,8 @@ function traceRequestEvidence(paths, assetId, limited) {
     card.append(cell('p', status.join(' · ')));
     const metrics = [path.backendPid ? `上报后端 PID ${path.backendPid}` : '', path.blockerPid ? `阻塞 PID ${path.blockerPid}` : ''];
     if (metrics.some(Boolean)) card.append(cell('small', metrics.filter(Boolean).join(' · ')));
-    const table = importTable(['服务 / 调用', '开始时间', '耗时 ms', '采样声明', '时间检查'], path.steps.map(step => [
-      step.kind === 'postgresql_client' ? `${step.service} · PostgreSQL` : step.service, formatTime(step.startedAt), String(step.durationMs),
+    const table = importTable(['服务 / 调用', 'Span ID', '父 Span ID', '开始时间', '耗时 ms', '采样声明', '时间检查'], path.steps.map(step => [
+      step.kind === 'postgresql_client' ? `${step.service} · PostgreSQL` : step.service, step.spanId, step.parentSpanId || '—', formatTime(step.startedAt), String(step.durationMs),
       step.samplingProbability == null ? '未声明' : `${Number((step.samplingProbability * 100).toPrecision(4))}%`,
       { unreliable: '时间异常', unavailable: '接收时间缺失', observed: '接收时间可核对' }[step.clock]
     ]));
@@ -4415,12 +4415,50 @@ function traceRequestEvidence(paths, assetId, limited) {
     const refs = cell('div', '', 'actions');
     for (const [label, endpoint, id] of [['原始请求 Trace', 'traces', path.traceId], ['后端会话证据', 'samples', path.backendSampleId], ['连接池采样', 'samples', path.poolerSampleId]]) {
       if (!id) continue;
-      const link = cell('a', label, 'monitor-link'); link.href = `/api/assets/${assetId}/${endpoint}/${id}`; refs.append(link);
+      const link = cell('a', label, 'monitor-link');
+      if (endpoint === 'samples') link.href = '#sample?' + new URLSearchParams({asset: event.assetId, sample: id, return: 'incidents?' + investigationParams(event.id)});
+      else {
+        link.href = `/api/assets/${event.assetId}/${endpoint}/${id}`;
+        link.target = '_blank'; link.rel = 'noopener noreferrer';
+      }
+      refs.append(link);
     }
-    card.append(refs); section.append(card);
+    card.append(refs, requestInfrastructurePanel(path.infrastructure, event)); section.append(card);
   }
   if (limited) section.append(cell('small', '此处显示优先核对的 12 条路径。'));
   return section;
+}
+
+function requestInfrastructurePanel(infra, event) {
+  const panel = cell('section', '', 'monitor-table');
+  panel.append(cell('h4', '请求与基础设施证据'));
+  const appStates = {verified: '应用 Pod UID 已通过 Kubernetes API 核对', reported: '应用 Pod UID 仅由发送方上报，待核对', unreported: '缺少应用 Pod UID'};
+  const pod = infra?.appPod;
+  const rows = [];
+  if (pod) {
+    rows.push(['应用 Pod', `${pod.namespace}/${pod.name} · ${pod.uid}`, formatTime(pod.observedAt), '已核对 UID']);
+    for (const container of pod.containers || []) rows.push(['应用容器', `${container.name} · ${container.runtimeId}`, formatTime(pod.observedAt), `运行态快照 · 启动于 ${formatTime(container.startedAt)}`]);
+    for (const claim of pod.pvcStates || []) rows.push(['应用 PVC / PV', [claim.name, claim.claimUid, claim.volumeName, claim.volumeUid].filter(Boolean).join(' · '),
+      formatTime(pod.observedAt), claim.volumeUid ? '已核对绑定 UID' : claim.claimUid ? '已核对 PVC UID' : '卷身份缺采']);
+  }
+  for (const sample of infra?.samples || []) {
+    const raw = cell('a', '查看原始采样', 'monitor-link');
+    raw.href = '#sample?' + new URLSearchParams({asset: event.assetId, sample: sample.sampleId, return: 'incidents?' + investigationParams(event.id)});
+    const relation = {same_window: '同窗采样', same_pod_uid: '同一 Pod UID', same_runtime_id: '同一容器 ID', same_claim_uid: '同一 PVC UID'};
+    const layer = {linux: 'Linux 主机', kubernetes: '数据库 Pod', container: '数据库容器', volume: '数据库卷'};
+    const source = cell('span', (relation[sample.relation] || '待核对') + ' · ');
+    source.append(raw);
+    rows.push([layer[sample.layer] || sample.layer, sample.identity || '身份缺采', formatTime(sample.at), source]);
+  }
+  panel.append(cell('p', appStates[infra?.appState] || '应用身份缺采', 'hint'));
+  if (rows.length) panel.append(importTable(['来源', '身份', '观测时间', '证据'], rows));
+  else panel.append(cell('p', '调用窗内没有可核对的基础设施采样。', 'hint'));
+  for (const change of infra?.changes || []) {
+    const [kind, name] = change.split(':', 2);
+    const labels = {pod_replaced: '同名 Pod 的 UID 已变化', pvc_replaced: '同名 PVC 的 UID 已变化', volume_replaced: '同名 PV 的 UID 已变化'};
+    if (labels[kind]) panel.append(cell('p', [labels[kind], name].filter(Boolean).join(' · '), 'warning'));
+  }
+  return panel;
 }
 
 function incidentImpactPanel(impact, event) {
@@ -5130,8 +5168,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   if (analysis.traceCoverage?.unresolvedParentSpans) diagnosis.append(cell('small',
     `链路断点：${analysis.traceCoverage.unresolvedParentSpans} 条 Span 的父 Span 未在当前事件窗口与显示上限内找到；可能由采样、延迟或时间窗造成。`));
+  if (analysis.traceCoverage?.conflictedParentSpans) diagnosis.append(cell('small',
+    `${analysis.traceCoverage.conflictedParentSpans} 条 Span 的父子关系存在时间冲突或循环。`));
   if (analysis.traceCoverage?.requestPaths?.length) {
-    diagnosis.append(traceRequestEvidence(analysis.traceCoverage.requestPaths, event.assetId, analysis.traceCoverage.requestPathsAtLimit));
+    diagnosis.append(traceRequestEvidence(analysis.traceCoverage.requestPaths, event, analysis.traceCoverage.requestPathsAtLimit));
   }
   if (analysis.dependencies?.calls?.length || analysis.dependencies?.controlPlane) {
     diagnosis.append(incidentDependencyPanel(analysis.dependencies, event));
@@ -5200,7 +5240,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     time_window: '处于事件时间窗', time_unreliable: '时间关联待核对', query_id_matches: 'Query ID 匹配',
     same_backend_pid: '后端 PID 匹配', observed_session: '观测到会话',
     blocked_by: '被阻塞于', observed_sql: '观测到 SQL', scheduled_on: '调度于',
-    originated_from: '来自应用 Pod', references_pvc: '引用 PVC',
+    originated_from: '来自应用 Pod', references_pvc: '引用 PVC', pvc_name_reported: '仅有 PVC 名称',
     observed_pvc_status: '核对 PVC 状态',
     routes_to: '路由至', compared_with: '与基线比较', hypothesizes: '提出候选',
     supported_by: '由证据支持', reviewed_by: '人工复核',

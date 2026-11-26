@@ -101,7 +101,7 @@ func classifyTraceImpact(spans []observedTraceSpan, samples map[string]sampleObs
 			}
 			signals[current.Service][span.TraceID] |= flags
 			parent, ok := byTrace[span.TraceID][current.ParentSpanID]
-			if !ok {
+			if !ok || !traceSpansOverlap(parent, current) {
 				break
 			}
 			current = parent

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"slices"
 	"sort"
 	"time"
@@ -15,11 +16,15 @@ type requestSpanObservation struct {
 	Sampling      *float64
 	ReceivedAt    *time.Time
 	TimingAnomaly bool
+	ReportedPod   json.RawMessage
+	VerifiedPod   json.RawMessage
 }
 
 type requestPathStep struct {
 	Service  string    `json:"service"`
 	SpanID   string    `json:"spanId"`
+	ParentID string    `json:"parentSpanId,omitempty"`
+	Status   string    `json:"status"`
 	Kind     string    `json:"kind"`
 	At       time.Time `json:"startedAt"`
 	Duration int64     `json:"durationMs"`
@@ -28,27 +33,25 @@ type requestPathStep struct {
 }
 
 type requestPathEvidence struct {
-	TraceID        string            `json:"traceId"`
-	DatabaseSpanID string            `json:"databaseSpanId"`
-	Steps          []requestPathStep `json:"steps"`
-	ParentState    string            `json:"parentState"`
-	MissingParent  string            `json:"missingParentSpanId,omitempty"`
-	ClockAnomaly   bool              `json:"clockAnomaly"`
-	BackendState   string            `json:"backendState"`
-	BackendPID     int               `json:"backendPid,omitempty"`
-	BlockerPID     int               `json:"blockerPid,omitempty"`
-	BackendSample  string            `json:"backendSampleId,omitempty"`
-	Route          string            `json:"route"`
-	PoolerState    string            `json:"poolerState,omitempty"`
-	PoolerSample   string            `json:"poolerSampleId,omitempty"`
+	TraceID        string                `json:"traceId"`
+	DatabaseSpanID string                `json:"databaseSpanId"`
+	Steps          []requestPathStep     `json:"steps"`
+	ParentState    string                `json:"parentState"`
+	MissingParent  string                `json:"missingParentSpanId,omitempty"`
+	ClockAnomaly   bool                  `json:"clockAnomaly"`
+	BackendState   string                `json:"backendState"`
+	BackendPID     int                   `json:"backendPid,omitempty"`
+	BlockerPID     int                   `json:"blockerPid,omitempty"`
+	BackendSample  string                `json:"backendSampleId,omitempty"`
+	Route          string                `json:"route"`
+	PoolerState    string                `json:"poolerState,omitempty"`
+	PoolerSample   string                `json:"poolerSampleId,omitempty"`
+	Infrastructure requestInfrastructure `json:"infrastructure"`
 }
 
 func traceRequestPaths(spans []requestSpanObservation, samples map[string]sampleObservation) ([]requestPathEvidence, bool) {
-	indexed := make(map[[2]string]requestSpanObservation, len(spans))
+	indexed := indexRequestSpans(spans)
 	ordered := make([]sampleObservation, 0, len(samples))
-	for _, span := range spans {
-		indexed[[2]string{span.TraceID, span.SpanID}] = span
-	}
 	for _, sample := range samples {
 		ordered = append(ordered, sample)
 	}
@@ -67,16 +70,26 @@ func traceRequestPaths(spans []requestSpanObservation, samples map[string]sample
 			BackendPID: span.BackendPID, Route: span.Route}
 		path.followParents(span, indexed)
 		path.attachBackend(span, ordered)
+		path.Infrastructure = collectRequestInfrastructure(span, ordered)
 		paths = append(paths, path)
 	}
 	// Prefer links with database-side evidence while preserving order for equal states.
 	sort.SliceStable(paths, func(i, j int) bool {
 		return paths[i].BackendState == "matched" && paths[j].BackendState != "matched"
 	})
+	recordRequestIdentityChanges(paths)
 	if len(paths) > traceRequestPathLimit {
 		return paths[:traceRequestPathLimit], true
 	}
 	return paths, false
+}
+
+func indexRequestSpans(spans []requestSpanObservation) map[[2]string]requestSpanObservation {
+	indexed := make(map[[2]string]requestSpanObservation, len(spans))
+	for _, span := range spans {
+		indexed[[2]string{span.TraceID, span.SpanID}] = span
+	}
+	return indexed
 }
 
 func (p *requestPathEvidence) followParents(span requestSpanObservation, indexed map[[2]string]requestSpanObservation) {
@@ -88,7 +101,7 @@ func (p *requestPathEvidence) followParents(span requestSpanObservation, indexed
 		} else if span.ReceivedAt == nil {
 			clock = "unavailable"
 		}
-		p.Steps = append(p.Steps, requestPathStep{Service: span.Service, SpanID: span.SpanID, Kind: span.Kind,
+		p.Steps = append(p.Steps, requestPathStep{Service: span.Service, SpanID: span.SpanID, ParentID: span.ParentSpanID, Kind: span.Kind, Status: span.Status,
 			At: span.Start, Duration: span.End.Sub(span.Start).Milliseconds(), Sampling: span.Sampling, Clock: clock})
 		if span.ParentSpanID == "" {
 			if len(p.Steps) == 1 {
@@ -110,9 +123,23 @@ func (p *requestPathEvidence) followParents(span requestSpanObservation, indexed
 			p.ParentState, p.MissingParent = "missing_parent", span.ParentSpanID
 			break
 		}
+		if !traceParentTimeCompatible(parent, span) {
+			p.ParentState = "time_conflict"
+			p.ClockAnomaly = true
+			break
+		}
 		span = parent
 	}
 	slices.Reverse(p.Steps)
+}
+
+func traceParentTimeCompatible(parent, child requestSpanObservation) bool {
+	return !parent.TimingAnomaly && !child.TimingAnomaly && traceSpansOverlap(parent.observedTraceSpan, child.observedTraceSpan)
+}
+
+func traceSpansOverlap(parent, child observedTraceSpan) bool {
+	return !parent.End.Before(parent.Start) && !child.End.Before(child.Start) &&
+		!parent.End.Before(child.Start) && !parent.Start.After(child.End)
 }
 
 func (p *requestPathEvidence) attachBackend(span requestSpanObservation, samples []sampleObservation) {
@@ -135,7 +162,8 @@ func (p *requestPathEvidence) attachBackend(span requestSpanObservation, samples
 			continue
 		}
 		pooler := object(sample.Metrics["pgbouncer"])
-		if p.Route == "pgbouncer" && p.PoolerSample == "" && stringValue(pooler["status"]) == "ok" {
+		if p.Route == "pgbouncer" && p.PoolerSample == "" && stringValue(pooler["status"]) == "ok" &&
+			inRequestWindow(sourceObservationTime(pooler, sample.At), span) {
 			p.PoolerState, p.PoolerSample = "pool_sample_observed", sample.ID
 		}
 		if p.BackendPID == 0 || p.BackendState == "matched" {

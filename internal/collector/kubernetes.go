@@ -33,22 +33,32 @@ type KubernetesTarget struct {
 // KubernetesPodIdentity is a bounded snapshot of a Pod's API-verified identity.
 // PVC names come from Pod spec references; states are separate API observations.
 type KubernetesPodIdentity struct {
-	Namespace string               `json:"namespace"`
-	Name      string               `json:"name"`
-	UID       string               `json:"uid"`
-	CreatedAt time.Time            `json:"createdAt"`
-	Node      string               `json:"node,omitempty"`
-	PVCs      []string             `json:"pvcs"`
-	PVCStates []KubernetesPVCState `json:"pvcStates"`
+	Namespace  string                        `json:"namespace"`
+	Name       string                        `json:"name"`
+	UID        string                        `json:"uid"`
+	CreatedAt  time.Time                     `json:"createdAt"`
+	Node       string                        `json:"node,omitempty"`
+	PVCs       []string                      `json:"pvcs"`
+	PVCStates  []KubernetesPVCState          `json:"pvcStates"`
+	Containers []KubernetesContainerIdentity `json:"containers,omitempty"`
+}
+
+type KubernetesContainerIdentity struct {
+	Name      string    `json:"name"`
+	RuntimeID string    `json:"runtimeId"`
+	StartedAt time.Time `json:"startedAt"`
 }
 
 // KubernetesPVCState records a namespaced, read-only GET made while verifying
 // an application Pod. An unavailable phase must never be interpreted as Bound.
 type KubernetesPVCState struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Phase      string `json:"phase,omitempty"`
-	VolumeName string `json:"volumeName,omitempty"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Phase      string     `json:"phase,omitempty"`
+	VolumeName string     `json:"volumeName,omitempty"`
+	ClaimUID   string     `json:"claimUid,omitempty"`
+	VolumeUID  string     `json:"volumeUid,omitempty"`
+	CreatedAt  *time.Time `json:"createdAt,omitempty"`
 }
 
 type kubeHTTPError int
@@ -130,6 +140,18 @@ func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, e
 	if node := kubeString(spec["nodeName"]); node != "" && kubeName.MatchString(node) && len(node) <= 253 {
 		identity.Node = node
 	}
+	for _, raw := range kubeList(kubeObject(pod["status"])["containerStatuses"]) {
+		row := kubeObject(raw)
+		name := kubeString(row["name"])
+		runtimeID := RuntimeContainerID(kubeString(row["containerID"]))
+		started, err := time.Parse(time.RFC3339Nano, kubeString(kubeObject(kubeObject(row["state"])["running"])["startedAt"]))
+		if err == nil && runtimeID != "" && len(name) <= 63 && kubeName.MatchString(name) {
+			identity.Containers = append(identity.Containers, KubernetesContainerIdentity{Name: name, RuntimeID: runtimeID, StartedAt: started})
+			if len(identity.Containers) == 16 {
+				break
+			}
+		}
+	}
 	seenPVCs := map[string]bool{}
 	for _, raw := range kubeList(spec["volumes"]) {
 		name := kubeString(kubeObject(kubeObject(raw)["persistentVolumeClaim"])["claimName"])
@@ -151,6 +173,12 @@ func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, e
 			meta := kubeObject(pvc["metadata"])
 			if kubeString(meta["namespace"]) == target.Namespace && kubeString(meta["name"]) == name {
 				state.Status = "ok"
+				if uid := kubeString(meta["uid"]); kubeUID.MatchString(uid) {
+					state.ClaimUID = uid
+				}
+				if at, err := time.Parse(time.RFC3339Nano, kubeString(meta["creationTimestamp"])); err == nil {
+					state.CreatedAt = &at
+				}
 				switch kubeString(kubeObject(pvc["status"])["phase"]) {
 				case "Bound", "Pending", "Lost":
 					state.Phase = kubeString(kubeObject(pvc["status"])["phase"])
@@ -160,6 +188,16 @@ func VerifyKubernetesPodIdentity(ctx context.Context, target KubernetesTarget, e
 				if volume := kubeString(kubeObject(pvc["spec"])["volumeName"]); volume != "" &&
 					len(volume) <= 253 && kubeName.MatchString(volume) {
 					state.VolumeName = volume
+					if state.ClaimUID != "" && state.Phase == "Bound" {
+						pv, err := k.get(ctx, "/api/v1/persistentvolumes/"+url.PathEscape(volume), nil)
+						metadata := kubeObject(pv["metadata"])
+						claim := kubeObject(kubeObject(pv["spec"])["claimRef"])
+						uid := kubeString(metadata["uid"])
+						if err == nil && metadata["name"] == volume && kubeUID.MatchString(uid) &&
+							claim["uid"] == state.ClaimUID && claim["namespace"] == target.Namespace && claim["name"] == name {
+							state.VolumeUID = uid
+						}
+					}
 				}
 			}
 		}

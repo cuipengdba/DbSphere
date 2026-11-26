@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/internal/trace"
 	"github.com/jackc/pgx/v5"
 )
@@ -309,7 +310,6 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	serviceSet := map[string]bool{}
 	spanSet := map[string]bool{}
 	spanServices := map[string]string{}
-	parentEdges := []map[string]string{}
 	for traceRows.Next() {
 		var traceID, spanID, service, kind, spanStatus, route, endpoint string
 		var parentID *string
@@ -359,8 +359,10 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		if queryID != nil {
 			observed.QueryID = *queryID
 		}
-		requestSpans = append(requestSpans, requestSpanObservation{observedTraceSpan: observed, Route: route, Endpoint: endpoint,
-			Sampling: declaredProbability, ReceivedAt: receivedAt, TimingAnomaly: timingAnomaly})
+		observation := requestSpanObservation{observedTraceSpan: observed, Route: route, Endpoint: endpoint,
+			Sampling: declaredProbability, ReceivedAt: receivedAt, TimingAnomaly: timingAnomaly,
+			ReportedPod: reportedPodJSON, VerifiedPod: verifiedPodJSON}
+		requestSpans = append(requestSpans, observation)
 		if !timingAnomaly {
 			observedSpans = append(observedSpans, observed)
 		}
@@ -450,73 +452,64 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 			if len(reportedPodJSON) != 0 {
 				appPodReported++
 			}
-			if len(verifiedPodJSON) != 0 {
-				var pod struct {
-					Namespace, Name, UID, Node string
-					PVCs                       []string
-					PVCStates                  []struct {
-						Name, Status, Phase, VolumeName string
-					}
-					ObservedAt time.Time
+			_, pod := requestPodEvidence(observation)
+			if pod != nil {
+				appPodVerified++
+				podNode := "app-pod:" + pod.UID
+				source := "/api/assets/" + event.AssetID + "/traces/" + traceID
+				addNode(podNode, "app_pod", pod.Namespace+"/"+pod.Name, source, pod.ObservedAt)
+				link := spanNode + ":" + podNode
+				if !appPodEdges[link] {
+					appPodEdges[link] = true
+					edges = append(edges, map[string]string{"from": spanNode, "to": podNode,
+						"relation": "originated_from"})
 				}
-				if json.Unmarshal(verifiedPodJSON, &pod) == nil && pod.Namespace != "" &&
-					pod.Name != "" && pod.UID != "" {
-					appPodVerified++
-					podNode := "app-pod:" + pod.UID
-					source := "/api/assets/" + event.AssetID + "/traces/" + traceID
-					addNode(podNode, "app_pod", pod.Namespace+"/"+pod.Name, source, pod.ObservedAt)
-					link := spanNode + ":" + podNode
+				if pod.Node != "" {
+					nodeID := "node:" + pod.Node
+					addNode(nodeID, "k8s_node", pod.Node, source, pod.ObservedAt)
+					link := podNode + ":" + nodeID
 					if !appPodEdges[link] {
 						appPodEdges[link] = true
-						edges = append(edges, map[string]string{"from": spanNode, "to": podNode,
-							"relation": "originated_from"})
+						edges = append(edges, map[string]string{"from": podNode, "to": nodeID,
+							"relation": "scheduled_on"})
 					}
-					if pod.Node != "" {
-						nodeID := "node:" + pod.Node
-						addNode(nodeID, "k8s_node", pod.Node, source, pod.ObservedAt)
-						link := podNode + ":" + nodeID
-						if !appPodEdges[link] {
-							appPodEdges[link] = true
-							edges = append(edges, map[string]string{"from": podNode, "to": nodeID,
-								"relation": "scheduled_on"})
-						}
+				}
+				states := map[string]collector.KubernetesPVCState{}
+				for _, state := range pod.PVCStates {
+					states[state.Name] = state
+				}
+				for _, name := range pod.PVCs {
+					state := states[name]
+					pvcID := fmt.Sprintf("pvc:unverified:%s:%s:%d", pod.UID, name, pod.ObservedAt.UnixNano())
+					relation := "pvc_name_reported"
+					if state.ClaimUID != "" && state.CreatedAt != nil && !state.CreatedAt.After(at) {
+						pvcID, relation = "pvc:uid:"+state.ClaimUID, "references_pvc"
 					}
-					states := map[string]struct{ Status, Phase string }{}
-					for _, state := range pod.PVCStates {
-						states[state.Name] = struct{ Status, Phase string }{state.Status, state.Phase}
+					addNode(pvcID, "pvc", name, source, pod.ObservedAt)
+					link := podNode + ":" + pvcID
+					if !appPodEdges[link] {
+						appPodEdges[link] = true
+						edges = append(edges, map[string]string{"from": podNode, "to": pvcID,
+							"relation": relation})
 					}
-					for _, name := range pod.PVCs {
-						pvcID := "pvc:" + pod.Namespace + ":" + name
-						addNode(pvcID, "pvc", name, source, pod.ObservedAt)
-						link := podNode + ":" + pvcID
-						if !appPodEdges[link] {
-							appPodEdges[link] = true
-							edges = append(edges, map[string]string{"from": podNode, "to": pvcID,
-								"relation": "references_pvc"})
-						}
-						if state, ok := states[name]; ok {
-							statusNode := fmt.Sprintf("app-pvc-state:%s:%s:%d", pod.UID, name, pod.ObservedAt.UnixNano())
-							if !appPVCStatusNodes[statusNode] && len(appPVCStatusNodes) < 20 {
-								appPVCStatusNodes[statusNode] = true
-								label := name + " · 状态未核对"
-								if state.Status == "ok" {
-									label = name + " · " + state.Phase
-								}
-								label += " · 观测于 " + pod.ObservedAt.UTC().Format(time.RFC3339)
-								addNode(statusNode, "pvc_status", label, source, pod.ObservedAt)
-								edges = append(edges, map[string]string{"from": statusNode, "to": pvcID,
-									"relation": "observed_pvc_status"})
-							} else if !appPVCStatusNodes[statusNode] {
-								appPVCStatusOmitted = true
+					if state, ok := states[name]; ok {
+						statusNode := fmt.Sprintf("app-pvc-state:%s:%s:%d", pod.UID, name, pod.ObservedAt.UnixNano())
+						if !appPVCStatusNodes[statusNode] && len(appPVCStatusNodes) < 20 {
+							appPVCStatusNodes[statusNode] = true
+							label := name + " · 状态未核对"
+							if state.Status == "ok" {
+								label = name + " · " + state.Phase
 							}
+							label += " · 观测于 " + pod.ObservedAt.UTC().Format(time.RFC3339)
+							addNode(statusNode, "pvc_status", label, source, pod.ObservedAt)
+							edges = append(edges, map[string]string{"from": statusNode, "to": pvcID,
+								"relation": "observed_pvc_status"})
+						} else if !appPVCStatusNodes[statusNode] {
+							appPVCStatusOmitted = true
 						}
 					}
 				}
 			}
-		}
-		if parentID != nil {
-			parentEdges = append(parentEdges, map[string]string{"from": "span:" + traceID + ":" + *parentID,
-				"to": spanNode, "relation": "parent_of"})
 		}
 	}
 	if err := traceRows.Err(); err != nil {
@@ -526,7 +519,9 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	traceRows.Close()
 	requestPaths, requestPathsAtLimit := traceRequestPaths(requestSpans, samples)
 	classifyTraceImpact(observedSpans, samples, serviceImpacts, sqlRegressionForEvent(event))
+	parentEdges, parentPairs, conflictedParents := requestParentEdges(requestSpans)
 	unresolvedParentSpans := addTraceParentAndServiceEdges(parentEdges, spanServices, &edges)
+	traceDBSpans = slices.DeleteFunc(traceDBSpans, func(span traceDBSpan) bool { return !parentPairs[span.Node] })
 	if candidate := traceLockCandidate(event, samples, traceDBSpans, spanSet, addNode, &edges); candidate != nil {
 		candidates = append(candidates, candidate)
 	}
@@ -535,6 +530,9 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 	}
 	if unresolvedParentSpans > 0 {
 		missing = append(missing, fmt.Sprintf("%d 条 Span 的父 Span 未在当前事件窗口中找到", unresolvedParentSpans))
+	}
+	if conflictedParents > 0 {
+		missing = append(missing, fmt.Sprintf("%d 条 Span 的父子关系存在时间冲突或循环", conflictedParents))
 	}
 	if appPodReported > appPodVerified {
 		missing = append(missing, fmt.Sprintf("%d 条应用 Pod 身份仅由 OTel 上报，未通过 Kubernetes API 核对",
@@ -592,8 +590,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		"timeline": event.Evidence, "candidates": candidates, "missingSignals": missing,
 		"ruleSuppressedCount": len(hidden), "dependencies": dependencies,
 		"traceCoverage": map[string]any{"spans": traceCount, "databaseSpans": databaseSpans,
-			"unresolvedParentSpans": unresolvedParentSpans,
-			"services":              services, "serviceImpact": impactList, "atLimit": traceCount == 100,
+			"unresolvedParentSpans": unresolvedParentSpans, "conflictedParentSpans": conflictedParents,
+			"services": services, "serviceImpact": impactList, "atLimit": traceCount == 100,
 			"appPodReported": appPodReported, "appPodVerified": appPodVerified,
 			"sampling": sampling, "clock": clock, "requestPaths": requestPaths, "requestPathsAtLimit": requestPathsAtLimit},
 	}

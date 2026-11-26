@@ -415,8 +415,11 @@ func TestApplicationPodIdentityRequiresKubernetesUIDAndPersistsInEventPG18(t *te
 				`"creationTimestamp":"2026-11-01T00:00:00Z"},"spec":{"nodeName":"worker-1",`+
 				`"volumes":[{"persistentVolumeClaim":{"claimName":"checkout-data"}}]}}`)
 		case "/api/v1/namespaces/apps/persistentvolumeclaims/checkout-data":
-			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-data"},`+
+			fmt.Fprint(w, `{"metadata":{"namespace":"apps","name":"checkout-data","uid":"claim-uid-1","creationTimestamp":"2026-11-01T00:00:00Z"},`+
 				`"status":{"phase":"Bound"},"spec":{"volumeName":"pv-checkout"}}`)
+		case "/api/v1/persistentvolumes/pv-checkout":
+			fmt.Fprint(w, `{"metadata":{"name":"pv-checkout","uid":"volume-uid-1"},`+
+				`"spec":{"claimRef":{"name":"checkout-data","namespace":"apps","uid":"claim-uid-1"}}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -494,8 +497,8 @@ current-context: test-context
 	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 2 {
-		t.Fatalf("expected one Pod and one PVC GET, got %d", requests.Load())
+	if requests.Load() != 3 {
+		t.Fatalf("expected one Pod, PVC and PV GET each, got %d", requests.Load())
 	}
 	var eventID string
 	if err := pg.pool.QueryRow(ctx, `INSERT INTO event_keys(id,asset_id,started_at)
@@ -515,7 +518,7 @@ current-context: test-context
 	for _, marker := range []string{`"type":"app_pod"`, `"relation":"originated_from"`,
 		`"relation":"scheduled_on"`, `"relation":"references_pvc"`,
 		`"relation":"observed_pvc_status"`, `checkout-data · Bound`,
-		`"appPodReported":1`, `"appPodVerified":1`} {
+		`"appPodReported":1`, `"appPodVerified":1`, `"claimUid":"claim-uid-1"`, `"volumeUid":"volume-uid-1"`} {
 		if !strings.Contains(string(encoded), marker) {
 			t.Fatalf("verified application Pod chain is missing %s: %s", marker, encoded)
 		}
@@ -541,7 +544,7 @@ current-context: test-context
 	if _, err := pg.SaveTraceSpans(ctx, decoded.Spans); err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 2 {
+	if requests.Load() != 3 {
 		t.Fatalf("repeated Pod UID bypassed the bounded API cache: %d GET requests", requests.Load())
 	}
 	badTraceID, badBody := build("replaced-uid")

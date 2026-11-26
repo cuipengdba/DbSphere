@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -56,5 +58,63 @@ func TestTraceRequestPathsPreserveIndependentEvidenceStates(t *testing.T) {
 	if !byID["time"].ClockAnomaly || byID["time"].BackendState != "time_unreliable" || byID["time"].PoolerSample != "" ||
 		byID["unreported"].BackendState != "pid_unreported" || byID["unreported"].PoolerSample == "" {
 		t.Fatal("unreliable timing or absent PID was replaced with unverified database evidence")
+	}
+}
+
+func TestRequestInfrastructureUsesNearestVerifiedIdentityAndSourceTime(t *testing.T) {
+	start := time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)
+	span := func(id, cluster, reportedUID, verifiedUID, claim, volume string, offset time.Duration) requestSpanObservation {
+		at := start.Add(offset)
+		return requestSpanObservation{observedTraceSpan: observedTraceSpan{TraceID: id, SpanID: "db", Kind: "postgresql_client", Start: at, End: at.Add(time.Second)},
+			ReportedPod: []byte(fmt.Sprintf(`{"namespace":"apps","name":"checkout","uid":%q}`, reportedUID)),
+			VerifiedPod: []byte(fmt.Sprintf(`{"namespace":"apps","name":"checkout","uid":%q,"cluster":%q,"createdAt":%q,"observedAt":%q,
+			"pvcStates":[{"name":"data","claimUid":%q,"volumeName":"volume","volumeUid":%q,"createdAt":%q}]}`,
+				verifiedUID, cluster, start.Add(-time.Minute).Format(time.RFC3339), at.Add(time.Second).Format(time.RFC3339),
+				claim, volume, start.Add(-time.Minute).Format(time.RFC3339)))}
+	}
+	first := span("first", "local", "old", "old", "claim-1", "volume-1", 0)
+	second := span("second", "local", "new", "new", "claim-2", "volume-2", 3*time.Second)
+	third := span("third", "local", "new", "new", "claim-2", "volume-2", 6*time.Second)
+	bad := span("bad", "local", "old", "new", "claim-2", "volume-2", 9*time.Second)
+	other := span("other", "another", "other", "other", "other-claim", "other-volume", 5*time.Second)
+	sample := func(id, pod string, offset, observed time.Duration) sampleObservation {
+		return sampleObservation{ID: id, At: third.Start.Add(offset), Status: "ok", Metrics: map[string]any{
+			"k8s": map[string]any{"status": "ok", "observedAt": third.Start.Add(observed).Format(time.RFC3339Nano),
+				"namespace": "apps", "pod": map[string]any{"uid": pod, "name": "checkout"}},
+		}}
+	}
+	paths, _ := traceRequestPaths([]requestSpanObservation{third, bad, first, other, second}, map[string]sampleObservation{
+		"verified":    sample("verified", "new", 100*time.Millisecond, 100*time.Millisecond),
+		"unrelated":   sample("unrelated", "old", 200*time.Millisecond, 200*time.Millisecond),
+		"late_source": sample("late_source", "new", 300*time.Millisecond, 2*time.Second),
+	})
+	byID := map[string]requestInfrastructure{}
+	for _, path := range paths {
+		byID[path.TraceID] = path.Infrastructure
+	}
+	if !slices.Equal(byID["second"].Changes, []string{"pod_replaced", "pvc_replaced:data", "volume_replaced:volume"}) ||
+		len(byID["third"].Changes) != 0 || byID["bad"].AppState != "reported" || byID["bad"].AppPod != nil {
+		t.Fatalf("identity transitions or mismatch were not preserved: %+v", byID)
+	}
+	if samples := byID["third"].Samples; len(samples) != 1 || samples[0].SampleID != "verified" || samples[0].Relation != "same_pod_uid" {
+		t.Fatalf("a later unrelated or out-of-window source displaced verified evidence: %+v", samples)
+	}
+}
+
+func TestRequestPathAndGraphRejectIncompatibleParents(t *testing.T) {
+	start := time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)
+	parent := requestSpanObservation{observedTraceSpan: observedTraceSpan{TraceID: "trace", SpanID: "parent", Start: start, End: start.Add(time.Second)}}
+	child := requestSpanObservation{observedTraceSpan: observedTraceSpan{TraceID: "trace", SpanID: "child", ParentSpanID: "parent", Kind: "postgresql_client", Start: start.Add(2 * time.Second), End: start.Add(3 * time.Second)}}
+	spans := []requestSpanObservation{parent, child}
+	paths, _ := traceRequestPaths(spans, nil)
+	if len(paths) != 1 || paths[0].ParentState != "time_conflict" || !paths[0].ClockAnomaly || len(paths[0].Steps) != 1 {
+		t.Fatalf("path accepted two disjoint spans: %+v", paths)
+	}
+	if edges, pairs, conflicts := requestParentEdges(spans); len(edges) != 0 || len(pairs) != 0 || conflicts != 1 {
+		t.Fatalf("graph accepted two disjoint spans: %v, %v, %d", edges, pairs, conflicts)
+	}
+	spans[0].End, spans[0].ParentSpanID = child.End, child.SpanID
+	if edges, pairs, conflicts := requestParentEdges(spans); len(edges) != 0 || len(pairs) != 0 || conflicts != 2 {
+		t.Fatalf("graph accepted a cycle: %v, %v, %d", edges, pairs, conflicts)
 	}
 }
