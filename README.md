@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.10.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.11.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.10.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.10.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.11.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.11.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](docs/SUPPORT_MATRIX.md)
 
 ## 界面预览
 
@@ -38,7 +38,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 
 | 领域 | 功能 |
 | --- | --- |
-| 资产纳管 | 支持 PostgreSQL 14–19、MySQL 8.4、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis OSS 7.2 与 8.4、etcd 3.5 与 3.6。支持 Linux、Docker、Kubernetes 和托管数据库，提供批量清单预览与导入、授权资产导出、连接及权限体检。 |
+| 资产纳管 | 支持 PostgreSQL 14–19、MySQL 8.4、瀚高安全版 4.5.9、达梦 DM8、金仓 V9 的 PostgreSQL 兼容模式、Redis 6.2、7.2、8.4 和 etcd 3.5、3.6。支持 Linux、Docker、Kubernetes 和托管数据库。批量接入后可以保存首采结果、查看原始证据并复检原资产。 |
 | 监控工作台 | 从集群下钻到实例、数据库和 SQL。对照连接、事务、等待、锁、WAL、复制、检查点和容量，支持同窗多实例对比、短时等待采样、历史阻塞树回放和原始样本。 |
 | 监控大屏 | 按引擎查看资产数、影响范围、近期采样、缺采、失败和端点失联。趋势图随资产引擎切换，支持放大、同步游标、固定时段、历史基线和原始采样。个人和团队值班视图可跨浏览器恢复。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |

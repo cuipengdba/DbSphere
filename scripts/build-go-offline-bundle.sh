@@ -11,9 +11,10 @@ case "$(uname -m)" in
   aarch64|arm64) arch=arm64 ;;
   *) arch='' ;;
 esac
-if [[ "$(uname -s)" != Linux || -z "$arch" ]] ||
+arch="${DBSPHERE_TARGET_ARCH:-$arch}"
+if [[ "$(uname -s)" != Linux || ! "$arch" =~ ^(amd64|arm64)$ ]] ||
    ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-  echo 'The online builder needs Linux x86_64 or arm64, Docker Engine and Compose v2.' >&2
+  echo 'The builder needs Linux, Docker Engine, Compose v2, and target architecture amd64 or arm64.' >&2
   exit 1
 fi
 version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_dir/package.json" | head -n 1)"
@@ -40,10 +41,46 @@ if ! grep -Fq "DBSPHERE_PG18_IMAGE:-$pg_source" "$repo_dir/deploy/compose/compos
   echo 'Go Compose PostgreSQL image must match the pinned offline source.' >&2
   exit 1
 fi
-docker build --platform "linux/$arch" --build-arg TARGETOS=linux --build-arg "TARGETARCH=$arch" \
-  -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
-docker pull --platform "linux/$arch" "$pg_source"
-docker image tag "$pg_source" postgres:18-bookworm
+if [[ -n "${DBSPHERE_RELEASE_BINARY:-}" ]]; then
+  binary="$(realpath -- "$DBSPHERE_RELEASE_BINARY")"
+  if [[ "$(basename -- "$binary")" != "DbSphere-go-$version-linux-$arch" ]]; then
+    echo 'The release binary filename must match the package version and architecture.' >&2
+    exit 1
+  fi
+  go version -m "$binary" | grep -Eq "^[[:space:]]*build[[:space:]]+GOARCH=$arch$"
+  go version -m "$binary" | grep -Eq '^[[:space:]]*build[[:space:]]+GOOS=linux$'
+  root="$stage/rootfs"
+  install -d "$root/etc/ssl/certs" "$root/licenses" "$root/var/lib/dbsphere-discovery"
+  install -m 0755 -- "$binary" "$root/dbsphere"
+  install -m 0644 -- "${DBSPHERE_CA_CERTIFICATES:-/etc/ssl/certs/ca-certificates.crt}" "$root/etc/ssl/certs/ca-certificates.crt"
+  cp -- "$repo_dir/LICENSE" "$root/licenses/DBSphere-LICENSE"
+  cp -R -- "$repo_dir/third_party/licenses/go" "$root/licenses/go"
+  printf '[]\n' > "$root/var/lib/dbsphere-discovery/targets.json"
+  docker build --network none --platform "linux/$arch" -t "$app_image" -f - "$root" <<'DOCKERFILE'
+FROM scratch
+COPY dbsphere /dbsphere
+COPY etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY licenses/ /licenses/
+COPY --chown=65532:65532 var/lib/dbsphere-discovery/ /var/lib/dbsphere-discovery/
+USER 65532:65532
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=5s --retries=12 CMD ["/dbsphere", "healthcheck"]
+ENTRYPOINT ["/dbsphere"]
+DOCKERFILE
+  rm -rf -- "$root"
+else
+  docker build --platform "linux/$arch" --network "${DBSPHERE_BUILD_NETWORK:-default}" \
+    --build-arg TARGETOS=linux --build-arg "TARGETARCH=$arch" --build-arg http_proxy --build-arg https_proxy --build-arg no_proxy \
+    -f "$repo_dir/Dockerfile-go" -t "$app_image" "$repo_dir"
+fi
+# Resolve the pinned index to a platform manifest. Classic Docker image stores
+# cannot retain two platform images under the same index digest.
+pg_manifest="$(docker buildx imagetools inspect --raw "$pg_source" | jq -er --arg arch "$arch" '
+  [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest]
+  | select(length == 1) | .[0]')"
+pg_platform="postgres@$pg_manifest"
+docker pull --platform "linux/$arch" "$pg_platform"
+docker image tag "$pg_platform" postgres:18-bookworm
 mkdir -p -- "$stage/deploy/compose"
 mkdir -p -- "$stage/deploy/k8s"
 cp -- "$repo_dir/deploy/k8s/dbsphere-container-agent.yaml" "$stage/deploy/k8s/"
@@ -65,8 +102,8 @@ docker image save --platform "linux/$arch" "$app_image" postgres:18-bookworm | g
 # Docker may change an image's reported ID when a multi-platform tag is
 # exported as one platform. Reload the exact archive before recording IDs.
 docker image load --input "$stage/images.tar.gz" >/dev/null
-app_image_id="$(docker image inspect --format '{{.Id}}' "$app_image")"
-pg_image_id="$(docker image inspect --format '{{.Id}}' postgres:18-bookworm)"
+app_image_id="$(docker image inspect --platform "linux/$arch" --format '{{.Id}}' "$app_image")"
+pg_image_id="$(docker image inspect --platform "linux/$arch" --format '{{.Id}}' postgres:18-bookworm)"
 if [[ ! "$app_image_id" =~ ^sha256:[0-9a-f]{64}$ || ! "$pg_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo 'Cannot identify both Linux images in the offline archive.' >&2
   exit 1

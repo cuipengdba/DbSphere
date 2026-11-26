@@ -1,9 +1,6 @@
 name: Browser acceptance
 
 on:
-  push:
-    branches: [main, 'release/**', 'development/v3.0', 'verify/v2.25-browser']
-  pull_request:
   workflow_dispatch:
 
 permissions:

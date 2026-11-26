@@ -121,6 +121,9 @@ function setView(route, updateHash = true) {
   showOverview(selected === 'overview');
   showGrafanaView(selected === 'grafana' ? params : null);
   showSample(selected === 'sample' && currentRole ? params : null);
+  if (selected === 'assets' && currentRole === 'admin' && !currentOrganization) {
+    $('asset-import-panel').dispatchEvent(new CustomEvent('onboarding-route', {detail: params.get('batch')}));
+  }
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() :
       selected === 'wallboard' ? wallboard.route() : query ? route : selected;
@@ -2952,8 +2955,11 @@ function setupAssetImport() {
   const form = $('asset-import-form'), apply = $('asset-import-apply'), probe = $('asset-import-probe');
   const output = $('asset-import-plan'), results = $('asset-import-results'), status = $('asset-import-status');
   const download = $('asset-import-export');
+  const panel = $('asset-import-panel'), batches = $('asset-import-batches'), more = $('asset-import-more');
+  const recheck = $('asset-import-recheck'), progress = $('asset-import-progress');
   const cnpgForm = $('cnpg-preview-form'), cnpgResults = $('cnpg-preview-results'), cnpgFill = $('cnpg-preview-fill');
-  let plan, checkedIDs = [], nextExport = '', exportPage = 1;
+  const batchRoot = '/api/assets/import/batches';
+  let plan, batch, batchRequest = 0, nextBatch = '', checking = false, applying = false, nextExport = '', exportPage = 1;
   let cnpgCandidates = [];
   cnpgForm.addEventListener('submit', async event => {
     event.preventDefault();
@@ -3003,55 +3009,162 @@ function setupAssetImport() {
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const input = payload();
+    if (applying || checking) return;
+    plan = null;
     apply.disabled = true;
     status.textContent = '正在预览清单';
     try {
       const response = await api('/api/assets/import/preview', 'POST', input);
       if (JSON.stringify(input) !== JSON.stringify(payload())) { status.textContent = '清单已修改，请重新预览'; return; }
-      plan = { ...input, revision: response.revision };
+      const random = crypto.getRandomValues(new Uint8Array(16));
+      random[6] = (random[6] & 15) | 64;
+      random[8] = (random[8] & 63) | 128;
+      const hex = [...random].map(value => value.toString(16).padStart(2, '0')).join('');
+      const batchId = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
+      plan = { ...input, revision: response.revision, batchId };
       print(response);
       apply.disabled = !response.canApply;
       status.textContent = `${response.rows.length} 项 · ${response.canApply ? '可应用' : '请修正冲突或无效项'}`;
     } catch (error) { status.textContent = error.message; }
   });
   apply.addEventListener('click', async () => {
-    if (!plan) return;
+    if (!plan || applying || checking) return;
+    const submitted = plan;
+    applying = true;
     apply.disabled = true;
     try {
-      const response = await api('/api/assets/import/apply', 'POST', plan);
+      const response = await api('/api/assets/import/apply', 'POST', submitted);
+      plan = null;
       print(response);
-      checkedIDs = response.rows.map(row => row.id);
       nextExport = ''; exportPage = 1; download.textContent = '导出 YAML';
-      probe.textContent = '分批检查连接与权限'; probe.hidden = false;
-      results.replaceChildren();
-      status.textContent = `已应用 ${checkedIDs.length} 项`;
+      status.textContent = `已应用 ${response.rows.length} 项`;
+      await openBatch(response.batchId);
       await refresh();
-    } catch (error) { status.textContent = error.message; }
-    finally { plan = null; }
-  });
-  probe.addEventListener('click', async () => {
-    probe.disabled = true; apply.disabled = true;
-    const failed = [], rows = [];
-    for (let offset = 0; offset < checkedIDs.length; offset += 5) {
-      const ids = checkedIDs.slice(offset, offset + 5);
-      status.textContent = `正在检查 ${offset + 1}–${offset + ids.length} / ${checkedIDs.length}`;
-      try {
-        const response = await api('/api/assets/import/probe', 'POST', { ids });
-        for (const result of response.results) {
-          const pg = result.postgres;
-          if (result.status !== 'ok' && pg?.pgStatus !== 'ok') failed.push(result.id);
-          const evidence = result.sampleId ? replaySampleLink(result.id, result.sampleId) : '无样本';
-          rows.push([result.id, pg?.pgStatus === 'ok' ? 'PostgreSQL 已连接' : '连接或基础采集未通过',
-            pg?.monitorRole === true ? 'pg_monitor' : pg?.monitorRole === false ? '缺少 pg_monitor' : '未知',
-            pg?.reason || (result.status !== 'ok' && pg?.pgStatus === 'ok' ? '可选采集源异常' : ''), evidence]);
-        }
-      } catch (error) { failed.push(...ids); rows.push([ids.join('、'), '批次未完成', '', error.message, '']); }
-      results.replaceChildren(importTable(['资产 ID', '连接', '权限', '状态说明', '证据'], rows));
+    } catch (error) {
+      if (error.status === 409 || error.status === 400) plan = null;
+      status.textContent = error.message;
+    } finally {
+      applying = false;
+      apply.disabled = !plan;
     }
-    checkedIDs = failed;
-    status.textContent = failed.length ? `${failed.length} 项待重试` : '连接检查完成';
-    probe.textContent = '重试失败项'; probe.hidden = !failed.length; probe.disabled = false;
   });
+  const pending = item => item.available && !item.lastAttemptAt;
+  const needsRecheck = item => item.available && item.lastAttemptAt && item.latestReport?.status !== 'ready';
+  function renderBatch() {
+    const items = batch?.items || [];
+    probe.hidden = !items.some(pending);
+    recheck.hidden = !items.some(needsRecheck);
+    probe.disabled = recheck.disabled = batches.disabled = more.disabled = checking;
+    if (!batch) { results.replaceChildren(); return; }
+    const rows = items.map(item => {
+      const current = item.latestReport;
+      const currentStatus = !item.available ? '资产已删除' :
+        readinessStates[current?.status] || (item.lastAttemptAt ? '未取得体检报告' : readinessStates.waiting);
+      const evidence = cell('div', '', 'actions');
+      if (item.available && item.firstReport?.sampleId) {
+        const link = replaySampleLink(item.assetId, item.firstReport.sampleId);
+        link.textContent = '首采原始采样';
+        evidence.append(link);
+      }
+      if (item.available && current?.sampleId && current.sampleId !== item.firstReport?.sampleId) {
+        const link = replaySampleLink(item.assetId, current.sampleId);
+        link.textContent = '复检原始采样';
+        evidence.append(link);
+      }
+      const details = cell('div');
+      const action = current?.checks.find(check => ['failed', 'limited', 'unknown'].includes(check.status) && check.action);
+      if (action) details.append(cell('p', readinessActions[action.action] || currentStatus));
+      if (current) details.append(readinessPanel(item.available ? current : {...current, sampleId: null}));
+      if (item.available && currentStatus !== readinessStates.ready && item.lastAttemptAt) {
+        const edit = cell('button', '编辑原资产', 'ghost small-button');
+        edit.type = 'button';
+        edit.disabled = checking;
+        edit.addEventListener('click', async () => {
+          try { editAsset((await api(`/api/assets/${item.assetId}`)).asset); }
+          catch (error) { notice(error.message, true); }
+        });
+        evidence.append(edit);
+      }
+      return [item.name, assetRuntimeLabel(item), readinessStates[item.firstReport?.status] || '—', currentStatus, details, evidence];
+    });
+    results.replaceChildren(importTable(['资产', '类型', '首采结果', '最近结果', '体检项', '原始证据与操作'], rows));
+  }
+  async function listBatches(append = false) {
+    const owner = csrf;
+    const response = await api(`${batchRoot}?after=${encodeURIComponent(append ? nextBatch : '')}`);
+    if (owner !== csrf) return;
+    if (!append) batches.replaceChildren(new Option('选择批次', ''));
+    for (const item of response.batches) {
+      if (![...batches.options].some(option => option.value === item.id)) {
+        batches.add(new Option(`${formatTime(item.createdAt)} · ${item.assetCount} 项 · ${item.id.slice(0, 8)}`, item.id));
+      }
+    }
+    nextBatch = response.next;
+    more.hidden = !nextBatch;
+    if (batch) selectBatch(batch);
+  }
+  function selectBatch(selected) {
+    if (![...batches.options].some(option => option.value === selected.id)) {
+      batches.add(new Option(`${formatTime(selected.createdAt)} · ${selected.items.length} 项 · ${selected.id.slice(0, 8)}`, selected.id));
+    }
+    batches.value = selected.id;
+  }
+  async function openBatch(id) {
+    const request = ++batchRequest;
+    const owner = csrf;
+    const selected = await api(`${batchRoot}/${id}`);
+    if (owner !== csrf || request !== batchRequest) return;
+    batch = selected;
+    if (document.body.dataset.activeView === 'assets') {
+      history.replaceState(history.state, '', `#assets?batch=${id}`);
+    }
+    selectBatch(batch);
+    progress.textContent = '';
+    renderBatch();
+  }
+  async function checkBatch(filter) {
+    if (!batch || checking || applying) return;
+    const id = batch.id, owner = csrf, ids = batch.items.filter(filter).map(item => item.assetId);
+    checking = true;
+    renderBatch();
+    try {
+      for (let offset = 0; offset < ids.length; offset += 5) {
+        if (owner !== csrf) return;
+        const chunk = ids.slice(offset, offset + 5);
+        progress.textContent = `正在验收 ${offset + 1}–${offset + chunk.length} / ${ids.length}`;
+        const updated = await api(`${batchRoot}/${id}/check`, 'POST', {ids: chunk});
+        if (owner !== csrf) return;
+        batch = updated;
+        renderBatch();
+      }
+      progress.textContent = `本次检查 ${ids.length} 项 · ${batch.items.filter(needsRecheck).length} 项待复检`;
+      await refresh();
+    } catch (error) { if (owner === csrf) progress.textContent = error.message; }
+    finally { checking = false; renderBatch(); }
+  }
+  const showError = error => { progress.textContent = error.message; };
+  panel.addEventListener('toggle', () => {
+    if (panel.open && nativeOverview && currentRole === 'admin' && !currentOrganization) void listBatches().catch(showError);
+  });
+  panel.addEventListener('onboarding-route', ({detail: id}) => {
+    if (!sampleUUID.test(id || '')) return;
+    panel.open = true;
+    if (batch?.id !== id && !checking) void openBatch(id).catch(showError);
+  });
+  panel.addEventListener('onboarding-reset', () => {
+    batchRequest++;
+    plan = batch = null;
+    form.reset(); apply.disabled = true; output.replaceChildren(); status.textContent = ''; progress.textContent = '';
+    batches.replaceChildren(new Option('选择批次', '')); nextBatch = ''; more.hidden = true;
+    renderBatch();
+  });
+  batches.addEventListener('change', () => {
+    if (batches.value) void openBatch(batches.value).catch(showError);
+    else { batch = null; batchRequest++; progress.textContent = ''; history.replaceState(history.state, '', '#assets'); renderBatch(); }
+  });
+  more.addEventListener('click', () => void listBatches(true).catch(showError));
+  probe.addEventListener('click', () => void checkBatch(pending));
+  recheck.addEventListener('click', () => void checkBatch(needsRecheck));
   download.addEventListener('click', async () => {
     download.disabled = true;
     try {
@@ -5037,6 +5150,7 @@ async function boot() {
     organizations = [];
   }
   if (session.csrf !== csrf) {
+    $('asset-import-panel').dispatchEvent(new Event('onboarding-reset'));
     aiModelRequest++;
     aiModelSettings = null;
     aiModelForm.reset();

@@ -111,6 +111,8 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		add("connection", "failed", "check_tls")
 	case strings.Contains(sample.Error, "SQLSTATE 42501"):
 		add("connection", "limited", "check_database_access")
+	case strings.Contains(sample.Error, "cannot read INFO server"):
+		add("connection", "limited", "check_stats_permission")
 	case pgStatus == "availability":
 		add("connection", "failed", "check_endpoint")
 	default:

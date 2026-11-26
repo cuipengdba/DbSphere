@@ -17,9 +17,9 @@ import (
 )
 
 var (
-	ErrRedisVersion   = errors.New("Redis monitoring requires Redis OSS 7.2 or 8.4")
+	ErrRedisVersion   = errors.New("Redis monitoring requires Redis 6.2, 7.2 or 8.4")
 	ErrRedisConfig    = errors.New("Redis TLS configuration is invalid")
-	redisVersion      = regexp.MustCompile(`^(7\.2|8\.4)\.([0-9]{1,2})$`)
+	redisVersion      = regexp.MustCompile(`^(6\.2|7\.2|8\.4)\.([0-9]{1,2})$`)
 	redisNodeID       = regexp.MustCompile(`^[a-f0-9]{40}$`)
 	redisTopologyName = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
 	errRedisGroup     = errors.New("specify a Sentinel master group")
@@ -159,11 +159,10 @@ func (RedisAdapter) Collect(ctx context.Context, target Target, password string)
 		details.Sentinel, err = readRedisSentinel(ctx, client, target.Database)
 		record("sentinel", "SENTINEL MASTER / MASTERS", err)
 	} else {
-		body, err := client.Info(ctx, "clients", "memory", "stats", "replication", "persistence").Result()
+		values, err := readRedisCounters(ctx, client, major == 6)
 		if err != nil {
 			record("redisCounters", "INFO clients / memory / stats / replication / persistence", err)
 		} else {
-			values := redisInfo(body)
 			details.Ops, details.Clients, details.MaxClients = redisInt(values, "instantaneous_ops_per_sec"), redisInt(values, "connected_clients"), redisInt(values, "maxclients")
 			details.Blocked, details.Rejected = redisInt(values, "blocked_clients"), redisInt(values, "rejected_connections")
 			details.Memory, details.MaxMemory = redisInt(values, "used_memory"), redisInt(values, "maxmemory")
@@ -212,34 +211,90 @@ func (RedisAdapter) Collect(ctx context.Context, target Target, password string)
 				details.SlotsOK, details.SlotsFail, details.SlotsPFail = redisInt(state, "cluster_slots_ok"), redisInt(state, "cluster_slots_fail"), redisInt(state, "cluster_slots_pfail")
 			}
 			record("slots", "CLUSTER INFO", err)
-			shards, err := client.ClusterShards(ctx).Result()
-			if err == nil {
-				details.Shards = []RedisShard{}
-				details.ShardsTruncated = len(shards) > 64
-				for _, shard := range shards[:min(len(shards), 64)] {
-					item := RedisShard{Slots: []RedisSlotRange{}, Nodes: []RedisShardNode{}}
-					for _, slots := range shard.Slots[:min(len(shard.Slots), 64)] {
-						if slots.Start >= 0 && slots.Start <= slots.End && slots.End < 16384 {
-							item.Slots = append(item.Slots, RedisSlotRange{Start: slots.Start, End: slots.End})
-						}
-					}
-					for _, node := range shard.Nodes[:min(len(shard.Nodes), 32)] {
-						if redisNodeID.MatchString(node.ID) {
-							item.Nodes = append(item.Nodes, RedisShardNode{ID: node.ID,
-								Role: redisChoice(node.Role, "master", "replica"), Health: redisChoice(node.Health, "online", "fail", "loading")})
-						}
-					}
-					details.ShardsTruncated = details.ShardsTruncated || len(shard.Slots) > 64 || len(shard.Nodes) > 32
-					details.Shards = append(details.Shards, item)
+			if major == 6 {
+				slots, err := client.ClusterSlots(ctx).Result()
+				if err == nil {
+					details.Shards, details.ShardsTruncated = redisLegacyShards(slots)
 				}
+				record("shards", "CLUSTER SLOTS", err)
+			} else {
+				shards, err := client.ClusterShards(ctx).Result()
+				if err == nil {
+					details.Shards = []RedisShard{}
+					details.ShardsTruncated = len(shards) > 64
+					for _, shard := range shards[:min(len(shards), 64)] {
+						item := RedisShard{Slots: []RedisSlotRange{}, Nodes: []RedisShardNode{}}
+						for _, slots := range shard.Slots[:min(len(shard.Slots), 64)] {
+							if slots.Start >= 0 && slots.Start <= slots.End && slots.End < 16384 {
+								item.Slots = append(item.Slots, RedisSlotRange{Start: slots.Start, End: slots.End})
+							}
+						}
+						for _, node := range shard.Nodes[:min(len(shard.Nodes), 32)] {
+							if redisNodeID.MatchString(node.ID) {
+								item.Nodes = append(item.Nodes, RedisShardNode{ID: node.ID,
+									Role: redisChoice(node.Role, "master", "replica"), Health: redisChoice(node.Health, "online", "fail", "loading")})
+							}
+						}
+						details.ShardsTruncated = details.ShardsTruncated || len(shard.Slots) > 64 || len(shard.Nodes) > 32
+						details.Shards = append(details.Shards, item)
+					}
+				}
+				record("shards", "CLUSTER SHARDS", err)
 			}
-			record("shards", "CLUSTER SHARDS", err)
 		}
 	}
 	report.Role = details.Role
 	return collectoradapter.Snapshot{Report: report, Metrics: map[string]any{
 		"redis": details, "role": nullableCollectorRole(details.Role), "version_num": version,
 	}}, nil
+}
+
+func readRedisCounters(ctx context.Context, client *redis.Client, legacy bool) (map[string]string, error) {
+	sections := []string{"clients", "memory", "stats", "replication", "persistence"}
+	if !legacy {
+		body, err := client.Info(ctx, sections...).Result()
+		return redisInfo(body), err
+	}
+	// Redis 6.2 accepts only one section per INFO command.
+	pipe := client.Pipeline()
+	commands := make([]*redis.StringCmd, 0, len(sections))
+	for _, section := range sections {
+		commands = append(commands, pipe.Info(ctx, section))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	result := make(map[string]string)
+	for _, command := range commands {
+		for key, value := range redisInfo(command.Val()) {
+			result[key] = value
+		}
+	}
+	return result, nil
+}
+
+func redisLegacyShards(slots []redis.ClusterSlot) ([]RedisShard, bool) {
+	result := make([]RedisShard, 0, min(len(slots), 64))
+	truncated := len(slots) > 64
+	for _, slot := range slots[:min(len(slots), 64)] {
+		if slot.Start < 0 || slot.Start > slot.End || slot.End >= 16384 {
+			continue
+		}
+		shard := RedisShard{Slots: []RedisSlotRange{{Start: int64(slot.Start), End: int64(slot.End)}}, Nodes: []RedisShardNode{}}
+		truncated = truncated || len(slot.Nodes) > 32
+		for i, node := range slot.Nodes[:min(len(slot.Nodes), 32)] {
+			if !redisNodeID.MatchString(node.ID) {
+				continue
+			}
+			role := "replica"
+			if i == 0 {
+				role = "master"
+			}
+			shard.Nodes = append(shard.Nodes, RedisShardNode{ID: node.ID, Role: role})
+		}
+		result = append(result, shard)
+	}
+	return result, truncated
 }
 
 func nullableCollectorRole(role string) any {

@@ -489,7 +489,7 @@
           <div id="asset-page-controls" class="event-page-controls" hidden><button id="asset-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="asset-next" type="button" class="ghost small-button" disabled>下一页</button></div>
         </section>
         <details id="asset-import-panel" class="panel admin-only platform-only asset-import">
-          <summary>PostgreSQL 批量纳管与清单导出</summary>
+          <summary>批量纳管与首采验收</summary>
           <form id="asset-import-form" class="form-grid">
             <label>清单格式<select name="format"><option value="yaml">DbSphere YAML</option><option value="csv">DbSphere CSV</option><option value="pigsty">Pigsty Inventory</option></select></label>
             <label>默认监控用户名<input name="username" maxlength="63" autocomplete="off" placeholder="dbsphere_monitor"></label>
@@ -500,7 +500,13 @@
           </form>
           <p id="asset-import-status" class="hint" aria-live="polite"></p>
           <div id="asset-import-plan" class="monitor-table"></div>
-          <div class="section-actions"><button id="asset-import-probe" class="ghost" type="button" hidden>分批检查连接与权限</button></div>
+          <div class="section-actions">
+            <label>接入批次 <select id="asset-import-batches"><option value="">选择批次</option></select></label>
+            <button id="asset-import-more" class="ghost" type="button" hidden>更多批次</button>
+            <button id="asset-import-probe" class="ghost" type="button" hidden>验收待首采资产</button>
+            <button id="asset-import-recheck" class="ghost" type="button" hidden>复检异常资产</button>
+          </div>
+          <p id="asset-import-progress" class="hint" role="status"></p>
           <div id="asset-import-results" class="monitor-table"></div>
           <details class="settings-details">
             <summary>发现 CloudNativePG 集群</summary>

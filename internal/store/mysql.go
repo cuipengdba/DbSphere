@@ -124,7 +124,10 @@ func mysqlCollectionError(err error) (string, string) {
 		if remote.Number == 1040 || remote.Number == 1053 {
 			return "availability", fmt.Sprintf("MySQL temporarily unavailable (error %d)", remote.Number)
 		}
-		return "telemetry", fmt.Sprintf("MySQL authentication or collection failed (error %d)", remote.Number)
+		if remote.Number == 1045 || remote.Number == 1698 {
+			return "telemetry", fmt.Sprintf("MySQL authentication failed (error %d)", remote.Number)
+		}
+		return "telemetry", fmt.Sprintf("MySQL collection failed (error %d)", remote.Number)
 	default:
 		return "availability", "MySQL connection or collection failed"
 	}

@@ -29,7 +29,7 @@
 
 Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。实测两节点流复制积压、回放追平和备库提升。会话等待历史、归档与 Top SQL 指纹按目标库的统计配置和权限提供。 [金仓接入与权限](KINGBASE.md)
 
-## Redis OSS 7.2 与 8.4
+## Redis 6.2、7.2 和 8.4
 
 独立只读 ACL 用户可读取 Redis 单节点、主从、Sentinel 与 Cluster。覆盖 OPS、缓存窗口、慢命令、持久化及拓扑，按可用权限显示缺口。 [Redis 接入与指标](REDIS.md)
 
