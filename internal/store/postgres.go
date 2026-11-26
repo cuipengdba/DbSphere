@@ -528,6 +528,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateLogRetestPlans(ctx, tx); err != nil {
 		return fmt.Errorf("migrate log retest plans: %w", err)
 	}
+	if err := migrateAlertRuleRevisions(ctx, tx); err != nil {
+		return fmt.Errorf("migrate alert rule revisions: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

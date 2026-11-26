@@ -3259,6 +3259,8 @@ function renderRules(rules) {
     }
     severity.value = rule.severity;
     const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;
+    const rulePatch = () => ({threshold: Number(threshold.value) * (rule.metric === growthMetric ? 1024 ** 3 : 1),
+      durationSeconds: Number(duration.value), recoverySeconds: Number(recovery.value), severity: severity.value, enabled: enabled.checked});
     for (const [label, input] of [[rule.metric === growthMetric ? '阈值（GiB/日）' : '阈值', threshold], ['触发持续秒数', duration],
       ['恢复持续秒数', recovery], ['级别', severity], ['启用', enabled]]) {
       const wrapper = document.createElement('label'); wrapper.append(cell('span', label), input); form.append(wrapper);
@@ -3267,14 +3269,145 @@ function renderRules(rules) {
     form.addEventListener('submit', async event => {
       event.preventDefault();
       try {
-        await api(`/api/alert-rules/${rule.id}`, 'PATCH', { threshold: Number(threshold.value) * (rule.metric === growthMetric ? 1024 ** 3 : 1),
-          durationSeconds: Number(duration.value), recoverySeconds: Number(recovery.value), severity: severity.value, enabled: enabled.checked });
+        await api(`/api/alert-rules/${rule.id}`, 'PATCH', rulePatch());
         notice(`${rule.title} 已更新；新配置将在下次采样时生效。`);
         document.activeElement?.blur(); await refresh();
       } catch (error) { notice(error.message, true); }
     });
-    details.append(form); list.append(details);
+    details.append(form);
+    if (currentRole === 'admin' && rule.metric !== 'collector.missed_intervals') details.append(alertReplayPanel(rule, rulePatch, form));
+    list.append(details);
   }
+}
+
+function alertReplayPanel(rule, draftPatch, ruleForm) {
+  const panel = cell('details', '', 'evidence');
+  panel.append(cell('summary', '历史回放与分批启用'));
+  const form = cell('form', '', 'rule-form');
+  const asset = cell('select');
+  for (const row of allAssets.filter(item => ['linux', 'managed', 'k8s'].includes(item.runtime))) {
+    const option = cell('option', row.name); option.value = row.id; asset.append(option);
+  }
+  const localTime = value => new Date(value - new Date(value).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  const dateField = value => {
+    const input = cell('input'); input.type = 'datetime-local'; input.required = true; input.value = localTime(value); return input;
+  };
+  const from = dateField(Date.now() - 3600000), to = dateField(Date.now());
+  for (const [name, input] of [['回放资产', asset], ['开始（本地时间）', from], ['结束（本地时间）', to]]) {
+    const label = cell('label', name); label.append(input); form.append(label);
+  }
+  const replay = cell('button', '预览回放', 'small-button'); replay.type = 'submit';
+  const save = cell('button', '保存为影子修订', 'small-button'); save.type = 'button'; save.disabled = true;
+  const output = cell('div', '', 'monitor-table'), history = cell('div', '', 'list');
+  form.append(replay, save);
+  panel.append(form, output, history);
+  let preview;
+  const route = () => `/api/assets/${asset.value}/alert-rules/${rule.id}`;
+  const request = () => ({from: new Date(from.value).toISOString(), to: new Date(to.value).toISOString(), patch: draftPatch()});
+  const showError = (target, error) => target.replaceChildren(cell('p', error.message, 'warning'));
+  const invalidate = () => { preview = undefined; save.disabled = true; };
+  form.addEventListener('input', invalidate);
+  ruleForm.addEventListener('input', invalidate);
+  const run = async persist => {
+    if (!asset.value || !form.reportValidity() || !ruleForm.reportValidity()) return;
+    replay.disabled = save.disabled = true;
+    try {
+      const input = request();
+      const snapshot = JSON.stringify(input);
+      const base = route();
+      if (persist && preview !== `${base}:${snapshot}`) {
+        output.replaceChildren(cell('p', '规则或时间窗已修改，请重新预览。', 'hint'));
+        return;
+      }
+      const result = await api(`${base}/${persist ? 'revisions' : 'replay'}`, 'POST', input);
+      if (base !== route() || snapshot !== JSON.stringify(request())) return;
+      renderAlertReplay(output, result.replay, asset.value);
+      preview = persist ? undefined : `${base}:${snapshot}`;
+      if (persist) await loadHistory();
+    } catch (error) { invalidate(); showError(output, error); }
+    finally { replay.disabled = false; save.disabled = !preview; }
+  };
+  form.addEventListener('submit', event => { event.preventDefault(); void run(false); });
+  save.addEventListener('click', () => void run(true));
+  const loadHistory = async () => {
+    if (!asset.value) return;
+    const base = route(), assetId = asset.value;
+    try {
+      const {revisions} = await api(`${base}/revisions`);
+      if (base !== route()) return;
+      history.replaceChildren();
+      for (const revision of revisions) {
+        const item = cell('details', '', 'evidence');
+        const status = revision.active ? '已启用' : revision.appliedAt ? '已替换' : revision.reviewed ? '已复核' : '影子观察';
+        item.append(cell('summary', `${status} · ${formatTime(revision.createdAt)} · ${revision.createdBy}`));
+        const content = cell('div', '', 'monitor-table');
+        renderAlertReplay(content, revision.replay, assetId);
+        item.append(content, cell('p', `有效影子采样 ${revision.shadowCount} 条${revision.shadowTransition ? ' · ' + (alertReplayChanges[revision.shadowTransition] || revision.shadowTransition) : ''}`));
+        if (revision.shadowSampleId) item.append(alertReplaySample(assetId, revision.shadowSampleId, '查看影子原始采样'));
+        if (revision.reviewed) item.append(cell('p', `${revision.reviewedBy} · ${revision.reviewNote}`));
+        const action = async payload => {
+          try { await api(`${base}/revisions/${revision.id}`, 'POST', payload); await loadHistory(); }
+          catch (error) { notice(error.message, true); }
+        };
+        if (!revision.reviewed) {
+          const review = cell('form', '', 'rule-form');
+          const label = cell('label', '复核结论');
+          const note = cell('input'); note.required = true; note.maxLength = 300; label.append(note);
+          review.append(label, cell('button', '保存复核', 'small-button'));
+          review.addEventListener('submit', event => { event.preventDefault(); void action({action:'review', note:note.value}); });
+          item.append(review);
+        } else if (!revision.appliedAt && revision.shadowCount > 0) {
+          for (const [scope, name] of [['asset', '仅对本资产启用'], ['organization', '对所属组织启用']]) {
+            const activate = cell('button', name, 'small-button'); activate.type = 'button';
+            activate.addEventListener('click', () => { if (confirm(name + '此规则修订？')) void action({action:'enable', scope}); });
+            item.append(activate);
+          }
+        } else if (revision.active) {
+          const revert = cell('button', '停止此修订', 'small-button'); revert.type = 'button';
+          revert.addEventListener('click', () => {
+            if (confirm('停止此修订后，后续告警将使用该范围的上一级生效规则。')) void action({action:'revert'});
+          });
+          item.append(revert);
+        }
+        history.append(item);
+      }
+    } catch (error) { if (base === route()) showError(history, error); }
+  };
+  asset.addEventListener('change', () => { output.replaceChildren(); void loadHistory(); });
+  panel.addEventListener('toggle', () => { if (panel.open) void loadHistory(); });
+  if (!asset.options.length) { replay.disabled = true; panel.append(cell('p', '需要可访问的 PostgreSQL 资产。', 'hint')); }
+  return panel;
+}
+
+const alertReplayChanges = {added:'新增触发', omitted:'遗漏触发', earlier:'提前', later:'延迟', same_time:'同一采样触发',
+  firing:'进入告警', recovered:'恢复', signal_missing:'读数缺采', recovery_pending:'等待恢复确认', recovery_cancelled:'恢复期再次异常'};
+
+function alertReplaySample(asset, sample, label) {
+  const link = cell('a', label, 'monitor-link');
+  link.href = '#sample?' + new URLSearchParams({asset, sample, return:'alerts'});
+  return link;
+}
+
+function renderAlertReplay(target, result, asset) {
+  const ruleText = rule => `v${rule.version} · ${rule.enabled ? '启用' : '停用'} · ${rule.operator} ${formatAlertValue(rule.metric, rule.threshold)} · 触发 ${rule.durationSeconds} 秒 · 恢复 ${rule.recoverySeconds || 0} 秒`;
+  target.replaceChildren(cell('p', `${formatTime(result.from)} – ${formatTime(result.to)} · ${result.samples} 条原始采样 · 缺读数 ${result.missingSignals} · 静默窗内 ${result.silencedSamples}`),
+    cell('p', `生效规则 ${ruleText(result.current)}`), cell('p', `拟修改规则 ${ruleText(result.proposed)}`));
+  if (!result.comparisons.length) { target.append(cell('p', '此时间窗内没有模拟触发。', 'hint')); return; }
+  const episodeCell = episode => {
+    if (!episode) return '—';
+    const item = cell('div');
+    item.append(cell('p', `${formatTime(episode.firingAt)} · 读数 ${episode.firingValue}${episode.suppressed ? ' · 触发时静默' : ''}`),
+      alertReplaySample(asset, episode.firingSampleId, '触发采样'));
+    if (episode.notifyAt && episode.suppressed) item.append(cell('p', `静默结束后可通知 ${formatTime(episode.notifyAt)}`));
+    if (episode.recoveredAt) item.append(cell('p', `恢复 ${formatTime(episode.recoveredAt)} · ${episode.recoverySeconds} 秒`),
+      alertReplaySample(asset, episode.recoverySampleId, '恢复采样'));
+    else item.append(cell('p', '窗内未观察到恢复'));
+    return item;
+  };
+  target.append(importTable(['差异', '生效规则', '拟修改规则'], result.comparisons.map(change => [
+    `${alertReplayChanges[change.state]}${change.shiftSeconds ? ' ' + Math.abs(change.shiftSeconds) + ' 秒' : ''}`,
+    episodeCell(change.current), episodeCell(change.proposed)
+  ])));
 }
 
 function importTable(headings, rows) {
@@ -5588,6 +5721,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
         text = `${prefix} · ${labels[evidence.kind] || evidence.kind}`;
       }
       if (alert.sampleId) text += ` · 样本 ${alert.sampleId}`;
+      if (alert.ruleRevisionId) text += ` · 规则修订 ${alert.ruleRevisionId}`;
       if (alert.detail?.status && alert.metric === 'routing.entry_fault')
         text += ` · ${routingStatus[alert.detail.status] || alert.detail.status}`;
       if (alert.reason) text += ` · ${alert.reason}`;
@@ -5625,6 +5759,13 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
+    if (['alert_firing', 'alert_suppressed', 'alert_recovered'].includes(evidence.kind) && sampleUUID.test(evidence.payload.sampleId || '')) {
+      const label = evidence.kind === 'alert_recovered' ? '查看恢复采样' : '查看触发采样';
+      const link = cell('a', label, 'monitor-link');
+      link.href = '#sample?' + new URLSearchParams({asset: event.assetId, sample: evidence.payload.sampleId,
+        return: 'incidents?' + investigationParams(event.id)});
+      row.append(' · ', link);
+    }
     if (risk && evidence.payload.sampleId) row.append(document.createTextNode(' · '), replaySampleLink(event.assetId, evidence.payload.sampleId));
     if (evidence.kind === 'log_record' && logEvidenceID.test(evidence.payload.batchId || '') && logEvidenceID.test(evidence.payload.recordId || '')) {
       const link = cell('a', '查看原始记录', 'monitor-link');

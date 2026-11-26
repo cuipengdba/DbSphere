@@ -816,6 +816,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if handleAssetRisk(w, r, store, role) {
 			return
 		}
+		if handleAlertRuleReplay(w, r, store, role) {
+			return
+		}
 		if handleAISettings(w, r, credentials, role) {
 			return
 		}

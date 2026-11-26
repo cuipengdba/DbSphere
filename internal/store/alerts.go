@@ -96,6 +96,8 @@ type alertState struct {
 	LastObservedAt  time.Time  `json:"lastObservedAt"`
 	MutedBy         *string    `json:"mutedBy"`
 	RecoveringSince *time.Time `json:"recoveringSince,omitempty"`
+	FiringRule      *alertRule `json:"firingRule,omitempty"`
+	RuleRevision    string     `json:"ruleRevisionId,omitempty"`
 }
 
 type alertSignal struct {
@@ -558,6 +560,7 @@ func nextGoAlert(rule alertRule, signal alertSignal, old *alertState, now time.T
 		LastValue: signal.Value, LastObservedAt: now}
 	if old != nil {
 		next.EventID, next.FiredAt, next.MutedBy = old.EventID, old.FiredAt, old.MutedBy
+		next.FiringRule, next.RuleRevision = old.FiringRule, old.RuleRevision
 	}
 	if firing {
 		next.Status = "firing"
@@ -647,11 +650,26 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 		return err
 	}
 	silences.Close()
+	overrides, err := activeRuleOverrides(ctx, tx, assetID, onlyRuleID)
+	if err != nil {
+		return err
+	}
 	for _, rule := range rules {
 		if onlyRuleID != "" && rule.ID != onlyRuleID {
 			continue
 		}
 		old := states[rule.ID]
+		stored := old
+		revision, scoped := overrides[rule.ID]
+		if scoped {
+			rule = revision.Rule
+		}
+		if old != nil && old.Status == "firing" && old.FiringRule != nil && (scoped || old.RuleRevision != "") {
+			rule, revision.ID = *old.FiringRule, old.RuleRevision
+		}
+		if old != nil && old.Status == "pending" && old.RuleRevision != revision.ID {
+			old = nil
+		}
 		if !rule.Enabled {
 			if old != nil {
 				if _, err := tx.Exec(ctx, `DELETE FROM alert_states WHERE asset_id=$1 AND rule_id=$2`,
@@ -667,12 +685,14 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 		signal := readGoSignalWithPrevious(rule.Metric, metrics, previous, now)
 		next, transition := nextGoAlert(rule, signal, old, now)
 		if next != nil {
+			next.RuleRevision = revision.ID
 			next.MutedBy = genericSilence
 			if id, exists := ruleSilences[rule.ID]; exists {
 				next.MutedBy = &id
 			}
 		}
 		if transition == "firing" {
+			next.FiringRule, next.RuleRevision = &rule, revision.ID
 			eventID, err := s.openGoAlertEvent(ctx, tx, assetID, rule, now)
 			if err != nil {
 				return err
@@ -694,7 +714,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 				DO UPDATE SET state_json=excluded.state_json`, assetID, rule.ID, body); err != nil {
 				return err
 			}
-		} else if old != nil {
+		} else if stored != nil {
 			if _, err := tx.Exec(ctx, `DELETE FROM alert_states WHERE asset_id=$1 AND rule_id=$2`, assetID, rule.ID); err != nil {
 				return err
 			}
@@ -729,7 +749,7 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 			}
 		}
 		if transition != "" && next != nil && next.EventID != "" {
-			payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,
+			payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version, "ruleRevisionId": next.RuleRevision,
 				"metric": rule.Metric, "severity": rule.Severity, "source": signal.Source,
 				"value": signal.Value, "threshold": rule.Threshold, "operator": rule.Operator,
 				"recoverySeconds": rule.RecoverySeconds, "durationSeconds": rule.DurationSeconds,
@@ -747,6 +767,9 @@ func (s *Postgres) applyGoAlerts(ctx context.Context, tx pgx.Tx, assetID, sample
 				}
 			}
 		}
+	}
+	if sampleID != "" && onlyRuleID == "" {
+		return observeAlertRevisions(ctx, tx, assetID, sampleID, now, metrics, previous)
 	}
 	return nil
 }
@@ -782,7 +805,7 @@ func (s *Postgres) finishGoAlert(ctx context.Context, tx pgx.Tx, assetID string,
 	if old == nil || old.EventID == "" {
 		return nil
 	}
-	payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version,
+	payload, _ := json.Marshal(map[string]any{"ruleId": rule.ID, "ruleVersion": rule.Version, "ruleRevisionId": old.RuleRevision,
 		"metric": rule.Metric, "sampleId": sampleID, "severity": rule.Severity,
 		"source": rule.Source, "value": old.LastValue, "silenceId": old.MutedBy})
 	var evidenceID string
@@ -843,30 +866,13 @@ type AlertRulePatch struct {
 	RecoverySeconds *int     `json:"recoverySeconds"`
 }
 
-func (s *Postgres) UpdateAlertRule(ctx context.Context, id string, patch AlertRulePatch) (any, error) {
+func patchedAlertRule(rule alertRule, patch AlertRulePatch) (alertRule, error) {
+	if !supportedAlertMetric(rule.Metric) {
+		return alertRule{}, ErrAlertRuleUnsupported
+	}
 	if patch.Enabled == nil && patch.Severity == nil && patch.Operator == nil &&
 		patch.Threshold == nil && patch.DurationSeconds == nil && patch.RecoverySeconds == nil {
-		return nil, ErrInvalidAlertRule
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT definition_json FROM alert_rules WHERE id=$1 FOR UPDATE`, id).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrAlertRuleNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	var rule alertRule
-	if err := json.Unmarshal(raw, &rule); err != nil {
-		return nil, err
-	}
-	if !supportedAlertMetric(rule.Metric) {
-		return nil, ErrAlertRuleUnsupported
+		return alertRule{}, ErrInvalidAlertRule
 	}
 	if patch.Enabled != nil {
 		rule.Enabled = *patch.Enabled
@@ -887,9 +893,26 @@ func (s *Postgres) UpdateAlertRule(ctx context.Context, id string, patch AlertRu
 		rule.RecoverySeconds = *patch.RecoverySeconds
 	}
 	if validateGoRuleUpdate(rule) != nil {
-		return nil, ErrInvalidAlertRule
+		return alertRule{}, ErrInvalidAlertRule
 	}
 	rule.Version++
+	return rule, nil
+}
+
+func (s *Postgres) UpdateAlertRule(ctx context.Context, id string, patch AlertRulePatch) (any, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rule, err := loadAlertRule(ctx, tx, id, true)
+	if err != nil {
+		return nil, err
+	}
+	rule, err = patchedAlertRule(rule, patch)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(rule)
 	if err != nil {
 		return nil, err

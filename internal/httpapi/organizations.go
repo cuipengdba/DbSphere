@@ -48,6 +48,13 @@ func scopedPrincipalIDs(ctx context.Context, db HealthStore, config *AuthConfig,
 
 func authorizeOrganizationAdmin(w http.ResponseWriter, r *http.Request, db HealthStore, allowed map[string]bool) bool {
 	path := r.URL.Path
+	if match := alertRuleReplayPath.FindStringSubmatch(path); match != nil {
+		if allowed[match[1]] {
+			return true
+		}
+		respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+		return false
+	}
 	if path == historyPolicyPath && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
 		return true
 	}
