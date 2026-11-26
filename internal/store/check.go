@@ -178,7 +178,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 			Cluster: dereference(k8sCluster), Namespace: dereference(k8sNamespace), Pod: dereference(k8sPod), Workload: dereference(k8sWorkload),
 		}}
 		if runtime == assets.RuntimeMySQL {
-			return s.checkMySQL(ctx, id, target, password, lease, interval, infra)
+			return s.checkMySQL(ctx, id, target, password, lease, interval, infra, routeSettings)
 		}
 		if runtime == assets.RuntimeDM8 {
 			return s.checkDM8(ctx, id, target, password, lease, interval, infra)
@@ -620,6 +620,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		}
 	}
 	if isMySQL {
+		if err := recordMySQLRouteEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
+			return CheckResult{}, fmt.Errorf("record MySQL writer entry event: %w", err)
+		}
 		if status == "ok" {
 			if err := recordMySQLLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
 				return CheckResult{}, fmt.Errorf("record MySQL lock event: %w", err)

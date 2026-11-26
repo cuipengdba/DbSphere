@@ -64,6 +64,7 @@ const views = {
   sample: ['原始采样', '查看采样时的指标、来源与采集状态。'],
   collection: ['采集历史', '核对计划任务、采集副本和原始采样。'],
   'engine-diagnosis': ['引擎专项诊断', '按采样时间核对异常、同期指标和恢复证据。'],
+  'ha-history': ['主备切换与写入口', '核对直连角色、入口落点和复制进度。'],
   logs: ['日志分析', '按项目、实例与批次查看日志和原始证据。'],
   grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
@@ -127,6 +128,7 @@ function setView(route, updateHash = true) {
   showSample(selected === 'sample' && currentRole ? params : null);
   void showCollectionHistory(selected === 'collection' && currentRole ? params : null);
   void showEngineDiagnosis(selected === 'engine-diagnosis' && currentRole ? params : null);
+  void showHAHistory(selected === 'ha-history' && currentRole ? params : null);
   if (selected === 'assets' && currentRole === 'admin' && !currentOrganization) {
     $('asset-import-panel').dispatchEvent(new CustomEvent('onboarding-route', {detail: params.get('batch')}));
   }
@@ -590,6 +592,84 @@ async function api(path, method = 'GET', payload, signal) {
 }
 
 const sampleUUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+
+function haHistoryLink(assetId, event) {
+  const link = cell('a', '主备切换与写入口', 'monitor-link');
+  const params = new URLSearchParams({asset: assetId});
+  if (event) {
+    params.set('event', event.id);
+    const at = Date.parse(event.startedAt);
+    const end = Date.parse(event.endedAt || new Date().toISOString());
+    if (Number.isFinite(at) && Number.isFinite(end)) {
+      params.set('from', new Date(Math.max(at - 600000, end - 6 * 86400000)).toISOString());
+      params.set('to', new Date(end + 60000).toISOString());
+    }
+  }
+  link.href = '#ha-history?' + params;
+  return link;
+}
+
+let haHistoryRequest;
+async function showHAHistory(params) {
+  haHistoryRequest?.abort();
+  if (!params) return;
+  const content = $('ha-history-content');
+  const asset = params.get('asset');
+  const event = params.get('event');
+  if (!sampleUUID.test(asset || '') || event && !sampleUUID.test(event)) {
+    content.replaceChildren(cell('p', '链接缺少有效的资产或事件 ID。', 'warning'));
+    return;
+  }
+  const returnLink = $('ha-history-return');
+  returnLink.href = event ? '#incidents?' + new URLSearchParams({event}) : '#assets?' + new URLSearchParams({asset});
+  returnLink.textContent = event ? '返回同一事件' : '返回资产与实例';
+  const request = new AbortController();
+  haHistoryRequest = request;
+  const query = new URLSearchParams();
+  for (const key of ['from', 'to', 'event']) if (params.has(key)) query.set(key, params.get(key));
+  content.replaceChildren(cell('p', '正在读取主备采样…', 'hint'));
+  try {
+    const [{asset: metadata}, history] = await Promise.all([
+      api(`/api/assets/${asset}`, 'GET', undefined, request.signal),
+      api(`/api/assets/${asset}/ha-history?${query}`, 'GET', undefined, request.signal)
+    ]);
+    if (request.signal.aborted) return;
+    const roles = {primary: '主库', standby: '备库', writable: '可写角色', read_only: '只读角色'};
+    const replay = {caught_up: '已追平观测位点', lagging: '有待回放数据', paused: '回放暂停', stopped: '复制线程停止'};
+    const scope = {local_wal: '本机已接收 WAL', sender_wal: '发送端可见链路', received_gtid: '通道已接收 GTID', local_native: '本机回放位点'};
+    const changes = {gap: '采样缺口', role: '直连角色变化', node: '直连节点变化', control: '控制面变化', timeline: '时间线变化', replay: '复制状态变化', route: '入口探测变化', entry_configuration: '入口配置变化'};
+    content.replaceChildren(cell('h2', metadata.name), cell('p', `${formatTime(history.from)} 至 ${formatTime(history.to)}`, 'hint'),
+      cell('p', '入口落点来自只读连接。追平状态以对应的 WAL、GTID 或厂商位点为范围。事件链接仅引用该事件保存的采样。', 'hint'));
+    if (!history.samples.length) {
+      content.append(cell('p', '此时段缺少可查看的主备采样。', 'empty'));
+      return;
+    }
+    if (history.truncated) content.append(cell('p', '显示时段内最近 100 条采样。', 'hint'));
+    const layout = cell('div', '', 'monitor-table');
+    const back = event ? 'incidents?' + new URLSearchParams({event}) : 'ha-history?' + params;
+    layout.append(importTable(['时间 / 变化', '资产直连', '控制面', '入口探测', '复制进度', '证据'], history.samples.map(point => {
+      const original = cell('a', '查看原始采样', 'monitor-link');
+      original.href = '#sample?' + new URLSearchParams({asset, sample: point.sampleId, return: back});
+      const evidence = cell('div');
+      evidence.append(original);
+      for (const item of point.events) {
+        const link = cell('a', `${item.phase === 'recovery' ? '恢复证据' : '事件证据'} · ${item.title}`, 'monitor-link');
+        link.href = '#incidents?' + new URLSearchParams({event: item.id, return: 'ha-history?' + params});
+        evidence.append(cell('br'), link);
+      }
+      const control = [point.controller, point.control, roles[point.controlRole], point.conflict && '与直连角色冲突'].filter(Boolean).join(' · ');
+      const route = [point.entry, routingStatus[point.entryStatus] || point.entryStatus, point.backend,
+        point.backendId, roles[point.entryRole]].filter(Boolean).join(' · ');
+      const copying = [replay[point.replayState] || '缺采', scope[point.replayScope], point.timeline, point.position,
+        Number.isFinite(point.replayGap) ? `${point.replayGap} ${point.replayUnit}` : ''].filter(Boolean).join(' · ');
+      return [[formatTime(point.at), ...point.changes.map(change => changes[change])].join(' · '),
+        [roles[point.role] || '角色缺采', point.node].filter(Boolean).join(' · '), control || '未采集', route || '无入口探测', copying, evidence];
+    })));
+    content.append(layout);
+  } catch (error) {
+    if (!request.signal.aborted) content.replaceChildren(cell('p', error.message, 'warning'));
+  }
+}
 const samplePath = /^\/api\/assets\/([0-9a-f-]{36})\/samples\/([0-9a-f-]{36})$/;
 
 function collectionHistoryLink(asset, label, range) {
@@ -1437,19 +1517,25 @@ async function showAsset(id, layer, background = false) {
   if (!valid()) return;
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
+    detail.append(haHistoryLink(id));
     attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
+    const settings = await api(`/api/assets/${id}/routing`).catch(() => null);
+    if (!valid()) return;
+    if (settings) renderRoutingSettings(detail, asset, settings, samples[0]?.collectedAt === asset.lastSampleAt ? samples[0] : null);
     if (readiness) detail.append(readinessPanel(readiness));
     return;
   }
   if (asset.runtime === 'dm8') {
     renderDM8Asset(detail, asset, samples);
+    detail.append(haHistoryLink(id));
     attachCollectionHistory(detail, id);
     if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'kingbase') {
     renderKingbaseAsset(detail, asset, samples);
+    detail.append(haHistoryLink(id));
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
@@ -1483,6 +1569,7 @@ async function showAsset(id, layer, background = false) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
+  detail.append(haHistoryLink(id));
   attachCollectionHistory(detail, id);
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
     : asset.runtime === 'managed' ? '托管 PostgreSQL · 主机与 K8S 资源信号不可用'
@@ -1637,11 +1724,12 @@ async function showAsset(id, layer, background = false) {
   organizeAssetLayers(detail, asset, preferredLayer, restoreLayerFocus);
 }
 
-const routingKinds = {pgbouncer: 'PgBouncer', haproxy: 'HAProxy', k8s_service: 'Kubernetes Service'};
+const routingKinds = {pgbouncer: 'PgBouncer', haproxy: 'HAProxy', k8s_service: 'Kubernetes Service', mysql_entry: 'MySQL 写入口'};
 const routingStatus = {
   ok: '入口可用', misrouted: '入口转发错位', pool_exhausted: '连接池占满，客户端排队',
   ready_pod_entry_unreachable: 'Pod 已就绪，Service 入口不可达', unreachable: '入口不可达',
   dns_error: '入口 DNS 解析失败', timeout: '入口探测超时', postgres_rejected: 'PostgreSQL 拒绝连接或探测',
+  mysql_rejected: 'MySQL 拒绝连接或探测',
   connection_error: '入口握手失败', backend_unknown: '后端身份待核对',
   configuration_error: '探测配置有误', cancelled: '探测取消'
 };
@@ -1650,10 +1738,11 @@ function routingOverview(assetId, route, sampleId) {
   const body = cell('div', '', 'routing-overview');
   body.append(cell('p', `${routingKinds[route.kind]} · ${route.entry} · ${routingStatus[route.status] ?? route.status}`,
     route.status === 'ok' ? 'evidence' : 'warning'));
-  const roles = {primary: '主库', standby: '备库'};
+  const roles = {primary: '主库', standby: '备库', writable: '可写角色', read_only: '只读角色'};
   const renderedRole = role => roles[role] ?? '未知';
   const probe = route.probe ?? {};
-  body.append(cell('p', `入口后端 ${probe.backend || '未识别'} · ${renderedRole(probe.role)} · 库 ${probe.database || '未识别'}${probe.durationMs == null ? '' : ` · ${probe.durationMs} ms`}`));
+  body.append(cell('p', [`入口后端 ${probe.backend || '未识别'}`, renderedRole(probe.role), probe.serverUuid,
+    probe.database && `库 ${probe.database}`, probe.durationMs != null && `${probe.durationMs} ms`].filter(Boolean).join(' · ')));
   if (route.readEntry) {
     const read = route.readProbe || {};
     body.append(cell('p', `备库入口 ${route.readEntry} · ${routingStatus[route.readStatus] || route.readStatus} · ${read.backend || '后端待核对'} · ${renderedRole(read.role)}`,
@@ -1724,21 +1813,25 @@ function renderRoutingSettings(detail, asset, settings, sample) {
     control.type = type; control.value = value; control.placeholder = placeholder;
     return control;
   };
-  const kinds = Object.entries(routingKinds).filter(([kind]) => kind !== 'k8s_service' || asset.runtime === 'k8s');
+  const mysql = asset.runtime === 'mysql';
+  const kinds = Object.entries(routingKinds).filter(([kind]) => mysql ? kind === 'mysql_entry' :
+    kind !== 'mysql_entry' && (kind !== 'k8s_service' || asset.runtime === 'k8s'));
   const kind = select([['', '关闭'], ...kinds], settings.kind);
-  const entry = input(settings.entry, 'db-service.namespace.svc.cluster.local:5432');
+  const entry = input(settings.entry, mysql ? 'mysql-router.example:3306' : 'db-service.namespace.svc.cluster.local:5432');
   const read = input(settings.readEntry || '', '可选，连接应返回备库');
-  const role = select([['', '仅观察'], ['primary', '主库'], ['standby', '备库']], settings.expectedRole);
+  const role = select(mysql ? [['writable', '可写角色']] : [['', '仅观察'], ['primary', '主库'], ['standby', '备库']],
+    mysql ? 'writable' : settings.expectedRole);
   const match = input('', '', 'checkbox'); match.checked = settings.matchDirect;
   const backend = input(settings.haproxyBackend, '例如 postgres-primary');
   const stats = input('', settings.statsConfigured ? '已设置，留空保留' : 'HAProxy 只读统计地址', 'password');
   stats.autocomplete = 'new-password';
-  field('入口类型', kind); field('入口主机与端口', entry); field('期望 PostgreSQL 角色', role);
+  field('入口类型', kind); field('入口主机与端口', entry); field('期望角色', role);
   field('备库入口主机与端口', read);
   field('要求入口与资产直连命中同一后端', match);
   field('HAProxy 后端名称', backend); field('HAProxy CSV 统计地址', stats);
   const updateFields = () => {
     for (const control of [entry, read, role, match]) control.parentElement.hidden = !kind.value;
+    if (mysql) read.parentElement.hidden = true;
     for (const control of [backend, stats]) control.parentElement.hidden = kind.value !== 'haproxy';
     entry.required = Boolean(kind.value);
   };
@@ -3579,7 +3672,7 @@ function investigationParams(eventId) {
 }
 
 function eventMonitoringReturn(value) {
-  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs|engine-diagnosis)(?:\?|$)/.test(value)) return '';
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs|engine-diagnosis|ha-history)(?:\?|$)/.test(value)) return '';
   const [view, query] = value.split('?', 2);
   const params = new URLSearchParams(query);
   params.delete('incidentReturn');
@@ -4822,6 +4915,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   header.append(status, cell('span', event.assetName || allAssets.find(asset => asset.id === event.assetId)?.name || event.assetId));
   summary.append(header, cell('h3', event.title), cell('small', `开始 ${formatTime(event.startedAt)}${event.endedAt ? ` · ${recoveryLabel} ${formatTime(event.endedAt)}` : ''}`),
     cell('small', `事件 ID ${event.id}`));
+  if (['availability', 'replication'].includes(event.eventGroup) || /_ha_/.test(event.eventGroup || '')) {
+    const asset = allAssets.find(item => item.id === event.assetId);
+    if (!asset || !['redis', 'etcd'].includes(asset.runtime)) summary.append(haHistoryLink(event.assetId, event));
+  }
   const memberCount = new Set(impact?.members?.map(member => member.assetId)).size;
   const services = analysis.traceCoverage?.serviceImpact?.filter(service => service.errorTraces > 0).length || 0;
   const scope = [event.clusterName && `集群 ${event.clusterName}`, investigation?.database && `数据库 ${investigation.database}`,
@@ -4832,7 +4929,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   if (back) {
     const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' :
       back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' :
-        back.startsWith('logs') ? '返回日志调查' : back.startsWith('engine-diagnosis') ?
+        back.startsWith('logs') ? '返回日志调查' : back.startsWith('ha-history') ? '返回主备切换与写入口' : back.startsWith('engine-diagnosis') ?
           '返回引擎专项诊断' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);

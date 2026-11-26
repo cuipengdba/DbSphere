@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/cuipengdba/dbsphere/internal/assets"
 	"github.com/cuipengdba/dbsphere/internal/collector"
 	"github.com/cuipengdba/dbsphere/pkg/collectoradapter"
 	"github.com/go-sql-driver/mysql"
@@ -58,10 +60,21 @@ func readMySQLInterval(current collector.MySQLMetrics, previousJSON []byte, elap
 	return result
 }
 
-func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration, infra nativeInfraTarget) (CheckResult, error) {
+func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.Target, password string, lease *CollectionLease, interval time.Duration,
+	infra nativeInfraTarget, route RoutingSettings) (CheckResult, error) {
+	var entry collector.RouteProbe
+	var routeCheck sync.WaitGroup
+	if route.Kind == "mysql_entry" {
+		routeCheck.Go(func() {
+			entryTarget := target
+			entryTarget.Host, entryTarget.Port, _ = assets.ParsePoolerEndpoint(route.Entry)
+			entry = collector.ProbeMySQLRoute(ctx, entryTarget, password)
+		})
+	}
 	snapshot, err := s.collectNativeObservation(ctx, id, target.Port, infra, lease, func() (collectoradapter.Snapshot, error) {
 		return (collector.MySQLAdapter{}).Collect(ctx, target, password)
 	})
+	routeCheck.Wait()
 	group, reason := "", ""
 	metrics := snapshot.Metrics
 	if err != nil {
@@ -70,6 +83,20 @@ func (s *Postgres) checkMySQL(ctx context.Context, id string, target collector.T
 	} else {
 		metrics["adapter"] = snapshot.Report
 		metrics["collector"] = map[string]any{"mysqlStatus": "ok"}
+	}
+	if route.Kind == "mysql_entry" {
+		status := entry.Status
+		direct, _ := metrics["mysql"].(collector.MySQLMetrics)
+		if entry.Status == "ok" {
+			switch {
+			case entry.Role != "writable" || route.MatchDirect && direct.ServerUUID != "" && entry.ServerUUID != "" && direct.ServerUUID != entry.ServerUUID:
+				status = "misrouted"
+			case entry.ServerUUID == "" || route.MatchDirect && direct.ServerUUID == "":
+				status = "backend_unknown"
+			}
+		}
+		metrics["routing"] = map[string]any{"kind": route.Kind, "entry": route.Entry, "status": status,
+			"expectedRole": route.ExpectedRole, "matchDirect": route.MatchDirect, "probe": entry}
 	}
 	return s.recordCheckWithLease(ctx, id, metrics, group, reason, time.Now().UTC(), lease, interval)
 }
@@ -99,10 +126,11 @@ func recordMySQLReplicationEvent(ctx context.Context, tx pgx.Tx, assetID, sample
 		for _, worker := range channel.Workers {
 			workerError = workerError || (worker.LastError != 0 && worker.State == "OFF")
 		}
+		pending := channel.ReceivedApplied != nil && !*channel.ReceivedApplied
 		if channel.Receiver != "ON" || (channel.Applier != "ON" && channel.Applier != "UNKNOWN") || workerError {
 			abnormal = append(abnormal, channel)
 		}
-		allHealthy = allHealthy && channel.Receiver == "ON" && channel.Applier == "ON" && !workerError
+		allHealthy = allHealthy && channel.Receiver == "ON" && channel.Applier == "ON" && !workerError && !pending
 	}
 	if len(abnormal) == 0 && (!allHealthy || !workObserved) {
 		return nil
@@ -110,6 +138,27 @@ func recordMySQLReplicationEvent(ctx context.Context, tx pgx.Tx, assetID, sample
 	return recordEngineObservationEvent(ctx, tx, assetID, sampleID, now, mysqlReplicaGroup, "MySQL 复制通道异常", source,
 		len(abnormal) > 0, map[string]any{"channels": abnormal, "serverUuid": details.ServerUUID},
 		map[string]any{"channels": details.Replication, "serverUuid": details.ServerUUID})
+}
+
+func recordMySQLRouteEvent(ctx context.Context, tx pgx.Tx, assetID, sampleID string, metrics map[string]any, now time.Time) error {
+	route := object(metrics["routing"])
+	status := stringValue(route["status"])
+	if status != "ok" && status != "misrouted" && status != "unreachable" && status != "dns_error" {
+		return nil
+	}
+	const group = "mysql_ha_entry"
+	if status == "ok" {
+		// A different configured endpoint is not evidence that the old endpoint recovered.
+		var same bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM open_event_groups o JOIN evidence ev ON ev.event_id=o.event_id
+			WHERE o.asset_id=$1 AND o.event_group=$2 AND ev.kind=$2 AND ev.payload_json->'route'->>'entry'=$3
+			AND ev.payload_json->'route'->>'matchDirect'=$4)`, assetID, group, route["entry"], fmt.Sprint(route["matchDirect"])).Scan(&same); err != nil || !same {
+			return err
+		}
+	}
+	return recordEngineObservationEvent(ctx, tx, assetID, sampleID, now, group, "MySQL 写入口异常",
+		"MySQL read-only session through configured entry", status != "ok",
+		map[string]any{"route": route}, map[string]any{"route": route})
 }
 
 func mysqlCollectionError(err error) (string, string) {

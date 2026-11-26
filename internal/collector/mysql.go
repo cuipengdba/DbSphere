@@ -47,6 +47,7 @@ type MySQLReplicationChannel struct {
 	Applier        string                   `json:"applier"`
 	LastIOError    int                      `json:"lastIoError"`
 	RemainingDelay *int64                   `json:"remainingDelaySeconds,omitempty"`
+	ReceivedApplied *bool                   `json:"receivedApplied,omitempty"`
 	Workers        []MySQLReplicationWorker `json:"workers,omitempty"`
 }
 
@@ -80,6 +81,7 @@ type MySQLBufferPool struct {
 type MySQLMetrics struct {
 	Version              string                    `json:"version"`
 	ServerUUID           string                    `json:"serverUuid"`
+	ServerReadOnly       *bool                     `json:"serverReadOnly,omitempty"`
 	Connections          *int                      `json:"connections"`
 	Running              *int                      `json:"running"`
 	MaxConnections       int                       `json:"maxConnections"`
@@ -101,16 +103,7 @@ var _ collectoradapter.Adapter = MySQLAdapter{}
 func (MySQLAdapter) Collect(ctx context.Context, target Target, password string) (collectoradapter.Snapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	config := mysql.NewConfig()
-	config.User, config.Passwd = target.Username, password
-	config.Net, config.Addr = "tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
-	config.Timeout = 4 * time.Second
-	config.ReadTimeout, config.WriteTimeout = 3*time.Second, 3*time.Second
-	config.Params = map[string]string{"transaction_read_only": "ON", "max_execution_time": "2000"}
-	if target.SSLMode == "require" {
-		config.TLSConfig = "true"
-	}
-	connector, err := mysql.NewConnector(config)
+	connector, err := mysql.NewConnector(readOnlyMySQLConfig(target, password))
 	if err != nil {
 		return collectoradapter.Snapshot{}, err
 	}
@@ -121,11 +114,28 @@ func (MySQLAdapter) Collect(ctx context.Context, target Target, password string)
 		return collectoradapter.Snapshot{}, err
 	}
 	defer conn.Close()
+	return collectMySQLSnapshot(ctx, conn, target)
+}
+
+func readOnlyMySQLConfig(target Target, password string) *mysql.Config {
+	config := mysql.NewConfig()
+	config.User, config.Passwd = target.Username, password
+	config.Net, config.Addr = "tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
+	config.Timeout = 4 * time.Second
+	config.ReadTimeout, config.WriteTimeout = 3*time.Second, 3*time.Second
+	config.Params = map[string]string{"transaction_read_only": "ON", "max_execution_time": "2000"}
+	if target.SSLMode == "require" {
+		config.TLSConfig = "true"
+	}
+	return config
+}
+
+func collectMySQLSnapshot(ctx context.Context, conn *sql.Conn, target Target) (collectoradapter.Snapshot, error) {
 	details := MySQLMetrics{LockWaits: []MySQLLockWait{}, TopSQL: []MySQLDigest{}, Replication: []MySQLReplicationChannel{}}
 	var comment string
 	var performanceSchema, serverReadOnly, transactionReadOnly bool
-	err = conn.QueryRowContext(ctx, `SELECT @@version, @@version_comment, @@performance_schema,
-		@@global.read_only, @@session.transaction_read_only, @@global.max_connections, @@global.server_uuid`).Scan(&details.Version,
+	err := conn.QueryRowContext(ctx, `SELECT @@version, @@version_comment, @@performance_schema,
+		(@@global.read_only OR @@global.super_read_only), @@session.transaction_read_only, @@global.max_connections, @@global.server_uuid`).Scan(&details.Version,
 		&comment, &performanceSchema, &serverReadOnly, &transactionReadOnly, &details.MaxConnections, &details.ServerUUID)
 	if err != nil {
 		return collectoradapter.Snapshot{}, err
@@ -141,6 +151,7 @@ func (MySQLAdapter) Collect(ctx context.Context, target Target, password string)
 	if !transactionReadOnly {
 		return collectoradapter.Snapshot{}, ErrMySQLReadOnly
 	}
+	details.ServerReadOnly = &serverReadOnly
 	report := collectoradapter.Report{Contract: collectoradapter.ContractVersion, Engine: "mysql", Profile: "mysql-8.4",
 		Version: 80400 + patch, Role: "writable", Transport: collectoradapter.Transport{ReadOnly: true}}
 	if serverReadOnly {
@@ -217,10 +228,13 @@ func collectMySQLPerformance(ctx context.Context, conn *sql.Conn, schema string,
 	signals[2] = mysqlSignalStatus(signals[2], err)
 
 	details.Replication, err = readMySQLRows(ctx, conn, `SELECT r.CHANNEL_NAME, COALESCE(r.SOURCE_UUID,''), r.SERVICE_STATE,
-		COALESCE(a.SERVICE_STATE,'UNKNOWN'), r.LAST_ERROR_NUMBER,a.REMAINING_DELAY
+		COALESCE(a.SERVICE_STATE,'UNKNOWN'), r.LAST_ERROR_NUMBER,a.REMAINING_DELAY,
+		CASE WHEN @@global.gtid_mode='ON' AND OCTET_LENGTH(r.RECEIVED_TRANSACTION_SET) BETWEEN 1 AND 65536
+		AND OCTET_LENGTH(@@global.gtid_executed)<=65536
+		THEN GTID_SUBSET(r.RECEIVED_TRANSACTION_SET,@@global.gtid_executed) END
 		FROM performance_schema.replication_connection_status r LEFT JOIN performance_schema.replication_applier_status a
 		USING (CHANNEL_NAME) ORDER BY r.CHANNEL_NAME LIMIT 21`, func(r *sql.Rows, v *MySQLReplicationChannel) error {
-		return r.Scan(&v.Name, &v.SourceUUID, &v.Receiver, &v.Applier, &v.LastIOError, &v.RemainingDelay)
+		return r.Scan(&v.Name, &v.SourceUUID, &v.Receiver, &v.Applier, &v.LastIOError, &v.RemainingDelay, &v.ReceivedApplied)
 	})
 	signals[3] = mysqlSignalStatus(signals[3], err)
 	if len(details.Replication) > 20 {

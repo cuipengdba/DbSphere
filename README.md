@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v3.15.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v3.16.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v3.15.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.15.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵)
+**[快速开始](docs/QUICK_START.md)** · [下载 v3.16.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v3.16.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵)
 
 ## 支持矩阵
 
@@ -16,6 +16,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | PostgreSQL 日志持续接入 | v3.15.0 新增 | 按文件代次和确认偏移接收日志。PG18.7 实测 JSON Lines 增量接入、续传和事件内 SQL 复测。 |
 | MySQL | 8.4 LTS | InnoDB 缓冲池、事务等待、SQL 指纹及复制通道。 |
 | MySQL 日志持续接入 | 8.4 LTS · v3.15.0 新增 | MySQL 8.4.13 实测 FILE 慢日志增量接入、轮转和原事件回链。 |
+| MySQL 写入口只读探测 | 8.4 LTS · v3.16.0 新增 | 读取入口后端 UUID 和全局只读状态，按采样记录入口异常与恢复。 |
 | 瀚高数据库 | 安全版 4.5.9，兼容内核 12.7 | 产品识别、会话等待及 SQL 指纹。 |
 | 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |
 | 金仓 KingbaseES | V9，PostgreSQL 兼容模式 | 会话等待、SQL 指纹、归档及流复制状态。 |
@@ -63,7 +64,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | 监控大屏 | 按引擎查看资产数、影响范围、近期采样、缺采、失败和端点失联。趋势图随资产引擎切换，支持放大、同步游标、固定时段、历史基线和原始采样。个人和团队值班视图可跨浏览器恢复。 |
 | 基础设施 | 监控 Linux 主机、Docker 容器和 Kubernetes Pod、Node、PVC 与事件。可从事件核对同窗身份、设备映射、采集覆盖和重启记录，并排比较容器 I/O 与 `active_file`、`inactive_file`。 |
 | SQL 与对象 | 分析 Top SQL 指纹、锁链、慢日志和执行计划，核对对象大小、死元组、冻结、Vacuum、Analyze、分区与索引状态。 |
-| 主备与服务入口 | 查看 PostgreSQL、达梦 Data Watch 和金仓流复制的角色、归档、位点和切换证据。支持 Patroni、CloudNativePG、PgBouncer、HAProxy 与 Kubernetes Service 的入口监控。 |
+| 主备与服务入口 | 按时间对照数据库直连角色、入口实际落点、控制面状态与复制进度。查看 PostgreSQL、MySQL、达梦 Data Watch 和金仓流复制的采样与同一事件证据。 |
 | 事件与根因 | 以同一个事件 ID 查看应用对 Redis 和数据库的调用、PG 等待会话、Kubernetes API Server 与 etcd 同窗指标，以及 Linux、容器、PVC 和原始日志证据。按服务、引擎与实例筛选，可分派、确认接班、验证恢复并导出复盘。 |
 | 日志分析 | 导入 PostgreSQL、瀚高、金仓 V9、达梦 DM8 和 MySQL 慢日志。支持项目和批次、断点续传、应用负载矩阵、延迟分布、原文回链、跨批次对比、调优复测、Zstd 归档及保留策略。 |
 | 告警、巡检与变更 | 提供规则阈值、维护静默、Webhook 和邮件投递。支持 PostgreSQL、达梦、金仓、Redis 和 etcd 的业务时段风险基线、影子预警和历史回测，以及巡检、变更时间线和 Markdown／HTML 报告。 |

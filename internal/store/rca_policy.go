@@ -34,6 +34,7 @@ var rcaRuleTitles = map[string]string{
 	"route_backend_mismatch":     "代理入口转发错位",
 	"service_entry_unreachable":  "Kubernetes Service 入口不可达",
 	"route_entry_unreachable":    "数据库入口探测失败",
+	"mysql_ha_entry":             "MySQL 写入口探测异常",
 	"pvc_pressure":               "Kubernetes PVC 空间压力",
 	"k8s_node_pressure":          "Kubernetes 节点压力",
 	"k8s_scheduling":             "Kubernetes Pod 无法调度",

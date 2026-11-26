@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -21,11 +23,58 @@ type RouteProbe struct {
 	Backend    string    `json:"backend,omitempty"`
 	Database   string    `json:"database,omitempty"`
 	Role       string    `json:"role,omitempty"`
+	ServerUUID string    `json:"serverUuid,omitempty"`
 	StartedAt  time.Time `json:"-"`
 	ObservedAt time.Time `json:"observedAt"`
 	DurationMS int64     `json:"durationMs"`
 	SQLState   string    `json:"sqlState,omitempty"`
 	Source     string    `json:"source"`
+}
+
+// ProbeMySQLRoute identifies the server reached through a configured entry using a read-only session.
+func ProbeMySQLRoute(ctx context.Context, target Target, password string) (probe RouteProbe) {
+	start := time.Now()
+	probe.Source = "MySQL read-only session through configured entry"
+	defer func() {
+		probe.ObservedAt = time.Now().UTC()
+		probe.DurationMS = time.Since(start).Milliseconds()
+	}()
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	connector, err := mysql.NewConnector(readOnlyMySQLConfig(target, password))
+	if err != nil {
+		probe.Status = "configuration_error"
+		return
+	}
+	db := sql.OpenDB(connector)
+	defer db.Close()
+	var version, comment, host, uuid string
+	var port int
+	var globalReadOnly, sessionReadOnly bool
+	err = db.QueryRowContext(ctx, `SELECT @@version,@@version_comment,@@hostname,@@port,@@server_uuid,
+		(@@global.read_only OR @@global.super_read_only),@@session.transaction_read_only`).
+		Scan(&version, &comment, &host, &port, &uuid, &globalReadOnly, &sessionReadOnly)
+	if err != nil {
+		var rejected *mysql.MySQLError
+		if errors.As(err, &rejected) {
+			probe.Status, probe.SQLState = "mysql_rejected", string(rejected.SQLState[:])
+		} else {
+			probe.Status, _ = routeProbeError(err)
+		}
+		return
+	}
+	if !mysql84Version.MatchString(version) || !strings.Contains(strings.ToLower(comment), "mysql") || !sessionReadOnly {
+		probe.Status = "configuration_error"
+		return
+	}
+	probe.Status, probe.Role, probe.ServerUUID = "ok", "writable", uuid
+	if globalReadOnly {
+		probe.Role = "read_only"
+	}
+	if host != "" && port > 0 {
+		probe.Backend = net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	return
 }
 
 // ProbePostgreSQLRoute opens one bounded, read-only session through the business endpoint.

@@ -61,8 +61,8 @@ func (s *Postgres) SetRouting(ctx context.Context, id string, input RoutingInput
 	settings := input.RoutingSettings
 	if settings.Kind != "" {
 		host, port, err := assets.ParsePoolerEndpoint(strings.TrimSpace(settings.Entry))
-		if err != nil || (settings.Kind != "pgbouncer" && settings.Kind != "haproxy" && settings.Kind != "k8s_service") ||
-			(settings.ExpectedRole != "" && settings.ExpectedRole != "primary" && settings.ExpectedRole != "standby") {
+		if err != nil || (settings.Kind != "pgbouncer" && settings.Kind != "haproxy" && settings.Kind != "k8s_service" && settings.Kind != "mysql_entry") ||
+			(settings.ExpectedRole != "" && settings.ExpectedRole != "primary" && settings.ExpectedRole != "standby" && settings.ExpectedRole != "writable") {
 			return RoutingSettings{}, ErrRoutingSettings
 		}
 		settings.Entry = net.JoinHostPort(host, strconv.Itoa(port))
@@ -110,7 +110,12 @@ func (s *Postgres) SetRouting(ctx context.Context, id string, input RoutingInput
 		}
 		return RoutingSettings{}, err
 	}
-	if !assets.IsPostgreSQLRuntime(runtime) || (settings.Kind == "k8s_service" && runtime != "k8s") {
+	if runtime == assets.RuntimeMySQL {
+		if settings.Kind != "" && (settings.Kind != "mysql_entry" || settings.ExpectedRole != "writable" || readEntry != nil && *readEntry != "") {
+			return RoutingSettings{}, ErrRoutingSettings
+		}
+	} else if !assets.IsPostgreSQLRuntime(runtime) || settings.Kind == "mysql_entry" || settings.ExpectedRole == "writable" ||
+		(settings.Kind == "k8s_service" && runtime != "k8s") {
 		return RoutingSettings{}, ErrRoutingSettings
 	}
 	if settings.Kind == "" {

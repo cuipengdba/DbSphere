@@ -75,6 +75,9 @@ func nativeHAEvent(kind string) (engine, action string) {
 	if kind == mysqlReplicaGroup {
 		return "mysql", "replication"
 	}
+	if kind == "mysql_ha_entry" {
+		return "mysql", "entry"
+	}
 	if (engine == "kingbase" || engine == "dm8") && (action == "role" || action == "replication" || action == "archive") {
 		return engine, action
 	}

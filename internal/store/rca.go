@@ -271,6 +271,10 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			case "archive":
 				addCandidate(item.Kind, label+" 已报告归档异常", "high", supports,
 					[]string{"核对归档状态、容量和归档错误日志"}, "数据库原生归档状态或错误时间给出异常证据。", nil, item.ObservedAt, nil)
+			case "entry":
+				addCandidate(item.Kind, "MySQL 写入口探测异常", "medium", supports,
+					[]string{"核对入口后端 UUID、全局只读状态和代理配置"},
+					"证据来自采集器通过配置入口建立的只读会话。", object(payload["route"]), item.ObservedAt, nil)
 			}
 			continue
 		}
