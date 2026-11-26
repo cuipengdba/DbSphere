@@ -18,6 +18,8 @@ func (s *Postgres) ReadAssetSection(ctx context.Context, id, section string, par
 	switch section {
 	case "readiness":
 		return s.assetReadiness(ctx, id, nil)
+	case "collection-history":
+		return s.collectionHistory(ctx, id, params)
 	case "samples":
 		values, err := s.queryJSON(ctx, `SELECT jsonb_build_object(
 			'id',id,'assetId',asset_id,'collectedAt',collected_at,'status',status,

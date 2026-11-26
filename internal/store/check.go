@@ -378,7 +378,12 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 	return s.recordCheckWithLease(ctx, id, metrics, group, reason, now, nil, 0)
 }
 
-func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration) (CheckResult, error) {
+func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration) (_ CheckResult, writeErr error) {
+	defer func() {
+		if lease != nil && writeErr != nil && !errors.Is(writeErr, ErrAssetNotFound) && !errors.Is(writeErr, ErrCollectionLeaseLost) {
+			writeErr = fmt.Errorf("%w: %w", errCollectionStoreWrite, writeErr)
+		}
+	}()
 	writeStarted := time.Now()
 	if err := s.ensureCollectionPartitions(ctx, now); err != nil {
 		return CheckResult{}, err
@@ -673,8 +678,10 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
 	}
 	if lease != nil {
-		if err := s.applyGoAlerts(ctx, tx, id, sampleID, map[string]any{"collectorMissedIntervals": 0}, nil, now, "collector_stale"); err != nil {
-			return CheckResult{}, fmt.Errorf("resolve Go stale alert: %w", err)
+		if status == "ok" {
+			if err := s.applyGoAlerts(ctx, tx, id, sampleID, map[string]any{"collectorMissedIntervals": 0}, nil, now, "collector_stale"); err != nil {
+				return CheckResult{}, fmt.Errorf("resolve Go stale alert: %w", err)
+			}
 		}
 		outcome := "ok"
 		if status == "error" {
@@ -688,7 +695,7 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		gaps, engine := collectionPermissionGaps(metrics)
 		if _, err := tx.Exec(ctx, finishCollectionSQL,
 			lease.AssetID, lease.Token, outcome, sampleID, int(interval.Seconds()), collectionQueueDelay(*lease),
-			lease.queryMs, time.Since(writeStarted).Milliseconds(), s.platformReplicaID, now, workMs, gaps, engine); err != nil {
+			lease.queryMs, time.Since(writeStarted).Milliseconds(), s.platformReplicaID, now, workMs, gaps, engine, ""); err != nil {
 			return CheckResult{}, fmt.Errorf("advance collection schedule: %w", err)
 		}
 	}

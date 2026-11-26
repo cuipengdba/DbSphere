@@ -88,13 +88,26 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 		AND a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
 		AND ($4::int=0 OR j.isolated=($4=2))
 	), ready AS (
-		SELECT j.asset_id FROM eligible e JOIN collection_jobs j ON j.asset_id=e.asset_id
+		SELECT j.asset_id,j.lease_token,j.lease_replica_id,j.lease_until FROM eligible e JOIN collection_jobs j ON j.asset_id=e.asset_id
 		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
 		AND ($4::int=0 OR j.isolated=($4=2))
 		ORDER BY e.source_slot,e.due_at,e.asset_id LIMIT $1 FOR UPDATE OF j SKIP LOCKED
-	) UPDATE collection_jobs j SET lease_token=gen_random_uuid(),
+	), claimed AS (
+		UPDATE collection_jobs j SET lease_token=gen_random_uuid(),
 		lease_until=statement_timestamp()+make_interval(secs=>$2),lease_replica_id=nullif($3,'')
-	FROM ready WHERE j.asset_id=ready.asset_id RETURNING j.asset_id::text,j.lease_token::text,j.due_at,statement_timestamp(),j.isolated`,
+		FROM ready WHERE j.asset_id=ready.asset_id
+		RETURNING j.asset_id,j.lease_token,j.due_at,j.lease_until,j.isolated,j.lease_replica_id,
+			ready.lease_token AS previous_token,ready.lease_replica_id AS previous_replica,
+			ready.lease_until AS previous_expiry
+	), expired AS (
+		UPDATE collection_attempts a SET outcome='lease_expired',finished_at=c.previous_expiry
+		FROM claimed c WHERE a.id=c.previous_token AND a.outcome='running'
+	), logged AS (
+		INSERT INTO collection_attempts(id,asset_id,due_at,claimed_at,lease_until,replica_id,previous_replica_id,takeover,isolated)
+		SELECT lease_token,asset_id,due_at,statement_timestamp(),lease_until,lease_replica_id,previous_replica,
+			previous_token IS NOT NULL,isolated FROM claimed
+		RETURNING asset_id,id,due_at,claimed_at,isolated
+	) SELECT asset_id::text,id::text,due_at,claimed_at,isolated FROM logged`,
 		limit, collectionLeaseSeconds, s.platformReplicaID, lane)
 	if err != nil {
 		return nil, err
@@ -117,7 +130,7 @@ func lockCollectionLease(ctx context.Context, tx pgx.Tx, lease CollectionLease) 
 	return err
 }
 
-const finishCollectionSQL = `UPDATE collection_jobs SET
+const finishCollectionSQL = `WITH advanced AS (UPDATE collection_jobs SET
 	lease_token=NULL,lease_until=NULL,lease_replica_id=NULL,
 	failures=CASE WHEN $3='ok' THEN 0 ELSE least(failures+1,7) END,
 	last_outcome=$3,last_finished_at=statement_timestamp(),last_sample_id=coalesce($4,last_sample_id),
@@ -129,14 +142,27 @@ const finishCollectionSQL = `UPDATE collection_jobs SET
 	due_at=CASE WHEN $3='ok'
 		THEN date_bin(make_interval(secs=>$5::int),statement_timestamp(),due_at)+make_interval(secs=>$5::int)
 		ELSE statement_timestamp()+make_interval(secs=>least(greatest($5::int,300),$5::int*(1 << least(failures,5)))) END
-	WHERE asset_id=$1 AND lease_token=$2`
+	WHERE asset_id=$1 AND lease_token=$2 AND ($14::text='' OR lease_until>clock_timestamp())
+	RETURNING due_at,last_finished_at,last_outcome)
+	UPDATE collection_attempts a SET outcome=coalesce(nullif($14,''),advanced.last_outcome),
+		finished_at=advanced.last_finished_at,query_ms=$7,store_ms=$8,permission_gaps=$12,sample_id=$4,
+		backoff_until=CASE WHEN advanced.last_outcome<>'ok' THEN advanced.due_at END
+	FROM advanced WHERE a.id=$2`
 
 // Retry only a lease still owned by this worker. If commit already succeeded,
 // the cleared token makes a retry harmless.
 func (s *Postgres) RetryCollectionLease(ctx context.Context, lease CollectionLease) error {
-	_, err := s.pool.Exec(ctx, finishCollectionSQL+" AND lease_until>clock_timestamp()",
+	return s.RetryFailedCollectionLease(ctx, lease, nil)
+}
+
+func (s *Postgres) RetryFailedCollectionLease(ctx context.Context, lease CollectionLease, failure error) error {
+	outcome := "execution_error"
+	if errors.Is(failure, errCollectionStoreWrite) {
+		outcome = "store_error"
+	}
+	_, err := s.pool.Exec(ctx, finishCollectionSQL,
 		lease.AssetID, lease.Token, "execution_error", nil, 5, collectionQueueDelay(lease), nil, nil,
-		s.platformReplicaID, nil, nil, nil, "")
+		s.platformReplicaID, nil, nil, nil, "", outcome)
 	return err
 }
 
