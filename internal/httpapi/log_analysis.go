@@ -232,13 +232,16 @@ func serveLogAnalysis(w http.ResponseWriter, r *http.Request, db HealthStore, ro
 			storepkg.LogRetestInput
 		}
 		if readJSONLimit(w, r, &input, 4096) != nil || !opsUUID.MatchString(input.CaseID) ||
-			!opsUUID.MatchString(input.BaselineBatchID) || !opsUUID.MatchString(input.CurrentBatchID) {
+			!opsUUID.MatchString(input.BaselineBatchID) || !opsUUID.MatchString(input.CurrentBatchID) ||
+			input.BaselinePlanID != "" && !opsUUID.MatchString(input.BaselinePlanID) ||
+			input.CurrentPlanID != "" && !opsUUID.MatchString(input.CurrentPlanID) {
 			err = storepkg.ErrLogInput
 			break
 		}
 		var audit string
 		audit, err = pg.StartRoleAudit(ctx, actor, r.Method, r.URL.Path)
 		if err == nil {
+			input.Actor = actor
 			value, err = pg.SaveEventLogRetest(ctx, sections[1], input.CaseID, input.LogRetestInput)
 			if auditErr := pg.FinishAdminAudit(ctx, audit, logAnalysisStatus(status, err)); auditErr != nil {
 				err = auditErr
