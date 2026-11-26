@@ -25,7 +25,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | Linux 与 Docker | Linux 主机、Docker 容器 | 主机 CPU、内存、磁盘与网络，以及容器 I/O 和文件缓存。 |
 | Kubernetes | 只读 API 与指标源 | Pod、Node、PVC、事件及容器资源观测，已验收的环境见详细矩阵。 |
 
-各项能力取决于数据源版本、部署拓扑和采集权限。长期监控数据保存在独立 PostgreSQL 18。验收范围、权限要求和接入方式见[详细支持与验收矩阵](docs/SUPPORT_MATRIX.md)。
+各项能力取决于数据源版本、部署拓扑和采集权限。长期监控数据保存在独立 PostgreSQL 18。新增数据源、兼容版本或接入模式随正式版单独列项，记录首次支持版本和实测范围。权限要求和接入方式见[详细支持与验收矩阵](docs/SUPPORT_MATRIX.md)。
 
 ## 界面预览
 

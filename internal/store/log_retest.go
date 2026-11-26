@@ -32,6 +32,26 @@ type LogRetestInput struct {
 	BaselineBatchID string
 	CurrentBatchID  string
 	TargetP95MS     float64
+	BaselinePlanID  string
+	CurrentPlanID   string
+	Actor           string `json:"-"`
+}
+
+func migrateLogRetestPlans(ctx context.Context, tx pgx.Tx) error {
+	var applied bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM dbsphere_schema_migrations WHERE version=66)").Scan(&applied); err != nil || applied {
+		return err
+	}
+	_, err := tx.Exec(ctx, `ALTER TABLE log_retests
+		ADD COLUMN baseline_plan uuid, ADD COLUMN current_plan uuid;
+		DO $$ DECLARE old_unique name; BEGIN
+			SELECT conname INTO STRICT old_unique FROM pg_constraint WHERE conrelid='log_retests'::regclass AND contype='u';
+			EXECUTE format('ALTER TABLE log_retests DROP CONSTRAINT %I',old_unique);
+		END $$;
+		ALTER TABLE log_retests ADD CONSTRAINT log_retests_measurement_key UNIQUE NULLS NOT DISTINCT
+		(investigation_id,baseline,current_batch,baseline_revision,current_revision,target_ms,baseline_plan,current_plan);
+		INSERT INTO dbsphere_schema_migrations(version) VALUES (66)`)
+	return err
 }
 
 type logRetestSample struct {
@@ -45,6 +65,7 @@ type logRetestSample struct {
 	To           *time.Time `json:"to"`
 	Coverage     string     `json:"coverage"`
 	CoverageNote string     `json:"coverageNote"`
+	Plan         json.RawMessage `json:"plan,omitempty"`
 }
 
 func (s *Postgres) EventLogRetestCases(ctx context.Context, event string) (any, error) {
@@ -53,7 +74,8 @@ func (s *Postgres) EventLogRetestCases(ctx context.Context, event string) (any, 
 	}
 	rows, err := s.queryJSON(ctx, `SELECT jsonb_build_object('id',q.id,'sql',r.sql_shape,
 		'fingerprint',r.fingerprint,'database',r.database_name,'application',r.application,'baselineBatchId',r.batch_id,
-		'batches',coalesce(c.options,'[]'::jsonb))
+		'batches',coalesce(c.options,'[]'::jsonb),'plans',coalesce(plans.options,'[]'::jsonb),
+		'retests',coalesce(saved.options,'[]'::jsonb))
 	FROM log_investigations q JOIN log_records r ON r.id=q.primary_record
 	JOIN log_instances i ON i.id=q.instance_id JOIN log_projects p ON p.id=i.project_id
 	JOIN event_keys k ON k.id=q.event_id JOIN assets a ON a.id=k.asset_id AND a.id=i.asset_id AND a.organization_id=p.organization_id
@@ -61,6 +83,13 @@ func (s *Postgres) EventLogRetestCases(ctx context.Context, event string) (any, 
 		'coverageNote',candidate.coverage_note) ORDER BY candidate.created_at DESC,candidate.id) AS options
 		FROM (SELECT b.id,b.name,b.coverage,b.coverage_note,b.created_at FROM log_batches b WHERE b.instance_id=i.id
 		ORDER BY b.created_at DESC,b.id LIMIT 100) candidate) c ON true
+	LEFT JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('id',plan.id,'at',plan.observed_at,'queryId',plan.query_id)
+		ORDER BY plan.observed_at DESC,plan.id) AS options FROM (SELECT s.id,s.observed_at,s.query_id
+		FROM sql_plan_snapshots s WHERE i.engine='postgres' AND s.asset_id=a.id AND s.database_name=r.database_name
+		ORDER BY s.observed_at DESC,s.id LIMIT 100) plan) plans ON true
+	LEFT JOIN LATERAL (SELECT jsonb_agg(t.result||jsonb_build_object('id',t.id,'createdAt',t.created_at)
+		ORDER BY t.created_at DESC,t.id) AS options FROM (SELECT id,result,created_at FROM log_retests
+		WHERE investigation_id=q.id ORDER BY created_at DESC,id LIMIT 10) t) saved ON true
 	WHERE q.event_id=$1 AND ($2='' OR a.organization_id::text=$2) AND r.kind='statement' AND r.fingerprint<>''
 	ORDER BY q.created_at DESC,q.id LIMIT 30`, event, OrganizationFromContext(ctx))
 	return map[string]any{"cases": rows}, err
@@ -95,25 +124,29 @@ func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigati
 	if input.BaselineBatchID == input.CurrentBatchID || input.TargetP95MS <= 0 || input.TargetP95MS > 3600000 || math.IsNaN(input.TargetP95MS) {
 		return nil, ErrLogInput
 	}
+	if (input.BaselinePlanID != "" || input.CurrentPlanID != "") && (requiredEvent == "" || input.Actor == "") {
+		return nil, ErrLogInput
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	var primary, instance, fingerprint, database, application string
-	var event *string
-	err = tx.QueryRow(ctx, `SELECT r.id::text,i.id::text,r.fingerprint,r.database_name,r.application,k.id::text
+	var primary, instance, engine, fingerprint, database, application string
+	var event, asset *string
+	err = tx.QueryRow(ctx, `SELECT r.id::text,i.id::text,i.engine,r.fingerprint,r.database_name,r.application,k.id::text,a.id::text
 		FROM log_investigations q JOIN log_instances i ON i.id=q.instance_id JOIN log_projects p ON p.id=i.project_id
 		JOIN log_records r ON r.id=q.primary_record
 		LEFT JOIN assets a ON a.id=i.asset_id AND a.organization_id=p.organization_id
 		LEFT JOIN event_keys k ON k.id=q.event_id AND k.asset_id=a.id
 		WHERE q.id=$1 AND ($2='' OR p.organization_id::text=$2) AND r.kind='statement' AND r.fingerprint<>''
 		AND ($3='' OR k.id::text=$3)`, investigation, OrganizationFromContext(ctx), requiredEvent).
-		Scan(&primary, &instance, &fingerprint, &database, &application, &event)
+		Scan(&primary, &instance, &engine, &fingerprint, &database, &application, &event, &asset)
 	if err != nil {
 		return nil, logWriteError(err)
 	}
 	batchIDs := [2]string{input.BaselineBatchID, input.CurrentBatchID}
+	planIDs := [2]string{input.BaselinePlanID, input.CurrentPlanID}
 	order := [2]int{0, 1}
 	if batchIDs[0] > batchIDs[1] {
 		order = [2]int{1, 0}
@@ -135,9 +168,9 @@ func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigati
 		query := `SELECT b.archive_revision,coalesce(selected.id::text,'') FROM log_batches b LEFT JOIN LATERAL (
 			SELECT r.id FROM log_records r JOIN log_files f ON f.id=r.file_id
 			WHERE r.batch_id=b.id AND r.kind='statement' AND r.fingerprint=$3 AND r.database_name=$4 AND r.application=$5
-			AND f.archive_expired_at IS NULL AND f.stored_size>0 AND
+			AND f.archive_expired_at IS NULL AND f.stored_size>0 AND f.state IN ('complete','partial') AND
 			($7<>'' OR EXISTS(SELECT 1 FROM log_investigation_records j WHERE j.investigation_id=$1 AND j.record_id=r.id))
-			ORDER BY (r.id=$6) DESC,r.observed_at DESC NULLS LAST,r.id LIMIT 1
+			ORDER BY (r.id=$6) DESC,r.observed_at DESC NULLS LAST,r.id LIMIT 1 FOR SHARE OF f
 		) selected ON true WHERE b.id=$2`
 		err = tx.QueryRow(ctx, query, investigation, batch, fingerprint, database, application, primary, requiredEvent).
 			Scan(&revisions[index], &samples[index].RecordID)
@@ -157,6 +190,18 @@ func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigati
 		samples[index].BatchID, samples[index].Calls, samples[index].Timed = batch, measure.Count, measure.Timed
 		samples[index].Mean, samples[index].P95, samples[index].From, samples[index].To = measure.Mean, measure.P95, summary.From, summary.To
 		samples[index].Coverage, samples[index].CoverageNote = summary.Coverage, summary.Note
+		if planID := planIDs[index]; planID != "" {
+			if engine != "postgres" || asset == nil || database == "" || samples[index].RecordID == "" || summary.From == nil || summary.To == nil {
+				return nil, ErrLogInput
+			}
+			if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('id',p.id,'assetId',p.asset_id,'at',p.observed_at,
+				'queryId',p.query_id,'identity','operator','actor',$6::text)
+				FROM sql_plan_snapshots p
+				WHERE p.id=$1 AND p.asset_id=$2 AND p.database_name=$3 AND p.observed_at BETWEEN $4 AND $5`,
+				planID, *asset, database, summary.From, summary.To, input.Actor).Scan(&samples[index].Plan); err != nil {
+				return nil, logWriteError(err)
+			}
+		}
 	}
 	if requiredEvent != "" {
 		for _, sample := range samples {
@@ -178,6 +223,9 @@ func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigati
 	if summaries[0].From != nil && summaries[1].From != nil && summaries[1].From.Before(*summaries[0].From) {
 		return nil, ErrLogInput
 	}
+	if requiredEvent != "" && summaries[0].To != nil && summaries[1].From != nil && !summaries[1].From.After(*summaries[0].To) {
+		reason = "基线窗口和复测窗口重叠，请选择互不重叠的批次。"
+	}
 	status, reason := logRetestDecision(reason, measures[0], measures[1], input.TargetP95MS)
 	result := map[string]any{"status": status, "reason": reason, "caseId": investigation, "eventId": event,
 		"baseline": samples[0], "current": samples[1], "targetP95Ms": input.TargetP95MS,
@@ -188,14 +236,16 @@ func (s *Postgres) saveLogRetest(ctx context.Context, requiredEvent, investigati
 	}
 	var id string
 	var created time.Time
-	err = tx.QueryRow(ctx, `INSERT INTO log_retests(investigation_id,baseline,current_batch,baseline_revision,current_revision,target_ms,result)
-		VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING id::text,created_at`, investigation,
-		batchIDs[0], batchIDs[1], revisions[0], revisions[1], input.TargetP95MS, payload).Scan(&id, &created)
+	err = tx.QueryRow(ctx, `INSERT INTO log_retests(investigation_id,baseline,current_batch,baseline_revision,current_revision,target_ms,result,baseline_plan,current_plan)
+		VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,'')::uuid,NULLIF($9,'')::uuid)
+		ON CONFLICT DO NOTHING RETURNING id::text,created_at`, investigation,
+		batchIDs[0], batchIDs[1], revisions[0], revisions[1], input.TargetP95MS, payload, planIDs[0], planIDs[1]).Scan(&id, &created)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		err = tx.QueryRow(ctx, `SELECT id::text,created_at,result FROM log_retests
-			WHERE investigation_id=$1 AND baseline=$2 AND current_batch=$3 AND baseline_revision=$4 AND current_revision=$5 AND target_ms=$6`,
-			investigation, batchIDs[0], batchIDs[1], revisions[0], revisions[1], input.TargetP95MS).Scan(&id, &created, &payload)
+			WHERE investigation_id=$1 AND baseline=$2 AND current_batch=$3 AND baseline_revision=$4 AND current_revision=$5 AND target_ms=$6
+			AND baseline_plan IS NOT DISTINCT FROM NULLIF($7,'')::uuid AND current_plan IS NOT DISTINCT FROM NULLIF($8,'')::uuid`,
+			investigation, batchIDs[0], batchIDs[1], revisions[0], revisions[1], input.TargetP95MS, planIDs[0], planIDs[1]).Scan(&id, &created, &payload)
 		if err != nil {
 			return nil, err
 		}

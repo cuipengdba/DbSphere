@@ -4569,17 +4569,26 @@ function eventLogRetest(event) {
     report.append(cell('h4', `${statuses[result.status]} · ${result.reason}`));
     report.append(cell('p', [`指纹 ${result.fingerprint || '未记录'}`, result.database, result.application,
       `P95 目标 ${result.targetP95Ms} ms`].filter(Boolean).join(' · '), 'hint'));
-    report.append(importTable(['批次', '采样时间窗', '采集口径', '日志调用数 / 已计时', '平均 / P95', '原始记录'],
+    report.append(importTable(['批次', '采样时间窗', '采集口径', '日志调用数 / 已计时', '平均 / P95', '原始记录', '执行计划'],
       [['基线', result.baseline], ['复测', result.current]].map(([label, sample]) => {
         let original = '原文缺失';
         if (sampleUUID.test(sample.recordId || '')) {
           original = cell('a', `查看${label}原文`, 'monitor-link');
           original.href = '#logs?' + new URLSearchParams({batch: sample.batchId, source: sample.recordId, incident: event.id});
         }
+        let plan = '未关联';
+        if (sample.plan && sampleUUID.test(sample.plan.id) && sampleUUID.test(sample.plan.assetId)) {
+          plan = cell('span', `由 ${sample.plan.actor} 确认关联 · `);
+          const link = cell('a', '查看计划证据', 'monitor-link');
+          link.href = `/api/assets/${sample.plan.assetId}/sql-plans/${sample.plan.id}`;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          plan.append(link);
+        }
         const milliseconds = value => Number.isFinite(value) ? `${value.toFixed(2)} ms` : '缺采';
         return [label, sample.from && sample.to ? `${formatTime(sample.from)} – ${formatTime(sample.to)}` : '缺采',
           [sample.coverage, sample.coverageNote].filter(Boolean).join(' · ') || '待确认',
-          `${sample.calls ?? '—'} / ${sample.timed}`, `${milliseconds(sample.meanMs)} / ${milliseconds(sample.p95Ms)}`, original];
+          `${sample.calls ?? '—'} / ${sample.timed}`, `${milliseconds(sample.meanMs)} / ${milliseconds(sample.p95Ms)}`, original, plan];
       })));
     return report;
   };
@@ -4597,6 +4606,9 @@ function eventLogRetest(event) {
       const [sqlField, sql] = select('caseId', '复测 SQL');
       const [beforeField, before] = select('baselineBatchId', '基线批次');
       const [afterField, after] = select('currentBatchId', '复测批次');
+      const [beforePlanField, beforePlan] = select('baselinePlanId', '基线计划');
+      const [afterPlanField, afterPlan] = select('currentPlanId', '复测计划');
+      const planHint = cell('p', '选择计划即确认它属于当前 SQL。计划须与对应批次同窗。', 'hint');
       const targetField = cell('label', 'P95 目标（毫秒）');
       const target = document.createElement('input');
       target.name = 'targetP95Ms'; target.type = 'number'; target.required = true;
@@ -4613,27 +4625,35 @@ function eventLogRetest(event) {
         if (item.batches.some(batch => batch.id === item.baselineBatchId)) before.value = item.baselineBatchId;
         const other = item.batches.find(batch => batch.id !== before.value);
         if (other) after.value = other.id;
+        for (const [field, input] of [[beforePlanField, beforePlan], [afterPlanField, afterPlan]]) {
+          field.hidden = !item.plans.length;
+          input.replaceChildren(new Option('未关联', ''), ...item.plans.map(plan =>
+            new Option(`${formatTime(plan.at)} · Query ID ${plan.queryId}`, plan.id)));
+        }
+        planHint.hidden = !item.plans.length;
         save.disabled = item.batches.length < 2;
-        resultPanel.replaceChildren();
+        resultPanel.replaceChildren(...item.retests.map(showResult));
       };
       sql.replaceChildren(...cases.map(item => new Option(item.sql || item.fingerprint, item.id)));
       sql.addEventListener('change', setBatches);
       setBatches();
-      form.append(sqlField, beforeField, afterField, targetField, save);
+      form.append(sqlField, beforeField, afterField, beforePlanField, afterPlanField, targetField, save);
       form.addEventListener('submit', async e => {
         e.preventDefault();
         if (before.value === after.value) { message.textContent = '请选择两个不同的批次。'; return; }
         save.disabled = true;
         try {
           const result = await api(route, 'POST', {caseId: sql.value, baselineBatchId: before.value,
-            currentBatchId: after.value, targetP95Ms: Number(target.value)});
+            currentBatchId: after.value, targetP95Ms: Number(target.value), baselinePlanId: beforePlan.value, currentPlanId: afterPlan.value});
           if (!panel.isConnected) return;
           message.textContent = '复测结果已保存到当前事件。';
-          resultPanel.replaceChildren(showResult(result));
+          const item = cases.find(candidate => candidate.id === result.caseId);
+          item.retests = [result, ...item.retests.filter(retest => retest.id !== result.id)].slice(0, 10);
+          if (item.id === sql.value) resultPanel.replaceChildren(...item.retests.map(showResult));
         } catch (error) { message.textContent = error.message; }
-        finally { save.disabled = false; }
+        finally { save.disabled = cases.find(candidate => candidate.id === sql.value).batches.length < 2; }
       });
-      output.replaceChildren(form, resultPanel);
+      output.replaceChildren(form, planHint, resultPanel);
     } catch (error) { message.textContent = error.message; loaded = false; }
   });
   return panel;
