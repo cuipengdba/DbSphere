@@ -40,6 +40,26 @@ func TestHAHistorySeparatesRouteControlAndReplay(t *testing.T) {
 	}
 }
 
+func TestHAHistoryNativeReplayRequiresObservedUpstream(t *testing.T) {
+	for _, fixture := range []struct{ engine, unit, state string }{
+		{assets.RuntimeDM8, "lsn", "VALID"},
+		{assets.RuntimeKingbase, "bytes", "streaming"},
+	} {
+		t.Run(fixture.engine, func(t *testing.T) {
+			details := map[string]any{"node": "replica-1", "role": "standby", "unit": fixture.unit,
+				"replayed": "0/1000", "replayGap": float64(0)}
+			sample := sampleObservation{Status: "ok", Metrics: map[string]any{fixture.engine: map[string]any{"ha": details}}}
+			if point := haHistoryPoint(fixture.engine, sample); point.ReplayState != "" || point.Entry != "" {
+				t.Fatalf("unverified upstream or route: %+v", point)
+			}
+			details["peers"] = []any{map[string]any{"kind": "upstream", "state": fixture.state}}
+			if point := haHistoryPoint(fixture.engine, sample); point.ReplayState != "caught_up" || point.ReplayUnit != fixture.unit {
+				t.Fatalf("native replay evidence: %+v", point)
+			}
+		})
+	}
+}
+
 func TestHAHistoryExactMySQLRouteEvidence(t *testing.T) {
 	dsn := os.Getenv("DBSPHERE_TEST_PG18_URL")
 	if dsn == "" {
