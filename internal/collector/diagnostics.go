@@ -82,10 +82,11 @@ func collectDiagnostics(ctx context.Context, conn *pgx.Conn, major int, inRecove
 			a.wait_event_type AS "waitType",a.wait_event AS "waitEvent",
 			a.query_id::text AS "waitingQueryId",
 			CASE WHEN blocker.datid=a.datid THEN blocker.query_id::text END AS "blockerQueryId",
+			a.backend_start AS "waitingBackendStart",blocker.backend_start AS "blockerBackendStart",
 			a.xact_start AS "waitingSince",blocker.xact_start AS "blockerXactStart"
 			FROM pg_stat_activity a CROSS JOIN LATERAL unnest(pg_blocking_pids(a.pid)) AS b(blocker_pid)
 			LEFT JOIN pg_stat_activity blocker ON blocker.pid=b.blocker_pid
-			WHERE a.datname=current_database() LIMIT 20) q`},
+			WHERE a.datname=current_database() ORDER BY a.pid,b.blocker_pid LIMIT 20) q`},
 		{"database", `SELECT to_jsonb(q) FROM (
 			SELECT deadlocks,blks_read AS "blocksRead",blks_hit AS "blocksHit",
 			temp_bytes AS "tempBytes",temp_files AS "tempFiles",stats_reset AS "statsReset",

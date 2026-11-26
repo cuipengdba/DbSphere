@@ -129,9 +129,33 @@ func TestRealLockWaitOpensAndRecoversOneIncident(t *testing.T) {
 	lock := investigation.Investigation.Locks
 	if lock == nil || lock.SampleID != second.SampleID || lock.EvidenceID == "" ||
 		!slices.ContainsFunc(lock.Pairs, func(pair investigationBlocker) bool {
-			return pair.WaitingPID == int(waitingPID) && pair.BlockerPID == int(blockerPID)
+			return pair.WaitingPID == int(waitingPID) && pair.BlockerPID == int(blockerPID) &&
+				pair.WaitingBackendStart != "" && pair.BlockerBackendStart != ""
 		}) {
 		t.Fatalf("the investigation shortcut did not cite the real lock sample: %+v", lock)
+	}
+	if !slices.ContainsFunc(lock.Adjacent, func(sample adjacentLockSample) bool {
+		return sample.Position == "previous" && sample.SampleID == first.SampleID &&
+			slices.ContainsFunc(sample.Pairs, func(pair adjacentLockPair) bool {
+				return pair.WaitingPID == int(waitingPID) && pair.BlockerPID == int(blockerPID) && pair.Status == "same_sessions"
+			})
+	}) {
+		t.Fatalf("missing same-session comparison for the earlier lock sample: %+v", lock.Adjacent)
+	}
+	parameters := url.Values{
+		"from": {first.CollectedAt.Add(-time.Second).Format(time.RFC3339Nano)},
+		"to": {second.CollectedAt.Add(time.Second).Format(time.RFC3339Nano)}, "bucketMinutes": {"1"},
+	}
+	history, err := pg.pgPerformanceHistory(ctx, asset.ID, parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(history.(map[string]any)["series"].([]json.RawMessage), func(row json.RawMessage) bool {
+		var peak struct{ Signal, SampleID, EventID string }
+		return json.Unmarshal(row, &peak) == nil && peak.Signal == "pg.blocked_sessions" &&
+			peak.SampleID == second.SampleID && peak.EventID == eventID
+	}) {
+		t.Fatalf("performance trend did not link the triggering sample to event %s: %+v", eventID, history)
 	}
 	for _, expected := range []string{eventID, second.SampleID, `"code":"lock_chain"`,
 		`"relation":"blocked_by"`, fmt.Sprint(waitingPID), fmt.Sprint(blockerPID)} {
