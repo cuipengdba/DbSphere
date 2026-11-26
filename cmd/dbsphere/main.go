@@ -578,6 +578,14 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 		}
 		now := time.Now().UTC()
 		var sampleCutoff, eventCutoff time.Time
+		historyCtx, stopHistory := context.WithTimeout(ctx, 20*time.Second)
+		_, _, historyErr := drainRetention(historyCtx, 10000, func(ctx context.Context, limit int) (int64, error) {
+			return pg.PruneCollectionHistory(ctx, now, limit)
+		})
+		stopHistory()
+		if historyErr != nil && ctx.Err() == nil {
+			log.Warn("Go collection history retention sweep failed", "error", historyErr)
+		}
 		if eventDays > 0 {
 			eventCutoff = now.AddDate(0, 0, -eventDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -670,7 +678,7 @@ func runNotifier(ctx context.Context, pg *store.Postgres, cfg notify.Config, log
 type collectorStore interface {
 	ClaimCollectionJobs(context.Context, time.Duration, int, store.CollectionLane) ([]store.CollectionLease, error)
 	CheckCollectionLease(context.Context, store.CollectionLease, time.Duration, []byte) (store.CheckResult, error)
-	RetryCollectionLease(context.Context, store.CollectionLease) error
+	RetryFailedCollectionLease(context.Context, store.CollectionLease, error) error
 }
 
 func runCollector(ctx context.Context, pg collectorStore, key []byte, interval time.Duration, workers int,
@@ -786,7 +794,7 @@ func collectScheduledJob(ctx context.Context, pg collectorStore, key []byte, int
 	if err != nil {
 		log.Error("Go collector failed to persist asset sample", "assetId", job.AssetID, "error", err)
 		releaseCtx, stopRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if retryErr := pg.RetryCollectionLease(releaseCtx, job); retryErr != nil {
+		if retryErr := pg.RetryFailedCollectionLease(releaseCtx, job, err); retryErr != nil {
 			log.Error("Go collector could not reschedule lease", "assetId", job.AssetID, "error", retryErr)
 		}
 		stopRelease()

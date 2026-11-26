@@ -96,7 +96,7 @@ func (stub *collectorLaneStub) ClaimCollectionJobs(_ context.Context, _ time.Dur
 	return claimed, nil
 }
 
-func (*collectorLaneStub) RetryCollectionLease(context.Context, store.CollectionLease) error {
+func (*collectorLaneStub) RetryFailedCollectionLease(context.Context, store.CollectionLease, error) error {
 	return nil
 }
 
@@ -122,7 +122,7 @@ func (stub collectorCycleStub) ClaimCollectionJobs(context.Context, time.Duratio
 	}
 	return []store.CollectionLease{{AssetID: "unavailable-target"}, {AssetID: "store-failure"}}, nil
 }
-func (collectorCycleStub) RetryCollectionLease(context.Context, store.CollectionLease) error {
+func (collectorCycleStub) RetryFailedCollectionLease(context.Context, store.CollectionLease, error) error {
 	return nil
 }
 func (collectorCycleStub) CheckCollectionLease(_ context.Context, lease store.CollectionLease, _ time.Duration, _ []byte) (store.CheckResult, error) {

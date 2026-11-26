@@ -15,6 +15,7 @@ let selectedAssetLayer = null;
 let selectedAssetTrendHours = 24;
 let assetDetailRequest = 0;
 let sampleRequest;
+let collectionHistoryRequest;
 let selectedEvent = null;
 let eventRequest = 0;
 let eventSection = 'evidence';
@@ -60,6 +61,7 @@ const views = {
   monitoring: ['监控工作台', '从集群健康进入实例趋势、等待分析和事件证据。'],
   live: ['实时观测', ''],
   sample: ['原始采样', '查看采样时的指标、来源与采集状态。'],
+  collection: ['采集历史', '核对计划任务、采集副本和原始采样。'],
   logs: ['日志分析', '按项目、实例与批次查看日志和原始证据。'],
   grafana: ['观测专题', ''],
   storage: ['基础设施监控', ''],
@@ -121,15 +123,20 @@ function setView(route, updateHash = true) {
   showOverview(selected === 'overview');
   showGrafanaView(selected === 'grafana' ? params : null);
   showSample(selected === 'sample' && currentRole ? params : null);
+  void showCollectionHistory(selected === 'collection' && currentRole ? params : null);
   if (selected === 'assets' && currentRole === 'admin' && !currentOrganization) {
     $('asset-import-panel').dispatchEvent(new CustomEvent('onboarding-route', {detail: params.get('batch')}));
+  }
+  if (selected === 'assets' && currentRole && sampleUUID.test(params.get('asset') || '')) {
+    void showAsset(params.get('asset')).then(() => $('detail').scrollIntoView({ block: 'start' }))
+      .catch(error => notice(error.message, true));
   }
   if (updateHash) {
     const next = selected === 'monitoring' ? monitoring.route() : selected === 'live' ? live.route() :
       selected === 'wallboard' ? wallboard.route() : query ? route : selected;
     if (location.hash !== `#${next}`) history.pushState(null, '', `#${next}`);
   }
-  if (currentRole && nativeOverview && !['overview', 'live', 'sample', 'grafana', 'wallboard', 'logs'].includes(selected) && !workspaceData.loaded)
+  if (currentRole && nativeOverview && !['overview', 'live', 'sample', 'collection', 'grafana', 'wallboard', 'logs'].includes(selected) && !workspaceData.loaded)
     void prepareWorkspace().catch(error => notice(error.message, true));
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (selected === 'incidents' && !updateHash) {
@@ -582,6 +589,85 @@ async function api(path, method = 'GET', payload, signal) {
 const sampleUUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const samplePath = /^\/api\/assets\/([0-9a-f-]{36})\/samples\/([0-9a-f-]{36})$/;
 
+function collectionHistoryLink(asset, label, range) {
+  const link = cell('a', label, 'monitor-inline-link');
+  link.href = '#collection?' + new URLSearchParams({ asset, ...range });
+  return link;
+}
+
+function attachCollectionHistory(detail, assetID) {
+  if (!pg18Store) return;
+  const link = collectionHistoryLink(assetID, '查看采集历史');
+  const heading = detail.querySelector('h3');
+  if (heading) heading.after(link);
+  else detail.prepend(link);
+}
+
+async function showCollectionHistory(params) {
+  collectionHistoryRequest?.abort();
+  collectionHistoryRequest = null;
+  if (!params) return;
+  const target = $('collection-history');
+  const asset = params.get('asset');
+  if (!sampleUUID.test(asset || '')) {
+    target.replaceChildren(cell('p', '缺少有效的资产 ID。', 'warning'));
+    return;
+  }
+  $('collection-return').href = '#assets?' + new URLSearchParams({ asset });
+  target.replaceChildren(cell('p', '正在读取采集历史…', 'hint'));
+  const request = new AbortController();
+  collectionHistoryRequest = request;
+  const range = new URLSearchParams();
+  for (const bound of ['from', 'to']) if (params.get(bound)) range.set(bound, params.get(bound));
+  try {
+    const [{ asset: details }, history] = await Promise.all([
+      api(`/api/assets/${asset}`, 'GET', undefined, request.signal),
+      api(`/api/assets/${asset}/collection-history?${range}`, 'GET', undefined, request.signal),
+    ]);
+    if (request.signal.aborted) return;
+    const sampleLink = (id, label) => {
+      if (!sampleUUID.test(id || '')) return '—';
+      const link = cell('a', label, 'monitor-inline-link');
+      link.href = '#sample?' + new URLSearchParams({ asset, sample: id, return: 'collection?' + params });
+      return link;
+    };
+    const outcomes = { running: '正在采集', ok: '采样成功', target_error: '目标采集失败',
+      store_error: '监控库写入失败', execution_error: '采集器执行失败', lease_expired: '租约过期' };
+    const ms = value => value == null ? '—' : `${value} ms`;
+    target.replaceChildren(cell('h2', details.name),
+      cell('p', `${formatTime(history.from)} 至 ${formatTime(history.to)} · 任务记录保留 ${history.retentionDays} 天`, 'hint'));
+    if (history.latestSuccessfulSample) {
+      const sample = history.latestSuccessfulSample;
+      const fallback = cell('p', `截至窗口结束的最近成功采样 ${formatTime(sample.collectedAt)} `, 'hint');
+      fallback.append(sampleLink(sample.id, '打开最近成功原始采样'));
+      target.append(fallback);
+    }
+    if (history.nextSuccessfulSample) {
+      const sample = history.nextSuccessfulSample;
+      const following = cell('p', `窗口结束后首次成功采样 ${formatTime(sample.collectedAt)} `, 'hint');
+      following.append(sampleLink(sample.id, '打开后续成功原始采样'));
+      target.append(following);
+    }
+    if (!history.attempts.length) {
+      target.append(cell('p', '此时段没有留存的调度记录，无法判定缺采原因。', 'empty'));
+      return;
+    }
+    if (history.truncated) target.append(cell('p', '显示时段内最近的 200 次尝试。可从趋势图选择更短的窗口。', 'hint'));
+    const table = cell('div', '', 'monitor-table');
+    table.append(importTable(['计划', '领取 / 排队', '副本', '结果', '查询', '落库', '权限缺口', '完成 / 退避', '证据'], history.attempts.map(attempt => [
+      formatTime(attempt.dueAt), `${formatTime(attempt.claimedAt)} · ${ms(attempt.queueMs)}`,
+      `${attempt.replicaId || '未记录'}${attempt.takeover ? ` · 接管 ${attempt.previousReplicaId || '未记录副本'}` : ''}`,
+      `${outcomes[attempt.outcome] || '未知'}${attempt.isolated ? ' · 隔离队列' : ''}`,
+      ms(attempt.queryMs), ms(attempt.storeMs), attempt.permissionGaps ?? '未核对',
+      [attempt.finishedAt, attempt.backoffUntil].filter(Boolean).map(formatTime).join(' / ') || '—',
+      sampleLink(attempt.sampleId, '原始采样'),
+    ])));
+    target.append(table);
+  } catch (error) {
+    if (!request.signal.aborted) target.replaceChildren(cell('p', error.message, 'warning'));
+  }
+}
+
 async function showSample(params) {
   sampleRequest?.abort();
   sampleRequest = null;
@@ -661,7 +747,7 @@ function sampleSection(title, content, open = false) {
 document.addEventListener('click', event => {
   if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
   const link = event.target.closest('a[href]');
-  if (!link || link.hasAttribute('download')) return;
+  if (!(link instanceof HTMLAnchorElement) || link.hasAttribute('download')) return;
   const url = new URL(link.href);
   if (url.origin !== location.origin || url.searchParams.get('download') === '1') return;
   const match = samplePath.exec(url.pathname);
@@ -1199,28 +1285,33 @@ async function showAsset(id, layer, background = false) {
   if (!valid()) return;
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness));
     return;
   }
   if (asset.runtime === 'dm8') {
     renderDM8Asset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
     if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'kingbase') {
     renderKingbaseAsset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'redis') {
     renderRedisAsset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
     return;
   }
   if (asset.runtime === 'etcd') {
     renderEtcdAsset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
     return;
@@ -1237,6 +1328,7 @@ async function showAsset(id, layer, background = false) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
+  attachCollectionHistory(detail, id);
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
     : asset.runtime === 'managed' ? '托管 PostgreSQL · 主机与 K8S 资源信号不可用'
       : asset.linuxHost || 'Linux 主机未关联';
@@ -1263,17 +1355,20 @@ async function showAsset(id, layer, background = false) {
     trendHead.append(cell('h3', '采样与连接趋势'));
     const periods = document.createElement('div'); periods.className = 'obs-periods';
     const trend = document.createElement('div');
+    let trendRequest = 0;
     const loadTrend = async (hours, bucketHours) => {
+      const generation = ++trendRequest;
       for (const button of periods.children) button.setAttribute('aria-pressed', String(Number(button.dataset.hours) === hours));
       trend.replaceChildren(cell('p', '正在读取趋势…', 'empty'));
       const to = new Date(); const from = new Date(to.getTime() - hours * 3600 * 1000);
       try {
         const result = await api(`/api/assets/${id}/series?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketHours=${bucketHours}`);
-        if (selectedAsset === id) trend.replaceChildren(
-          window.DbSphereObservability.sampleTrend(result.series, hours, bucketHours),
+        if (valid() && generation === trendRequest) trend.replaceChildren(
+          window.DbSphereObservability.sampleTrend(result.series, hours, bucketHours, to, (from, until) =>
+            collectionHistoryLink(id, `查看 ${formatTime(from)} 的缺采`, {from: from.toISOString(), to: until.toISOString()}).hash),
           window.DbSphereObservability.metricTrend(result.series, hours, bucketHours));
       } catch (error) {
-        if (selectedAsset === id) trend.replaceChildren(cell('p', `趋势读取失败：${error.message}`, 'warning'));
+        if (valid() && generation === trendRequest) trend.replaceChildren(cell('p', `趋势读取失败：${error.message}`, 'warning'));
       }
     };
     for (const [label, hours, bucketHours] of [['24 小时', 24, 1], ['7 天', 168, 6]]) {
@@ -2826,7 +2921,7 @@ function renderCollectorStatus(status) {
       const outcomes = { ok: '采样成功', target_error: '目标采集失败', execution_error: '采集器执行失败' };
       queue.replaceChildren(cell('p', Object.entries(labels).map(([key, label]) => `${label} ${counts[key]}`).join(' · '), 'hint'));
       if (jobs.length) queue.append(importTable(['实例', '引擎', '调度状态', '最近结果', '下次到期', '租约截止', '连续失败', '权限缺口', '采样'], jobs.map(job => [
-        job.name, engines[job.engine] || job.engine, [labels[job.state], job.isolated ? '隔离队列' : ''].filter(Boolean).join(' · '), outcomes[job.outcome] ?? '待执行',
+        collectionHistoryLink(job.assetId, job.name), engines[job.engine] || job.engine, [labels[job.state], job.isolated ? '隔离队列' : ''].filter(Boolean).join(' · '), outcomes[job.outcome] ?? '待执行',
         formatTime(job.dueAt), formatTime(job.leaseUntil), job.failures, job.permissionGaps ?? '未核对',
         job.lastSampleId ? replaySampleLink(job.assetId, job.lastSampleId) : '—'
       ])));

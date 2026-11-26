@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -12,17 +13,18 @@ import (
 )
 
 func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
-	url := os.Getenv("DBSPHERE_TEST_PG18_URL")
-	if url == "" {
+	dsn := os.Getenv("DBSPHERE_TEST_PG18_URL")
+	if dsn == "" {
 		t.Skip("PostgreSQL 18 monitoring store is required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	pg, err := Open(ctx, url)
+	pg, err := Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pg.Close()
+	pg.SetPlatformReplica("collection-fixture-a")
 	key := []byte("01234567890123456789012345678901")
 	created, err := pg.CreateAsset(ctx, assets.Input{Name: "collection lease fixture", Host: "127.0.0.1",
 		Port: 1, Database: "postgres", Username: "monitor", Password: "test-secret", SSLMode: "disable", Runtime: "linux"}, key)
@@ -55,6 +57,7 @@ func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
 	if _, err := pg.pool.Exec(ctx, `UPDATE collection_jobs SET lease_until=now()-interval '1 second' WHERE asset_id=$1`, asset.ID); err != nil {
 		t.Fatal(err)
 	}
+	pg.SetPlatformReplica("collection-fixture-b")
 	second := claim()
 	if second.Token == "" || second.Token == first.Token || !second.DueAt.Equal(first.DueAt) {
 		t.Fatalf("takeover lost logical job or fencing token: first=%+v second=%+v", first, second)
@@ -82,6 +85,14 @@ func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
 	if outcome != "target_error" || sampleID != result.SampleID || failures != 1 || delay != 15 || samples != 1 || events != 1 {
 		t.Fatalf("retry changed a committed job: outcome=%s failures=%d delay=%v samples=%d events=%d", outcome, failures, delay, samples, events)
 	}
+	var expired, replacement bool
+	if err := pg.pool.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM collection_attempts WHERE id=$1 AND outcome='lease_expired' AND sample_id IS NULL),
+		EXISTS(SELECT 1 FROM collection_attempts WHERE id=$2 AND outcome='target_error' AND takeover
+			AND previous_replica_id='collection-fixture-a' AND replica_id='collection-fixture-b' AND sample_id=$3)`,
+		first.Token, second.Token, result.SampleID).Scan(&expired, &replacement); err != nil || !expired || !replacement {
+		t.Fatalf("missing original and replacement attempts: %v %v %v", expired, replacement, err)
+	}
 	if _, err := pg.pool.Exec(ctx, `UPDATE collection_jobs SET due_at=now()-interval '1 second' WHERE asset_id=$1`, asset.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +100,30 @@ func TestCollectionLeaseTakeoverFencesSamplesAndRetries(t *testing.T) {
 	if next.AssetID != asset.ID || next.Token == second.Token {
 		t.Fatal("the next due job was unavailable")
 	}
-	if err := pg.RetryCollectionLease(ctx, next); err != nil {
+	if err := pg.RetryFailedCollectionLease(ctx, next, errCollectionStoreWrite); err != nil {
 		t.Fatal(err)
+	}
+	history, err := pg.collectionHistory(ctx, asset.ID, url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := history.(map[string]any)["attempts"].([]json.RawMessage)
+	var latest struct {
+		DueAt        time.Time `json:"dueAt"`
+		Outcome      string `json:"outcome"`
+		BackoffUntil string `json:"backoffUntil"`
+	}
+	foundRetry := false
+	for _, entry := range entries {
+		if err := json.Unmarshal(entry, &latest); err != nil {
+			t.Fatal(err)
+		}
+		if latest.DueAt.Equal(next.DueAt) && latest.Outcome == "store_error" && latest.BackoffUntil != "" {
+			foundRetry = true
+		}
+	}
+	if len(entries) != 3 || !foundRetry {
+		t.Fatalf("storage error and backoff not readable: %s", entries)
 	}
 	if err := pg.pool.QueryRow(ctx, `SELECT last_outcome,failures,extract(epoch FROM due_at-last_finished_at)::float8
 		FROM collection_jobs WHERE asset_id=$1`, asset.ID).Scan(&outcome, &failures, &delay); err != nil {

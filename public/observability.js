@@ -304,12 +304,11 @@
     return section;
   }
 
-  function sampleTrend(series, hours, bucketHours) {
+  function sampleTrend(series, hours, bucketHours, through = new Date(), gapHref) {
     const section = make('div', 'obs-trend-charts');
     const points = Array.isArray(series) ? series.filter(point => Number.isFinite(Date.parse(point.bucket))) : [];
-    if (!points.length) { section.append(make('p', 'empty', '所选时间范围内没有采样；无法绘制趋势。')); return section; }
     const bucketMs = bucketHours * 3600000;
-    const end = Math.floor(Date.now() / bucketMs) * bucketMs;
+    const end = Math.floor(through.getTime() / bucketMs) * bucketMs;
     const start = end - (Math.ceil(hours / bucketHours) - 1) * bucketMs;
     const data = new Map(points.map(point => [Math.floor(Date.parse(point.bucket) / bucketMs) * bucketMs, point]));
     const slots = Array.from({ length: Math.ceil(hours / bucketHours) }, (_, index) =>
@@ -345,8 +344,18 @@
               width: barWidth, height: Math.max(success * unit, 1), fill: 'var(--plot-blue)' }));
             if (errors) group.append(svg('rect', { x: x - barWidth / 2,
               y: 150 - samples * unit, width: barWidth, height: errors * unit, fill: 'var(--issue-line)' }));
-          } else group.append(svg('line', { x1: x - 4, x2: x + 4, y1: 148, y2: 148,
-            stroke: 'var(--plot-gray)', 'stroke-width': 2 }));
+          } else {
+            const marker = svg('line', { x1: x - 4, x2: x + 4, y1: 148, y2: 148,
+              stroke: 'var(--plot-gray)', 'stroke-width': 2 });
+            if (gapHref && stamp < through) {
+              const until = new Date(Math.min(stamp.getTime() + bucketMs, through.getTime()));
+              const label = `${time(stamp)} · 查看缺采`;
+              const link = svg('a', { href: gapHref(stamp, until), 'aria-label': label });
+              link.append(titleNode(label), svg('rect', { x: x - barWidth / 2, y: 119, width: barWidth,
+                height: 34, fill: 'transparent' }), marker);
+              group.append(link);
+            } else group.append(marker);
+          }
           group.append(titleNode(`${time(stamp)} · ${point ? `成功 ${success}、失败 ${errors}` : '无采样'}`));
           canvas.append(group);
         } else {
@@ -371,9 +380,9 @@
     };
     section.append(chart('采样成功与失败', 'samples'), chart('平均连接数', 'connections'));
     const latest = points.at(-1);
-    section.append(make('p', 'obs-latest',
+    if (latest) section.append(make('p', 'obs-latest',
       `最新时间桶 ${time(latest.bucket)} · ${latest.samples} 次采样 · ${latest.errors} 次失败 · 平均连接 ${latest.averageConnections ?? '未采集'}`));
-    section.append(make('p', 'obs-caption', '蓝色为成功采样，橙色为失败采样；短横线表示无采样。连接数只连接相邻且有值的时间桶，不推断缺失数据。'));
+    section.append(make('p', 'obs-caption', '蓝色为成功采样，橙色为失败采样。点击短横线查看无采样时段。'));
     return section;
   }
 
