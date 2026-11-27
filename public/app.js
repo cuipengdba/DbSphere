@@ -552,6 +552,7 @@ function assetRuntimeLabel(asset) {
   if (asset.runtime === 'etcd') return 'etcd';
   if (asset.runtime === 'redis') return 'Redis';
   if (asset.runtime === 'kingbase') return '金仓 V9';
+  if (asset.runtime === 'opengauss') return 'openGauss';
   if (asset.runtime === 'dm8') return '达梦 DM8';
   if (asset.runtime === 'mysql') return 'MySQL 8.4';
   if (asset.runtime === 'k8s') return `K8S${asset.namespace ? ' / ' + asset.namespace : ''}`;
@@ -1375,7 +1376,7 @@ function renderAssets(assets, summary = '') {
     }
     const version = asset.runtime === 'mysql' ? (asset.versionNum ? `MySQL 8.4.${asset.versionNum % 100}` : 'MySQL 待识别')
       : ['redis','etcd'].includes(asset.runtime) ? (asset.versionNum ? `${assetRuntimeLabel(asset)} ${Math.floor(asset.versionNum / 10000)}.${Math.floor(asset.versionNum / 100) % 100}.${asset.versionNum % 100}` : `${assetRuntimeLabel(asset)} 待识别`)
-      : asset.runtime === 'dm8' || asset.runtime === 'kingbase' ? assetRuntimeLabel(asset)
+      : ['dm8','kingbase','opengauss'].includes(asset.runtime) ? assetRuntimeLabel(asset)
         : `PG ${asset.versionNum ? Math.floor(asset.versionNum / 10000) : '待识别'}${asset.pg14Eol ? ' · EOL' : ''}`;
     info.append(cell('small', `${version} · ${formatTime(asset.lastSampleAt)}`));
     const actions = document.createElement('div'); actions.className = 'actions';
@@ -1473,6 +1474,7 @@ function readinessEngineVersion(report) {
   const version = report?.versionNum;
   if (!Number.isSafeInteger(version) || version <= 0) return '待识别';
   const major = Math.floor(version / 10000), minor = Math.floor(version / 100) % 100, patch = version % 100;
+  if (report.runtime === 'opengauss') return `openGauss ${major}.${minor}.${patch}`;
   if (report.runtime === 'dm8' || report.runtime === 'kingbase') return `V${major} 系列`;
   if (['mysql', 'redis', 'etcd'].includes(report.runtime)) return `${major}.${minor}.${patch}`;
   if (report.product === 'highgo') return `兼容内核 ${major}.${version % 10000}`;
@@ -1563,6 +1565,12 @@ async function showAsset(id, layer, background = false) {
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     if (pg18Store) detail.append(assetRiskPanel(id));
+    return;
+  }
+  if (asset.runtime === 'opengauss') {
+    renderOpenGaussAsset(detail, asset, samples);
+    attachCollectionHistory(detail, id);
+    if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
     return;
   }
   if (asset.runtime === 'redis') {
@@ -2017,6 +2025,49 @@ function renderDM8Asset(detail, asset, samples) {
       values.signals.some(signal => signal.key === 'lockWaits' && signal.status === 'ok') ? numeric(values.waits.length) : '未采集',
       replaySampleLink(asset.id, sample.id)];
   }));
+}
+
+function renderOpenGaussAsset(detail, asset, samples) {
+  detail.replaceChildren(cell('h3', asset.name), cell('p', `openGauss · ${asset.host}:${asset.port}/${asset.database}`),
+    cell('p', [assetHealth(asset).label, formatTime(asset.lastSampleAt), asset.lastError].filter(Boolean).join(' · '), 'hint'));
+  const links = cell('div', '', 'actions');
+  const trend = cell('a', '查看 openGauss 实时趋势', 'monitor-link');
+  trend.href = '#live?' + new URLSearchParams({asset: asset.id, engine: 'opengauss'});
+  links.append(trend);
+  const event = recentEvents.find(item => item.assetId === asset.id && item.kind === 'opengauss_lock_wait');
+  if (event) {
+    const link = cell('a', '打开 openGauss 锁等待事件', 'monitor-link');
+    link.href = '#incidents?' + new URLSearchParams({event: event.id});
+    links.append(link);
+  }
+  detail.append(links);
+  const current = samples[0];
+  const data = current?.collectedAt === asset.lastSampleAt ? current.metrics?.opengauss : null;
+  if (!data) {
+    detail.append(cell('p', '当前没有成功的 openGauss 样本。请核对版本、连接和监控权限。', 'empty'));
+    return;
+  }
+  const format = new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 1});
+  const value = n => Number.isFinite(n) ? format.format(n) : '缺采';
+  detail.append(cell('p', data.version, 'hint'));
+  detail.append(importTable(['会话', '活动会话', '事务', '数据库容量 MiB'], [[value(data.sessions), value(data.activeSessions),
+    value(data.transactions), Number.isFinite(data.databaseBytes) ? value(data.databaseBytes / 1048576) : '缺采']]));
+  const signals = current.metrics.adapter?.signals || [];
+  const lockSignal = signals.find(signal => signal.key === 'lockWaits');
+  detail.append(cell('h4', 'openGauss 原生锁等待'));
+  if (lockSignal?.status !== 'ok') {
+    detail.append(cell('p', lockSignal?.reason || '锁等待缺采', 'warning'));
+  } else if (data.waits?.length) {
+    detail.append(importTable(['等待会话', '阻塞会话', '等待事件', '锁模式'], data.waits.map(wait =>
+      [wait.waitingSession, wait.blockingSession || '未定位', wait.event, wait.mode])));
+    if (data.waitsTruncated) detail.append(cell('p', '仅显示前 32 条等待记录。', 'hint'));
+  } else {
+    detail.append(cell('p', '当前样本未观测到事务锁等待。', 'hint'));
+  }
+  const coverage = cell('details', '', 'settings-details');
+  coverage.append(cell('summary', '采集来源与缺口'), importTable(['来源', '状态'], signals.map(signal =>
+    [signal.source, signal.status === 'ok' ? '已采集' : signal.reason || '缺采'])));
+  detail.append(coverage, replaySampleLink(asset.id, current.id));
 }
 
 function renderKingbaseAsset(detail, asset, samples) {
@@ -3290,7 +3341,7 @@ function renderCollectorStatus(status) {
   if (status.cycle?.atBatchLimit) summary.append(cell('p', `最近一轮领取了 ${status.batchLimit} 个任务。`, 'hint'));
   summary.append(cell('p', '轮次统计来自当前进程的常规采集队列。所有副本的任务、租约和重试记录保存在 PostgreSQL 18。', 'hint'));
   if (summary.nextElementSibling) return;
-  const engines = {postgres:'PostgreSQL',highgo:'瀚高',mysql:'MySQL 8.4',dm8:'达梦 DM8',kingbase:'金仓 V9',redis:'Redis',etcd:'etcd'};
+  const engines = {postgres:'PostgreSQL',highgo:'瀚高',mysql:'MySQL 8.4',dm8:'达梦 DM8',kingbase:'金仓 V9',opengauss:'openGauss',redis:'Redis',etcd:'etcd'};
   const runtimes = {linux:'Linux',k8s:'Kubernetes',managed:'托管'};
   const queue = cell('div', '', 'monitor-table');
   queue.setAttribute('aria-live', 'polite');
@@ -3667,7 +3718,7 @@ function setupAssetImport() {
     return '#sample?' + new URLSearchParams({asset: assetId, sample: sampleId, return: `assets?batch=${batch.id}`});
   }
   function acceptanceSummary(includeNames) {
-    const runtimes = ['linux', 'k8s', 'managed', 'mysql', 'dm8', 'kingbase', 'redis', 'etcd'];
+    const runtimes = ['linux', 'k8s', 'managed', 'mysql', 'dm8', 'kingbase', 'opengauss', 'redis', 'etcd'];
     const buildReport = (item, report) => {
       if (!report) return null;
       const result = {
@@ -3901,7 +3952,7 @@ function setupAssetImport() {
 
 setupAssetImport();
 
-function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase','redis','etcd'].includes(runtime) ? runtime : 'postgres'; }
+function databaseRuntimeGroup(runtime) { return ['dm8','mysql','kingbase','opengauss','redis','etcd'].includes(runtime) ? runtime : 'postgres'; }
 
 function editAsset(asset) {
   editingAsset = asset.id;
@@ -3925,7 +3976,7 @@ function editAsset(asset) {
   $('asset-dialog').dataset.mode = 'edit';
   $('asset-dialog-title').textContent = asset.runtime === 'dm8' ? '编辑达梦 DM8 实例' :
     asset.runtime === 'mysql' ? '编辑 MySQL 实例' : asset.runtime === 'kingbase' ? '编辑金仓 V9 实例' :
-    asset.runtime === 'redis' ? '编辑 Redis 实例' : asset.runtime === 'etcd' ? '编辑 etcd 成员' : '编辑 PostgreSQL 实例';
+    asset.runtime === 'opengauss' ? '编辑 openGauss 实例' : asset.runtime === 'redis' ? '编辑 Redis 实例' : asset.runtime === 'etcd' ? '编辑 etcd 成员' : '编辑 PostgreSQL 实例';
   $('asset-error').textContent = '';
   if (!$('asset-dialog').open) $('asset-dialog').showModal();
 }
@@ -3945,7 +3996,7 @@ function resetEdit() {
   $('asset-integrations').open = false;
 }
 
-const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', redis: 'Redis', etcd: 'etcd', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
+const replayLayers = { app: '应用 Trace', entry: '入口探测', storage: '容器与存储', postgres: 'PostgreSQL', mysql: 'MySQL', dm8: '达梦 DM8', kingbase: '金仓 V9', opengauss: 'openGauss', redis: 'Redis', etcd: 'etcd', sql: 'SQL', linux: 'Linux', k8s: 'Kubernetes', replication: '复制与高可用', notification: '通知投递',
   pooler: 'PgBouncer', response: '处置', ai: 'AI 辅助' };
 const replayStrength = { direct: '直接证据', correlated: '时间相关', conflict: '标识不符', insufficient: '证据不足', record: '事件记录' };
 const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', event_ended: '事件关闭', alert_firing: '告警触发', alert_recovered: '告警恢复',
@@ -3956,7 +4007,7 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   notification_delivery: '通知尝试', notification_retry: '通知重试',
   external_alert_firing: '外部告警触发', external_alert_resolved: '外部告警恢复', external_ticket_linked: '外部工单关联',
   external_ticket_receipt: '外部工单回执',
-  collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', kingbase_lock_wait: '金仓锁等待', recovery_verified: '人工验证恢复',
+  collection_error: '采集发现异常', collection_recovered: '采样已恢复', mysql_lock_wait: 'InnoDB 锁等待', dm8_lock_wait: '达梦事务锁等待', kingbase_lock_wait: '金仓锁等待', opengauss_lock_wait: 'openGauss 锁等待', recovery_verified: '人工验证恢复',
   redis_eviction: 'Redis 缓存淘汰', redis_sentinel_failover: 'Sentinel 主节点异常或切换', redis_slots_unhealthy: 'Redis 槽位异常',
   etcd_leader_change: 'etcd Leader 中断或切换', etcd_health_degraded: 'etcd 健康检查异常', etcd_disk_latency: 'etcd 磁盘延迟',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
@@ -4290,7 +4341,7 @@ function investigationPanel(event, replay, analysis, scope, grafanaLink, impact)
   panel.append(grid);
   const phases = [['before', '故障前'], ['during', '触发时'], ['peak', '峰值'], ['after', '恢复后']];
   const layers = [['all', '全部'], ['app', '应用'], ['pooler', '入口与连接池'], ['postgres', '数据库'], ['infra', 'Linux / Kubernetes'], ['storage', '容器 / 磁盘 / PVC']];
-  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'redis', 'sql', 'replication'], infra: ['linux', 'k8s', 'etcd'], storage: ['storage']};
+  const layerKeys = {app: ['app'], pooler: ['entry', 'pooler'], postgres: ['postgres', 'mysql', 'dm8', 'kingbase', 'opengauss', 'redis', 'sql', 'replication'], infra: ['linux', 'k8s', 'etcd'], storage: ['storage']};
   const comparisons = new Map((replay.comparison || []).map(row => [row.phase, row]));
   if (replay.peak) comparisons.set('peak', replay.peak);
   const graph = analysis.graph || { nodes: [], edges: [] };
@@ -5340,7 +5391,7 @@ function eventLogRetest(event) {
 function incidentDependencyPanel(data, event) {
   const panel = cell('section', '', 'incident-dependency');
   panel.append(cell('h4', '跨数据库调用与基础设施证据'));
-  const labels = {postgres:'PostgreSQL',mysql:'MySQL',dm8:'达梦 DM8',kingbase:'金仓 V9',redis:'Redis',etcd:'etcd'};
+  const labels = {postgres:'PostgreSQL',mysql:'MySQL',dm8:'达梦 DM8',kingbase:'金仓 V9',opengauss:'openGauss',redis:'Redis',etcd:'etcd'};
   const millis = value => Number.isFinite(value) ? `${value.toFixed(2)} ms` : '未采集';
   const modal = cell('dialog', '', 'log-dialog log-raw');
   const content = cell('div', '');
@@ -5525,10 +5576,11 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const asset = allAssets.find(item => item.id === event.assetId);
     const mysql = asset?.runtime === 'mysql' || event.kind?.startsWith('mysql');
     const dm8 = asset?.runtime === 'dm8' || event.kind?.startsWith('dm8');
+    const opengauss = asset?.runtime === 'opengauss' || event.kind?.startsWith('opengauss');
     const kingbase = asset?.runtime === 'kingbase' || event.kind?.startsWith('kingbase');
     const redis = asset?.runtime === 'redis' || event.kind?.startsWith('redis');
     const etcd = asset?.runtime === 'etcd' || event.kind?.startsWith('etcd_');
-    const engine = etcd ? 'etcd' : redis ? 'redis' : kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
+    const engine = etcd ? 'etcd' : redis ? 'redis' : opengauss ? 'opengauss' : kingbase ? 'kingbase' : dm8 ? 'dm8' : mysql ? 'mysql' : 'postgres';
     const link = cell('a', '打开 Grafana 专题', 'monitor-link incident-monitor-return');
     const start = Date.parse(event.startedAt);
     const anchor = back ? new URLSearchParams(back.split('?')[1]) : null;
@@ -6202,7 +6254,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = evidence.kind === 'log_record' ? '日志原始证据' : ['log_retest', 'statement_retest'].includes(evidence.kind) ? '调优复测' :
+    const label = evidence.kind === 'opengauss_lock_wait' ? replayKinds[evidence.kind] :
+      evidence.kind === 'log_record' ? '日志原始证据' : ['log_retest', 'statement_retest'].includes(evidence.kind) ? '调优复测' :
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
@@ -6226,8 +6279,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       });
       row.append(button);
     }
-    if (['alert_firing', 'alert_suppressed', 'alert_recovered'].includes(evidence.kind) && sampleUUID.test(evidence.payload.sampleId || '')) {
-      const label = evidence.kind === 'alert_recovered' ? '查看恢复采样' : '查看触发采样';
+    const recoverySample = evidence.kind === 'alert_recovered' || evidence.kind === 'collection_recovered';
+    if ((recoverySample || ['alert_firing', 'alert_suppressed', 'opengauss_lock_wait'].includes(evidence.kind)) &&
+        sampleUUID.test(evidence.payload.sampleId || '')) {
+      const label = recoverySample ? '查看恢复采样' : '查看触发采样';
       const link = cell('a', label, 'monitor-link');
       link.href = '#sample?' + new URLSearchParams({asset: event.assetId, sample: evidence.payload.sampleId,
         return: 'incidents?' + investigationParams(event.id)});
@@ -6486,6 +6541,7 @@ $('runtime').addEventListener('change', (event) => {
   const mysql = event.target.value === 'mysql';
   const dm8 = event.target.value === 'dm8';
   const kingbase = event.target.value === 'kingbase';
+  const opengauss = event.target.value === 'opengauss';
   const nativeHA = dm8 || kingbase || mysql;
   const redis = event.target.value === 'redis';
   const etcd = event.target.value === 'etcd';
@@ -6495,8 +6551,8 @@ $('runtime').addEventListener('change', (event) => {
   event.target.dataset.previousRuntime = event.target.value;
   const form = $('asset-form');
   if (!editingAsset && previousEngine !== nextEngine) {
-    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321', redis:'6379', etcd:'2379'};
-    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test', redis:'0', etcd:'etcd'};
+    const ports = {postgres:'5432', mysql:'3306', dm8:'5236', kingbase:'54321', opengauss:'5432', redis:'6379', etcd:'2379'};
+    const names = {postgres:'postgres', mysql:'', dm8:'DAMENG', kingbase:'test', opengauss:'postgres', redis:'0', etcd:'etcd'};
     if (form.elements.port.value === ports[previousEngine]) form.elements.port.value = ports[nextEngine];
     if (form.elements.database.value === names[previousEngine]) form.elements.database.value = names[nextEngine];
     if (previous === 'dm8') form.elements.sslMode.value = 'require';
@@ -6505,11 +6561,12 @@ $('runtime').addEventListener('change', (event) => {
   if (dm8) form.elements.sslMode.value = 'disable';
   $('asset-database-label').textContent = etcd ? '监控对象' : redis ? '实例范围／Sentinel 组' : '数据库';
   $('asset-password-label').textContent = etcd ? '观测令牌（可选）' : '密码';
-  $('asset-integrations').hidden = mysql || dm8 || kingbase || redis || etcd;
-  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = mysql || dm8 || kingbase || redis || etcd;
+  $('asset-integrations').hidden = mysql || dm8 || kingbase || opengauss || redis || etcd;
+  for (const input of $('asset-integrations').querySelectorAll('input')) input.disabled = $('asset-integrations').hidden;
   $('asset-runtime-hint').textContent = mysql ? '数据库名称用于筛选 SQL 指纹。使用专用账号读取 Performance Schema。'
     : dm8 ? '主机和端口须匹配达梦采集探针的授权目标。使用专用监控账号读取动态性能视图。'
     : kingbase ? '选择 PostgreSQL 兼容模式的金仓 V9。使用专用只读账号和实际数据库名称。'
+    : opengauss ? '使用 openGauss 7.0 单实例的专用账号。会话与锁等待需要监控权限。'
     : redis ? '普通节点和 Cluster 填 0。Sentinel 填主节点组名，端口通常为 26379。'
     : etcd ? '填写成员观测端点。Kubernetes Context 可选，使用该 Context 的只读凭据读取 API Server 指标。'
     : 'Linux 主机指标需要 node_exporter。Kubernetes 采集使用只读 API 凭据。数据库建议使用专用只读监控账号。';
@@ -6520,7 +6577,7 @@ $('runtime').addEventListener('change', (event) => {
       : !k8s && child.querySelector?.('[name=k8sCluster]') === null;
   }
   for (const field of document.querySelectorAll('.linux-field')) {
-    field.hidden = !linux && !nativeHA && !redis && !etcd;
+    field.hidden = !linux && !nativeHA && !opengauss && !redis && !etcd;
     field.querySelector('input').disabled = field.hidden;
   }
   for (const field of $('k8s-fields').querySelectorAll('input')) field.disabled = !k8s && !nativeHA && (!etcd || field.name !== 'k8sCluster');

@@ -19,7 +19,7 @@ import (
 
 func (s *Postgres) TraceAssets(ctx context.Context, key []byte) ([]trace.Asset, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id::text,host,port,database_name,pooler_url_enc,pooler_endpoint,
-		CASE WHEN runtime IN ('mysql','redis','etcd','dm8','kingbase') THEN runtime ELSE 'postgres' END FROM assets`)
+		CASE WHEN runtime IN ('mysql','redis','etcd','dm8','kingbase','opengauss') THEN runtime ELSE 'postgres' END FROM assets`)
 	if err != nil {
 		return nil, fmt.Errorf("list OTLP asset identities: %w", err)
 	}

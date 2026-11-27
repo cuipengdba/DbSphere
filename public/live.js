@@ -24,6 +24,13 @@
     { key: 'dm8Transactions', title: '事务', unit: '', source: 'V$TRX · 窗口均值' },
     { key: 'dm8Waits', title: '已观测锁等待', unit: '', source: 'V$TRXWAIT · 窗口峰值' }
   ];
+  const openGaussMetrics = [
+    { key: 'opengaussSessions', title: '会话', unit: '', source: 'pg_stat_activity · 桶内均值' },
+    { key: 'opengaussActive', title: '活动会话', unit: '', source: 'pg_stat_activity · 桶内均值' },
+    { key: 'opengaussTransactions', title: '事务', unit: '', source: 'pg_stat_activity · 桶内均值' },
+    { key: 'opengaussWaits', title: '锁等待', unit: '', source: 'pg_thread_wait_status · 桶内峰值' },
+    { key: 'opengaussSize', title: '数据库容量', unit: ' B', source: 'pg_database_size · 桶内均值' }
+  ];
   const kingbaseMetrics = [
     { key: 'kingbaseSessions', title: '会话', unit: '', source: 'sys_catalog.sys_stat_activity · 桶内均值' },
     { key: 'kingbaseActive', title: '活动会话', unit: '', source: 'sys_catalog.sys_stat_activity · 桶内均值' },
@@ -50,7 +57,7 @@
     {key:'etcdCommit', title:'后端提交',unit:' ms',source:'采样间平均耗时 · 桶内峰值'},
     {key:'etcdAPI', title:'API Server → etcd',unit:' ms',source:'API Server 记录的 etcd 请求耗时 · 桶内峰值'}
   ];
-  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'};
+  const engineNames = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', opengauss:'openGauss', redis:'Redis', etcd:'etcd'};
   const minute = 60000;
   const validId = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value || '');
   const freshnessLabels = { ok: '采样正常', error: '采集失败', pending: '待采样', stale: '采样陈旧' };
@@ -66,6 +73,7 @@
     replication: 'dbsphere-replication', infrastructure: 'dbsphere-infrastructure', mysql: 'dbsphere-mysql',
     dm8: 'dbsphere-dm8',
     kingbase: 'dbsphere-kingbase',
+    opengauss: 'dbsphere-opengauss',
     redis: 'dbsphere-redis',
     etcd: 'dbsphere-etcd',
     containerIO: 'dbsphere-container-io', containerCache: 'dbsphere-container-cache', containerVolumes: 'dbsphere-container-volumes', containerRCA: 'dbsphere-container-rca' };
@@ -453,6 +461,12 @@
         ['命中率',nativeCount('hitPercent') === '—' ? '—' : nativeCount('hitPercent') + '%',observed,'cyan','redisHitPercent'],
         ['窗口淘汰',nativeCount('evicted'),observed,native.evicted > 0 ? 'alert' : 'violet','redisEvicted'],
         ['内存',bytes(native.memory),observed,'cyan','redisMemory']
+      ] : selected?.engine === 'opengauss' ? [
+        availability,
+        ['会话', nativeCount('sessions'), `活动 ${nativeCount('active')} · ${observed}`, 'blue', 'opengaussSessions'],
+        ['事务', nativeCount('transactions'), observed, 'violet', 'opengaussTransactions'],
+        ['锁等待', nativeCount('waits'), observed, native.waits > 0 ? 'alert' : 'violet', 'opengaussWaits'],
+        ['数据库容量', bytes(native.size), observed, 'cyan', 'opengaussSize']
       ] : selected?.engine === 'kingbase' ? [
         availability,
         ['会话', nativeCount('sessions'), `活动 ${nativeCount('active')} · ${observed}`, 'blue', 'kingbaseSessions'],
@@ -653,7 +667,7 @@
           link.href = '#engine-diagnosis?' + query;
           parent.append(link);
         }
-        const name = {redis:'查看 Redis 慢命令和拓扑',kingbase:'查看金仓 SQL 指纹与锁链',etcd:'查看 etcd 成员和存储延迟'}[asset?.engine];
+        const name = {redis:'查看 Redis 慢命令和拓扑',kingbase:'查看金仓 SQL 指纹与锁链',opengauss:'查看 openGauss 实例与锁等待',etcd:'查看 etcd 成员和存储延迟'}[asset?.engine];
         if (name) {
           const button = element('button', name, 'ghost small-button');
           button.type = 'button';
@@ -702,7 +716,7 @@
       to = selection.end || now;
       from = (selection.end && selection.start) || to - selectedTimescale * minute;
       const list = get('metrics');
-      const specialized = {etcd:etcdMetrics,redis:redisMetrics,kingbase:kingbaseMetrics,dm8:dm8Metrics,mysql:mysqlMetrics};
+      const specialized = {etcd:etcdMetrics,redis:redisMetrics,kingbase:kingbaseMetrics,opengauss:openGaussMetrics,dm8:dm8Metrics,mysql:mysqlMetrics};
       const enabled = asset?.engine === 'redis' && asset.engineMetrics?.mode === 'sentinel' ?
         redisMetrics.filter(metric => metric.key === 'redisLatency') : specialized[asset?.engine] || metrics;
       if (!enabled.includes(selectedMetric)) selectedMetric = enabled[0];

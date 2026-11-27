@@ -27,7 +27,7 @@ const assetJSON = `jsonb_build_object(
 	'id',id,'organizationId',organization_id,'name',name,'clusterName',cluster_name,'host',host,'port',port,'database',database_name,
 	'environment',environment,'tags',tags,
 	'username',username,'sslMode',ssl_mode,'runtime',runtime,
-	'engine',CASE WHEN runtime IN ('mysql','dm8','kingbase','redis','etcd') THEN runtime ELSE 'postgresql' END,
+	'engine',CASE WHEN runtime IN ('mysql','dm8','kingbase','opengauss','redis','etcd') THEN runtime ELSE 'postgresql' END,
 	'linuxHost',linux_host,'linuxExporterPort',linux_exporter_port,
 	'poolerConfigured',pooler_url_enc IS NOT NULL,'poolerEndpoint',pooler_endpoint,
 	'patroniConfigured',patroni_url_enc IS NOT NULL,

@@ -51,6 +51,8 @@ func (s *Postgres) MonitoringSeries(ctx context.Context, ids []string, params ur
 		query = dm8SeriesSQL
 	case "kingbase":
 		query = kingbaseSeriesSQL
+	case "opengauss":
+		query = openGaussSeriesSQL
 	case "etcd":
 		query = etcdSeriesSQL
 	}
@@ -128,6 +130,19 @@ const kingbaseSeriesSQL = `SELECT jsonb_build_object(
 	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
 	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='kingbase'
 	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'kingbase'
+	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
+
+const openGaussSeriesSQL = `SELECT jsonb_build_object(
+	'bucket',date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC'),
+	'opengaussSessions',avg((s.metrics_json#>>'{opengauss,sessions}')::numeric),
+	'opengaussActive',avg((s.metrics_json#>>'{opengauss,activeSessions}')::numeric),
+	'opengaussTransactions',avg((s.metrics_json#>>'{opengauss,transactions}')::numeric),
+	'opengaussWaits',max(CASE WHEN s.metrics_json#>'{adapter,signals}' @> '[{"key":"lockWaits","status":"ok"}]'::jsonb
+		AND jsonb_typeof(s.metrics_json#>'{opengauss,waits}')='array' THEN jsonb_array_length(s.metrics_json#>'{opengauss,waits}') END),
+	'opengaussSize',avg((s.metrics_json#>>'{opengauss,databaseBytes}')::numeric),
+	'latestSampleId',(array_agg(s.id ORDER BY s.collected_at DESC,s.id DESC))[1])
+	FROM samples s JOIN assets a ON a.id=s.asset_id AND a.runtime='opengauss'
+	WHERE s.asset_id=$1 AND s.collected_at>=$2 AND s.collected_at<=$3 AND s.metrics_json ? 'opengauss'
 	GROUP BY date_bin(make_interval(mins=>$4::int),s.collected_at,timestamptz '2000-01-01 UTC') ORDER BY 1`
 
 const redisSeriesSQL = `SELECT jsonb_build_object(

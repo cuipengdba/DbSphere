@@ -344,6 +344,23 @@ func analyzeCandidates(event *eventRecord, samples map[string]sampleObservation,
 			}
 			continue
 		}
+		if item.Kind == openGaussLockGroup {
+			var payload map[string]any
+			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {
+				wait := object(list(payload["waits"])[0])
+				title := "openGauss 报告事务锁等待"
+				if holder, waiter := stringValue(wait["blockingSession"]), stringValue(wait["waitingSession"]); holder != "" && waiter != "" {
+					title = fmt.Sprintf("openGauss 返回会话 %s 正在阻塞会话 %s", holder, waiter)
+				}
+				supports := []string{item.ID}
+				if id := stringValue(payload["sampleId"]); id != "" {
+					supports = append(supports, "sample:"+id)
+				}
+				addCandidate("opengauss_session_lock", title, "high", supports,
+					[]string{"核对等待会话、锁模式和持锁事务的提交路径"}, "openGauss 原生等待视图报告了采样瞬间的关系。", nil, item.ObservedAt, nil)
+			}
+			continue
+		}
 		if item.Kind == dm8LockGroup {
 			var payload map[string]any
 			if json.Unmarshal(item.Payload, &payload) == nil && len(list(payload["waits"])) > 0 {

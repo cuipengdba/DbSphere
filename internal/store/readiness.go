@@ -102,7 +102,7 @@ func summarizeReadiness(checks []readinessCheck) string {
 func describeReadiness(sample readinessSample, runtime string) []readinessCheck {
 	metrics := sample.Metrics
 	pgStatus := stringValue(object(metrics["collector"])["pgStatus"])
-	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "dm8" || runtime == "redis" || runtime == "etcd") {
+	if pgStatus == "" && (runtime == "mysql" || runtime == "kingbase" || runtime == "opengauss" || runtime == "dm8" || runtime == "redis" || runtime == "etcd") {
 		pgStatus = stringValue(object(metrics["collector"])[runtime+"Status"])
 	}
 	if pgStatus == "" && sample.Status == "ok" {

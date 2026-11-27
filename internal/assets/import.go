@@ -72,7 +72,7 @@ func ParseImport(request ImportRequest) ([]Declaration, error) {
 			item.Runtime = "managed"
 		}
 		if item.Port == 0 {
-			item.Port = map[string]int{RuntimeMySQL: 3306, RuntimeRedis: 6379, RuntimeEtcd: 2379, RuntimeDM8: 5236, RuntimeKingbase: 54321}[item.Runtime]
+			item.Port = map[string]int{RuntimeMySQL: 3306, RuntimeRedis: 6379, RuntimeEtcd: 2379, RuntimeDM8: 5236, RuntimeKingbase: 54321, RuntimeOpenGauss: 5432}[item.Runtime]
 			if item.Port == 0 {
 				item.Port = 5432
 			}

@@ -180,6 +180,8 @@ func (s *Postgres) eventWithRCAPolicy(ctx context.Context, id, replayCode string
 		assetLayer = "dm8"
 	} else if event.Kind == kingbaseLockGroup {
 		assetLayer = "kingbase"
+	} else if event.Kind == openGaussLockGroup {
+		assetLayer = "opengauss"
 	} else if event.Kind == redisEvictionGroup || event.Kind == redisSentinelGroup || event.Kind == redisSlotsGroup {
 		assetLayer = "redis"
 	} else if event.Kind == etcdLeaderGroup || event.Kind == etcdHealthGroup || event.Kind == etcdDiskGroup {

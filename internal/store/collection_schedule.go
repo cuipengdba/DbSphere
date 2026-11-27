@@ -74,7 +74,7 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `INSERT INTO collection_jobs(asset_id,due_at)
 		SELECT a.id,coalesce(a.last_sample_at+make_interval(secs=>$1),a.created_at)
-		FROM assets a WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		FROM assets a WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd')
 		AND a.remote_site=''
 		AND NOT EXISTS (SELECT 1 FROM collection_jobs j WHERE j.asset_id=a.id)
 		ORDER BY a.id LIMIT 100 FOR KEY SHARE OF a SKIP LOCKED
@@ -86,7 +86,7 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 			THEN 'postgres' ELSE a.runtime END ORDER BY j.due_at,j.asset_id) AS source_slot
 		FROM collection_jobs j JOIN assets a ON a.id=j.asset_id
 		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
-		AND a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		AND a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd')
 		AND a.remote_site=''
 		AND ($4::int=0 OR j.isolated=($4=2))
 	), ready AS (
@@ -205,7 +205,7 @@ const collectionQueueSQL = `WITH queue AS (
 		WHEN a.last_sample_at IS NULL THEN 'missing'
 		WHEN coalesce(j.due_at,a.last_sample_at+make_interval(secs=>$1))<=now() THEN 'due'
 		ELSE 'scheduled' END AS state
-	FROM assets a LEFT JOIN collection_jobs j ON j.asset_id=a.id WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+	FROM assets a LEFT JOIN collection_jobs j ON j.asset_id=a.id WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd')
 		AND ($2::uuid IS NULL OR a.organization_id=$2)
 ), ranked AS (
 	SELECT *, array_position(ARRAY['delayed','backoff','missing','running','due','scheduled'],state) AS priority

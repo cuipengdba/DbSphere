@@ -21,7 +21,7 @@
     ['PgBouncer 排队', '关联连接池 · 客户端', [['poolWaiting', '排队']]],
     ['容器文件缓存', '数据库容器 · MiB', [['activeFile', 'Active file'], ['inactiveFile', 'Inactive file']]]
   ];
-  const engineLabels = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'};
+  const engineLabels = {postgres:'PostgreSQL', mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', opengauss:'openGauss', redis:'Redis', etcd:'etcd'};
   const nativeCharts = {
     mysql: [
       ['客户端连接', 'MySQL 连接状态 · 个', [['mysqlClients','连接'],['mysqlRunning','活动']]],
@@ -44,6 +44,11 @@
       ['数据库容量', 'sys_database_size · MiB', [['kingbaseSize','容量']]],
       ['复制回放差距', 'WAL 收发与回放 · MiB', [['kingbaseLag','回放差距']]],
       ['归档失败', 'sys_stat_archiver 累计 · 次', [['kingbaseArchiveFailures','失败']]]
+    ],
+    opengauss: [
+      ['会话', 'pg_stat_activity · 个', [['opengaussSessions','会话'],['opengaussActive','活动']]],
+      ['事务与锁等待', 'pg_stat_activity / pg_thread_wait_status · 个', [['opengaussTransactions','事务'],['opengaussWaits','等待']]],
+      ['数据库容量', 'pg_database_size · MiB', [['opengaussSize','容量']]]
     ],
     redis: [
       ['每秒操作', 'INFO stats · OPS', [['redisOps','操作']]],
@@ -69,7 +74,7 @@
     ]
   };
   const mebi = new Set(['diskReadBps','diskWriteBps','networkReceiveBps','networkTransmitBps','lag','activeFile','inactiveFile',
-    'dm8Allocated','dm8Used','kingbaseSize','kingbaseLag','redisMemory','etcdSize','etcdQuota']);
+    'dm8Allocated','dm8Used','kingbaseSize','kingbaseLag','opengaussSize','redisMemory','etcdSize','etcdQuota']);
   const statuses = { ok: '正常', stale: '陈旧', error: '采集失败', pending: '待首采', degraded: '部分缺采' };
   const roles = { primary: '主库', replica: '备库', standby: '备库', standalone: '单实例', leader:'Leader', follower:'Follower', 'no-leader':'暂无 Leader' };
   const boardStates = new Set(['affected', 'missing', 'maintenance', 'recovered', 'healthy']);
@@ -542,7 +547,7 @@
           button.dataset.state = asset.unavailable ? 'error' : asset.freshness;
           button.setAttribute('aria-pressed', String(asset.id === selection.asset));
           const name = node('strong', '', asset.name);
-          const role = roles[asset.role] || ({mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', redis:'Redis', etcd:'etcd'}[asset.engine] || '数据库');
+          const role = roles[asset.role] || ({mysql:'MySQL', dm8:'达梦 DM8', kingbase:'金仓 V9', opengauss:'openGauss', redis:'Redis', etcd:'etcd'}[asset.engine] || '数据库');
           const availability = asset.unavailable ? '故障' : statuses[asset.freshness] || '缺采';
           const connection = finite(asset.connections) && asset.maxConnections > 0
             ? '连接 ' + asset.connections + '/' + asset.maxConnections : '连接缺采';

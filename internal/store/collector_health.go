@@ -87,7 +87,7 @@ func (s *Postgres) CollectionHealth(ctx context.Context, interval int) (any, err
 		SELECT a.organization_id,o.name AS organization,a.runtime,a.last_sample_at,j.*,
 		coalesce(j.last_engine,CASE WHEN a.runtime IN ('linux','k8s','managed') THEN 'postgres' ELSE a.runtime END) AS engine
 		FROM assets a JOIN organizations o ON o.id=a.organization_id LEFT JOIN collection_jobs j ON j.asset_id=a.id
-		WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd') AND ($2::uuid IS NULL OR a.organization_id=$2)
+		WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd') AND ($2::uuid IS NULL OR a.organization_id=$2)
 	) SELECT jsonb_build_object(
 		'organizationId',j.organization_id,'organization',j.organization,'source',j.runtime,'engine',j.engine,
 		'targets',count(*),'isolated',count(*) FILTER (WHERE j.isolated),

@@ -2,6 +2,7 @@ package assets
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -39,5 +40,32 @@ func TestImportRejectsEmbeddedCredentialsAndAliases(t *testing.T) {
 	_, err = ParseImport(ImportRequest{Format: "yaml", Content: "item: &item {name: order}\nassets: [*item]"})
 	if !errors.Is(err, ErrInvalidImport) {
 		t.Fatal("accepted YAML alias")
+	}
+}
+
+func TestImportDomesticDatabaseDefaults(t *testing.T) {
+	for _, target := range []struct {
+		runtime, database, tls string
+		port                   int
+	}{
+		{"linux", "postgres", "require", 5432}, // HighGo uses the PostgreSQL adapter.
+		{RuntimeDM8, "DAMENG", "disable", 5236},
+		{RuntimeKingbase, "postgres", "require", 54321},
+		{RuntimeOpenGauss, "postgres", "require", 5432},
+	} {
+		t.Run(target.runtime, func(t *testing.T) {
+			items, err := ParseImport(ImportRequest{Format: "yaml", Username: "monitor",
+				CredentialRef: "env:DBSPHERE_IMPORT_MONITOR",
+				Content:       fmt.Sprintf("assets: [{name: db, host: db.example, runtime: %s}]", target.runtime)})
+			if err != nil || len(items) != 1 {
+				t.Fatalf("import declarations: %v", err)
+			}
+			asset := items[0]
+			if asset.Issue != "" || asset.Input.Validate() != nil || asset.Runtime != target.runtime ||
+				asset.Port != target.port || asset.Database != target.database || asset.SSLMode != target.tls ||
+				asset.CredentialRef != "env:DBSPHERE_IMPORT_MONITOR" {
+				t.Fatalf("unexpected import settings: %+v", asset)
+			}
+		})
 	}
 }

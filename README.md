@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v4.3.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v4.4.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v4.3.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.3.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v4.4.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.4.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
 
 ## 支持矩阵
 
@@ -22,6 +22,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |
 | 金仓 KingbaseES | V9，PostgreSQL 兼容模式 | 会话等待、SQL 指纹、归档及流复制状态。 |
 | 金仓 KingbaseES | `V009R002C016B0006` 单节点 · v4.0.0 新增实测 | PostgreSQL 兼容模式，首采、认证修正、原资产复检及原始样本回查。 |
+| openGauss | 7.0.0 `2397a86f`，Linux 单实例 · v4.4.0 新增 | 只读会话、锁等待和容量，支持权限复检和同一事件恢复。 |
 | Redis OSS | 6.2 · v3.11.0 新增 | OPS、内存、命中与淘汰、慢命令及 Cluster 槽位。Redis 6.2.24 已验收单节点和三主节点 Cluster。 |
 | Redis OSS | 7.2、8.4 | 单节点、主从、Sentinel 和 Cluster 指标，按 ACL 权限读取。 |
 | 站点采集 | v4.2.0 · PostgreSQL 18.7、MySQL 8.4.13、Redis 6.2.24 | 跨网段只读采集、双向 TLS、磁盘缓冲及原事件恢复回查。 |

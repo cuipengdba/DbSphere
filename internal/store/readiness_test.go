@@ -43,6 +43,36 @@ func TestReadinessPreservesConnectionPermissionLimit(t *testing.T) {
 	}
 }
 
+func TestDomesticDatabaseReadinessDistinguishesPermissionFromObservedZero(t *testing.T) {
+	for _, scenario := range []struct{ runtime, statusKey, signal, source string }{
+		{"linux", "pgStatus", "activeWaits", "pg_catalog.pg_stat_activity"},
+		{"dm8", "dm8Status", "lockWaits", "SYS.V$TRXWAIT"},
+		{"kingbase", "kingbaseStatus", "lockWaits", "sys_catalog.sys_locks"},
+		{"opengauss", "opengaussStatus", "lockWaits", "pg_catalog.pg_thread_wait_status"},
+	} {
+		t.Run(scenario.runtime, func(t *testing.T) {
+			for _, permission := range []struct{ signalStatus, checkStatus, overall string }{
+				{"permission_denied", "limited", "limited"},
+				{"unavailable", "unknown", "limited"},
+				{"ok", "ok", "ready"},
+			} {
+				sample := readinessSample{Status: "ok", Metrics: map[string]any{
+					"collector": map[string]any{scenario.statusKey: "ok"},
+					"adapter": map[string]any{"transport": map[string]any{"readOnly": true}, "signals": []any{
+						map[string]any{"key": scenario.signal, "status": permission.signalStatus, "source": scenario.source},
+					}},
+				}}
+				checks := describeReadiness(sample, scenario.runtime)
+				if summarizeReadiness(checks) != permission.overall || !slices.ContainsFunc(checks, func(check readinessCheck) bool {
+					return check.Key == scenario.signal && check.Status == permission.checkStatus
+				}) {
+					t.Fatalf("%s: unexpected checks %+v", permission.signalStatus, checks)
+				}
+			}
+		})
+	}
+}
+
 func TestKindReadinessReportsDeniedPVC(t *testing.T) {
 	namespace, pod := os.Getenv("DBSPHERE_TEST_READINESS_NAMESPACE"), os.Getenv("DBSPHERE_TEST_READINESS_POD")
 	if namespace == "" || pod == "" {

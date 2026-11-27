@@ -368,7 +368,7 @@ func (s *Postgres) ExportAssets(ctx context.Context, after string) (any, error) 
 	if after != "" && !evidenceUUID.MatchString(after) {
 		return nil, assets.ErrInvalidImport
 	}
-	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd') AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
+	values, err := s.queryJSON(ctx, "SELECT "+assetJSON+" FROM assets WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd') AND ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 101", nullable(after))
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ var poolerHostPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`)
 const RuntimeMySQL = "mysql"
 const RuntimeDM8 = "dm8"
 const RuntimeKingbase = "kingbase"
+const RuntimeOpenGauss = "opengauss"
 const RuntimeRedis = "redis"
 const RuntimeEtcd = "etcd"
 
@@ -30,7 +31,7 @@ func IsPostgreSQLRuntime(runtime string) bool {
 
 func IsSupportedRuntime(runtime string) bool {
 	return IsPostgreSQLRuntime(runtime) || runtime == RuntimeMySQL || runtime == RuntimeDM8 ||
-		runtime == RuntimeKingbase || runtime == RuntimeRedis || runtime == RuntimeEtcd
+		runtime == RuntimeKingbase || runtime == RuntimeOpenGauss || runtime == RuntimeRedis || runtime == RuntimeEtcd
 }
 
 type OptionalPort int
@@ -145,7 +146,7 @@ func (a Input) Validate() error {
 	if a.Runtime == "k8s" && (a.K8sCluster == "" || a.Namespace == "") {
 		return errors.New("Kubernetes cluster and namespace are required")
 	}
-	linuxExporter := a.Runtime == "linux" || nativeResources || a.Runtime == RuntimeRedis || a.Runtime == RuntimeEtcd
+	linuxExporter := a.Runtime == "linux" || nativeResources || a.Runtime == RuntimeOpenGauss || a.Runtime == RuntimeRedis || a.Runtime == RuntimeEtcd
 	if a.LinuxExporterPort != 0 && (!linuxExporter || !shortHostPattern.MatchString(a.LinuxHost) ||
 		int(a.LinuxExporterPort) < 1 || int(a.LinuxExporterPort) > 65535) {
 		return errors.New("invalid Linux exporter endpoint")

@@ -18,7 +18,6 @@ import (
 	"github.com/cuipengdba/dbsphere/internal/collectorstate"
 	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var ErrAssetNotFound = errors.New("asset not found")
@@ -37,7 +36,7 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 		return nil, fmt.Errorf("invalid Go collection schedule")
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
-		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','opengauss','redis','etcd')
 		AND remote_site=''
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
@@ -119,19 +118,19 @@ func (s *Postgres) checkStaleCollection(ctx context.Context, id string, interval
 }
 
 func collectionError(err error) (string, string) {
-	var pgErr *pgconn.PgError
+	var pgErr interface{ SQLState() string }
 	if errors.As(err, &pgErr) {
-		if strings.HasPrefix(pgErr.Code, "08") || pgErr.Code == "53300" ||
-			pgErr.Code == "57P01" || pgErr.Code == "57P02" || pgErr.Code == "57P03" {
-			return "availability", "PostgreSQL temporarily unavailable (SQLSTATE " + pgErr.Code + ")"
+		code := pgErr.SQLState()
+		if strings.HasPrefix(code, "08") || code == "53300" || code == "57P01" || code == "57P02" || code == "57P03" {
+			return "availability", "PostgreSQL temporarily unavailable (SQLSTATE " + code + ")"
 		}
-		if strings.HasPrefix(pgErr.Code, "28") {
-			return "telemetry", "PostgreSQL authentication failed (SQLSTATE " + pgErr.Code + ")"
+		if strings.HasPrefix(code, "28") {
+			return "telemetry", "PostgreSQL authentication failed (SQLSTATE " + code + ")"
 		}
-		if pgErr.Code == "42501" {
+		if code == "42501" {
 			return "telemetry", "PostgreSQL monitoring role lacks permission (SQLSTATE 42501)"
 		}
-		return "telemetry", "PostgreSQL collection query failed (SQLSTATE " + pgErr.Code + ")"
+		return "telemetry", "PostgreSQL collection query failed (SQLSTATE " + code + ")"
 	}
 	if strings.Contains(err.Error(), "outside the supported") {
 		return "telemetry", err.Error()
@@ -211,6 +210,9 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	if runtime == assets.RuntimeRedis {
 		return s.checkRedis(ctx, id, target, password, lease, interval, nativeInfraTarget{host: linuxHost, exporterPort: exporterPort})
+	}
+	if runtime == assets.RuntimeOpenGauss {
+		return s.checkOpenGauss(ctx, id, target, password, lease, interval, nativeInfraTarget{host: linuxHost, exporterPort: exporterPort})
 	}
 	if runtime == assets.RuntimeEtcd {
 		target.KubernetesCluster = dereference(k8sCluster)
@@ -478,6 +480,8 @@ func (s *Postgres) recordObservation(ctx context.Context, id string, metrics map
 		label, source = "达梦 DM8", "go_dm8_collector"
 	} else if runtime == assets.RuntimeKingbase {
 		label, source = "金仓 V9", "go_kingbase_collector"
+	} else if runtime == assets.RuntimeOpenGauss {
+		label, source = "openGauss", "go_opengauss_collector"
 	} else if runtime == assets.RuntimeRedis {
 		label, source = "Redis", "go_redis_collector"
 	} else if runtime == assets.RuntimeEtcd {
@@ -729,6 +733,12 @@ func (s *Postgres) recordObservation(ctx context.Context, id string, metrics map
 				if err := recordNativeHAEvents(ctx, tx, id, sampleID, previousID, "kingbase", now, previousAt, details.HA, previous, interval); err != nil {
 					return CheckResult{}, fmt.Errorf("record Kingbase replication event: %w", err)
 				}
+			}
+		}
+	} else if runtime == assets.RuntimeOpenGauss {
+		if status == "ok" {
+			if err := recordOpenGaussLockEvent(ctx, tx, id, sampleID, metrics, now); err != nil {
+				return CheckResult{}, fmt.Errorf("record openGauss lock event: %w", err)
 			}
 		}
 	} else if runtime == assets.RuntimeRedis {

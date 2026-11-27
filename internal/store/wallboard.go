@@ -282,6 +282,11 @@ func wallboardNativeValues(values map[string]float64, metrics map[string]any) bo
 		copyValues(object(m["replication"]), map[string]string{"kingbaseLag": "maxReplayLagBytes"})
 		copyValues(object(m["ha"]), map[string]string{"kingbaseLag": "replayGap"})
 		copyValues(object(object(m["ha"])["archive"]), map[string]string{"kingbaseArchiveFailures": "failed"})
+	case metrics["opengauss"] != nil:
+		m := object(metrics["opengauss"])
+		copyValues(m, map[string]string{"opengaussSessions": "sessions", "opengaussActive": "activeSessions",
+			"opengaussTransactions": "transactions", "opengaussSize": "databaseBytes"})
+		putWaits("opengaussWaits", m["waits"])
 	case metrics["redis"] != nil:
 		m := object(metrics["redis"])
 		copyValues(m, map[string]string{"redisOps": "ops", "redisClients": "clients", "redisMemory": "memoryBytes",
