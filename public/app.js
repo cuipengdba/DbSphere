@@ -3504,11 +3504,11 @@ function setupAssetImport() {
   const recheck = $('asset-import-recheck'), progress = $('asset-import-progress');
   const reportButton = $('asset-import-report'), supportButton = $('asset-import-support');
   const supportPanel = $('asset-import-support-panel'), supportPreview = $('asset-import-support-preview');
-  const supportDownload = $('asset-import-support-download');
+  const supportDownload = $('asset-import-support-download'), supportEvent = $('asset-import-support-event');
   const cnpgForm = $('cnpg-preview-form'), cnpgResults = $('cnpg-preview-results'), cnpgFill = $('cnpg-preview-fill');
   const batchRoot = '/api/assets/import/batches';
   let plan, batch, batchRequest = 0, nextBatch = '', checking = false, applying = false, loadingBatch = false, nextExport = '', exportPage = 1;
-  let cnpgCandidates = [];
+  let cnpgCandidates = [], supportRequest = 0;
   cnpgForm.addEventListener('submit', async event => {
     event.preventDefault();
     cnpgFill.hidden = true;
@@ -3646,11 +3646,37 @@ function setupAssetImport() {
     if (!batch || checking || loadingBatch) return;
     downloadBatchJSON(`dbsphere-acceptance-${batch.id}.json`, JSON.stringify(acceptanceSummary(true), null, 2));
   });
-  supportButton.addEventListener('click', () => {
+  function clearSupportPreview() {
+    supportRequest++;
+    supportPanel.hidden = true;
+    supportPanel.open = false;
+    supportPreview.textContent = '';
+  }
+  supportEvent.addEventListener('input', clearSupportPreview);
+  supportButton.addEventListener('click', async () => {
     if (!batch || checking || loadingBatch) return;
-    supportPreview.textContent = JSON.stringify(acceptanceSummary(false), null, 2);
-    supportPanel.hidden = false;
-    supportPanel.open = true;
+    clearSupportPreview();
+    const request = supportRequest, owner = csrf;
+    const report = acceptanceSummary(false), id = supportEvent.value.trim().toLowerCase();
+    try {
+      if (id) {
+        if (!sampleUUID.test(id)) throw Error('请填写有效的事件 ID。');
+        const {event} = await api(`/api/events/${id}`);
+        if (request !== supportRequest || owner !== csrf) return;
+        if (event?.id !== id || !batch.items.some(item => item.available && item.assetId === event.assetId)) {
+          throw Error('该事件不属于当前批次中的可用资产。');
+        }
+        const evidenceKinds = ['collection_error', 'collection_recovered', 'alert_firing', 'alert_recovered', 'recovery_verified'];
+        const evidence = Array.isArray(event.evidence) ? event.evidence : [];
+        report.event = { id, status: ['open', 'resolved'].includes(event.status) ? event.status : 'unknown',
+          evidenceKinds: evidenceKinds.filter(kind => evidence.some(item => item.kind === kind)) };
+      }
+      supportPreview.textContent = JSON.stringify(report, null, 2);
+      supportPanel.hidden = false;
+      supportPanel.open = true;
+    } catch (error) {
+      if (request === supportRequest && owner === csrf) showError(error);
+    }
   });
   supportDownload.addEventListener('click', () => {
     if (!batch || checking || loadingBatch || supportPanel.hidden) return;
@@ -3663,9 +3689,8 @@ function setupAssetImport() {
     probe.disabled = recheck.disabled = checking || loadingBatch;
     batches.disabled = more.disabled = checking;
     reportButton.disabled = supportButton.disabled = !batch || checking || loadingBatch;
-    supportPanel.hidden = true;
-    supportPanel.open = false;
-    supportPreview.textContent = '';
+    clearSupportPreview();
+    supportEvent.disabled = !batch || checking || loadingBatch;
     if (!batch) { results.replaceChildren(); return; }
     const rows = items.map(item => {
       const current = item.latestReport;
@@ -3729,6 +3754,7 @@ function setupAssetImport() {
     try {
       const selected = await api(`${batchRoot}/${id}`);
       if (owner !== csrf || request !== batchRequest) return;
+      if (batch?.id !== selected.id) supportEvent.value = '';
       batch = selected;
       if (document.body.dataset.activeView === 'assets') {
         history.replaceState(history.state, '', `#assets?batch=${id}`);
@@ -3780,6 +3806,7 @@ function setupAssetImport() {
   panel.addEventListener('onboarding-reset', () => {
     batchRequest++;
     plan = batch = null;
+    supportEvent.value = '';
     loadingBatch = false;
     form.reset(); apply.disabled = true; output.replaceChildren(); status.textContent = ''; progress.textContent = '';
     batches.replaceChildren(new Option('选择批次', '')); nextBatch = ''; more.hidden = true;

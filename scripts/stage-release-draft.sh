@@ -4,7 +4,7 @@ set -euo pipefail
 root="${1:?Expected the downloaded test artifacts directory}"
 out="${2:?Expected the release manifest directory}"
 version="$(jq -er .version package.json)"
-[[ "$version" =~ ^3\.[0-9]+\.0$ ]]
+[[ "$version" =~ ^[34]\.[0-9]+\.0$ ]]
 tag="v$version"
 test "${GITHUB_REF:?}" = "refs/heads/release/$tag"
 draft="$(gh api "repos/${GITHUB_REPOSITORY:?}/releases?per_page=10" |
