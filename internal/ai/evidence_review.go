@@ -20,6 +20,14 @@ type ReviewSource struct {
 	At       time.Time          `json:"observedAt"`
 	SampleID string             `json:"sampleId,omitempty"`
 	Signals  map[string]float64 `json:"signals,omitempty"`
+	PlanDiff []ReviewPlanChange `json:"planDiff,omitempty"`
+}
+
+type ReviewPlanChange struct {
+	Before     string   `json:"before,omitempty"`
+	After      string   `json:"after,omitempty"`
+	BeforeRows *float64 `json:"beforeRows,omitempty"`
+	AfterRows  *float64 `json:"afterRows,omitempty"`
 }
 
 type ReviewClaim struct {

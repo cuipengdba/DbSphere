@@ -2970,7 +2970,7 @@ async function loadHistoryPolicies() {
         await loadHistoryPolicies();
       } catch (error) { notice(error.message, true); submit.disabled = false; }
     });
-    target.replaceChildren(form);
+    target.replaceChildren(form, statementTextSettings());
     if (!policies.length) target.append(cell('p', '暂无指标分层策略。', 'empty'));
     for (const policy of policies) {
       const line = cell('div', '', 'list-item');
@@ -2985,6 +2985,47 @@ async function loadHistoryPolicies() {
       target.append(line);
     }
   } catch (error) { target.replaceChildren(cell('p', error.message, 'warning')); }
+}
+
+function statementTextSettings() {
+  const panel = cell('details', '', 'settings-details');
+  panel.append(cell('summary', 'SQL 原文保留'));
+  const form = cell('form', '', 'response-form');
+  const org = accessSelect(form, '组织', 'organizationId', organizationOptions(), [currentOrganization || defaultOrganizationID]);
+  const days = accessInput(form, '保留天数（0 表示关闭）', 'days', '0', {type:'number', min:0, max:30, step:1, required:true});
+  const save = cell('button', '保存 SQL 原文保留策略');
+  save.type = 'submit';
+  const status = cell('p', '', 'hint');
+  status.setAttribute('role', 'status');
+  form.append(save, status);
+  panel.append(cell('p', '策略适用于管理员在事件复测中手动附加的 SQL 原文。'), form);
+  const path = '/api/admin/statement-text-retention';
+  let request = 0;
+  async function load() {
+    const id = ++request;
+    save.disabled = days.disabled = true;
+    status.textContent = '正在读取策略…';
+    try {
+      const policy = await api(path + '?' + new URLSearchParams({organizationId:org.value}));
+      if (id !== request) return;
+      days.value = policy.days;
+      save.disabled = days.disabled = false;
+      status.textContent = '';
+    } catch (error) { if (id === request) status.textContent = error.message; }
+  }
+  panel.addEventListener('toggle', () => { if (panel.open) void load(); });
+  org.addEventListener('change', () => void load());
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    org.disabled = save.disabled = true;
+    try {
+      const policy = await api(path, 'PUT', {organizationId:org.value, days:days.valueAsNumber});
+      days.value = policy.days;
+      status.textContent = '已保存 SQL 原文保留策略';
+    } catch (error) { status.textContent = error.message; }
+    finally { org.disabled = save.disabled = false; }
+  });
+  return panel;
 }
 
 $('recovery-inventory-form').addEventListener('submit', async event => {
@@ -3920,6 +3961,176 @@ const replayKinds = { trace_span: '应用 Span', event_started: '事件开始', 
   etcd_leader_change: 'etcd Leader 中断或切换', etcd_health_degraded: 'etcd 健康检查异常', etcd_disk_latency: 'etcd 磁盘延迟',
   linux_state: 'Linux 采集', k8s_state: 'Kubernetes 采集', pgbouncer_state: 'PgBouncer 采集', patroni_state: 'Patroni 采集',
   event_acknowledged: '事件确认', event_handoff: '值班交接', operator_response: '处置记录', rca_decision: '人工复核', ai_advisory: 'AI 分析建议' };
+
+function statementComparisonPanel(event) {
+  const panel = cell('details', '', 'settings-details');
+  panel.id = 'event-statement-comparison';
+  panel.append(cell('summary', 'SQL 性能对比与复测'));
+  const output = cell('div', '', 'list');
+  panel.append(output);
+  const path = `/api/events/${event.id}/statement-comparison`;
+  const labels = {ok: '可比较', partial: '部分覆盖', missing: '缺采', low_calls: '调用数不足', reset: '统计重置或实例变化', truncated: '超出采样上限'};
+  const numberFormat = new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 3});
+  const formatNumber = value => numberFormat.format(value);
+  const duration = value => value == null ? '—' : `${formatNumber(value)} ms`;
+  function sampleLink(asset, sample, label) {
+    const link = cell('a', label, 'monitor-link');
+    link.href = '#sample?' + new URLSearchParams({asset, sample, return: 'incidents?' + investigationParams(event.id)});
+    return link;
+  }
+  function render(result) {
+    const report = cell('article', '', 'response-form');
+    if (result.evidenceId) report.dataset.retest = result.evidenceId;
+    report.append(cell('p', `${result.source} · ${result.fingerprint}`));
+    const ratio = result.ratio != null ? `平均耗时为基准的 ${formatNumber(result.ratio)} 倍` :
+      result.status === 'identity_changed' ? '两个窗口统计身份不同，无法比较' : '证据不足，无法比较平均耗时';
+    report.append(cell('p', ratio, 'hint'));
+    report.append(importTable(['窗口', '覆盖', '区间数', '缺采／重置', '调用数', '总耗时', '平均耗时', '原始采样'],
+      [['基准期', result.baseline], ['对比期', result.current]].map(([label, window]) => {
+        const links = cell('div', '', 'actions');
+        if (window.firstSampleId) links.append(sampleLink(result.assetId, window.firstSampleId, `${label}首条原始采样`));
+        if (window.lastSampleId) links.append(sampleLink(result.assetId, window.lastSampleId, `${label}末条原始采样`));
+        return [label, `${labels[window.status]} · ${window.samples} 样本 · ${formatNumber(window.coveredSeconds)} 秒`,
+          window.pairs, `${window.missingPairs}／${window.resetPairs}`, window.calls, duration(window.totalMs), duration(window.averageMs), links];
+      })));
+    if (result.slowLogs) {
+      const logScope = {
+        operator: '慢日志分布按操作人确认的日志指纹统计。已核对组织、资产和数据库。请人工核对该指纹与 Performance Schema Digest 的对应关系。',
+        unmapped: '慢日志缺采。可从日志分析复制已关联资产的 MySQL 慢日志记录 ID。',
+        query_id: '慢日志分布来自同库、同 Query ID 的已导入记录。角色与顶层属性须另行核对。'
+      };
+      report.append(cell('p', logScope[result.slowLogs.identity || 'query_id']));
+      report.append(importTable(['窗口', '日志数', '中位耗时', 'P95', '证据'],
+        [['基准期', result.slowLogs.baseline], ['对比期', result.slowLogs.current]].map(([label, logs]) => {
+          const link = cell('a', logs.batchId ? '查看慢日志原始记录' : '脱敏慢日志', 'monitor-link');
+          if (logs.batchId) {
+            link.href = '#logs?' + new URLSearchParams({batch: logs.batchId, source: logs.lastLogId, incident: event.id});
+          } else {
+            link.href = `/api/assets/${result.assetId}/slow-logs/${logs.lastLogId}`;
+            link.target = '_blank'; link.rel = 'noopener';
+          }
+          const count = logs.status === 'missing' ? '缺采' : logs.status === 'truncated' ? '超过 1000' : logs.count;
+          return [label, count, duration(logs.medianMs), duration(logs.p95Ms),
+            logs.lastLogId && currentRole === 'admin' ? link : '—'];
+        })));
+    }
+    if (result.plan) {
+      const plan = cell('details', '', 'settings-details');
+      plan.append(cell('summary', '查看脱敏执行计划'), cell('p',
+        `${result.plan.changed ? '节点结构有变化' : '节点结构一致'} · ${result.plan.identity === 'explain' ? '已核对 PostgreSQL Query ID' : '指纹由操作人确认'}`));
+      const before = new Map(result.plan.baseline.map(node => [node.path, node]));
+      const after = new Map(result.plan.current.map(node => [node.path, node]));
+      plan.append(importTable(['节点路径', '基准节点', '基准估算行数', '对比节点', '对比估算行数'],
+        [...new Set([...before.keys(), ...after.keys()])].map(key => [key, before.get(key)?.operation ?? '—',
+          before.get(key)?.estimatedRows ?? '—', after.get(key)?.operation ?? '—', after.get(key)?.estimatedRows ?? '—'])));
+      report.append(plan);
+    }
+    if (result.hasText && result.evidenceId && currentRole === 'admin') {
+      const original = cell('details', '', 'settings-details');
+      original.append(cell('summary', '读取已保留的 SQL 原文'));
+      const contents = cell('div');
+      original.append(contents);
+      let request = 0;
+      original.addEventListener('toggle', async () => {
+        const id = ++request;
+        contents.replaceChildren();
+        if (!original.open) return;
+        contents.append(cell('p', '正在读取 SQL 原文…', 'hint'));
+        try {
+          const data = await api(`${path}/${result.evidenceId}/text`, 'POST');
+          if (id !== request || !original.open) return;
+          contents.replaceChildren(cell('p', `可读取至 ${formatTime(data.expiresAt)}`), cell('pre', data.text));
+        } catch (error) {
+          if (id === request) contents.replaceChildren(cell('p', error.message, 'warning'));
+        }
+      });
+      report.append(original);
+    }
+    return report;
+  }
+  let loaded = false;
+  panel.addEventListener('toggle', async () => {
+    if (!panel.open || loaded) return;
+    loaded = true;
+    try {
+      const data = await api(path);
+      const history = cell('div', '', 'list');
+      for (const result of data.retests || []) history.append(render(result));
+      output.replaceChildren(history);
+      if (panel.dataset.retestTarget) history.querySelector(`[data-retest="${panel.dataset.retestTarget}"]`)?.scrollIntoView({block:'nearest'});
+      if (!['admin', 'operator'].includes(currentRole)) return;
+      const form = cell('form', '', 'response-form');
+      const status = cell('p', '', 'hint');
+      status.setAttribute('role', 'status');
+      const field = (name, title, tag = 'input') => {
+        const label = cell('label', title);
+        const input = cell(tag);
+        input.name = name;
+        label.append(input); form.append(label);
+        return input;
+      };
+      const fingerprint = field('fingerprint', data.engine === 'mysql' ? 'MySQL Digest' : 'PostgreSQL SQL 指纹');
+      fingerprint.required = true; fingerprint.maxLength = 64;
+      const eventTime = new Date(data.startedAt);
+      const dateFields = [['baselineFrom', '基准开始', -30], ['baselineTo', '基准结束', 0],
+        ['currentFrom', '对比开始', 0], ['currentTo', '对比结束', 30]];
+      for (const [name, label, minutes] of dateFields) {
+        const input = field(name, label + '（本地时间）');
+        input.type = 'datetime-local'; input.step = '0.001'; input.required = true;
+        const value = new Date(Math.min(Date.now(), eventTime.getTime() + minutes * 60000));
+        input.value = new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 23);
+      }
+      const slowLog = data.engine === 'mysql' ? field('slowLogId', '已核对的慢日志记录 ID（可选）') : null;
+      if (slowLog) slowLog.maxLength = 36;
+      for (const [name, title] of [['baselinePlan','基准计划 JSON（可选）'],['currentPlan','对比计划 JSON（可选）']]) {
+        const input = field(name,title,'textarea');
+        input.maxLength = 50000; input.rows = 3;
+      }
+      let sqlText;
+      if (currentRole === 'admin') {
+        const policy = await api('/api/admin/statement-text-retention?' + new URLSearchParams({organizationId:data.organizationId})).catch(() => null);
+        if (policy?.days > 0) {
+          sqlText = field('sqlText', `附加 SQL 原文（可选，加密保留 ${policy.days} 天）`, 'textarea');
+          sqlText.maxLength = 8192; sqlText.rows = 3;
+        }
+      }
+      const actions = cell('div', '', 'actions');
+      const preview = cell('button', '比较两个窗口'); preview.type = 'submit';
+      const save = cell('button', '保存到原事件', 'ghost'); save.type = 'submit'; save.value = 'save';
+      actions.append(preview, save);
+      form.append(actions, status);
+      output.prepend(form);
+      form.addEventListener('submit', async evt => {
+        evt.preventDefault();
+        preview.disabled = save.disabled = true;
+        status.textContent = '正在读取监控库采样…';
+        try {
+          const formData = new FormData(form);
+          const iso = name => new Date(formData.get(name)).toISOString();
+          const input = {fingerprint: fingerprint.value.trim().toLowerCase(),
+            baseline: {from: iso('baselineFrom'), to: iso('baselineTo')}, current: {from: iso('currentFrom'), to: iso('currentTo')},
+            save: evt.submitter?.value === 'save'};
+          if (slowLog?.value.trim()) input.slowLogId = slowLog.value.trim().toLowerCase();
+          if (input.save && sqlText?.value.trim()) input.sqlText = sqlText.value;
+          for (const name of ['baselinePlan', 'currentPlan']) {
+            const text = formData.get(name).trim();
+            // JSON.parse would round the signed 64-bit PostgreSQL Query Identifier.
+            if (text) input[`${name}Json`] = text;
+          }
+          const result = await api(path, 'POST', input);
+          history.querySelector('[data-comparison-preview]')?.remove();
+          const card = render(result);
+          if (!result.evidenceId) card.dataset.comparisonPreview = 'true';
+          history.prepend(card);
+          if (result.evidenceId && sqlText) sqlText.value = '';
+          status.textContent = result.evidenceId ? '已保存到原事件。刷新后可在证据助手中引用。' : '已计算对比结果';
+        } catch (error) { status.textContent = error.message; }
+        finally { preview.disabled = save.disabled = false; }
+      });
+    } catch (error) { output.replaceChildren(cell('p', error.message, 'warning')); loaded = false; }
+  });
+  return panel;
+}
 
 function evidenceReviewPanel(event, showSource) {
   const panel = cell('details', '', 'settings-details ai-evidence-panel');
@@ -5653,6 +5864,10 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
   }
   if (analysis.missingSignals.length) diagnosis.append(cell('small', `信号缺口：${analysis.missingSignals.join('；')}`));
   evidencePanel.append(diagnosis, window.DbSphereObservability.eventGraph(analysis.graph, event), coverageDetails, graphDetails);
+  const sqlAsset = allAssets.find(asset => asset.id === event.assetId);
+  if (!sqlAsset || ['linux', 'k8s', 'managed', 'mysql'].includes(sqlAsset.runtime)) {
+    evidencePanel.append(statementComparisonPanel(event));
+  }
   evidencePanel.append(evidenceReviewPanel(event, id => {
     activate('timeline');
     const record = timelinePanel.querySelector('#event-evidence-' + id);
@@ -5976,6 +6191,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'ai_advisory') text = `AI 待核验建议：${evidence.payload.summary || ''} · 不确定性：${evidence.payload.uncertainty || ''} · 待检查：${evidence.payload.suggestedChecks?.join('；') || '无'} · 证据 ID：${evidence.payload.evidenceIds?.join('、') || '无'}`;
     if (evidence.kind === 'ai_evidence_review') text = (evidence.payload.result?.model || '模型') + ' · ' +
       (evidence.payload.result?.claims?.length || 0) + ' 条带引用的审核结论';
+    if (evidence.kind === 'statement_retest') text = `${evidence.payload.source} · ${evidence.payload.fingerprint}`;
     if (evidence.kind === 'event_handoff') text = evidence.payload.action === 'accepted' ?
       `${evidence.payload.actor} 已确认接手` : `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
     if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
@@ -5986,10 +6202,30 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = evidence.kind === 'log_record' ? '日志原始证据' : evidence.kind === 'log_retest' ? '调优复测' :
+    const label = evidence.kind === 'log_record' ? '日志原始证据' : ['log_retest', 'statement_retest'].includes(evidence.kind) ? '调优复测' :
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
+    if (evidence.kind === 'statement_retest') {
+      for (const [window, name] of [[evidence.payload.baseline, '基准期原始采样'], [evidence.payload.current, '复测原始采样']]) {
+        if (!sampleUUID.test(window?.lastSampleId || '')) continue;
+        const link = cell('a', name, 'monitor-link');
+        link.href = '#sample?' + new URLSearchParams({asset: event.assetId, sample: window.lastSampleId,
+          return: 'incidents?' + investigationParams(event.id)});
+        row.append(' · ', link);
+      }
+      const button = cell('button', '查看对比依据', 'ghost small-button');
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        activate('evidence');
+        const report = $('event-statement-comparison');
+        if (!report) return;
+        report.dataset.retestTarget = evidence.id;
+        report.open = true;
+        (report.querySelector(`[data-retest="${evidence.id}"]`) || report).scrollIntoView({block:'nearest'});
+      });
+      row.append(button);
+    }
     if (['alert_firing', 'alert_suppressed', 'alert_recovered'].includes(evidence.kind) && sampleUUID.test(evidence.payload.sampleId || '')) {
       const label = evidence.kind === 'alert_recovered' ? '查看恢复采样' : '查看触发采样';
       const link = cell('a', label, 'monitor-link');

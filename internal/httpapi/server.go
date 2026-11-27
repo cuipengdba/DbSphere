@@ -855,6 +855,9 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if handleAIEvidenceReview(w, r, store, credentials, role) {
 			return
 		}
+		if handleStatementComparison(w, r, store, role, credentials.MasterKey) {
+			return
+		}
 		if r.URL.Path == "/api/admin/organizations" {
 			handleOrganizationDirectory(w, r, store, role)
 			return

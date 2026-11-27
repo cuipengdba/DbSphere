@@ -55,7 +55,7 @@ func authorizeOrganizationAdmin(w http.ResponseWriter, r *http.Request, db Healt
 		respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
 		return false
 	}
-	if path == historyPolicyPath && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
+	if (path == historyPolicyPath || path == statementTextPolicyPath) && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
 		return true
 	}
 	if r.Method == http.MethodPut {
@@ -90,7 +90,7 @@ func authorizeOrganizationAdmin(w http.ResponseWriter, r *http.Request, db Healt
 		}
 	}
 	if r.Method == http.MethodPost {
-		for _, route := range []*regexp.Regexp{eventAIPath, eventAIQuestionPath, eventDecisionPath} {
+		for _, route := range []*regexp.Regexp{eventAIPath, eventAIQuestionPath, eventDecisionPath, eventStatementTextPath} {
 			if match := route.FindStringSubmatch(path); match != nil {
 				return authorizeScopedResource(w, r, db, allowed, "event", match[1])
 			}

@@ -660,6 +660,14 @@ func runDataRetention(ctx context.Context, pg *store.Postgres, sampleDays, event
 		if historyErr != nil && ctx.Err() == nil {
 			log.Warn("Go collection history retention sweep failed", "error", historyErr)
 		}
+		textCtx, stopText := context.WithTimeout(ctx, 20*time.Second)
+		_, _, textErr := drainRetention(textCtx, 1000, func(ctx context.Context, limit int) (int64, error) {
+			return pg.PruneStatementText(ctx, now, limit)
+		})
+		stopText()
+		if textErr != nil && ctx.Err() == nil {
+			log.Warn("SQL text retention sweep failed", "error", textErr)
+		}
 		if eventDays > 0 {
 			eventCutoff = now.AddDate(0, 0, -eventDays)
 			sweepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)

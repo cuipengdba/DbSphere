@@ -344,7 +344,7 @@ func authorizeNamedScope(w http.ResponseWriter, r *http.Request, db HealthStore,
 			respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
 			return false
 		}
-		for _, route := range []*regexp.Regexp{eventAckPath, eventResponsePath, eventWorkOrdersPath, workOrderPreviewPath, eventHandoffPath, eventReviewPath, eventDeliveryRetryPath} {
+		for _, route := range []*regexp.Regexp{eventAckPath, eventResponsePath, eventWorkOrdersPath, workOrderPreviewPath, eventHandoffPath, eventReviewPath, eventDeliveryRetryPath, eventStatementPath} {
 			if match := route.FindStringSubmatch(path); match != nil {
 				return authorizeScopedResource(w, r, db, allowed, "event", match[1])
 			}

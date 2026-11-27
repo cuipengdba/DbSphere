@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v4.2.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v4.3.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v4.2.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.2.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v4.3.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.3.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
 
 ## 支持矩阵
 
@@ -17,6 +17,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | MySQL | 8.4 LTS | InnoDB 缓冲池、事务等待、SQL 指纹及复制通道。 |
 | MySQL 日志持续接入 | 8.4 LTS · v3.15.0 新增 | MySQL 8.4.13 实测 FILE 慢日志增量接入、轮转和原事件回链。 |
 | MySQL 写入口只读探测 | 8.4 LTS · v3.16.0 新增 | MySQL 8.4.13 双节点实测入口后端 UUID、只读副本误路由、复制追平与原事件恢复。 |
+| 事件内 SQL 性能对比 | v4.3.0 · PostgreSQL、MySQL 8.4 | 同指纹双窗口、执行计划差异、慢日志分布、原始证据和复测。 |
 | 瀚高数据库 | 安全版 4.5.9，兼容内核 12.7 | 产品识别、会话等待及 SQL 指纹。 |
 | 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |
 | 金仓 KingbaseES | V9，PostgreSQL 兼容模式 | 会话等待、SQL 指纹、归档及流复制状态。 |
@@ -82,6 +83,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 
 - [从安装到首次采集](docs/QUICK_START.md) · [离线部署与升级](docs/OFFLINE_DEPLOYMENT.md)
 - [监控工作台](docs/MONITORING_WORKSPACE.md) · [事件调查](docs/INCIDENT_INVESTIGATION.md) · [日志分析](docs/LOG_ANALYSIS.md)
+- [SQL 性能对比与复测](docs/SQL_PERFORMANCE_COMPARISON.md) · [SQL 性能诊断报告模板](docs/SQL_PERFORMANCE_REPORT_TEMPLATE.md)
 - [Linux 与容器存储](docs/CONTAINER_STORAGE.md) · [Kubernetes 接入](docs/OFFLINE_DEPLOYMENT.md#kubernetes-接入) · [托管 PostgreSQL](docs/MANAGED_POSTGRESQL.md) · [达梦 DM8](docs/DM8.md) · [金仓 V9](docs/KINGBASE.md) · [Redis](docs/REDIS.md) · [etcd 控制面](docs/ETCD.md)
 - [长期指标留存](docs/HISTORY_STORAGE.md) · [运维系统接口](docs/OPERATIONS_INTEGRATION.md) · [事件证据助手](docs/AI_EVIDENCE_REVIEW.md)
 

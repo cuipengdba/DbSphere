@@ -38,17 +38,18 @@ type MySQLDigest struct {
 	P95MS        *float64 `json:"p95Ms,omitempty"`
 	P99MS        *float64 `json:"p99Ms,omitempty"`
 	TempDisk     uint64   `json:"tempDiskTables"`
+	FirstSeen    string   `json:"firstSeen,omitempty"`
 }
 
 type MySQLReplicationChannel struct {
-	Name           string                   `json:"name"`
-	SourceUUID     string                   `json:"sourceUuid"`
-	Receiver       string                   `json:"receiver"`
-	Applier        string                   `json:"applier"`
-	LastIOError    int                      `json:"lastIoError"`
-	RemainingDelay *int64                   `json:"remainingDelaySeconds,omitempty"`
-	ReceivedApplied *bool                   `json:"receivedApplied,omitempty"`
-	Workers        []MySQLReplicationWorker `json:"workers,omitempty"`
+	Name            string                   `json:"name"`
+	SourceUUID      string                   `json:"sourceUuid"`
+	Receiver        string                   `json:"receiver"`
+	Applier         string                   `json:"applier"`
+	LastIOError     int                      `json:"lastIoError"`
+	RemainingDelay  *int64                   `json:"remainingDelaySeconds,omitempty"`
+	ReceivedApplied *bool                    `json:"receivedApplied,omitempty"`
+	Workers         []MySQLReplicationWorker `json:"workers,omitempty"`
 }
 
 type MySQLReplicationWorker struct {
@@ -80,6 +81,7 @@ type MySQLBufferPool struct {
 
 type MySQLMetrics struct {
 	Version              string                    `json:"version"`
+	Database             string                    `json:"database,omitempty"`
 	ServerUUID           string                    `json:"serverUuid"`
 	ServerReadOnly       *bool                     `json:"serverReadOnly,omitempty"`
 	Connections          *int                      `json:"connections"`
@@ -131,7 +133,7 @@ func readOnlyMySQLConfig(target Target, password string) *mysql.Config {
 }
 
 func collectMySQLSnapshot(ctx context.Context, conn *sql.Conn, target Target) (collectoradapter.Snapshot, error) {
-	details := MySQLMetrics{LockWaits: []MySQLLockWait{}, TopSQL: []MySQLDigest{}, Replication: []MySQLReplicationChannel{}}
+	details := MySQLMetrics{Database: target.Database, LockWaits: []MySQLLockWait{}, TopSQL: []MySQLDigest{}, Replication: []MySQLReplicationChannel{}}
 	var comment string
 	var performanceSchema, serverReadOnly, transactionReadOnly bool
 	err := conn.QueryRowContext(ctx, `SELECT @@version, @@version_comment, @@performance_schema,
@@ -219,11 +221,11 @@ func collectMySQLPerformance(ctx context.Context, conn *sql.Conn, schema string,
 
 	details.TopSQL, err = readMySQLRows(ctx, conn, `SELECT DIGEST, COUNT_STAR, SUM_TIMER_WAIT / 1000000000,
 		AVG_TIMER_WAIT / 1000000000, SUM_ROWS_EXAMINED,SUM_ROWS_SENT,SUM_ERRORS,
-		NULLIF(QUANTILE_95,0) / 1000000000,NULLIF(QUANTILE_99,0) / 1000000000,SUM_CREATED_TMP_DISK_TABLES
+		NULLIF(QUANTILE_95,0) / 1000000000,NULLIF(QUANTILE_99,0) / 1000000000,SUM_CREATED_TMP_DISK_TABLES,CAST(FIRST_SEEN AS CHAR)
 		FROM performance_schema.events_statements_summary_by_digest
 		WHERE SCHEMA_NAME=? AND DIGEST IS NOT NULL AND COUNT_STAR>0 ORDER BY SUM_TIMER_WAIT DESC,DIGEST LIMIT 15`,
 		func(r *sql.Rows, v *MySQLDigest) error {
-			return r.Scan(&v.Digest, &v.Calls, &v.TotalMS, &v.MeanMS, &v.RowsExamined, &v.RowsSent, &v.Errors, &v.P95MS, &v.P99MS, &v.TempDisk)
+			return r.Scan(&v.Digest, &v.Calls, &v.TotalMS, &v.MeanMS, &v.RowsExamined, &v.RowsSent, &v.Errors, &v.P95MS, &v.P99MS, &v.TempDisk, &v.FirstSeen)
 		}, schema)
 	signals[2] = mysqlSignalStatus(signals[2], err)
 

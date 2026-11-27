@@ -31,6 +31,7 @@ var reviewSourceKinds = []string{
 	"etcd_leader_change",
 	"etcd_health_degraded",
 	"etcd_disk_latency",
+	"statement_retest",
 }
 
 var reviewNumericPaths = []struct {
@@ -46,6 +47,15 @@ var reviewNumericPaths = []struct {
 	{"leadMinutes", []string{"leadMinutes"}},
 	{"cpuUsedPercent", []string{"cpu", "usedPercent"}},
 	{"memoryUsedPercent", []string{"memory", "usedPercent"}},
+	{"baselineAverageMs", []string{"baseline", "averageMs"}},
+	{"currentAverageMs", []string{"current", "averageMs"}},
+	{"baselineCalls", []string{"baseline", "calls"}},
+	{"currentCalls", []string{"current", "calls"}},
+	{"baselineMissingPairs", []string{"baseline", "missingPairs"}},
+	{"currentMissingPairs", []string{"current", "missingPairs"}},
+	{"baselineResetPairs", []string{"baseline", "resetPairs"}},
+	{"currentResetPairs", []string{"current", "resetPairs"}},
+	{"sqlAverageRatio", []string{"ratio"}},
 }
 
 func reviewSignals(payload map[string]any) map[string]float64 {
@@ -64,7 +74,82 @@ func reviewSignals(payload map[string]any) map[string]float64 {
 		}
 		signals[field.name] = number
 	}
+	if changed, ok := object(payload["plan"])["changed"].(bool); ok {
+		if signals == nil {
+			signals = map[string]float64{}
+		}
+		signals["planShapeChanged"] = 0
+		if changed {
+			signals["planShapeChanged"] = 1
+		}
+	}
 	return signals
+}
+
+func reviewPlanChanges(value any) []ai.ReviewPlanChange {
+	plan := object(value)
+	if plan == nil {
+		return nil
+	}
+	allowed := func(operation string) string {
+		switch operation {
+		case "Seq Scan", "Index Scan", "Index Only Scan", "Bitmap Heap Scan", "Bitmap Index Scan", "Tid Scan", "Gather", "Gather Merge",
+			"Sort", "Incremental Sort", "Aggregate", "Subquery Scan", "Hash", "Limit", "Materialize", "Append", "Merge Append", "Memoize",
+			"CTE Scan", "Function Scan", "Values Scan", "Foreign Scan", "Result", "Unique", "Group", "WindowAgg",
+			"system", "const", "eq_ref", "ref", "fulltext", "ref_or_null", "index_merge", "unique_subquery", "index_subquery", "range", "index", "ALL":
+			return operation
+		}
+		for _, join := range []string{"Nested Loop", "Merge Join", "Hash Join"} {
+			for _, kind := range []string{"", " Inner", " Left", " Right", " Full", " Semi", " Anti", " Right Anti", " Right Semi"} {
+				if operation == join+kind {
+					return operation
+				}
+			}
+		}
+		return "unknown"
+	}
+	type node struct {
+		operation string
+		rows      *float64
+	}
+	changes := map[string]ai.ReviewPlanChange{}
+	var paths []string
+	for _, side := range []string{"baseline", "current"} {
+		for _, item := range list(plan[side]) {
+			fields := object(item)
+			path := stringValue(fields["path"])
+			if path == "" {
+				continue
+			}
+			n := node{operation: allowed(stringValue(fields["operation"]))}
+			if rows, ok := fields["estimatedRows"].(float64); ok && rows >= 0 && !math.IsInf(rows, 0) {
+				n.rows = &rows
+			}
+			change, exists := changes[path]
+			if !exists {
+				paths = append(paths, path)
+			}
+			if side == "baseline" {
+				change.Before, change.BeforeRows = n.operation, n.rows
+			} else {
+				change.After, change.AfterRows = n.operation, n.rows
+			}
+			changes[path] = change
+		}
+	}
+	var result []ai.ReviewPlanChange
+	for _, path := range paths {
+		change := changes[path]
+		if change.Before == change.After && (change.BeforeRows == nil && change.AfterRows == nil ||
+			change.BeforeRows != nil && change.AfterRows != nil && *change.BeforeRows == *change.AfterRows) {
+			continue
+		}
+		result = append(result, change)
+		if len(result) == 3 {
+			break
+		}
+	}
+	return result
 }
 
 func fallbackEvidenceReview(sources []ai.ReviewSource) ai.EvidenceReview {
@@ -83,6 +168,13 @@ func fallbackEvidenceReview(sources []ai.ReviewSource) ai.EvidenceReview {
 		}
 		if len(result.Claims) != 0 {
 			first = item
+			break
+		}
+	}
+	for _, item := range sources {
+		if item.Kind == "statement_retest" {
+			text := "核对 SQL 对比的指纹、调用数、缺采与重置。在隔离实例复核执行计划及估算行数。"
+			result.Claims = append(result.Claims, ai.ReviewClaim{Kind: "verification", Text: text, EvidenceIDs: []string{item.ID}})
 			break
 		}
 	}
@@ -125,7 +217,12 @@ func (s *Postgres) PrepareAIEvidenceReview(ctx context.Context, event string) (E
 		}
 		var payload map[string]any
 		if json.Unmarshal(raw, &payload) == nil {
-			if id, ok := payload["sampleId"].(string); ok && evidenceUUID.MatchString(id) {
+			id := stringValue(payload["sampleId"])
+			if item.Kind == "statement_retest" {
+				id = stringValue(object(payload["current"])["lastSampleId"])
+				item.PlanDiff = reviewPlanChanges(payload["plan"])
+			}
+			if evidenceUUID.MatchString(id) {
 				item.SampleID = id
 			}
 			item.Signals = reviewSignals(payload)
