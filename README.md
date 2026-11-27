@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v4.5.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v4.6.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v4.5.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.5.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v4.6.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.6.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
 
 ## 支持矩阵
 
@@ -18,6 +18,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | MySQL 日志持续接入 | 8.4 LTS · v3.15.0 新增 | MySQL 8.4.13 实测 FILE 慢日志增量接入、轮转和原事件回链。 |
 | MySQL 写入口只读探测 | 8.4 LTS · v3.16.0 新增 | MySQL 8.4.13 双节点实测入口后端 UUID、只读副本误路由、复制追平与原事件恢复。 |
 | 数据库变更治理 | v4.5.0 · PostgreSQL、MySQL 8.4 | 变更窗口、独立审批、ITSM 回执及原事件复核。 |
+| [备份恢复演练](docs/RESTORE_DRILLS.md) | v4.6.0 · pgBackRest 2.60.1、PostgreSQL 18 | 全量与差异备份、WAL 缺口、隔离时间点恢复和 RPO/RTO 签收。 |
 | 事件内 SQL 性能对比 | v4.3.0 · PostgreSQL、MySQL 8.4 | 同指纹双窗口、执行计划差异、慢日志分布、原始证据和复测。 |
 | 瀚高数据库 | 安全版 4.5.9，兼容内核 12.7 | 产品识别、会话等待及 SQL 指纹。 |
 | 达梦数据库 | DM8 | 会话与事务锁、归档及 Data Watch 主备状态。 |

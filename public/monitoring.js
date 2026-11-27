@@ -1851,7 +1851,10 @@
         const seconds = value => `${number(value)} s`;
         body.append(stats([
           ['pgBackRest stanza', report.stanza, report.repositoryHealthy ? '报告正常' : '报告异常'],
-          ['最近成功备份', formatTime(report.lastSuccessAt), report.lastAttemptStatus === 'failed' ? '最近尝试失败' : ''],
+          ['最近成功备份', formatTime(report.lastSuccessAt), report.lastSuccessAt ?
+            `${number(Math.max(0, (Date.parse(sample.collectedAt) - Date.parse(report.lastSuccessAt)) / 3600000))} 小时前（采样时）` : '缺采'],
+          ['最近备份尝试', report.lastAttemptStatus === 'failed' ? '失败' : report.lastAttemptStatus === 'success' ? '成功' : '未上报',
+            report.lastAttemptAt ? formatTime(report.lastAttemptAt) : ''],
           ['目标 RPO', display(report.targetRpoSeconds || null, seconds)],
           ['目标 RTO', display(report.targetRtoSeconds || null, seconds)]
         ]));

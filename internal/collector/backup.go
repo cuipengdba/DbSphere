@@ -79,6 +79,7 @@ type backupRestore struct {
 
 type recoveryWitness struct {
 	ID               string    `json:"id,omitempty"`
+	TargetID         string    `json:"targetId,omitempty"`
 	Isolated         bool      `json:"isolated,omitempty"`
 	BeforeMarker     string    `json:"beforeMarker,omitempty"`
 	AfterMarker      string    `json:"afterMarker,omitempty"`
@@ -296,7 +297,7 @@ func (r recoveryWitness) verified() bool {
 
 func (r recoveryWitness) projection() map[string]any {
 	verified := r.verified()
-	proof := map[string]any{"targetAt": r.TargetAt, "finishedAt": r.FinishedAt,
+	proof := map[string]any{"targetAt": r.TargetAt, "startedAt": r.StartedAt, "finishedAt": r.FinishedAt,
 		"rtoSeconds": r.FinishedAt.Sub(r.StartedAt).Seconds(), "confirmedBefore": r.ConfirmedBefore,
 		"excludedAfter": r.ExcludedAfter, "verification": "reported"}
 	if backupName.MatchString(r.ID) {
@@ -304,6 +305,9 @@ func (r recoveryWitness) projection() map[string]any {
 	}
 	if verified {
 		proof["verification"], proof["isolated"] = "verified", true
+		if backupName.MatchString(r.TargetID) {
+			proof["targetId"] = r.TargetID
+		}
 		proof["beforeMarker"], proof["afterMarker"] = r.BeforeMarker, r.AfterMarker
 		proof["restoredCommitAt"], proof["sourceCommitAt"], proof["afterCommitAt"] = r.RestoredCommitAt, r.SourceCommitAt, r.AfterCommitAt
 	}

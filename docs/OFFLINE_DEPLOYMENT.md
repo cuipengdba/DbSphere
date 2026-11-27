@@ -2,7 +2,7 @@
 
 [快速开始](QUICK_START.md) · [最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest) · [支持矩阵](SUPPORT_MATRIX.md)
 
-发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.5.0 为例。
+发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.6.0 为例。
 
 跨网段部署可在中心启用站点接收端，并在业务网段运行同架构静态采集程序。客户可独立配置本地推理服务或 HTTPS 模型网关。[站点采集与模型接入](SITE_COLLECTION.md)
 
@@ -16,7 +16,7 @@
 ## 容器化一键安装
 
 ```bash
-bundle=DbSphere-go-offline-4.5.0-linux-amd64.run
+bundle=DbSphere-go-offline-4.6.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
@@ -34,7 +34,7 @@ curl -fsS http://127.0.0.1:8081/readyz
 ## Grafana 增强离线包
 
 ```bash
-bundle=DbSphere-go-observability-4.5.0-linux-amd64.run
+bundle=DbSphere-go-observability-4.6.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 ```
 
@@ -49,7 +49,7 @@ Prometheus 数据默认保留 7 天并限制为 2 GB，可通过 `DBSPHERE_PROME
 从发布页下载对应架构的 systemd 包。将示例路径 `/absolute/dbsphere.env` 改成实际配置路径。填写独立 `DBSPHERE_DATABASE_URL` 和管理员引导配置。已部署环境须沿用原 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 ```bash
-bundle=DbSphere-go-systemd-4.5.0-linux-amd64.run
+bundle=DbSphere-go-systemd-4.6.0-linux-amd64.run
 sha256sum --check "$bundle.sha256"
 (umask 077 && bash "$bundle" --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
@@ -59,6 +59,21 @@ systemctl status dbsphere-native.service
 ```
 
 `--check` 检查 PG18、写入状态、权限和迁移版本。安装后配置位于 `/etc/dbsphere-native/dbsphere.env`，升级时可省略环境文件参数。原生运行端口使用 `DBSPHERE_PORT`，默认 8080。静态程序也可用同一组连接和主密钥配置自行管理。
+
+## 安装 pgBackRest
+
+三类正式包安装时会同时部署 pgBackRest 静态可执行文件。容器包将工具放在配置目录的 `tools/pgbackrest/`，原生包将工具放在 `/opt/dbsphere-native/tools/pgbackrest/`。使用该目录的 `pgbackrest version` 核对版本。
+
+在数据库主机单独安装时，下载对应架构的 `DbSphere-pgbackrest-2.60.1-linux-<架构>.run` 和同名 `.sha256`。也可执行三类应用包的 `--install-pgbackrest /absolute/tools/pgbackrest`。安装器通过校验和与架构检查后放置工具及许可证，不启动服务。
+
+```bash
+bundle=DbSphere-pgbackrest-2.60.1-linux-amd64.run
+sha256sum --check "$bundle.sha256"
+bash "$bundle" /absolute/tools/pgbackrest
+/absolute/tools/pgbackrest/pgbackrest version
+```
+
+实测范围为 PostgreSQL 18.7 与本地 POSIX 仓库。静态工具包含 Zstandard，SFTP 仓库和 systemd 通知编译选项关闭。 [恢复演练手册](RESTORE_DRILLS.md)
 
 ## 升级与密码轮换
 

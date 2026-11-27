@@ -583,13 +583,14 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		dutyView := dutyViewPath.FindStringSubmatch(r.URL.Path)
 		changeGovernance := changeGovernancePath.FindStringSubmatch(r.URL.Path)
+		restoreDrill := restoreDrillPath.FindStringSubmatch(r.URL.Path)
 		if role == "viewer" && r.Method != http.MethodGet && dutyView == nil {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Read-only account cannot change monitoring data"})
 			return
 		}
 		if role == "approver" && r.Method != http.MethodGet && dutyView == nil &&
 			!(r.Method == http.MethodPost && workOrderDecisionPath.MatchString(r.URL.Path)) &&
-			!(changeGovernance != nil && changeGovernanceRole(changeGovernance, r.Method, role)) {
+			!(changeGovernance != nil && changeGovernanceRole(changeGovernance, r.Method, role)) && !restoreDrillDecision(restoreDrill, r.Method) {
 			respond(w, http.StatusForbidden, map[string]string{"error": "Approver account can only review work orders"})
 			return
 		}
@@ -623,6 +624,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 			if changeGovernance != nil {
 				if !viewerScope[changeGovernance[1]] {
+					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
+					return
+				}
+			} else if restoreDrill != nil {
+				if !viewerScope[restoreDrill[1]] {
 					respond(w, http.StatusNotFound, map[string]string{"error": "Asset not found"})
 					return
 				}
@@ -843,6 +849,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if changeGovernance != nil {
 			handleChangeGovernance(w, r, store, changeGovernance, role, credentials.MasterKey)
+			return
+		}
+		if restoreDrill != nil {
+			handleRestoreDrill(w, r.WithContext(storepkg.WithAccessActor(r.Context(), actor)), store, restoreDrill, role)
 			return
 		}
 		if handleAccessDirectory(w, r, namedDB, role, credentials) {
@@ -1871,7 +1881,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			r.URL.Path != "/log-analysis.js" && r.URL.Path != "/log-analysis.css" &&
 			r.URL.Path != "/overview.js" && r.URL.Path != "/overview.css" &&
 			r.URL.Path != "/container-storage.js" && r.URL.Path != "/container-storage.css" &&
-			r.URL.Path != "/change-governance.js" &&
+			r.URL.Path != "/change-governance.js" && r.URL.Path != "/restore-drill.js" &&
 			r.URL.Path != "/styles.css" && r.URL.Path != "/freshness.css" && r.URL.Path != "/console.css" && r.URL.Path != "/favicon.svg" {
 			http.NotFound(w, r)
 			return

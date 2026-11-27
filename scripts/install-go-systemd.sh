@@ -2,11 +2,14 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: bash DbSphere-go-systemd-*.run --sample-config, or sudo bash DbSphere-go-systemd-*.run [--check] [/absolute/dbsphere.env]' >&2
+  echo 'Usage: bash DbSphere-go-systemd-*.run --sample-config | --install-pgbackrest /absolute/install-directory, or sudo bash DbSphere-go-systemd-*.run [--check] [/absolute/dbsphere.env]' >&2
   exit 1
 }
 payload="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 (cd -- "$payload" && sha256sum --check --strict --quiet SHA256SUMS)
+if [[ $# -eq 2 && "$1" == --install-pgbackrest ]]; then
+  exec bash "$payload/pgbackrest.run" "$2"
+fi
 if [[ $# -eq 1 && "$1" == --sample-config ]]; then
   cat -- "$payload/dbsphere.env.example"
   exit 0
@@ -23,6 +26,7 @@ case "$(uname -m):$(cat -- "$payload/architecture")" in
   x86_64:amd64|aarch64:arm64|arm64:arm64) ;;
   *) echo 'The native package architecture does not match this host.' >&2; exit 1 ;;
 esac
+if [[ -f "$payload/pgbackrest.run" ]]; then bash "$payload/pgbackrest.run" --check "$payload"; fi
 
 unit_name=dbsphere-native.service
 unit="/etc/systemd/system/$unit_name"
@@ -95,4 +99,5 @@ if ! activate; then
   if [[ "$was_active" == true ]]; then systemctl start "$unit_name"; fi
   exit 1
 fi
+if [[ -f "$payload/pgbackrest.run" ]]; then bash "$payload/pgbackrest.run" "$bin_dir/tools/pgbackrest"; fi
 echo "DbSphere native service is active and enabled. Configuration: $config"

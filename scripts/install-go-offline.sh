@@ -4,14 +4,17 @@ set -euo pipefail
 rotate_admin=false
 disable_observability=false
 check_only=false
-if [[ $# -eq 1 && "$1" == --check ]]; then
+if [[ $# -eq 2 && "$1" == --install-pgbackrest ]]; then
+  bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  exec bash "$bundle_dir/pgbackrest.run" "$2"
+elif [[ $# -eq 1 && "$1" == --check ]]; then
   check_only=true
 elif [[ $# -eq 1 && "$1" == --rotate-admin-password ]]; then
   rotate_admin=true
 elif [[ $# -eq 1 && "$1" == --disable-observability ]]; then
   disable_observability=true
 elif [[ $# -ne 0 && ! ( $# -eq 2 && "$1" == --backup && "$2" == /* ) ]]; then
-  echo 'Usage: bash install.sh [--check | --backup /absolute/output/directory | --rotate-admin-password | --disable-observability]' >&2
+  echo 'Usage: bash install.sh [--check | --install-pgbackrest /absolute/install-directory | --backup /absolute/output/directory | --rotate-admin-password | --disable-observability]' >&2
   exit 1
 fi
 bundle_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +76,7 @@ if [[ "$rotate_admin" == true && ! -f "$env_file" ]]; then
 fi
 created_config=false
 if [[ "$check_only" == true ]]; then
+  if [[ -f "$bundle_dir/pgbackrest.run" ]]; then bash "$bundle_dir/pgbackrest.run" --check "$bundle_dir"; fi
   if ! docker info >/dev/null 2>&1; then
     echo 'Unable to reach Docker Engine. Check the service and access to its socket.' >&2
     exit 1
@@ -301,6 +305,9 @@ docker compose --env-file "$env_file" "${compose_args[@]}" \
 if [[ -f "$bundle_dir/deploy/k8s/dbsphere-container-agent.yaml" ]]; then
   install -d -m 0755 -- "$config_dir/kubernetes"
   install -m 0644 -- "$bundle_dir/deploy/k8s/dbsphere-container-agent.yaml" "$config_dir/kubernetes/"
+fi
+if [[ -f "$bundle_dir/pgbackrest.run" ]]; then
+  bash "$bundle_dir/pgbackrest.run" "$config_dir/tools/pgbackrest"
 fi
 web_port="$(sed -n 's/^DBSPHERE_WEB_PORT=//p' "$env_file" | tail -n 1)"
 echo "DbSphere Go is ready at http://127.0.0.1:${web_port:-8081}"

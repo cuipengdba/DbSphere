@@ -587,7 +587,7 @@ async function api(path, method = 'GET', payload, signal) {
   if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences)
     throw new Error('只读账号不能修改监控数据。');
   if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences &&
-      !(method === 'POST' && /^\/api\/(?:work-orders\/[0-9a-f-]+|assets\/[0-9a-f-]+\/change-governance\/[0-9a-f-]+)\/(approve|reject)$/.test(path)))
+      !(method === 'POST' && /^\/api\/(?:work-orders\/[0-9a-f-]+|assets\/[0-9a-f-]+\/(?:change-governance|restore-drills)\/[0-9a-f-]+)\/(approve|reject)$/.test(path)))
     throw new Error('审批账号只能审批工单和变更申请。');
   const binary = payload instanceof Blob;
   const response = await fetch(path, {
@@ -1531,7 +1531,7 @@ $('asset-retry-readiness').addEventListener('click', () => void runAssetReadines
 
 async function showAsset(id, layer, background = false) {
   const detail = $('detail');
-  const editing = () => detail.querySelector('[data-change-governance][open]') ||
+  const editing = () => detail.querySelector('[data-change-governance][open], [data-restore-drill][open]') ||
     (detail.contains(document.activeElement) && document.activeElement.closest('form'));
   if (background && editing()) return;
   const request = ++assetDetailRequest;
@@ -1606,7 +1606,11 @@ async function showAsset(id, layer, background = false) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
-  if (nativeOverview) detail.append(changePanel());
+  if (nativeOverview) {
+    detail.append(changePanel());
+    detail.append(window.DbSphereRestoreDrill.create(asset,
+      new URLSearchParams(window.location.hash.split('?')[1]).get('drill'), {api, role:currentRole, formatTime}));
+  }
   appendSiteCollection(detail, asset);
   detail.append(haHistoryLink(id));
   attachCollectionHistory(detail, id);
@@ -6251,6 +6255,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'statement_retest') text = `${evidence.payload.source} · ${evidence.payload.fingerprint}`;
     if (evidence.kind === 'change_review') text = [evidence.payload.externalId, evidence.payload.actor, evidence.payload.note].filter(Boolean).join(' · ');
     if (evidence.kind === 'change_receipt') text = [evidence.payload.externalId, evidence.payload.receiptId, evidence.payload.state].filter(Boolean).join(' · ');
+    if (evidence.kind === 'restore_drill') text = [evidence.payload.actor, evidence.payload.note].filter(Boolean).join(' · ');
     if (evidence.kind === 'event_handoff') text = evidence.payload.action === 'accepted' ?
       `${evidence.payload.actor} 已确认接手` : `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
     if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
@@ -6262,11 +6267,23 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
     const label = evidence.kind === 'change_review' ? (evidence.payload.phase === 'recovery' ? '变更回退核对' : '上线后复核') :
-      evidence.kind === 'change_receipt' ? '外部变更回执' : evidence.kind === 'opengauss_lock_wait' ? replayKinds[evidence.kind] :
+      evidence.kind === 'change_receipt' ? '外部变更回执' : evidence.kind === 'restore_drill' ? '备份恢复演练' :
+      evidence.kind === 'opengauss_lock_wait' ? replayKinds[evidence.kind] :
       evidence.kind === 'log_record' ? '日志原始证据' : ['log_retest', 'statement_retest'].includes(evidence.kind) ? '调优复测' :
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
+    if (evidence.kind === 'restore_drill' && sampleUUID.test(evidence.payload.drillId || '')) {
+      const drill = cell('a', '查看恢复演练', 'monitor-link');
+      drill.href = '#assets?' + new URLSearchParams({asset:event.assetId, drill:evidence.payload.drillId});
+      row.append(' · ', drill);
+      if (sampleUUID.test(evidence.payload.sampleId || '')) {
+        const raw = cell('a', '恢复原始采样', 'monitor-link');
+        raw.href = '#sample?' + new URLSearchParams({asset:event.assetId, sample:evidence.payload.sampleId,
+          return:'incidents?' + investigationParams(event.id)});
+        row.append(' · ', raw);
+      }
+    }
     if (['change_review', 'change_receipt'].includes(evidence.kind) && sampleUUID.test(evidence.payload.changeId || '')) {
       const order = cell('a', '查看变更单', 'monitor-link');
       order.href = '#assets?' + new URLSearchParams({asset:event.assetId, change:evidence.payload.changeId});

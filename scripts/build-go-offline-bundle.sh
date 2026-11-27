@@ -112,6 +112,7 @@ if [[ ! "$app_image_id" =~ ^sha256:[0-9a-f]{64}$ || ! "$pg_image_id" =~ ^sha256:
 fi
 printf 'DBSPHERE_GO_OFFLINE_VERSION=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE=%s\nDBSPHERE_GO_OFFLINE_APP_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_IMAGE_ID=%s\nDBSPHERE_GO_OFFLINE_PG_SOURCE=%s\nDBSPHERE_GO_OFFLINE_ARCH=%s\n' \
   "$version" "$app_image" "$app_image_id" "$pg_image_id" "$pg_source" "$arch" > "$stage/bundle.env"
+bash "$repo_dir/scripts/stage-pgbackrest-bundle.sh" "$stage" "$arch"
 (cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$output_dir/DbSphere-go-offline-$version-linux-$arch.run"
 tar -C "$stage" -czf "$payload" .
