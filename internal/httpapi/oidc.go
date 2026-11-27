@@ -27,6 +27,8 @@ type OIDCProvider struct {
 	ClientSecret string
 	RedirectURL  string
 	client       *http.Client
+	groupPolicy  *oidcGroupPolicy
+	groupsScope  string
 }
 
 type oidcFlow struct {
@@ -56,7 +58,9 @@ func LoadOIDCProvider() (*OIDCProvider, error) {
 	settings := &OIDCProvider{Issuer: strings.TrimSpace(os.Getenv("DBSPHERE_OIDC_ISSUER")),
 		ClientID: os.Getenv("DBSPHERE_OIDC_CLIENT_ID"), ClientSecret: os.Getenv("DBSPHERE_OIDC_CLIENT_SECRET"),
 		RedirectURL: os.Getenv("DBSPHERE_OIDC_REDIRECT_URL")}
-	if settings.Issuer == "" && settings.ClientID == "" && settings.ClientSecret == "" && settings.RedirectURL == "" {
+	rawGroups := strings.TrimSpace(os.Getenv("DBSPHERE_OIDC_GROUP_MAPPINGS"))
+	settings.groupsScope = strings.TrimSpace(os.Getenv("DBSPHERE_OIDC_GROUP_SCOPE"))
+	if settings.Issuer == "" && settings.ClientID == "" && settings.ClientSecret == "" && settings.RedirectURL == "" && rawGroups == "" && settings.groupsScope == "" {
 		return nil, nil
 	}
 	if _, err := oidcURL(settings.Issuer); err != nil {
@@ -65,6 +69,13 @@ func LoadOIDCProvider() (*OIDCProvider, error) {
 	redirect, err := oidcURL(settings.RedirectURL)
 	if err != nil || redirect.Path != oidcCallbackPath || settings.ClientID == "" || settings.ClientSecret == "" {
 		return nil, errors.New("OIDC requires a client ID, secret and an explicit callback URL")
+	}
+	settings.groupPolicy, err = parseOIDCGroupPolicy(rawGroups, settings.Issuer, settings.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	if settings.groupsScope != "" && (settings.groupPolicy == nil || !oidcScopeName.MatchString(settings.groupsScope) || settings.groupsScope == "offline_access") {
+		return nil, errors.New("invalid OIDC group scope")
 	}
 	settings.client = &http.Client{Timeout: 5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -92,8 +103,12 @@ func (o *OIDCProvider) discover(ctx context.Context) (*oidc.Provider, oauth2.Con
 	if _, err := oidcURL(metadata.Keys); err != nil {
 		return nil, oauth2.Config{}, err
 	}
+	scopes := []string{oidc.ScopeOpenID}
+	if o.groupsScope != "" && o.groupsScope != oidc.ScopeOpenID {
+		scopes = append(scopes, o.groupsScope)
+	}
 	return provider, oauth2.Config{ClientID: o.ClientID, ClientSecret: o.ClientSecret, RedirectURL: o.RedirectURL,
-		Endpoint: endpoints, Scopes: []string{oidc.ScopeOpenID}}, nil
+		Endpoint: endpoints, Scopes: scopes}, nil
 }
 
 type oidcAccessStore interface {
@@ -195,14 +210,43 @@ func registerOIDC(mux *http.ServeMux, db HealthStore, config *AuthConfig) {
 			return
 		}
 		var claims struct {
-			AuthorizedParty string `json:"azp"`
+			AuthorizedParty string          `json:"azp"`
+			Groups          json.RawMessage `json:"groups"`
 		}
 		if identity.Claims(&claims) != nil || (len(identity.Audience) > 1 || claims.AuthorizedParty != "") && claims.AuthorizedParty != settings.ClientID {
 			failed(w, r, "rejected")
 			return
 		}
-		account, err := store.AccessOIDC(ctx, identity.Issuer, identity.Subject)
+		var account storepkg.AccessAccount
+		if settings.groupPolicy == nil {
+			account, err = store.AccessOIDC(ctx, identity.Issuer, identity.Subject)
+		} else {
+			groupStore, ok := db.(oidcGroupStore)
+			now := time.Now()
+			if !ok || identity.IssuedAt.IsZero() || identity.IssuedAt.Before(now.Add(-oidcGroupSessionLifetime)) || identity.IssuedAt.After(now.Add(time.Minute)) {
+				failed(w, r, "rejected")
+				return
+			}
+			var groups []string
+			if len(claims.Groups) > 0 && json.Unmarshal(claims.Groups, &groups) != nil {
+				groups = nil
+			}
+			account, err = groupStore.ApplyOIDCGroupGrant(ctx, identity.Issuer, identity.Subject, identity.IssuedAt, settings.groupPolicy.grant(groups))
+		}
 		if err != nil || !account.Enabled {
+			if settings.groupPolicy != nil && account.ID != "" && errors.Is(err, storepkg.ErrAccessMissing) {
+				if signed, ok := db.(signedOrganizationAudit); ok {
+					auditContext := storepkg.WithAccessActor(storepkg.WithOrganization(ctx, account.OrganizationID), account.Username)
+					id, auditErr := signed.StartSignedRoleAudit(auditContext, account.Username, http.MethodPost, "/api/oidc/group-rejected", config.MasterKey)
+					if auditErr == nil {
+						auditErr = signed.FinishSignedAdminAudit(ctx, id, http.StatusForbidden, config.MasterKey)
+					}
+					if auditErr != nil {
+						failed(w, r, "unavailable")
+						return
+					}
+				}
+			}
 			failed(w, r, "unlinked")
 			return
 		}
@@ -220,13 +264,32 @@ func registerOIDC(mux *http.ServeMux, db HealthStore, config *AuthConfig) {
 				return
 			}
 		}
-		session, err := issueAccessSession(ctx, store, config.MasterKey, account, time.Now())
+		now := time.Now()
+		maxAge := 43200
+		var session string
+		if settings.groupPolicy != nil {
+			expires := identity.Expiry
+			if renewed := now.Add(oidcGroupSessionLifetime); renewed.Before(expires) {
+				expires = renewed
+			}
+			maxAge = max(1, int(expires.Sub(now).Seconds()))
+			session, err = createNamedAccessSession(ctx, store, config, account, groupSessionPrefix, now, expires)
+		} else {
+			session, err = issueAccessSession(ctx, store, config.MasterKey, account, now)
+		}
 		if signedOK {
 			status := http.StatusOK
 			if err != nil {
 				status = http.StatusServiceUnavailable
 			}
 			if auditErr := signed.FinishSignedAdminAudit(ctx, auditID, status, config.MasterKey); auditErr != nil {
+				if session != "" {
+					if digest, ok := accessSessionDigest(config, session); ok {
+						cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+						_ = store.RevokeAccessSession(cleanup, digest)
+						cancel()
+					}
+				}
 				failed(w, r, "unavailable")
 				return
 			}
@@ -235,7 +298,7 @@ func registerOIDC(mux *http.ServeMux, db HealthStore, config *AuthConfig) {
 			failed(w, r, "unavailable")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200, HttpOnly: true,
+		http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: maxAge, HttpOnly: true,
 			SameSite: http.SameSiteStrictMode, Secure: secure || config.SecureCookie})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})

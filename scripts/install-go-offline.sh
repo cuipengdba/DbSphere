@@ -104,6 +104,14 @@ if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   store_mode=external-pg18
 fi
 compose_args=(-f "$base")
+if grep -q '^DBSPHERE_OPENBAO_TOKEN_DIR=' "$env_file" || [[ -n "${DBSPHERE_OPENBAO_TOKEN_DIR:-}" ]]; then
+  token_dir="${DBSPHERE_OPENBAO_TOKEN_DIR:-$(sed -n 's/^DBSPHERE_OPENBAO_TOKEN_DIR=//p' "$env_file" | tail -n 1)}"
+  if [[ "$token_dir" != /* || ! -d "$token_dir" || ! -f "$token_dir/token" ]]; then
+    echo 'DBSPHERE_OPENBAO_TOKEN_DIR must contain a token file in an existing absolute directory.' >&2
+    exit 1
+  fi
+  compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.openbao.yaml")
+fi
 if grep -q '^DBSPHERE_KUBECONFIG_HOST_PATH=' "$env_file"; then
   kubeconfig_path="$(sed -n 's/^DBSPHERE_KUBECONFIG_HOST_PATH=//p' "$env_file" | tail -n 1)"
   if [[ "$kubeconfig_path" != /* || ! -f "$kubeconfig_path" ]]; then

@@ -83,6 +83,14 @@ func main() {
 		log.Info("DbSphere administrator password rotated; restart the app to apply it")
 		return
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "emergency-admin" {
+		if err := manageEmergencyAdmin(os.Args[2:]); err != nil {
+			log.Error("DbSphere emergency administrator command failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("DbSphere emergency administrator window updated")
+		return
+	}
 	if err := run(log); err != nil {
 		log.Error("DbSphere Go startup failed", "error", err)
 		os.Exit(1)
@@ -169,6 +177,18 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	emergency := os.Getenv("DBSPHERE_EMERGENCY_ADMIN")
+	if emergency != "" && emergency != "true" && emergency != "false" {
+		return errors.New("DBSPHERE_EMERGENCY_ADMIN must be true or false")
+	}
+	openBao, err := loadOpenBao()
+	if err != nil {
+		return err
+	}
+	auditDestination, err := notify.LoadAuditDestination()
+	if err != nil {
+		return err
+	}
 	operations, err := httpapi.LoadOperationsConfig()
 	if err != nil {
 		return err
@@ -188,6 +208,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer pg.Close()
+	pg.ConfigureOpenBao(openBao)
 	pg.ConfigureContainerStorage(storageConfig)
 	pg.ConfigureRetention(cfg.SampleDays, cfg.EventDays)
 	notifyConfig, err := notify.Load()
@@ -260,6 +281,7 @@ func run(log *slog.Logger) error {
 			ReplicaID:            replica.ID,
 			WorkOrderProfiles:    workProfiles,
 			OIDC:                 oidcProvider,
+			EmergencyAdmin:       emergency == "true",
 			Operations:           operations,
 			Observability:        observability,
 			SecureCookie:         os.Getenv("DBSPHERE_COOKIE_SECURE") == "true",
@@ -273,6 +295,18 @@ func run(log *slog.Logger) error {
 	defer listener.Close()
 	if err := notifySystemdReady(); err != nil {
 		return fmt.Errorf("notify systemd readiness: %w", err)
+	}
+	if auditDestination != nil {
+		auditCtx, stopAudit := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			auditDestination.Run(auditCtx, pg, cfg.MasterKey, log)
+		}()
+		defer func() {
+			stopAudit()
+			<-done
+		}()
 	}
 	go func() {
 		<-ctx.Done()

@@ -2,7 +2,7 @@
 
 [快速开始](QUICK_START.md) · [最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest) · [支持矩阵](SUPPORT_MATRIX.md)
 
-发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.0.0 为例。
+发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.1.0 为例。
 
 | 部署方式 | 文件前缀 | 目标机条件 |
 | --- | --- | --- |
@@ -14,7 +14,7 @@
 ## 容器化一键安装
 
 ```bash
-bundle=DbSphere-go-offline-4.0.0-linux-amd64.run
+bundle=DbSphere-go-offline-4.1.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
@@ -32,7 +32,7 @@ curl -fsS http://127.0.0.1:8081/readyz
 ## Grafana 增强离线包
 
 ```bash
-bundle=DbSphere-go-observability-4.0.0-linux-amd64.run
+bundle=DbSphere-go-observability-4.1.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 ```
 
@@ -47,7 +47,7 @@ Prometheus 数据默认保留 7 天并限制为 2 GB，可通过 `DBSPHERE_PROME
 从发布页下载对应架构的 systemd 包。将示例路径 `/absolute/dbsphere.env` 改成实际配置路径。填写独立 `DBSPHERE_DATABASE_URL` 和管理员引导配置。已部署环境须沿用原 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 ```bash
-bundle=DbSphere-go-systemd-4.0.0-linux-amd64.run
+bundle=DbSphere-go-systemd-4.1.0-linux-amd64.run
 sha256sum --check "$bundle.sha256"
 (umask 077 && bash "$bundle" --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
@@ -81,6 +81,8 @@ Go 离线包内置随包 PG18 的备份命令：`bash DbSphere-go-offline-<版�
 在「系统状态 → 账号和团队」创建项目团队，填写团队负责的资产 UUID，再为独立账号分配角色和团队。管理员可全局管理。值班员可以确认、交接其授权事件并提交工单，独立审批人可以批准或驳回授权范围内他人提交的工单，只读人员可以查看授权资产和证据。新设密码至少 12 字符。停用账号或轮换凭据会撤销该账号已有的会话。团队清单为空的非管理员账号拥有零资产访问权。
 
 ## 账号、单点登录和审计
+
+企业身份源组映射、应急管理员、OpenBao 和签名审计投递配置见[企业接入手册](ENTERPRISE_IDENTITY.md)。
 
 从旧版升级后，已有资产和团队归入默认组织，已有平台管理员继续用于本机管理。平台管理员可从「组织管理」创建组织，纳管新资产时选择所属组织。组织管理员可管理本组织资产及其凭据、账号、团队和事件链接。分享链接在期限内可解析，接收者登录后须具有该资产的访问权限。
 

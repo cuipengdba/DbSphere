@@ -43,6 +43,7 @@ type AccessAccount struct {
 	Hash             string    `json:"-"`
 	OrganizationID   string    `json:"organizationId,omitempty"`
 	OrganizationName string    `json:"organizationName,omitempty"`
+	OIDCLinked       bool      `json:"-"`
 	UpdatedAt        time.Time `json:"-"`
 }
 
@@ -105,12 +106,12 @@ const accountColumns = `a.id::text,a.username,a.role,a.enabled,a.password_hash,
 		AND (a.role='admin' AND a.organization_id IS NOT NULL OR EXISTS(
 		SELECT FROM access_memberships m JOIN access_team_assets t USING(team_id)
 		WHERE m.account_id=a.id AND t.asset_id=r.id)) ORDER BY r.id),
-	coalesce(a.organization_id::text,''),coalesce((SELECT name FROM organizations WHERE id=a.organization_id),''),a.updated_at`
+	coalesce(a.organization_id::text,''),coalesce((SELECT name FROM organizations WHERE id=a.organization_id),''),a.oidc_subject IS NOT NULL,a.updated_at`
 
 func readAccessAccount(row pgx.Row) (AccessAccount, error) {
 	var account AccessAccount
 	err := row.Scan(&account.ID, &account.Username, &account.Role, &account.Enabled, &account.Hash, &account.TeamIDs, &account.AssetIDs,
-		&account.OrganizationID, &account.OrganizationName, &account.UpdatedAt)
+		&account.OrganizationID, &account.OrganizationName, &account.OIDCLinked, &account.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrAccessMissing
 	}
@@ -238,7 +239,9 @@ func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input Acce
 		result, updateErr := tx.Exec(ctx, `UPDATE access_accounts SET role=coalesce(nullif($2,''),role),
 			enabled=coalesce($3,enabled),updated_at=now(),
 			oidc_subject=CASE WHEN $5::text IS NULL THEN oidc_subject ELSE nullif($5,'') END,
-			oidc_issuer=CASE WHEN $5::text IS NULL THEN oidc_issuer WHEN $5<>'' THEN $6 ELSE NULL END
+			oidc_issuer=CASE WHEN $5::text IS NULL THEN oidc_issuer WHEN $5<>'' THEN $6 ELSE NULL END,
+			oidc_last_claim_at=CASE WHEN $5::text IS NULL THEN oidc_last_claim_at ELSE NULL END,
+			oidc_group_allowed=CASE WHEN $5::text IS NULL THEN oidc_group_allowed ELSE false END
 			WHERE id=$1 AND (nullif($4,'')::uuid IS NULL OR organization_id=nullif($4,'')::uuid)`,
 			id, input.Role, input.Enabled, organizationID, input.OIDCSubject, input.OIDCIssuer)
 		err = updateErr
@@ -266,7 +269,7 @@ func (s *Postgres) WriteAccessAccount(ctx context.Context, id string, input Acce
 			return AccessAccount{}, accessWriteError(err)
 		}
 	}
-	if input.Enabled != nil && !*input.Enabled || input.OIDCSubject != nil && id != "" {
+	if input.Enabled != nil && !*input.Enabled || input.OIDCSubject != nil || input.Role != "" || input.TeamIDs != nil {
 		if _, err = tx.Exec(ctx, `DELETE FROM access_sessions WHERE account_id=$1`, id); err != nil {
 			return AccessAccount{}, err
 		}

@@ -49,6 +49,26 @@ func auditFingerprint(pub []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func AuditPublicIdentity(master []byte) (string, string) {
+	public := auditPrivateKey(master).Public().(ed25519.PublicKey)
+	return base64.RawURLEncoding.EncodeToString(public), auditFingerprint(public)
+}
+
+// VerifyDeliveredAudit checks a single entry against an independently pinned key.
+// Receivers also verify sequence and previous hash against their durable cursor.
+func VerifyDeliveredAudit(org string, entry AuditEntry, encodedKey, fingerprint string) error {
+	public, err := base64.RawURLEncoding.DecodeString(encodedKey)
+	if err != nil || len(public) != ed25519.PublicKeySize || fingerprint == "" || auditFingerprint(public) != fingerprint {
+		return errors.New("audit key fingerprint mismatch")
+	}
+	sum := auditEntryHash(org, entry.Sequence, entry.PreviousHash, entry.Record)
+	signature, err := base64.RawURLEncoding.DecodeString(entry.Signature)
+	if err != nil || entry.Sequence < 1 || !json.Valid(entry.Record) || entry.Hash != hex.EncodeToString(sum[:]) || !ed25519.Verify(public, sum[:], signature) {
+		return errors.New("audit hash or signature mismatch")
+	}
+	return nil
+}
+
 func auditEntryHash(org string, seq int64, prev string, record []byte) [32]byte {
 	var canonical bytes.Buffer
 	if json.Compact(&canonical, record) == nil {

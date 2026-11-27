@@ -198,6 +198,7 @@ type AuthConfig struct {
 	WorkOrderProfiles    map[string]WorkOrderProfile
 	ReplicaID            string
 	OIDC                 *OIDCProvider
+	EmergencyAdmin       bool
 	Operations           OperationsConfig
 	Observability        ObservabilityConfig
 }
@@ -362,19 +363,29 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		if cookie != nil {
 			token = cookie.Value
 		}
-		adminKey := security.AdminSessionKey(credentials.MasterKey, credentials.PasswordHash)
-		role, loggedIn := security.SessionRole(adminKey, token, time.Now())
+		var role string
+		var loggedIn bool
+		adminKey, emergencyUntil, keyErr := requestAdminKey(r, store, credentials, setupBridge)
+		if keyErr != nil {
+			adminKey = nil
+		}
+		if adminKey != nil {
+			role, loggedIn = security.SessionRole(adminKey, token, time.Now())
+		}
 		namedDB, _ := store.(accessStore)
 		var principal storepkg.AccessAccount
-		if !loggedIn && namedDB != nil && validAccessToken(token) {
+		namedDigest, hasNamedDigest := accessSessionDigest(credentials, token)
+		if !loggedIn && namedDB != nil && hasNamedDigest {
 			var err error
-			principal, err = namedDB.AccessSession(r.Context(), accessDigest(credentials.MasterKey, token), time.Now())
+			principal, err = namedDB.AccessSession(r.Context(), namedDigest, time.Now())
 			if err != nil && !errors.Is(err, storepkg.ErrAccessMissing) {
 				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
 				return
 			}
-			if err == nil && principal.Enabled {
+			if err == nil && allowedNamedSession(credentials, principal, token) {
 				role, loggedIn = principal.Role, true
+			} else {
+				principal = storepkg.AccessAccount{}
 			}
 		}
 		if !loggedIn && credentials.ViewerPasswordHash != "" {
@@ -440,7 +451,13 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusConflict, map[string]string{"error": "管理员初始化已完成，请返回登录"})
 				return
 			} else {
-				loginRole, loginAccount, err = authenticateAccessLogin(r.Context(), namedDB, credentials, input.Username, input.Password)
+				loginConfig := credentials
+				if credentials.EmergencyAdmin && adminKey == nil {
+					copy := *credentials
+					copy.PasswordHash = ""
+					loginConfig = &copy
+				}
+				loginRole, loginAccount, err = authenticateAccessLogin(r.Context(), namedDB, loginConfig, input.Username, input.Password)
 			}
 			if err != nil {
 				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
@@ -470,6 +487,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			delete(attempts, ip)
 			attemptsMu.Unlock()
 			var session string
+			maxAge := 43200
 			if loginAccount.ID != "" {
 				session, err = issueAccessSession(r.Context(), namedDB, credentials.MasterKey, loginAccount, time.Now())
 			} else if loginRole == "viewer" {
@@ -478,6 +496,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			} else if loginRole == "approver" {
 				approverKey := security.ApproverSessionKey(credentials.MasterKey, credentials.ApproverPasswordHash)
 				session, err = security.CreateApproverSession(approverKey, time.Now())
+			} else if credentials.EmergencyAdmin && !initialSetup {
+				maxAge = max(1, int(time.Until(emergencyUntil).Seconds()))
+				if err = recordEmergencyLogin(r.Context(), store, credentials.MasterKey); err == nil {
+					session, err = security.CreateSession(adminKey, time.Now())
+				}
 			} else {
 				session, err = security.CreateSession(adminKey, time.Now())
 			}
@@ -485,7 +508,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				respond(w, http.StatusInternalServerError, map[string]string{"error": "Session unavailable"})
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: 43200,
+			http.SetCookie(w, &http.Cookie{Name: "dbsphere_session", Value: session, Path: "/", MaxAge: maxAge,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: credentials.SecureCookie})
 			loginScope, err := scopedPrincipalIDs(r.Context(), store, credentials, loginAccount, loginRole)
 			if err != nil {
@@ -531,6 +554,8 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				"organizationId":   principal.OrganizationID,
 				"organizationName": principal.OrganizationName,
 				"oidcEnabled":      credentials.OIDC != nil,
+				"emergencyAdmin":   credentials.EmergencyAdmin,
+				"emergencyOpen":    !emergencyUntil.IsZero(),
 				"approvalEnabled":  approval,
 				"csrf":             csrf})
 			return
@@ -546,7 +571,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/logout" {
 			if principal.ID != "" {
-				if err := namedDB.RevokeAccessSession(r.Context(), accessDigest(credentials.MasterKey, token)); err != nil {
+				if err := namedDB.RevokeAccessSession(r.Context(), namedDigest); err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Session storage unavailable"})
 					return
 				}
@@ -584,7 +609,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			}
 		}
 		if strings.HasPrefix(r.URL.Path, logAnalysisPath) {
-			serveLogAnalysis(w, r, store, role, actor)
+			serveLogAnalysis(w, r, store, role, actor, credentials.MasterKey)
 			return
 		}
 		viewerScope := map[string]bool(nil)
@@ -1639,6 +1664,11 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 		}
 		if sections, ok := store.(AssetSectionReader); ok && r.Method == http.MethodGet {
 			if match := rawSQLPath.FindStringSubmatch(r.URL.Path); match != nil {
+				if role != "admin" {
+					respond(w, http.StatusForbidden, map[string]string{"error": "SQL evidence requires administrator access"})
+					return
+				}
+				w.Header().Set("Cache-Control", "no-store")
 				value, err := sections.RawSQLEvidence(r.Context(), match[1], match[2], match[3])
 				if err != nil {
 					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "SQL evidence unavailable"})

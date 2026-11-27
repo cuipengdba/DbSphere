@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cuipengdba/dbsphere/internal/collector"
-	"github.com/cuipengdba/dbsphere/internal/security"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -58,8 +57,8 @@ func (s *Postgres) RunWaitCapture(ctx context.Context, assetID, eventID, profile
 	}
 	var target collector.Target
 	var encrypted string
-	err = tx.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc FROM assets WHERE id=$1 AND runtime IN ('linux','k8s','managed')`, assetID).
-		Scan(&target.Host, &target.Port, &target.Database, &target.Username, &target.SSLMode, &encrypted)
+	err = tx.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,runtime FROM assets WHERE id=$1 AND runtime IN ('linux','k8s','managed')`, assetID).
+		Scan(&target.Host, &target.Port, &target.Database, &target.Username, &target.SSLMode, &encrypted, &target.Runtime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAssetNotFound
 	}
@@ -86,7 +85,7 @@ func (s *Postgres) RunWaitCapture(ctx context.Context, assetID, eventID, profile
 	if limited {
 		return nil, ErrWaitCaptureBusy
 	}
-	password, err := security.Decrypt(key, encrypted)
+	password, _, err := s.collectionCredential(ctx, assetID, target, encrypted, key)
 	if err != nil {
 		return nil, ErrWaitCaptureTarget
 	}

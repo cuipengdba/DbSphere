@@ -169,8 +169,16 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	target.Runtime = runtime
-	password, err := security.Decrypt(key, encrypted)
+	if s.openBao.Bound(id) && routeSettings.Kind != "" {
+		return s.recordCheckWithLease(ctx, id, map[string]any{"credential": map[string]any{"provider": "openbao", "status": "route_unsupported"}},
+			"telemetry", "OpenBao credential requires a direct database target", time.Now().UTC(), lease, interval)
+	}
+	password, credentialVersion, err := s.collectionCredential(ctx, id, target, encrypted, key)
 	if err != nil {
+		if s.openBao.Bound(id) {
+			return s.recordCheckWithLease(ctx, id, map[string]any{"credential": map[string]any{"provider": "openbao", "status": "unavailable"}},
+				"telemetry", "OpenBao credential unavailable", time.Now().UTC(), lease, interval)
+		}
 		return CheckResult{}, fmt.Errorf("decrypt monitoring credential: %w", err)
 	}
 	if runtime == assets.RuntimeMySQL || runtime == assets.RuntimeDM8 || runtime == assets.RuntimeKingbase {
@@ -348,6 +356,13 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	}
 	if backup := collector.Backup(id, time.Now().UTC()); backup != nil {
 		metrics["backup"] = backup
+	}
+	if credentialVersion > 0 {
+		status := "verified"
+		if collectErr != nil {
+			status = "database_check_failed"
+		}
+		metrics["credential"] = map[string]any{"provider": "openbao", "version": credentialVersion, "status": status}
 	}
 	if routeSettings.Kind != "" {
 		route := routeAssessment(routeSettings, routeProbe, metrics, kube, pooler, haproxy, target.Username)

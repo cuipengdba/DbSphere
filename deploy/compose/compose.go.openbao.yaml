@@ -1,0 +1,21 @@
+services:
+  app:
+    environment:
+      DBSPHERE_OPENBAO_TOKEN_FILE: /run/dbsphere-openbao/token
+    volumes:
+      - type: bind
+        source: ${DBSPHERE_OPENBAO_TOKEN_DIR:?Set an absolute OpenBao token directory}
+        target: /run/dbsphere-openbao
+        read_only: true
+        bind:
+          create_host_path: false
+  replica:
+    environment:
+      DBSPHERE_OPENBAO_TOKEN_FILE: /run/dbsphere-openbao/token
+    volumes:
+      - type: bind
+        source: ${DBSPHERE_OPENBAO_TOKEN_DIR:?Set an absolute OpenBao token directory}
+        target: /run/dbsphere-openbao
+        read_only: true
+        bind:
+          create_host_path: false

@@ -244,5 +244,6 @@ func handleOrganizationAudit(w http.ResponseWriter, r *http.Request, db HealthSt
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="dbsphere-organization-audit.json"`)
+	w.Header().Set("Cache-Control", "no-store")
 	respond(w, http.StatusOK, export)
 }

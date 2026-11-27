@@ -23,7 +23,11 @@ type Postgres struct {
 	tracePodMu                    sync.Mutex
 	tracePodCache                 map[string]tracePodCacheEntry
 	containerStorage              collector.ContainerStorageConfig
+	openBao                       *security.OpenBao
 }
+
+// ConfigureOpenBao is called before starting collectors and the HTTP server.
+func (s *Postgres) ConfigureOpenBao(client *security.OpenBao) { s.openBao = client }
 
 func (s *Postgres) ConfigureContainerStorage(cfg collector.ContainerStorageConfig) {
 	s.containerStorage = cfg
@@ -533,6 +537,12 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	}
 	if err := migrateTicketReceipts(ctx, tx); err != nil {
 		return fmt.Errorf("migrate external ticket receipts: %w", err)
+	}
+	if err := migrateOIDCGroupGrants(ctx, tx); err != nil {
+		return fmt.Errorf("migrate OIDC group grants: %w", err)
+	}
+	if err := migrateAuditDelivery(ctx, tx); err != nil {
+		return fmt.Errorf("migrate audit delivery: %w", err)
 	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)

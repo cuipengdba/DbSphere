@@ -1398,7 +1398,7 @@ $('asset-readiness-batch').addEventListener('toggle', () => {
 });
 
 const readinessLabels = {
-  connection: '数据库连接', tls: '会话 TLS', readOnly: '采集会话只读', connections: '连接状态',
+  connection: '数据库连接', credentialSource: 'OpenBao 凭据', tls: '会话 TLS', readOnly: '采集会话只读', connections: '连接状态',
   sessions: '数据库会话', databaseSize: '数据库容量', topSql: 'Top SQL 指纹',
   server: '实例身份', redisCounters: 'Redis 原生指标', slowCommands: '慢命令', slots: '槽位状态', shards: '分片', sentinel: 'Sentinel 主节点组',
   etcdHealth: 'etcd 健康探测', etcdRaft: 'Raft 状态', etcdMembers: '成员列表', etcdMetrics: '原生指标', etcdAPIServer: 'Kubernetes API Server',
@@ -1416,6 +1416,7 @@ const readinessStates = {
 };
 const readinessActions = {
   check_credentials: '核对目标库账号、凭据和访问规则', check_tls: '核对证书链、CA 配置与连接主机名',
+  check_openbao: '核对 OpenBao 绑定、令牌、证书及当前凭据版本',
   check_database_access: '请数据库管理员核对登录角色权限', check_endpoint: '核对端点、端口和网络可达性',
   check_sample: '查看原始采样或复检', check_tls_identity: '按部署要求核对 TLS 校验模式',
   check_read_only: '核对采集账号及只读会话配置', check_stats_permission: '请数据库管理员核对统计视图读取权限',
@@ -6037,6 +6038,9 @@ async function boot() {
   document.body.dataset.organizationScope = String(!!currentOrganization);
   $('role-label').textContent = [currentUsername, session.organizationName, accessRoleLabels[currentRole]].filter(Boolean).join(' · ');
   $('oidc-login').hidden = !oidcEnabled || session.authenticated;
+  const emergencyNote = $('emergency-admin-note');
+  emergencyNote.hidden = session.authenticated || !session.emergencyAdmin;
+  emergencyNote.textContent = session.emergencyOpen ? '本机应急管理员登录窗口已开启。' : '本机应急管理员登录窗口尚未开启。';
   $('scoped-asset-export').hidden = !currentUsername || !viewerScoped;
   $('role-label').hidden = !session.authenticated;
   $('login-panel').hidden = session.authenticated;
@@ -6056,8 +6060,8 @@ async function boot() {
   }
   const ssoError = new URLSearchParams(location.search).get('sso');
   if (ssoError && !session.authenticated) {
-    $('login-error').textContent = ssoError === 'unlinked' ? '该身份尚未绑定 DbSphere 账号。' :
-      ssoError === 'unavailable' ? '企业身份源暂不可用，可使用本地账号登录。' : '单点登录未通过验证。';
+    $('login-error').textContent = ssoError === 'unlinked' ? '该身份没有可用的 DbSphere 授权。' :
+      ssoError === 'unavailable' ? '企业身份源暂不可用。请联系平台管理员。' : '单点登录未通过验证。';
   }
   if (session.authenticated) {
     const runtime = await api('/api/version').catch(() => null);

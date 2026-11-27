@@ -29,6 +29,7 @@ type accessStore interface {
 }
 
 const accessTokenPrefix = "na_"
+const groupSessionPrefix = "og_"
 const accessUUID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 
 var accessAccountPath = regexp.MustCompile("^/api/admin/accounts/(" + accessUUID + ")(/rotate)?$")
@@ -39,21 +40,60 @@ func accessDigest(master []byte, token string) string {
 	return security.CSRFToken(master, "named-session:"+token)
 }
 
-func validAccessToken(token string) bool {
-	if len(token) != len(accessTokenPrefix)+43 || !strings.HasPrefix(token, accessTokenPrefix) {
+func namedSessionPrefix(token string) string {
+	if len(token) != len(accessTokenPrefix)+43 {
+		return ""
+	}
+	prefix := token[:len(accessTokenPrefix)]
+	if prefix != accessTokenPrefix && prefix != groupSessionPrefix {
+		return ""
+	}
+	if _, err := base64.RawURLEncoding.Strict().DecodeString(token[len(prefix):]); err != nil {
+		return ""
+	}
+	return prefix
+}
+
+func accessSessionDigest(config *AuthConfig, token string) (string, bool) {
+	switch namedSessionPrefix(token) {
+	case accessTokenPrefix:
+		return accessDigest(config.MasterKey, token), true
+	case groupSessionPrefix:
+		if config.OIDC != nil && config.OIDC.groupPolicy != nil {
+			return accessDigest(config.MasterKey, config.OIDC.groupPolicy.fingerprint+":"+token), true
+		}
+	}
+	return "", false
+}
+
+func allowedNamedSession(config *AuthConfig, account storepkg.AccessAccount, token string) bool {
+	if !account.Enabled {
 		return false
 	}
-	_, err := base64.RawURLEncoding.Strict().DecodeString(token[len(accessTokenPrefix):])
-	return err == nil
+	if config.OIDC != nil && config.OIDC.groupPolicy != nil && account.OIDCLinked {
+		return namedSessionPrefix(token) == groupSessionPrefix
+	}
+	return namedSessionPrefix(token) == accessTokenPrefix
 }
 
 func issueAccessSession(ctx context.Context, db accessStore, master []byte, account storepkg.AccessAccount, now time.Time) (string, error) {
+	return createNamedAccessSession(ctx, db, &AuthConfig{MasterKey: master}, account, accessTokenPrefix, now, now.Add(12*time.Hour))
+}
+
+func createNamedAccessSession(ctx context.Context, db accessStore, config *AuthConfig, account storepkg.AccessAccount, prefix string, now, expiry time.Time) (string, error) {
+	if !expiry.After(now) {
+		return "", storepkg.ErrAccessInput
+	}
 	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
 	}
-	token := accessTokenPrefix + base64.RawURLEncoding.EncodeToString(nonce[:])
-	return token, db.CreateAccessSession(ctx, account, accessDigest(master, token), now, now.Add(12*time.Hour))
+	token := prefix + base64.RawURLEncoding.EncodeToString(nonce[:])
+	digest, ok := accessSessionDigest(config, token)
+	if !ok {
+		return "", storepkg.ErrAccessInput
+	}
+	return token, db.CreateAccessSession(ctx, account, digest, now, expiry)
 }
 
 func accessPassword(password string) (string, error) {
@@ -102,7 +142,8 @@ func authenticateAccessLogin(ctx context.Context, db accessStore, config *AuthCo
 	if hash == "" {
 		hash = strings.Repeat("0", 32) + ":" + strings.Repeat("0", 64)
 	}
-	if security.VerifyPassword(password, hash) && account.Enabled {
+	if security.VerifyPassword(password, hash) && account.Enabled &&
+		!(config.OIDC != nil && config.OIDC.groupPolicy != nil && account.OIDCLinked) {
 		return account.Role, account, nil
 	}
 	return "", storepkg.AccessAccount{}, nil
@@ -146,7 +187,7 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 			Password string `json:"password"`
 			Legacy   string `json:"legacyRole"`
 		}
-		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(&input.AccessAccountInput, config) ||
+		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(r.Context(), &input.AccessAccountInput, config) ||
 			input.Legacy != "" && (input.OrganizationID != "" || storepkg.OrganizationFromContext(r.Context()) != "") {
 			writeAccessResult(w, 0, nil, storepkg.ErrAccessInput)
 			break
@@ -169,7 +210,7 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 		writeAccessResult(w, http.StatusCreated, map[string]any{"account": data}, err)
 	case r.Method == http.MethodPatch && account != nil && account[2] == "":
 		var input storepkg.AccessAccountInput
-		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(&input, config) {
+		if readJSONLimit(w, r, &input, 8192) != nil || !prepareOIDCBinding(r.Context(), &input, config) {
 			writeAccessResult(w, 0, nil, storepkg.ErrAccessInput)
 			break
 		}
@@ -204,7 +245,10 @@ func handleAccessDirectory(w http.ResponseWriter, r *http.Request, db accessStor
 	return true
 }
 
-func prepareOIDCBinding(input *storepkg.AccessAccountInput, config *AuthConfig) bool {
+func prepareOIDCBinding(ctx context.Context, input *storepkg.AccessAccountInput, config *AuthConfig) bool {
+	if input.OIDCSubject != nil && config.OIDC != nil && config.OIDC.groupPolicy != nil && storepkg.OrganizationFromContext(ctx) != "" {
+		return false
+	}
 	if input.OIDCSubject == nil || *input.OIDCSubject == "" {
 		return true
 	}

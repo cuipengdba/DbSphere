@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -30,7 +31,14 @@ func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string
 		hash = stored
 	}
 	now := time.Now()
-	if role, ok := security.SessionRole(security.AdminSessionKey(auth.MasterKey, hash), cookie.Value, now); ok {
+	adminConfig := *auth
+	adminConfig.PasswordHash = hash
+	var setupBridge netip.Addr
+	if auth.EmergencyAdmin && auth.DockerLocalSetup {
+		setupBridge = dockerSetupBridge()
+	}
+	adminKey, _, err := requestAdminKey(r, db, &adminConfig, setupBridge)
+	if role, ok := security.SessionRole(adminKey, cookie.Value, now); err == nil && adminKey != nil && ok {
 		if role != "admin" {
 			return "", http.StatusForbidden
 		}
@@ -46,9 +54,10 @@ func grafanaPrincipal(r *http.Request, db HealthStore, auth *AuthConfig) (string
 			return "", http.StatusForbidden
 		}
 	}
-	if db, ok := db.(accessStore); ok && validAccessToken(cookie.Value) {
-		principal, err := db.AccessSession(r.Context(), accessDigest(auth.MasterKey, cookie.Value), now)
-		if err == nil && principal.Enabled {
+	digest, valid := accessSessionDigest(auth, cookie.Value)
+	if db, ok := db.(accessStore); ok && valid {
+		principal, err := db.AccessSession(r.Context(), digest, now)
+		if err == nil && allowedNamedSession(auth, principal, cookie.Value) {
 			if principal.Role != "admin" || principal.OrganizationID != "" {
 				return "", http.StatusForbidden
 			}

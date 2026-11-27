@@ -117,6 +117,8 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		add("connection", "ok", "")
 	case strings.Contains(sample.Error, "authentication failed"):
 		add("connection", "failed", "check_credentials")
+	case strings.HasPrefix(sample.Error, "OpenBao credential"):
+		add("connection", "unknown", "check_openbao")
 	case strings.Contains(sample.Error, "TLS"):
 		add("connection", "failed", "check_tls")
 	case strings.Contains(sample.Error, "SQLSTATE 42501"):
@@ -127,6 +129,12 @@ func describeReadiness(sample readinessSample, runtime string) []readinessCheck 
 		add("connection", "failed", "check_endpoint")
 	default:
 		add("connection", "unknown", "check_sample")
+	}
+	switch object(metrics["credential"])["status"] {
+	case "verified":
+		add("credentialSource", "ok", "")
+	case "unavailable", "route_unsupported", "database_check_failed":
+		add("credentialSource", "failed", "check_openbao")
 	}
 	adapter := object(metrics["adapter"])
 	transport := object(adapter["transport"])
