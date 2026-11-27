@@ -5,7 +5,7 @@ v4.2.0 支持由站点的 Go 进程采集 PostgreSQL、MySQL 和 Redis。站点�
 ## 开通站点
 
 1. 为接收端签发匹配访问地址的服务端证书，为每个采集器签发可用于客户端认证的证书。计算客户端叶证书 DER 的 SHA-256。中心将证书指纹登记到站点。一个站点可登记多个指纹以平滑更换证书。
-2. 中心设置 `DBSPHERE_SITE_RECEIVER_CONFIG` 指向接收配置文件。原生安装可在服务配置中指定绝对路径。Compose 安装设置 `DBSPHERE_SITE_CONFIG_DIR` 指向存放 `receiver.json` 与证书文件的目录，配置中的证书路径使用容器内的 `/run/dbsphere-sites/`。授予容器进程运行账号（UID/GID `65532:65532`）遍历此目录及读取配置、证书和私钥的权限，限制其他账号读取私钥。接收进程监听 `0.0.0.0:8444`。设置 `DBSPHERE_SITE_BIND_IP` 为中心站点网络的宿主机地址，并按需设置 `DBSPHERE_SITE_PORT`。
+2. 中心设置 `DBSPHERE_SITE_RECEIVER_CONFIG` 指向接收配置文件。原生安装可在服务配置中指定绝对路径。Compose 安装设置 `DBSPHERE_SITE_CONFIG_DIR` 指向存放 `receiver.json` 与证书文件的目录，配置中的证书路径使用容器内的 `/dbsphere-sites/`。授予容器进程运行账号（UID/GID `65532:65532`）遍历此目录及读取配置、证书和私钥的权限，限制其他账号读取私钥。接收进程监听 `0.0.0.0:8444`。设置 `DBSPHERE_SITE_BIND_IP` 为中心站点网络的宿主机地址，并按需设置 `DBSPHERE_SITE_PORT`。
 3. 在中心新增资产，保存资产 UUID。将数据库账号密码留在站点的权限受限文件内。设置环境后，在中心执行 `dbsphere assign-site ASSET_UUID east`。
 4. 在站点保存采集配置并执行 `dbsphere site-collector /etc/dbsphere-sites/collector.json`。可用系统的服务管理器运行同一命令。确认资产页显示站点、最后上报时间与待补送数量。
 
@@ -14,9 +14,9 @@ v4.2.0 支持由站点的 Go 进程采集 PostgreSQL、MySQL 和 Redis。站点�
 ```json
 {
   "listen": "0.0.0.0:8444",
-  "certificateFile": "/run/dbsphere-sites/server.crt",
-  "keyFile": "/run/dbsphere-sites/server.key",
-  "clientCAFile": "/run/dbsphere-sites/site-ca.crt",
+  "certificateFile": "/dbsphere-sites/server.crt",
+  "keyFile": "/dbsphere-sites/server.key",
+  "clientCAFile": "/dbsphere-sites/site-ca.crt",
   "intervalSeconds": 30,
   "sites": {"east": ["REPLACE_WITH_CLIENT_CERTIFICATE_SHA256"]}
 }

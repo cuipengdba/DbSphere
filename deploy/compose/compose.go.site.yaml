@@ -1,13 +1,13 @@
 services:
   app:
     environment:
-      DBSPHERE_SITE_RECEIVER_CONFIG: /run/dbsphere-sites/receiver.json
+      DBSPHERE_SITE_RECEIVER_CONFIG: /dbsphere-sites/receiver.json
     ports:
       - '${DBSPHERE_SITE_BIND_IP:-127.0.0.1}:${DBSPHERE_SITE_PORT:-8444}:8444'
     volumes:
       - type: bind
         source: ${DBSPHERE_SITE_CONFIG_DIR:?Set an absolute site receiver directory}
-        target: /run/dbsphere-sites
+        target: /dbsphere-sites
         read_only: true
         bind:
           create_host_path: false
