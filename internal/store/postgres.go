@@ -562,6 +562,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateNotificationRoutes(ctx, tx); err != nil {
 		return fmt.Errorf("migrate notification routes: %w", err)
 	}
+	if err := migrateSiteManagement(ctx, tx); err != nil {
+		return fmt.Errorf("migrate site management: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

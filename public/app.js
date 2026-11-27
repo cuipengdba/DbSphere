@@ -80,6 +80,7 @@ const views = {
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
   inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
   'service-reports': ['服务报告', '核对服务可用性、维护窗口、缺采和原始证据。'],
+  'managed-sites': ['站点管理', '查看站点采集覆盖、最近上报和升级记录。'],
   settings: ['系统状态', '检查监控数据存储与部署状态。']
 };
 
@@ -94,6 +95,7 @@ function setView(route, updateHash = true) {
     }
   }
   const selected = Object.hasOwn(views, view) && (view !== 'wallboard' || nativeOverview) &&
+    (view !== 'managed-sites' || ['admin', 'operator'].includes(currentRole)) &&
     (view !== 'logs' || nativeOverview && currentRole === 'admin') ? view :
     nativeOverview ? 'wallboard' : 'overview';
   const params = new URLSearchParams(query);
@@ -107,6 +109,7 @@ function setView(route, updateHash = true) {
     section.hidden = section.dataset.view !== selected ||
       ((section.id === 'admin-audit-panel' || section.id === 'collector-status-panel') && currentRole !== 'admin');
   for (const button of document.querySelectorAll('[data-nav]')) {
+    if (button.dataset.nav === 'managed-sites') button.hidden = !['admin', 'operator'].includes(currentRole);
     const active = button.dataset.nav === selected;
     button.classList.toggle('active', active);
     if (active) button.setAttribute('aria-current', 'page');
@@ -137,6 +140,7 @@ function setView(route, updateHash = true) {
   showGrafanaView(selected === 'grafana' ? params : null);
   showSample(selected === 'sample' && currentRole ? params : null);
   if (selected === 'service-reports' && currentRole) void showServiceOperations('reports', params);
+  if (selected === 'managed-sites') void showManagedSites();
   void showCollectionHistory(selected === 'collection' && currentRole ? params : null);
   void showEngineDiagnosis(selected === 'engine-diagnosis' && currentRole ? params : null);
   void showHAHistory(selected === 'ha-history' && currentRole ? params : null);
@@ -211,6 +215,15 @@ async function showServiceOperations(tool, params) {
   const panel = $(tool === 'reports' ? 'service-reports-workspace' : 'notification-routes-workspace');
   window.DbSphereServiceOperations[tool](panel, params, {api, role: currentRole, formatTime,
     organization: currentOrganization, options: organizationOptions(), defaultOrganization: defaultOrganizationID});
+}
+
+async function showManagedSites() {
+  const state = workspaceData;
+  if (currentRole === 'admin' && !currentOrganization) await loadOrganizations(false);
+  if (state !== workspaceData || document.body.dataset.activeView !== 'managed-sites') return;
+  window.DbSphereManagedSites.render($('managed-sites-workspace'), {api, formatTime,
+    admin:currentRole === 'admin', platform:currentRole === 'admin' && !currentOrganization,
+    organizations:organizationOptions(), defaultOrganization:defaultOrganizationID});
 }
 
 let aiModelSettings = null;

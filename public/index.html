@@ -24,6 +24,7 @@
   <script src="/change-governance.js" defer></script>
   <script src="/restore-drill.js" defer></script>
   <script src="/service-operations.js" defer></script>
+  <script src="/managed-sites.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -69,6 +70,7 @@
           <button type="button" data-nav="inspections"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z M9 10h7 M9 14h7 M9 17h5"/></svg><span>巡检与报告</span></button>
           <button type="button" data-nav="service-reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 4v16h16M8 15l4-6 4 3 4-6"/></svg><span>服务报告</span></button>
           <button type="button" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>系统状态</span></button>
+          <button type="button" data-nav="managed-sites" hidden><span>站点管理</span></button>
         </nav>
         <div class="sidebar-foot"><span id="workspace-version" class="workspace-version" hidden></span><span class="workspace-platform">Linux · Kubernetes</span></div>
       </aside>
@@ -640,6 +642,7 @@
         <section class="panel"><div class="section-head"><div><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
       </div>
       <section class="panel" data-view="service-reports" hidden><div id="service-reports-workspace"></div></section>
+      <section class="panel" data-view="managed-sites" hidden><div id="managed-sites-workspace"></div></section>
       <div class="section-nav" data-view="inspections" aria-label="巡检专题"><button type="button" data-section="history">巡检历史</button><button type="button" data-section="schedules">巡检计划</button><button type="button" data-section="templates">巡检模板</button></div>
       <div class="section-stack" data-view="inspections">
         <section class="panel" data-section-panel="schedules">

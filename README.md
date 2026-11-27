@@ -2,11 +2,11 @@
 
 **全域数据库智能运维管理平台**
 
-[![当前正式版 v4.7.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
+[![当前正式版 v4.8.0](https://img.shields.io/github/v/release/cuipengdba/DbSphere?label=%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC&color=238636&style=flat-square)](https://github.com/cuipengdba/DbSphere/releases/latest) [![Apache License 2.0](https://img.shields.io/badge/License-Apache--2.0-4C778A?style=flat-square)](LICENSE)
 
 DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工作台。在浏览器中查看各引擎和 Linux 指标，从异常图表进入问题事件，沿同一个事件 ID 查到根因候选、原始证据和恢复记录。
 
-**[快速开始](docs/QUICK_START.md)** · [下载 v4.7.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.7.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
+**[快速开始](docs/QUICK_START.md)** · [下载 v4.8.0 一键离线包](https://github.com/cuipengdba/DbSphere/releases/tag/v4.8.0) · [部署手册](docs/OFFLINE_DEPLOYMENT.md) · [支持矩阵](#支持矩阵) · [试点验收](docs/PILOT_ACCEPTANCE.md) · [企业接入](docs/ENTERPRISE_IDENTITY.md) · [4.x 路线图](docs/ROADMAP_V4.0_V4.20.md)
 
 ## 支持矩阵
 
@@ -29,6 +29,7 @@ DbSphere 是面向数据库、缓存和 Kubernetes 控制面的开源运维工�
 | Redis OSS | 6.2 · v3.11.0 新增 | OPS、内存、命中与淘汰、慢命令及 Cluster 槽位。Redis 6.2.24 已验收单节点和三主节点 Cluster。 |
 | Redis OSS | 7.2、8.4 | 单节点、主从、Sentinel 和 Cluster 指标，按 ACL 权限读取。 |
 | 站点采集 | v4.2.0 · PostgreSQL 18.7、MySQL 8.4.13、Redis 6.2.24 | 跨网段只读采集、双向 TLS、磁盘缓冲及原事件恢复回查。 |
+| 多站点汇总 | v4.8.0 · 独立 PG18 监控库 · 双向 TLS | 中心查看各站点的采样覆盖、事件和签收数量，按组织委派运维，核对分批升级与回退。 [多站点手册](docs/MANAGED_SITES.md) |
 | etcd | 3.5、3.6 | 成员、Raft、WAL 与后端提交指标，可与 API Server 指标同窗对照。 |
 | Linux 与 Docker | Linux 主机、Docker 容器 | 主机 CPU、内存、磁盘与网络，以及容器 I/O 和文件缓存。 |
 | Kubernetes | 只读 API 与指标源 | Pod、Node、PVC、事件及容器资源观测，已验收的环境见详细矩阵。 |

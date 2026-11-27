@@ -102,6 +102,7 @@ Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。�
 | 数据库变更治理 | v4.5.0 | PostgreSQL 18.7 和 MySQL Community 8.4.13 实库验证只读预检、锁等待和回退恢复。通用 ITSM 协议夹具验证独立审批、超窗、幂等回执和原事件回链。 [变更治理手册](CHANGE_GOVERNANCE.md) |
 | pgBackRest 备份恢复演练 | v4.6.0 | pgBackRest 2.60.1 与 PostgreSQL 18.7 本地仓库。验收涵盖全量与差异备份、真实 WAL 缺口及补齐、隔离时间点恢复、审批、报告与原事件回链。 [恢复演练手册](RESTORE_DRILLS.md) |
 | 服务报告、通知路由与事件复盘 | v4.7.0 | 使用 PG18 中的有效采样、维护窗口及事件证据。通知使用现有 Webhook、邮件或已绑定组织的运维 Webhook。AI 复盘可接入 OpenAI 兼容接口。 [服务运维手册](SERVICE_OPERATIONS.md) |
+| 多站点汇总与委派运维 | v4.8.0 | 站点使用独立 PG18 监控库，中心通过双向 TLS 接收摘要。原始证据由原站点按本地权限提供。 [多站点手册](MANAGED_SITES.md) |
 
 [站点采集与模型配置](SITE_COLLECTION.md)
 

@@ -25,6 +25,17 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) > 1 && os.Args[1] == "site-summary" {
+		if len(os.Args) != 3 {
+			log.Error("use site-summary CONFIG")
+			os.Exit(1)
+		}
+		if err := runSiteSummary(os.Args[2], log); err != nil {
+			log.Error("site summary command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "site-collector" || os.Args[1] == "assign-site") {
 		err := errors.New("use site-collector CONFIG or assign-site ASSET_ID SITE")
 		if os.Args[1] == "site-collector" && len(os.Args) == 3 {

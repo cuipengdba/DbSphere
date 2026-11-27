@@ -65,24 +65,55 @@ func loadSiteReceiver(path string) (siteReceiverConfig, map[string]string, error
 func siteReceiver(pg *store.Postgres, sites map[string]string, interval time.Duration) http.Handler {
 	concurrency := make(chan struct{}, 8)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+remoteobs.Path, func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-			http.Error(w, "client certificate required", http.StatusForbidden)
+	authorized := func(handle func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+				http.Error(w, "client certificate required", http.StatusForbidden)
+				return
+			}
+			digest := sha256.Sum256(r.TLS.PeerCertificates[0].Raw)
+			site := sites[hex.EncodeToString(digest[:])]
+			if site == "" {
+				http.Error(w, "site certificate is not registered", http.StatusForbidden)
+				return
+			}
+			select {
+			case concurrency <- struct{}{}:
+				defer func() { <-concurrency }()
+			default:
+				http.Error(w, "receiver busy", http.StatusServiceUnavailable)
+				return
+			}
+			handle(w, r, site)
+		}
+	}
+	mux.HandleFunc("POST "+remoteobs.SiteSummaryPath, authorized(func(w http.ResponseWriter, r *http.Request, site string) {
+		var summary remoteobs.SiteSummary
+		if remoteobs.Decode(http.MaxBytesReader(w, r.Body, remoteobs.MaxSiteSummaryBody), &summary) != nil {
+			http.Error(w, "invalid site summary", http.StatusBadRequest)
 			return
 		}
-		digest := sha256.Sum256(r.TLS.PeerCertificates[0].Raw)
-		site := sites[hex.EncodeToString(digest[:])]
-		if site == "" {
-			http.Error(w, "site certificate is not registered", http.StatusForbidden)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		receipt, err := pg.SaveSiteSummary(ctx, site, summary)
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			switch {
+			case errors.Is(err, remoteobs.ErrInvalid):
+				status = http.StatusBadRequest
+			case errors.Is(err, store.ErrSiteUnavailable):
+				status = http.StatusForbidden
+			case errors.Is(err, store.ErrSiteCapacity):
+				status = http.StatusUnprocessableEntity
+			case errors.Is(err, store.ErrRemoteConflict):
+				status = http.StatusConflict
+			}
+			http.Error(w, http.StatusText(status), status)
 			return
 		}
-		select {
-		case concurrency <- struct{}{}:
-			defer func() { <-concurrency }()
-		default:
-			http.Error(w, "receiver busy", http.StatusServiceUnavailable)
-			return
-		}
+		writeSiteReceipt(w, receipt)
+	}))
+	mux.HandleFunc("POST "+remoteobs.Path, authorized(func(w http.ResponseWriter, r *http.Request, site string) {
 		var item remoteobs.Observation
 		if remoteobs.Decode(http.MaxBytesReader(w, r.Body, remoteobs.MaxBody), &item) != nil {
 			http.Error(w, "invalid observation", http.StatusBadRequest)
@@ -113,11 +144,15 @@ func siteReceiver(pg *store.Postgres, sites map[string]string, interval time.Dur
 			http.Error(w, http.StatusText(status), status)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(receipt)
-	})
+		writeSiteReceipt(w, receipt)
+	}))
 	return mux
+}
+
+func writeSiteReceipt(w http.ResponseWriter, receipt remoteobs.Receipt) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(receipt)
 }
 
 func startSiteReceiver(ctx context.Context, pg *store.Postgres, path string, log *slog.Logger) (func(), error) {
