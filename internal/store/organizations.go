@@ -141,6 +141,16 @@ func (s *Postgres) AssetOrganization(ctx context.Context, id string) (string, er
 	return organization, err
 }
 
+func (s *Postgres) EventOrganization(ctx context.Context, id string) (string, error) {
+	var organization string
+	err := s.pool.QueryRow(ctx, `SELECT a.organization_id::text FROM event_keys k JOIN assets a ON a.id=k.asset_id
+		WHERE k.id=$1 AND ($2='' OR a.organization_id::text=$2)`, id, OrganizationFromContext(ctx)).Scan(&organization)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrEventNotFound
+	}
+	return organization, err
+}
+
 func (s *Postgres) CreateEventShare(ctx context.Context, eventID string, hours int) (any, error) {
 	if hours < 1 || hours > 168 {
 		return nil, ErrAccessInput

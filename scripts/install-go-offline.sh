@@ -104,6 +104,14 @@ if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   store_mode=external-pg18
 fi
 compose_args=(-f "$base")
+if grep -q '^DBSPHERE_SITE_CONFIG_DIR=' "$env_file" || [[ -n "${DBSPHERE_SITE_CONFIG_DIR:-}" ]]; then
+  site_dir="${DBSPHERE_SITE_CONFIG_DIR:-$(sed -n 's/^DBSPHERE_SITE_CONFIG_DIR=//p' "$env_file" | tail -n 1)}"
+  if [[ "$site_dir" != /* || ! -f "$site_dir/receiver.json" ]]; then
+    echo 'DBSPHERE_SITE_CONFIG_DIR must contain receiver.json in an existing absolute directory.' >&2
+    exit 1
+  fi
+  compose_args+=(-f "$bundle_dir/deploy/compose/compose.go.site.yaml")
+fi
 if grep -q '^DBSPHERE_OPENBAO_TOKEN_DIR=' "$env_file" || [[ -n "${DBSPHERE_OPENBAO_TOKEN_DIR:-}" ]]; then
   token_dir="${DBSPHERE_OPENBAO_TOKEN_DIR:-$(sed -n 's/^DBSPHERE_OPENBAO_TOKEN_DIR=//p' "$env_file" | tail -n 1)}"
   if [[ "$token_dir" != /* || ! -d "$token_dir" || ! -f "$token_dir/token" ]]; then

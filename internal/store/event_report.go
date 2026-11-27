@@ -295,13 +295,14 @@ func (s *Postgres) AutoAIEventIDs(ctx context.Context, limit int) ([]string, err
 	if limit < 1 || limit > 20 {
 		return nil, fmt.Errorf("invalid automatic AI batch size")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT e.id::text FROM events e
+	rows, err := s.pool.Query(ctx, `SELECT e.id::text FROM events e JOIN assets target ON target.id=e.asset_id
 		WHERE e.status='open' AND e.started_at>=now()-interval '24 hours'
+		AND ($2='' OR target.organization_id::text=$2)
 		AND EXISTS(SELECT 1 FROM evidence f WHERE f.event_id=e.id AND f.kind='alert_firing'
 			AND f.payload_json->>'severity'='critical')
 		AND NOT EXISTS(SELECT 1 FROM evidence a WHERE a.event_id=e.id AND a.kind='ai_invocation'
 			AND a.payload_json->>'actor'='auto')
-		ORDER BY e.started_at DESC LIMIT $1`, limit)
+		ORDER BY e.started_at DESC LIMIT $1`, limit, OrganizationFromContext(ctx))
 	if err != nil {
 		return nil, err
 	}

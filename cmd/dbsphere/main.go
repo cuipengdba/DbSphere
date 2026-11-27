@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,19 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) > 1 && (os.Args[1] == "site-collector" || os.Args[1] == "assign-site") {
+		err := errors.New("use site-collector CONFIG or assign-site ASSET_ID SITE")
+		if os.Args[1] == "site-collector" && len(os.Args) == 3 {
+			err = runSiteCollector(os.Args[2], log)
+		} else if os.Args[1] == "assign-site" && len(os.Args) == 4 {
+			err = assignSiteCollector(os.Args[2], os.Args[3])
+		}
+		if err != nil {
+			log.Error("site collector command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "push-log" {
 		if err := pushLog(os.Args[2:]); err != nil {
 			log.Error("DbSphere log push failed", "error", err)
@@ -254,10 +268,21 @@ func run(log *slog.Logger) error {
 	if autoAI != "" && autoAI != "true" && autoAI != "false" {
 		return fmt.Errorf("DBSPHERE_AI_AUTO_SUMMARY must be true or false")
 	}
-	aiRuntime, err := ai.NewRuntime(pg, cfg.MasterKey, ai.Settings{Endpoint: os.Getenv("DBSPHERE_AI_CHAT_URL"),
+	var modelCA, modelKeys map[string]string
+	for envName, output := range map[string]*map[string]string{
+		"DBSPHERE_AI_CA_REFERENCES":  &modelCA,
+		"DBSPHERE_AI_KEY_REFERENCES": &modelKeys,
+	} {
+		if raw := os.Getenv(envName); raw != "" && (len(raw) > 1<<20 || json.Unmarshal([]byte(raw), output) != nil || len(*output) > 32) {
+			return fmt.Errorf("invalid %s configuration", envName)
+		}
+	}
+	aiRuntime, err := ai.NewRuntimeWithReferences(pg, cfg.MasterKey, ai.Settings{Endpoint: os.Getenv("DBSPHERE_AI_CHAT_URL"),
 		Model: os.Getenv("DBSPHERE_AI_MODEL"), APIKey: os.Getenv("DBSPHERE_AI_API_KEY"), DailyLimit: aiDailyLimit,
+		OrganizationID: os.Getenv("DBSPHERE_AI_ORGANIZATION"), Mode: os.Getenv("DBSPHERE_AI_MODE"),
+		CARef: os.Getenv("DBSPHERE_AI_CA_REF"), KeyRef: os.Getenv("DBSPHERE_AI_KEY_REF"),
 		ReviewSeconds: int(reviewTimeout / time.Second), ReviewSchema: reviewSchema == "true", AutoSummary: autoAI == "true"},
-		remoteAI == "true", os.Getenv("DBSPHERE_AI_ALLOWED_ORIGINS"))
+		remoteAI == "true", os.Getenv("DBSPHERE_AI_ALLOWED_ORIGINS"), modelCA, modelKeys)
 	if err != nil {
 		return err
 	}
@@ -293,6 +318,13 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer listener.Close()
+	if path := os.Getenv("DBSPHERE_SITE_RECEIVER_CONFIG"); path != "" {
+		stopSiteReceiver, err := startSiteReceiver(ctx, pg, path, log)
+		if err != nil {
+			return err
+		}
+		defer stopSiteReceiver()
+	}
 	if err := notifySystemdReady(); err != nil {
 		return fmt.Errorf("notify systemd readiness: %w", err)
 	}
@@ -411,7 +443,7 @@ func runAutoAI(ctx context.Context, pg autoAIStore, settings func(context.Contex
 		var ids []string
 		config, err := settings(ctx)
 		if err == nil && config.Client != nil && config.Settings.AutoSummary {
-			ids, err = pg.AutoAIEventIDs(ctx, 5)
+			ids, err = pg.AutoAIEventIDs(store.WithOrganization(ctx, config.Settings.OrganizationID), 5)
 			if err != nil && ctx.Err() == nil {
 				log.Error("automatic AI event scan failed", "error", err)
 			}
@@ -424,6 +456,7 @@ func runAutoAI(ctx context.Context, pg autoAIStore, settings func(context.Contex
 				break
 			}
 			model, dailyLimit := config.Client, config.Settings.DailyLimit
+			analyzeCtx = store.WithOrganization(analyzeCtx, config.Settings.OrganizationID)
 			prompt, evidenceIDs, err := pg.EventAIEvidence(analyzeCtx, eventID)
 			if err != nil || len(evidenceIDs) == 0 {
 				cancel()

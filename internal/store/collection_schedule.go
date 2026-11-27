@@ -75,6 +75,7 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 	if _, err := tx.Exec(ctx, `INSERT INTO collection_jobs(asset_id,due_at)
 		SELECT a.id,coalesce(a.last_sample_at+make_interval(secs=>$1),a.created_at)
 		FROM assets a WHERE a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		AND a.remote_site=''
 		AND NOT EXISTS (SELECT 1 FROM collection_jobs j WHERE j.asset_id=a.id)
 		ORDER BY a.id LIMIT 100 FOR KEY SHARE OF a SKIP LOCKED
 		ON CONFLICT(asset_id) DO NOTHING`, int(interval.Seconds())); err != nil {
@@ -86,6 +87,7 @@ func (s *Postgres) ClaimCollectionJobs(ctx context.Context, interval time.Durati
 		FROM collection_jobs j JOIN assets a ON a.id=j.asset_id
 		WHERE j.due_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now())
 		AND a.runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		AND a.remote_site=''
 		AND ($4::int=0 OR j.isolated=($4=2))
 	), ready AS (
 		SELECT j.asset_id,j.lease_token,j.lease_replica_id,j.lease_until FROM eligible e JOIN collection_jobs j ON j.asset_id=e.asset_id

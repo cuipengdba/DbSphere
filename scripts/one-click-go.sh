@@ -27,6 +27,9 @@ if grep -q '^DBSPHERE_DATABASE_URL=' "$env_file"; then
   compose_file="$repo_dir/deploy/compose/compose.go.external.yaml"
 fi
 compose_args=(-f "$compose_file")
+if grep -q '^DBSPHERE_SITE_CONFIG_DIR=' "$env_file" || [[ -n "${DBSPHERE_SITE_CONFIG_DIR:-}" ]]; then
+  compose_args+=(-f "$repo_dir/deploy/compose/compose.go.site.yaml")
+fi
 if grep -q '^DBSPHERE_OPENBAO_TOKEN_DIR=' "$env_file" || [[ -n "${DBSPHERE_OPENBAO_TOKEN_DIR:-}" ]]; then
   compose_args+=(-f "$repo_dir/deploy/compose/compose.go.openbao.yaml")
 fi

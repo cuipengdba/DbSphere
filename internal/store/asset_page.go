@@ -34,6 +34,7 @@ const assetJSON = `jsonb_build_object(
 	'k8sCluster',k8s_cluster,'namespace',k8s_namespace,'workload',k8s_workload,
 	'pod',k8s_pod,'node',k8s_node,'createdAt',created_at,
 	'lastSampleAt',last_sample_at,'lastStatus',last_status,
+	'remoteSite',nullif(remote_site,''),'remoteReceivedAt',remote_received_at,'remoteBacklog',remote_backlog,'remoteIntervalSeconds',remote_interval_seconds,
 	'lastError',last_error,'versionNum',version_num,'role',role,
 	'pg14Eol',runtime IN ('linux','k8s','managed') AND coalesce(version_num/10000=14,false))`
 

@@ -38,6 +38,7 @@ func (s *Postgres) DueAssetIDs(ctx context.Context, interval time.Duration, limi
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id::text FROM assets
 		WHERE runtime IN ('linux','k8s','managed','mysql','dm8','kingbase','redis','etcd')
+		AND remote_site=''
 		AND (last_sample_at IS NULL OR last_sample_at <= now() - make_interval(secs=>$1))
 		ORDER BY last_sample_at NULLS FIRST,id LIMIT $2`, int(interval.Seconds()), limit)
 	if err != nil {
@@ -62,6 +63,10 @@ func (s *Postgres) CheckStaleAsset(ctx context.Context, id string, interval time
 }
 
 func (s *Postgres) checkStaleAsset(ctx context.Context, id string, interval time.Duration, now time.Time, lease *CollectionLease) error {
+	return s.checkStaleCollection(ctx, id, interval, now, lease, false)
+}
+
+func (s *Postgres) checkStaleCollection(ctx context.Context, id string, interval time.Duration, now time.Time, lease *CollectionLease, remote bool) error {
 	if interval < collectorstate.MinimumIntervalSeconds*time.Second || interval > time.Hour {
 		return fmt.Errorf("invalid Go collection schedule")
 	}
@@ -74,17 +79,27 @@ func (s *Postgres) checkStaleAsset(ctx context.Context, id string, interval time
 	}
 	defer tx.Rollback(ctx)
 	var created time.Time
-	var last *time.Time
-	if err := tx.QueryRow(ctx, `SELECT created_at,last_sample_at FROM assets WHERE id=$1 FOR UPDATE`, id).
-		Scan(&created, &last); err != nil {
+	var last, assigned *time.Time
+	var site string
+	if err := tx.QueryRow(ctx, `SELECT created_at,last_sample_at,remote_site,remote_assigned_at FROM assets WHERE id=$1 FOR UPDATE`, id).
+		Scan(&created, &last, &site, &assigned); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrAssetNotFound
 		}
 		return err
 	}
+	if (site != "") != remote {
+		return nil
+	}
 	base := created
 	if last != nil {
 		base = *last
+	}
+	if remote && assigned != nil && assigned.After(base) {
+		base = *assigned
+	}
+	if remote && now.Sub(base) < 2*interval {
+		return nil
 	}
 	if lease != nil {
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
@@ -142,6 +157,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	var target collector.Target
 	var encrypted string
 	var runtime string
+	var remoteSite string
 	var linuxHost *string
 	var exporterPort *int
 	var poolerEncrypted *string
@@ -150,12 +166,12 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	var statsEncrypted *string
 	var k8sCluster, k8sNamespace, k8sWorkload, k8sPod *string
 	err := s.pool.QueryRow(ctx, `SELECT host,port,database_name,username,ssl_mode,password_enc,
-		runtime,linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,
+		runtime,a.remote_site,linux_host,linux_exporter_port,pooler_url_enc,patroni_url_enc,
 		k8s_cluster,k8s_namespace,k8s_workload,k8s_pod,
 		coalesce(r.kind,''),coalesce(r.entry,''),coalesce(r.expected_role,''),coalesce(r.match_direct,false),
 		coalesce(r.haproxy_backend,''),r.haproxy_stats_enc,coalesce(r.read_entry,'')
 		FROM assets a LEFT JOIN asset_route_settings r ON r.asset_id=a.id WHERE a.id=$1`, id).Scan(&target.Host, &target.Port, &target.Database,
-		&target.Username, &target.SSLMode, &encrypted, &runtime, &linuxHost, &exporterPort,
+		&target.Username, &target.SSLMode, &encrypted, &runtime, &remoteSite, &linuxHost, &exporterPort,
 		&poolerEncrypted, &patroniEncrypted, &k8sCluster, &k8sNamespace, &k8sWorkload, &k8sPod,
 		&routeSettings.Kind, &routeSettings.Entry, &routeSettings.ExpectedRole, &routeSettings.MatchDirect,
 		&routeSettings.HAProxyBackend, &statsEncrypted, &routeSettings.ReadEntry)
@@ -165,7 +181,7 @@ func (s *Postgres) checkAsset(ctx context.Context, id string, key []byte, lease 
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("load monitoring target: %w", err)
 	}
-	if !assets.IsSupportedRuntime(runtime) {
+	if remoteSite != "" || !assets.IsSupportedRuntime(runtime) {
 		return CheckResult{}, ErrCollectionUnavailable
 	}
 	target.Runtime = runtime
@@ -394,6 +410,10 @@ func (s *Postgres) recordCheckAt(ctx context.Context, id string, metrics map[str
 }
 
 func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration) (_ CheckResult, writeErr error) {
+	return s.recordObservation(ctx, id, metrics, group, reason, now, lease, interval, nil)
+}
+
+func (s *Postgres) recordObservation(ctx context.Context, id string, metrics map[string]any, group, reason string, now time.Time, lease *CollectionLease, interval time.Duration, remote *remoteWrite) (_ CheckResult, writeErr error) {
 	defer func() {
 		if lease != nil && writeErr != nil && !errors.Is(writeErr, ErrAssetNotFound) && !errors.Is(writeErr, ErrCollectionLeaseLost) {
 			writeErr = fmt.Errorf("%w: %w", errCollectionStoreWrite, writeErr)
@@ -409,11 +429,46 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	}
 	defer tx.Rollback(ctx)
 	var runtime string
-	if err := tx.QueryRow(ctx, "SELECT runtime FROM assets WHERE id=$1 FOR UPDATE", id).Scan(&runtime); err != nil {
+	var lastSample *time.Time
+	var remoteSite string
+	if err := tx.QueryRow(ctx, "SELECT runtime,last_sample_at,remote_site FROM assets WHERE id=$1 FOR UPDATE", id).Scan(&runtime, &lastSample, &remoteSite); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CheckResult{}, ErrAssetNotFound
 		}
 		return CheckResult{}, err
+	}
+	if remote == nil && remoteSite != "" {
+		return CheckResult{}, ErrCollectionUnavailable
+	}
+	if remote != nil {
+		duplicate, err := remote.prepare(ctx, tx, runtime, remoteSite, metrics)
+		if err != nil || duplicate {
+			return CheckResult{}, err
+		}
+	}
+	if remote != nil && lastSample != nil && !now.After(*lastSample) {
+		encoded, err := json.Marshal(metrics)
+		if err != nil {
+			return CheckResult{}, err
+		}
+		status := "ok"
+		if reason != "" {
+			status = "error"
+		}
+		var sampleID string
+		if err := tx.QueryRow(ctx, `INSERT INTO samples(id,asset_id,collected_at,status,metrics_json,error)
+			VALUES(gen_random_uuid(),$1,$2,$3,$4,$5) RETURNING id`, id, now, status, encoded, nullable(reason)).Scan(&sampleID); err != nil {
+			return CheckResult{}, err
+		}
+		if err := remote.finish(ctx, tx, sampleID); err != nil {
+			return CheckResult{}, err
+		}
+		return CheckResult{SampleID: sampleID, Status: status, CollectedAt: now}, tx.Commit(ctx)
+	}
+	if remote != nil && lastSample != nil && now.Sub(*lastSample) >= 2*interval {
+		layer := ensureCollectorLayer(metrics)
+		layer["gapSince"] = *lastSample
+		layer["gapSeconds"] = int64(now.Sub(*lastSample).Seconds())
 	}
 	isMySQL := runtime == assets.RuntimeMySQL
 	label, source := "PostgreSQL", "go_postgres_collector"
@@ -427,6 +482,9 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		label, source = "Redis", "go_redis_collector"
 	} else if runtime == assets.RuntimeEtcd {
 		label, source = "etcd", "go_etcd_collector"
+	}
+	if remote != nil {
+		source = "remote_" + source
 	}
 	if lease != nil {
 		if err := lockCollectionLease(ctx, tx, *lease); err != nil {
@@ -529,6 +587,11 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 		VALUES(gen_random_uuid(),$1,$2,$3,$4,$5) RETURNING id`, id, now, status, encoded, nullable(reason)).Scan(&sampleID)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("save monitoring sample: %w", err)
+	}
+	if remote != nil {
+		if err := remote.finish(ctx, tx, sampleID); err != nil {
+			return CheckResult{}, err
+		}
 	}
 	var version, role any
 	if metrics != nil {
@@ -694,6 +757,11 @@ func (s *Postgres) recordCheckWithLease(ctx context.Context, id string, metrics 
 	}
 	if err := s.resolveGoCollectionFailures(ctx, tx, id, sampleID, group, source, now); err != nil {
 		return CheckResult{}, fmt.Errorf("resolve Go collection failures: %w", err)
+	}
+	if remote != nil && status == "ok" && remote.receivedAt.Sub(now) < 2*interval {
+		if err := s.applyGoAlerts(ctx, tx, id, sampleID, map[string]any{"collectorMissedIntervals": 0}, nil, remote.receivedAt, "collector_stale"); err != nil {
+			return CheckResult{}, fmt.Errorf("resolve stale site collection: %w", err)
+		}
 	}
 	if lease != nil {
 		if status == "ok" {

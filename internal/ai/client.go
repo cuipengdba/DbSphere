@@ -3,6 +3,8 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +26,7 @@ type Config struct {
 	AllowRemote   bool
 	ReviewSchema  bool
 	ReviewTimeout time.Duration
+	RootCAs       *x509.CertPool
 }
 
 type Client struct {
@@ -44,6 +47,11 @@ type Result struct {
 	Notice          string   `json:"notice"`
 }
 
+func isLocalEndpoint(u *url.URL) bool {
+	ip := net.ParseIP(u.Hostname())
+	return strings.EqualFold(u.Hostname(), "localhost") || ip != nil && ip.IsLoopback()
+}
+
 func New(cfg Config) (*Client, error) {
 	if cfg.URL == "" && cfg.Model == "" {
 		return nil, nil
@@ -56,8 +64,7 @@ func New(cfg Config) (*Client, error) {
 		!strings.HasSuffix(u.Path, "/chat/completions") {
 		return nil, ErrInvalidConfiguration
 	}
-	local := strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()) != nil &&
-		net.ParseIP(u.Hostname()).IsLoopback()
+	local := isLocalEndpoint(u)
 	if u.Scheme != "https" && !(u.Scheme == "http" && local) {
 		return nil, ErrInvalidConfiguration
 	}
@@ -66,6 +73,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: cfg.RootCAs}
 	timeout := cfg.ReviewTimeout
 	if timeout == 0 {
 		timeout = 28 * time.Second

@@ -3,10 +3,13 @@ package ai
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,15 +20,22 @@ import (
 var ErrSettingsChanged = errors.New("AI configuration changed")
 var ErrProbeBusy = errors.New("AI connection test is already running or was just started")
 
+var modelOrganizationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var modelReference = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$`)
+
 type Settings struct {
-	Enabled       bool   `json:"enabled"`
-	Endpoint      string `json:"endpoint"`
-	Model         string `json:"model"`
-	APIKey        string `json:"apiKey,omitempty"`
-	DailyLimit    int    `json:"dailyLimit"`
-	ReviewSeconds int    `json:"reviewSeconds"`
-	ReviewSchema  bool   `json:"reviewSchema"`
-	AutoSummary   bool   `json:"autoSummary"`
+	Enabled        bool   `json:"enabled"`
+	Endpoint       string `json:"endpoint"`
+	Model          string `json:"model"`
+	APIKey         string `json:"apiKey,omitempty"`
+	DailyLimit     int    `json:"dailyLimit"`
+	ReviewSeconds  int    `json:"reviewSeconds"`
+	ReviewSchema   bool   `json:"reviewSchema"`
+	AutoSummary    bool   `json:"autoSummary"`
+	OrganizationID string `json:"organizationId"`
+	Mode           string `json:"mode"`
+	CARef          string `json:"caRef"`
+	KeyRef         string `json:"keyRef"`
 }
 
 type SettingsStore interface {
@@ -45,6 +55,7 @@ func (s ActiveSettings) Public() map[string]any {
 	return map[string]any{"enabled": s.Client != nil, "endpoint": s.Settings.Endpoint, "model": s.Settings.Model,
 		"hasKey": s.Settings.APIKey != "", "dailyLimit": s.Settings.DailyLimit, "reviewSeconds": s.Settings.ReviewSeconds,
 		"reviewSchema": s.Settings.ReviewSchema, "autoSummary": s.Settings.AutoSummary, "revision": s.Revision,
+		"organizationId": s.Settings.OrganizationID, "mode": s.Settings.Mode, "caRef": s.Settings.CARef, "keyRef": s.Settings.KeyRef,
 		"overridden": s.Overridden, "invalid": s.Invalid}
 }
 
@@ -53,6 +64,8 @@ type Runtime struct {
 	key     []byte
 	base    ActiveSettings
 	origins map[string]bool
+	trust   map[string]*x509.CertPool
+	secrets map[string]string
 
 	mu        sync.Mutex
 	saved     ActiveSettings
@@ -61,17 +74,24 @@ type Runtime struct {
 }
 
 func NewRuntime(store SettingsStore, key []byte, base Settings, allowRemote bool, origins string) (*Runtime, error) {
-	client, err := New(base.clientConfig(allowRemote))
-	if err != nil || base.AutoSummary && client == nil {
-		return nil, ErrInvalidConfiguration
+	return NewRuntimeWithReferences(store, key, base, allowRemote, origins, nil, nil)
+}
+
+func NewRuntimeWithReferences(store SettingsStore, key []byte, base Settings, allowRemote bool, origins string, trust, secrets map[string]string) (*Runtime, error) {
+	r := &Runtime{store: store, key: key, origins: map[string]bool{}, trust: map[string]*x509.CertPool{}, secrets: secrets}
+	for name, encoded := range trust {
+		data, err := base64.StdEncoding.DecodeString(encoded)
+		pool := x509.NewCertPool()
+		if !modelReference.MatchString(name) || len(data) > 256<<10 || err != nil || !pool.AppendCertsFromPEM(data) {
+			return nil, ErrInvalidConfiguration
+		}
+		r.trust[name] = pool
 	}
-	base.Enabled = client != nil
-	publicBase := base
-	publicBase.APIKey = ""
-	wire, _ := json.Marshal(publicBase)
-	r := &Runtime{store: store, key: key, base: ActiveSettings{Settings: base, Client: client, Revision: revision(string(wire))}, origins: map[string]bool{}}
 	if allowRemote && base.Endpoint != "" {
-		endpoint, _ := url.Parse(base.Endpoint)
+		endpoint, err := url.Parse(base.Endpoint)
+		if err != nil {
+			return nil, ErrInvalidConfiguration
+		}
 		r.origins[modelOrigin(endpoint)] = true
 	}
 	for _, raw := range strings.Split(origins, ",") {
@@ -85,6 +105,22 @@ func NewRuntime(store SettingsStore, key []byte, base Settings, allowRemote bool
 		}
 		r.origins[modelOrigin(u)] = true
 	}
+	var client *Client
+	if base.Endpoint != "" || base.Model != "" {
+		var err error
+		client, err = r.newClient(base)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if base.AutoSummary && client == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	base.Enabled = client != nil
+	publicBase := base
+	publicBase.APIKey = ""
+	wire, _ := json.Marshal(publicBase)
+	r.base = ActiveSettings{Settings: base, Client: client, Revision: revision(string(wire))}
 	return r, nil
 }
 
@@ -116,7 +152,31 @@ func (r *Runtime) newClient(s Settings) (*Client, error) {
 	if err != nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return New(s.clientConfig(r.origins[modelOrigin(u)]))
+	if s.Mode != "" && s.Mode != "local" && s.Mode != "gateway" || (s.Mode == "gateway" || s.CARef != "") && u.Scheme != "https" ||
+		s.Mode == "local" && !isLocalEndpoint(u) || s.OrganizationID != "" && !modelOrganizationID.MatchString(s.OrganizationID) {
+		return nil, ErrInvalidConfiguration
+	}
+	cfg := s.clientConfig(r.origins[modelOrigin(u)])
+	if s.CARef != "" {
+		cfg.RootCAs = r.trust[s.CARef]
+		if cfg.RootCAs == nil {
+			return nil, ErrInvalidConfiguration
+		}
+	}
+	if s.KeyRef != "" {
+		cfg.APIKey = r.secrets[s.KeyRef]
+		if !modelReference.MatchString(s.KeyRef) || s.APIKey != "" || cfg.APIKey == "" || len(cfg.APIKey) > 4096 || strings.ContainsAny(cfg.APIKey, "\x00\r\n") {
+			return nil, ErrInvalidConfiguration
+		}
+	}
+	return New(cfg)
+}
+
+func (s ActiveSettings) ForOrganization(organization string) ActiveSettings {
+	if s.Settings.OrganizationID != "" && s.Settings.OrganizationID != organization {
+		s.Client = nil
+	}
+	return s
 }
 
 func (r *Runtime) Current(ctx context.Context) (ActiveSettings, error) {
@@ -164,7 +224,7 @@ func (r *Runtime) read(ctx context.Context) (string, ActiveSettings, error) {
 func proposedSettings(current ActiveSettings, input Settings, keepKey bool) (Settings, error) {
 	input.Endpoint = strings.TrimSpace(input.Endpoint)
 	input.Model = strings.TrimSpace(input.Model)
-	if keepKey {
+	if keepKey && input.KeyRef == "" {
 		if input.APIKey != "" || (current.Settings.APIKey != "" && input.Endpoint != current.Settings.Endpoint) {
 			return Settings{}, ErrInvalidConfiguration
 		}

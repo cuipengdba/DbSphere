@@ -1093,7 +1093,7 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 				questionMode = match != nil
 			}
 			if match != nil {
-				current, err := credentials.activeAI(r.Context())
+				current, err := credentials.eventAI(r.Context(), store, match[1])
 				if err != nil || current.Client == nil {
 					respond(w, http.StatusNotImplemented, map[string]string{"error": "AI model is not configured"})
 					return

@@ -544,6 +544,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateAuditDelivery(ctx, tx); err != nil {
 		return fmt.Errorf("migrate audit delivery: %w", err)
 	}
+	if err := migrateRemoteCollection(ctx, tx); err != nil {
+		return fmt.Errorf("migrate remote collection: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

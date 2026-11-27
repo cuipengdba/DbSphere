@@ -12,9 +12,28 @@ import (
 
 func (a *AuthConfig) activeAI(ctx context.Context) (ai.ActiveSettings, error) {
 	if a.AIRuntime != nil {
-		return a.AIRuntime.Current(ctx)
+		state, err := a.AIRuntime.Current(ctx)
+		if organization := storepkg.OrganizationFromContext(ctx); organization != "" {
+			state = state.ForOrganization(organization)
+		}
+		return state, err
 	}
 	return ai.ActiveSettings{Client: a.AI, Settings: ai.Settings{DailyLimit: a.AIDailyLimit}}, nil
+}
+
+func (a *AuthConfig) eventAI(ctx context.Context, db HealthStore, eventID string) (ai.ActiveSettings, error) {
+	state, err := a.activeAI(ctx)
+	if err != nil || state.Client == nil || state.Settings.OrganizationID == "" {
+		return state, err
+	}
+	scope, ok := db.(interface {
+		EventOrganization(context.Context, string) (string, error)
+	})
+	if !ok {
+		return state.ForOrganization(""), nil
+	}
+	organization, err := scope.EventOrganization(ctx, eventID)
+	return state.ForOrganization(organization), err
 }
 
 func handleAISettings(w http.ResponseWriter, r *http.Request, a *AuthConfig, role string) bool {

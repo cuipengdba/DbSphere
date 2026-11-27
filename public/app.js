@@ -43,6 +43,13 @@ let collectorSchedule = { known: false, enabled: false, intervalMs: 60000, clock
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN') : '尚无数据';
 function assetHealth(asset) {
+  if (asset.remoteSite) {
+    if (!asset.remoteReceivedAt) return { label: '等待站点上报', kind: 'pending' };
+    if (collectorSchedule.known && asset.remoteIntervalSeconds && Date.now() + collectorSchedule.clockOffsetMs - Date.parse(asset.lastSampleAt) >= 2000 * asset.remoteIntervalSeconds) {
+      return { label: '站点采样陈旧', kind: 'stale' };
+    }
+    return asset.lastStatus === 'error' ? { label: '站点采集失败', kind: 'error' } : { label: '站点已上报', kind: 'ok' };
+  }
   if (!collectorSchedule.known) return asset.lastStatus === 'ok' ? { label: '正常', kind: 'ok' }
     : asset.lastStatus === 'error' ? { label: '采集失败', kind: 'error' } : { label: '待采集', kind: 'pending' };
   if (!collectorSchedule.enabled) return asset.lastStatus === 'ok' ? { label: '最近一次成功', kind: 'manual' }
@@ -204,7 +211,7 @@ async function loadAIModelSettings(message = '') {
     if (request !== aiModelRequest) return;
     aiModelSettings = settings;
     const fields = aiModelForm.elements;
-    for (const key of ['endpoint', 'model', 'dailyLimit', 'reviewSeconds']) fields[key].value = settings[key];
+    for (const key of ['endpoint', 'model', 'dailyLimit', 'reviewSeconds', 'mode', 'organizationId', 'caRef', 'keyRef']) fields[key].value = settings[key] ?? '';
     for (const key of ['enabled', 'reviewSchema', 'autoSummary']) fields[key].checked = settings[key];
     fields.apiKey.value = '';
     fields.apiKey.placeholder = settings.hasKey ? '已配置 · 留空保留原密钥' : '如接口需要，请输入密钥';
@@ -226,6 +233,8 @@ async function updateAIModel(action) {
   const revision = aiModelSettings.revision;
   const endpoint = fields.endpoint.value.trim();
   const payload = {revision, endpoint, model: fields.model.value.trim(), apiKey: fields.apiKey.value,
+    mode: fields.mode.value, organizationId: fields.organizationId.value.trim(),
+    caRef: fields.caRef.value.trim(), keyRef: fields.keyRef.value.trim(),
     keepKey: aiModelSettings.hasKey && !fields.apiKey.value && !fields.clearKey.checked && endpoint === aiModelSettings.endpoint,
     dailyLimit: fields.dailyLimit.valueAsNumber, reviewSeconds: fields.reviewSeconds.valueAsNumber,
     enabled: fields.enabled.checked, reviewSchema: fields.reviewSchema.checked, autoSummary: fields.autoSummary.checked};
@@ -941,7 +950,7 @@ async function showSample(params) {
     field(summary, '采样 ID', sample.id);
     if (sample.error) field(summary, '采集异常', sample.error);
     details.append(summary);
-    const sourceNames = { collector: '采集器', diagnostics: '数据库诊断', sqlPerformance: 'SQL 性能',
+    const sourceNames = { collector: '采集器', remoteCollector: '站点采集与补送', diagnostics: '数据库诊断', sqlPerformance: 'SQL 性能',
       pgStorageIO: '数据库 I/O', linux: 'Linux 主机', k8s: 'Kubernetes', containerStorage: '容器与存储', backup: '备份' };
     const scalars = document.createElement('dl');
     scalars.className = 'sample-fields';
@@ -1351,7 +1360,7 @@ function renderAssets(assets, summary = '') {
     const item = document.createElement('article'); item.className = 'list-item';
     const info = document.createElement('div');
     info.append(cell('strong', asset.name), cell('small', `${asset.host}:${asset.port} · ${assetRuntimeLabel(asset)}`));
-    if (currentRole === 'admin' && !currentOrganization && $('asset-readiness-batch').open) {
+    if (!asset.remoteSite && currentRole === 'admin' && !currentOrganization && $('asset-readiness-batch').open) {
       const label = cell('label', '', 'hint');
       const pick = document.createElement('input');
       pick.type = 'checkbox'; pick.value = asset.id; pick.dataset.readinessAsset = asset.name;
@@ -1388,7 +1397,10 @@ function renderAssets(assets, summary = '') {
       try { await api(`/api/assets/${asset.id}`, 'DELETE'); if (selectedAsset === asset.id) { selectedAsset = null; $('detail').textContent = '选择资产查看最新采样。'; } await refresh(); }
       catch (e) { notice(e.message, true); }
     });
-    actions.append(view, edit, check, remove); item.append(info, actions); list.append(item);
+    actions.append(view);
+    if (asset.remoteSite) info.append(cell('small', `站点 ${asset.remoteSite}`));
+    else actions.append(edit, check);
+    actions.append(remove); item.append(info, actions); list.append(item);
   }
 }
 
@@ -1528,6 +1540,7 @@ async function showAsset(id, layer, background = false) {
   if (!valid()) return;
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
+    appendSiteCollection(detail, asset);
     detail.append(haHistoryLink(id));
     attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
@@ -1554,6 +1567,7 @@ async function showAsset(id, layer, background = false) {
   }
   if (asset.runtime === 'redis') {
     renderRedisAsset(detail, asset, samples);
+    appendSiteCollection(detail, asset);
     attachEngineDiagnosis(detail, asset);
     attachCollectionHistory(detail, id);
     if (readiness) detail.append(readinessPanel(readiness, readiness.status === 'limited' || readiness.status === 'failed'));
@@ -1580,6 +1594,7 @@ async function showAsset(id, layer, background = false) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
+  appendSiteCollection(detail, asset);
   detail.append(haHistoryLink(id));
   attachCollectionHistory(detail, id);
   const location = asset.runtime === 'k8s' ? `${asset.k8sCluster}/${asset.namespace}/${asset.pod || asset.workload || '未映射'}`
@@ -1733,6 +1748,14 @@ async function showAsset(id, layer, background = false) {
     } else detail.append(cell('p', `容量预测暂不可用：${forecast.reason}`, 'empty'));
   }
   organizeAssetLayers(detail, asset, preferredLayer, restoreLayerFocus);
+}
+
+function appendSiteCollection(detail, asset) {
+  if (!asset.remoteSite) return;
+  const backlog = asset.remoteBacklog == null ? '待上报' : `${asset.remoteBacklog} 条`;
+  const summary = cell('p', `采集站点 ${asset.remoteSite} · 最后上报 ${formatTime(asset.remoteReceivedAt)} · 待补送 ${backlog}`, 'hint');
+  summary.dataset.siteCollection = '';
+  detail.append(summary);
 }
 
 const routingKinds = {pgbouncer: 'PgBouncer', haproxy: 'HAProxy', k8s_service: 'Kubernetes Service', mysql_entry: 'MySQL 写入口'};

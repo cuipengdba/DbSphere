@@ -657,6 +657,10 @@
         <div class="section-head"><h2>模型接入</h2><button id="ai-model-refresh" class="ghost" type="button">刷新</button></div>
         <form id="ai-model-form">
           <fieldset class="ai-model-fields" disabled>
+            <label>接入方式<select name="mode"><option value="">兼容配置</option><option value="local">本地模型</option><option value="gateway">客户 HTTPS 网关</option></select></label>
+            <label>授权组织 ID<input name="organizationId" maxlength="36" placeholder="留空授权全平台"></label>
+            <label>证书引用<input name="caRef" maxlength="80"></label>
+            <label>密钥引用<input name="keyRef" maxlength="80"></label>
             <label>接口地址<input name="endpoint" type="url" maxlength="2048" placeholder="http://localhost:8000/v1/chat/completions"></label>
             <label>模型名称<input name="model" maxlength="128"></label>
             <label>API 密钥<input name="apiKey" type="password" maxlength="4096" autocomplete="new-password"></label>

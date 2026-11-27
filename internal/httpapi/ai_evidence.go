@@ -53,7 +53,7 @@ func handleAIEvidenceReview(w http.ResponseWriter, r *http.Request, db HealthSto
 		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "Evidence packet unavailable"})
 		return true
 	}
-	current, modelStateErr := auth.activeAI(r.Context())
+	current, modelStateErr := auth.eventAI(r.Context(), db, eventID)
 	if current.Settings.DailyLimit == 0 {
 		current.Settings.DailyLimit = auth.AIDailyLimit
 	}
