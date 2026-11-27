@@ -117,7 +117,7 @@ func (c *Client) Analyze(ctx context.Context, evidence string, allowedIDs []stri
 	if err != nil {
 		return Result{}, ErrUnavailable
 	}
-	content, err := c.completion(ctx, c.http, requestBody)
+	content, err := c.completion(ctx, c.http, requestBody, false)
 	if err != nil {
 		return Result{}, err
 	}
@@ -150,7 +150,7 @@ func (c *Client) Analyze(ctx context.Context, evidence string, allowedIDs []stri
 	return result, nil
 }
 
-func (c *Client) completion(ctx context.Context, client *http.Client, requestBody []byte) (string, error) {
+func (c *Client) completion(ctx context.Context, client *http.Client, requestBody []byte, allowTokenLimit bool) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return "", ErrUnavailable
@@ -179,9 +179,13 @@ func (c *Client) completion(ctx context.Context, client *http.Client, requestBod
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if json.Unmarshal(limited, &completion) != nil || len(completion.Choices) != 1 ||
-		(completion.Choices[0].FinishReason != "" && completion.Choices[0].FinishReason != "stop") {
+	if json.Unmarshal(limited, &completion) != nil || len(completion.Choices) != 1 {
 		return "", ErrUnavailable
 	}
-	return completion.Choices[0].Message.Content, nil
+	choice := completion.Choices[0]
+	if choice.FinishReason != "" && choice.FinishReason != "stop" &&
+		!(allowTokenLimit && choice.FinishReason == "length") {
+		return "", ErrUnavailable
+	}
+	return choice.Message.Content, nil
 }

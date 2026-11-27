@@ -96,6 +96,40 @@ func TestAIProviderTimeout(t *testing.T) {
 	}
 }
 
+type emptyAISettingsStore struct{}
+
+func (emptyAISettingsStore) ReadAISettings(context.Context) (string, error) { return "", nil }
+func (emptyAISettingsStore) CompareAISettings(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func TestAIAllowsTokenLimitedResponseOnlyForConnectivity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"content":"OK"}}]}`))
+	}))
+	defer server.Close()
+	endpoint := server.URL + "/v1/chat/completions"
+	runtime, err := NewRuntime(emptyAISettingsStore{}, nil, Settings{}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := runtime.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{Enabled: true, Endpoint: endpoint, Model: "test", Mode: "local", DailyLimit: 2, ReviewSeconds: 10}
+	if err := runtime.Probe(context.Background(), state.Revision, settings, false); err != nil {
+		t.Fatalf("connectivity probe rejected a valid token-limited reply: %v", err)
+	}
+	client, err := New(Config{URL: endpoint, Model: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Analyze(context.Background(), "evidence-1", []string{"evidence-1"}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("analysis accepted an incomplete reply: %v", err)
+	}
+}
+
 func TestAIQuestionUsesBoundedEvidenceAndChecksCitations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {

@@ -296,12 +296,13 @@ func (r *Runtime) Probe(ctx context.Context, expected string, input Settings, ke
 		r.mu.Unlock()
 	}()
 	defer client.http.CloseIdleConnections()
-	wire, err := json.Marshal(map[string]any{"model": input.Model, "stream": false, "max_tokens": 32,
+	wire, err := json.Marshal(map[string]any{"model": input.Model, "stream": false, "temperature": 0, "max_tokens": 32,
 		"messages": []map[string]string{{"role": "user", "content": "DbSphere connection test. Reply OK."}}})
 	if err != nil {
 		return err
 	}
-	answer, err := client.completion(ctx, client.http, wire)
+	// A nonempty, token-limited reply still proves that the connection works.
+	answer, err := client.completion(ctx, client.http, wire, true)
 	if err != nil || strings.TrimSpace(answer) == "" {
 		return ErrUnavailable
 	}

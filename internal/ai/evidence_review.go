@@ -86,7 +86,7 @@ func (c *Client) ReviewEvidence(ctx context.Context, sources []ReviewSource, que
 	if err != nil {
 		return EvidenceReview{}, ErrUnavailable
 	}
-	content, err := c.completion(ctx, c.reviewHTTP, body)
+	content, err := c.completion(ctx, c.reviewHTTP, body, false)
 	if err != nil {
 		return EvidenceReview{}, err
 	}
