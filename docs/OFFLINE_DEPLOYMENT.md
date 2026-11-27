@@ -21,6 +21,10 @@ curl -fsS http://127.0.0.1:8081/readyz
 
 安装器验证架构并载入本地镜像，Compose 使用 `--no-build --pull never`。默认绑定部署主机的 `127.0.0.1:8081`。首次登录和远程 SSH 转发见[快速开始](QUICK_START.md#2-首次登录)。
 
+从 v4.0.0 起，标准包和增强包可使用 `bash "$bundle" --check` 预检。预检核对校验清单、主机架构、Docker 连接以及本次启用的 Compose 配置。如果在 Docker 主机通过本地 socket 连接，并且装有 `ss`，还会核对 Web 端口监听情况。同一 Compose 项目已绑定的端口可继续用于升级。预检显示解包所在文件系统的可用空间，完成后自动清理解包文件。可从同一 `.run` 文件直接执行正常安装。
+
+使用外部监控库时，另从可访问目标库的环境运行静态程序的 `check-store`，核对 PostgreSQL 18 版本、连通性和迁移权限。
+
 配置文件默认在 `${XDG_CONFIG_HOME:-$HOME/.config}/dbsphere-go/dbsphere-go.env`。可通过 `DBSPHERE_GO_CONFIG_DIR` 指定绝对配置目录。在配置文件中设置 `DBSPHERE_WEB_PORT` 可调整宿主机端口。容器模式自动采集默认开启，`DBSPHERE_COLLECT_INTERVAL_SECONDS` 为 15–3600 秒，`DBSPHERE_COLLECT_WORKERS` 为 1–16，默认 60 秒和 4 个工作进程。
 
 要接入已有独立 PG18，在配置文件中填写应用可访问的 `DBSPHERE_DATABASE_URL`。容器内的环回地址指向应用容器自身。数据库连接账号需要在监控数据库的 `public` schema 中创建和更新 DbSphere 对象。切换 DSN 不会迁移原监控库数据。

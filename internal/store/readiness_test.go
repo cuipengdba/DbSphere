@@ -103,7 +103,7 @@ func TestPG18ReadinessChangesRecoverTheSameEvent(t *testing.T) {
 			t.Fatalf("the database sample should remain healthy: %+v %v", result, err)
 		}
 		report, err := pg.assetReadiness(ctx, asset.ID, nil)
-		if err != nil || report.SampleID != result.SampleID || report.SampledAt == nil ||
+		if err != nil || report.SampleID != result.SampleID || report.SampledAt == nil || report.VersionNum/10000 != 18 ||
 			!slices.ContainsFunc(report.Checks, func(c readinessCheck) bool { return c.Key == "activeWaits" && c.Status == waitStatus }) {
 			t.Fatalf("incorrect current coverage: %+v %v", report, err)
 		}

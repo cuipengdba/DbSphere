@@ -1456,6 +1456,16 @@ function readinessPanel(report, expanded = false) {
   return panel;
 }
 
+function readinessEngineVersion(report) {
+  const version = report?.versionNum;
+  if (!Number.isSafeInteger(version) || version <= 0) return '待识别';
+  const major = Math.floor(version / 10000), minor = Math.floor(version / 100) % 100, patch = version % 100;
+  if (report.runtime === 'dm8' || report.runtime === 'kingbase') return `V${major} 系列`;
+  if (['mysql', 'redis', 'etcd'].includes(report.runtime)) return `${major}.${minor}.${patch}`;
+  if (report.product === 'highgo') return `兼容内核 ${major}.${version % 10000}`;
+  return major >= 10 ? `${major}.${version % 10000}` : `${major}.${minor}.${patch}`;
+}
+
 let readinessRetry = [];
 async function runAssetReadiness(selection) {
   if (selection.length < 1 || selection.length > 5) {
@@ -3492,9 +3502,12 @@ function setupAssetImport() {
   const download = $('asset-import-export');
   const panel = $('asset-import-panel'), batches = $('asset-import-batches'), more = $('asset-import-more');
   const recheck = $('asset-import-recheck'), progress = $('asset-import-progress');
+  const reportButton = $('asset-import-report'), supportButton = $('asset-import-support');
+  const supportPanel = $('asset-import-support-panel'), supportPreview = $('asset-import-support-preview');
+  const supportDownload = $('asset-import-support-download');
   const cnpgForm = $('cnpg-preview-form'), cnpgResults = $('cnpg-preview-results'), cnpgFill = $('cnpg-preview-fill');
   const batchRoot = '/api/assets/import/batches';
-  let plan, batch, batchRequest = 0, nextBatch = '', checking = false, applying = false, nextExport = '', exportPage = 1;
+  let plan, batch, batchRequest = 0, nextBatch = '', checking = false, applying = false, loadingBatch = false, nextExport = '', exportPage = 1;
   let cnpgCandidates = [];
   cnpgForm.addEventListener('submit', async event => {
     event.preventDefault();
@@ -3585,11 +3598,74 @@ function setupAssetImport() {
   });
   const pending = item => item.available && !item.lastAttemptAt;
   const needsRecheck = item => item.available && item.lastAttemptAt && item.latestReport?.status !== 'ready';
+  function batchSampleLink(assetId, sampleId) {
+    return '#sample?' + new URLSearchParams({asset: assetId, sample: sampleId, return: `assets?batch=${batch.id}`});
+  }
+  function acceptanceSummary(includeNames) {
+    const runtimes = ['linux', 'k8s', 'managed', 'mysql', 'dm8', 'kingbase', 'redis', 'etcd'];
+    const buildReport = (item, report) => {
+      if (!report) return null;
+      const result = {
+        status: Object.hasOwn(readinessStates, report.status) ? report.status : 'unknown',
+        versionNum: Number.isSafeInteger(report.versionNum) && report.versionNum > 0 ? report.versionNum : null,
+        product: report.product === 'highgo' ? 'highgo' : null,
+        sampledAt: Number.isFinite(Date.parse(report.sampledAt)) ? new Date(report.sampledAt).toISOString() : null,
+        sampleId: sampleUUID.test(report.sampleId || '') ? report.sampleId : null,
+        checks: (report.checks || []).filter(check => Object.hasOwn(readinessLabels, check.key)).map(check => ({
+          key: check.key,
+          status: Object.hasOwn(readinessStates, check.status) ? check.status : 'unknown',
+          action: Object.hasOwn(readinessActions, check.action) ? check.action : null
+        }))
+      };
+      if (includeNames && item.available && result.sampleId) result.sampleLink = batchSampleLink(item.assetId, result.sampleId);
+      return result;
+    };
+    return {
+      schemaVersion: 1,
+      type: includeNames ? 'asset-batch-acceptance' : 'asset-batch-support',
+      dbsphereVersion: workspaceData.runtime?.version || null,
+      batchId: batch.id,
+      items: batch.items.map(item => ({
+        ...(includeNames ? {name: item.name, assetId: item.assetId} : {}),
+        runtime: runtimes.includes(item.runtime) ? item.runtime : 'unknown',
+        available: item.available,
+        first: buildReport(item, item.firstReport),
+        latest: buildReport(item, item.latestReport)
+      }))
+    };
+  }
+  function downloadBatchJSON(name, text) {
+    const url = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  reportButton.addEventListener('click', () => {
+    if (!batch || checking || loadingBatch) return;
+    downloadBatchJSON(`dbsphere-acceptance-${batch.id}.json`, JSON.stringify(acceptanceSummary(true), null, 2));
+  });
+  supportButton.addEventListener('click', () => {
+    if (!batch || checking || loadingBatch) return;
+    supportPreview.textContent = JSON.stringify(acceptanceSummary(false), null, 2);
+    supportPanel.hidden = false;
+    supportPanel.open = true;
+  });
+  supportDownload.addEventListener('click', () => {
+    if (!batch || checking || loadingBatch || supportPanel.hidden) return;
+    downloadBatchJSON(`dbsphere-support-${batch.id}.json`, supportPreview.textContent);
+  });
   function renderBatch() {
     const items = batch?.items || [];
     probe.hidden = !items.some(pending);
     recheck.hidden = !items.some(needsRecheck);
-    probe.disabled = recheck.disabled = batches.disabled = more.disabled = checking;
+    probe.disabled = recheck.disabled = checking || loadingBatch;
+    batches.disabled = more.disabled = checking;
+    reportButton.disabled = supportButton.disabled = !batch || checking || loadingBatch;
+    supportPanel.hidden = true;
+    supportPanel.open = false;
+    supportPreview.textContent = '';
     if (!batch) { results.replaceChildren(); return; }
     const rows = items.map(item => {
       const current = item.latestReport;
@@ -3597,13 +3673,13 @@ function setupAssetImport() {
         readinessStates[current?.status] || (item.lastAttemptAt ? '未取得体检报告' : readinessStates.waiting);
       const evidence = cell('div', '', 'actions');
       if (item.available && item.firstReport?.sampleId) {
-        const link = replaySampleLink(item.assetId, item.firstReport.sampleId);
-        link.textContent = '首采原始采样';
+        const link = cell('a', '首采原始采样', 'monitor-link');
+        link.href = batchSampleLink(item.assetId, item.firstReport.sampleId);
         evidence.append(link);
       }
       if (item.available && current?.sampleId && current.sampleId !== item.firstReport?.sampleId) {
-        const link = replaySampleLink(item.assetId, current.sampleId);
-        link.textContent = '复检原始采样';
+        const link = cell('a', '复检原始采样', 'monitor-link');
+        link.href = batchSampleLink(item.assetId, current.sampleId);
         evidence.append(link);
       }
       const details = cell('div');
@@ -3620,9 +3696,10 @@ function setupAssetImport() {
         });
         evidence.append(edit);
       }
-      return [item.name, assetRuntimeLabel(item), readinessStates[item.firstReport?.status] || '—', currentStatus, details, evidence];
+      return [item.name, assetRuntimeLabel(item), readinessEngineVersion(current),
+        readinessStates[item.firstReport?.status] || '—', currentStatus, details, evidence];
     });
-    results.replaceChildren(importTable(['资产', '类型', '首采结果', '最近结果', '体检项', '原始证据与操作'], rows));
+    results.replaceChildren(importTable(['资产', '类型', '采样版本', '首采结果', '最近结果', '体检项', '原始证据与操作'], rows));
   }
   async function listBatches(append = false) {
     const owner = csrf;
@@ -3647,18 +3724,32 @@ function setupAssetImport() {
   async function openBatch(id) {
     const request = ++batchRequest;
     const owner = csrf;
-    const selected = await api(`${batchRoot}/${id}`);
-    if (owner !== csrf || request !== batchRequest) return;
-    batch = selected;
-    if (document.body.dataset.activeView === 'assets') {
-      history.replaceState(history.state, '', `#assets?batch=${id}`);
-    }
-    selectBatch(batch);
-    progress.textContent = '';
+    loadingBatch = true;
     renderBatch();
+    try {
+      const selected = await api(`${batchRoot}/${id}`);
+      if (owner !== csrf || request !== batchRequest) return;
+      batch = selected;
+      if (document.body.dataset.activeView === 'assets') {
+        history.replaceState(history.state, '', `#assets?batch=${id}`);
+      }
+      selectBatch(batch);
+      progress.textContent = '';
+    } catch (error) {
+      if (owner === csrf && request === batchRequest) {
+        if (batch) selectBatch(batch);
+        else batches.value = '';
+        throw error;
+      }
+    } finally {
+      if (owner === csrf && request === batchRequest) {
+        loadingBatch = false;
+        renderBatch();
+      }
+    }
   }
   async function checkBatch(filter) {
-    if (!batch || checking || applying) return;
+    if (!batch || checking || applying || loadingBatch) return;
     const id = batch.id, owner = csrf, ids = batch.items.filter(filter).map(item => item.assetId);
     checking = true;
     renderBatch();
@@ -3689,13 +3780,14 @@ function setupAssetImport() {
   panel.addEventListener('onboarding-reset', () => {
     batchRequest++;
     plan = batch = null;
+    loadingBatch = false;
     form.reset(); apply.disabled = true; output.replaceChildren(); status.textContent = ''; progress.textContent = '';
     batches.replaceChildren(new Option('选择批次', '')); nextBatch = ''; more.hidden = true;
     renderBatch();
   });
   batches.addEventListener('change', () => {
     if (batches.value) void openBatch(batches.value).catch(showError);
-    else { batch = null; batchRequest++; progress.textContent = ''; history.replaceState(history.state, '', '#assets'); renderBatch(); }
+    else { batch = null; batchRequest++; loadingBatch = false; progress.textContent = ''; history.replaceState(history.state, '', '#assets'); renderBatch(); }
   });
   more.addEventListener('click', () => void listBatches(true).catch(showError));
   probe.addEventListener('click', () => void checkBatch(pending));

@@ -28,6 +28,7 @@ type readinessReport struct {
 	SSLMode          string           `json:"sslMode"`
 	Status           string           `json:"status"`
 	Product          string           `json:"product,omitempty"`
+	VersionNum       int              `json:"versionNum,omitempty"`
 	SampleID         string           `json:"sampleId,omitempty"`
 	SampledAt        *time.Time       `json:"sampledAt,omitempty"`
 	PreviousSampleID string           `json:"previousSampleId,omitempty"`
@@ -59,6 +60,7 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 	current := samples[0]
 	adapter := object(current.Metrics["adapter"])
 	report.SampleID, report.SampledAt = current.ID, &current.At
+	report.VersionNum = int(number(current.Metrics["version_num"]))
 	if adapter["product"] == "highgo" {
 		report.Product = "highgo"
 	}
