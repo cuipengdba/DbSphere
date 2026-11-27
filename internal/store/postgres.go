@@ -556,6 +556,12 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	if err := migrateRestoreDrill(ctx, tx); err != nil {
 		return fmt.Errorf("migrate restore drills: %w", err)
 	}
+	if err := migrateServiceReports(ctx, tx); err != nil {
+		return fmt.Errorf("migrate service reports: %w", err)
+	}
+	if err := migrateNotificationRoutes(ctx, tx); err != nil {
+		return fmt.Errorf("migrate notification routes: %w", err)
+	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)
 	}

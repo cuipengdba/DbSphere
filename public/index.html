@@ -23,6 +23,7 @@
   <script src="/container-storage.js" defer></script>
   <script src="/change-governance.js" defer></script>
   <script src="/restore-drill.js" defer></script>
+  <script src="/service-operations.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -66,6 +67,7 @@
           <button type="button" data-nav="assets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6 M4 12c0 4 16 4 16 0"/></svg><span>资产与实例</span></button>
           <button type="button" data-nav="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3z M10 20h4"/></svg><span>告警与通知</span></button>
           <button type="button" data-nav="inspections"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z M9 10h7 M9 14h7 M9 17h5"/></svg><span>巡检与报告</span></button>
+          <button type="button" data-nav="service-reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 4v16h16M8 15l4-6 4 3 4-6"/></svg><span>服务报告</span></button>
           <button type="button" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>系统状态</span></button>
         </nav>
         <div class="sidebar-foot"><span id="workspace-version" class="workspace-version" hidden></span><span class="workspace-platform">Linux · Kubernetes</span></div>
@@ -614,7 +616,8 @@
           <div id="event-page-controls" class="event-page-controls" hidden><button id="event-prev" type="button" class="ghost small-button" disabled>上一页</button><button id="event-next" type="button" class="ghost small-button" disabled>下一页</button></div></section>
         <section class="panel"><div class="section-head"><div><h2>事件证据与根因分析</h2></div></div><div id="event-detail" class="empty">选择事件查看它的全链路证据。</div></section>
       </div>
-      <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="rca" class="admin-only platform-only">根因规则</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button></div>
+      <div class="section-nav" data-view="alerts" aria-label="告警专题"><button type="button" data-section="active">当前告警</button><button type="button" data-section="rules">规则与阈值</button><button type="button" data-section="rca" class="admin-only platform-only">根因规则</button><button type="button" data-section="silences">静默与维护</button><button type="button" data-section="delivery">通知投递</button><button type="button" data-section="routes" class="admin-only">通知路由</button></div>
+      <section class="panel admin-only" data-view="alerts" data-section-panel="routes" hidden><div id="notification-routes-workspace"></div></section>
       <div class="section-stack" data-view="alerts">
         <section class="panel" data-section-panel="active"><div class="section-head"><div><h2>值班事件</h2></div></div><div id="alert-list" class="list"></div></section>
         <section class="panel" data-section-panel="delivery"><div class="section-head"><div><h2>通知投递</h2></div></div><div id="notification-list" class="list"></div></section>
@@ -636,6 +639,7 @@
         </section>
         <section class="panel"><div class="section-head"><div><h2>最近时间窗</h2></div></div><div id="silence-list" class="list"></div></section>
       </div>
+      <section class="panel" data-view="service-reports" hidden><div id="service-reports-workspace"></div></section>
       <div class="section-nav" data-view="inspections" aria-label="巡检专题"><button type="button" data-section="history">巡检历史</button><button type="button" data-section="schedules">巡检计划</button><button type="button" data-section="templates">巡检模板</button></div>
       <div class="section-stack" data-view="inspections">
         <section class="panel" data-section-panel="schedules">

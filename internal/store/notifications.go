@@ -33,9 +33,18 @@ func (s *Postgres) queueGoNotifications(ctx context.Context, tx pgx.Tx, evidence
 	_, err := tx.Exec(ctx, `INSERT INTO notification_outbox(id,evidence_id,channel,next_attempt_at)
 		SELECT gen_random_uuid(),source.id,route.channel,$2
 		FROM evidence source JOIN event_keys target ON target.id=source.event_id
-		JOIN assets a ON a.id=target.asset_id
+		JOIN assets a ON a.id=target.asset_id JOIN events v ON v.id=target.id AND v.started_at=target.started_at
+		LEFT JOIN notification_routes policy ON policy.organization_id=a.organization_id AND policy.event_group=v.event_group
 		CROSS JOIN unnest(ARRAY['webhook','email','operations_webhook']) AS route(channel)
 		WHERE source.id=$1 AND (route.channel<>'operations_webhook' OR a.organization_id=$3::uuid)
+		AND CASE
+			WHEN source.kind='alert_recovered' AND policy.organization_id IS NOT NULL THEN EXISTS (
+				SELECT FROM evidence prior JOIN notification_outbox queued ON queued.evidence_id=prior.id
+				WHERE prior.event_id=source.event_id AND queued.channel=route.channel
+				AND prior.kind IN ('alert_firing','alert_unsuppressed','alert_escalation') AND queued.status<>'skipped')
+			WHEN policy.organization_id IS NULL THEN true
+			WHEN source.kind='alert_escalation' THEN route.channel=ANY(policy.escalation_channels)
+			ELSE route.channel=ANY(policy.initial_channels) END
 		AND NOT EXISTS (
 			SELECT FROM evidence prior JOIN notification_outbox queued ON queued.evidence_id=prior.id
 			WHERE prior.event_id=source.event_id AND queued.channel=route.channel
@@ -69,7 +78,7 @@ func (s *Postgres) DispatchDueNotifications(ctx context.Context, limit int,
 			WHERE n.status='pending' AND n.next_attempt_at<=now()
 			AND (e.kind<>'alert_recovered' OR NOT EXISTS (
 				SELECT FROM evidence original JOIN notification_outbox previous ON previous.evidence_id=original.id
-				WHERE original.event_id=v.id AND original.kind IN ('alert_firing','alert_unsuppressed')
+				WHERE original.event_id=v.id AND original.kind IN ('alert_firing','alert_unsuppressed','alert_escalation')
 				AND previous.channel=n.channel AND previous.status='pending'))
 			ORDER BY n.next_attempt_at,n.id LIMIT 1 FOR UPDATE OF n SKIP LOCKED`).
 			Scan(&item.ID, &item.Channel, &attempts, &item.Kind, &item.ObservedAt,
@@ -224,9 +233,15 @@ func (s *Postgres) QueueCriticalEscalations(ctx context.Context, now time.Time, 
 	queued := 0
 	for _, item := range candidates {
 		var eventID string
-		err := tx.QueryRow(ctx, `SELECT id::text FROM events WHERE id=$1 AND status='open'
-			AND acknowledged_at IS NULL AND started_at<=$2 FOR UPDATE`,
-			item.state.EventID, now.Add(-time.Duration(afterMinutes)*time.Minute)).Scan(&eventID)
+		var delay int
+		err := tx.QueryRow(ctx, `SELECT v.id::text,coalesce(policy.escalation_minutes,$3::int)
+			FROM events v JOIN assets a ON a.id=v.asset_id
+			LEFT JOIN notification_routes policy ON policy.organization_id=a.organization_id AND policy.event_group=v.event_group
+			WHERE v.id=$1 AND v.status='open' AND v.acknowledged_at IS NULL
+			AND (policy.organization_id IS NULL OR cardinality(policy.escalation_channels)>0)
+			AND CASE WHEN policy.organization_id IS NULL THEN v.started_at ELSE coalesce($4::timestamptz,v.started_at) END
+				<= $2::timestamptz-make_interval(mins=>coalesce(policy.escalation_minutes,$3::int)) FOR UPDATE OF v`,
+			item.state.EventID, now, afterMinutes, item.state.FiredAt).Scan(&eventID, &delay)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
@@ -254,7 +269,7 @@ func (s *Postgres) QueueCriticalEscalations(ctx context.Context, now time.Time, 
 		}
 		payload, _ := json.Marshal(map[string]any{"ruleId": item.ruleID,
 			"severity": item.rule.Severity, "source": item.rule.Source,
-			"value": item.state.LastValue, "afterMinutes": afterMinutes})
+			"value": item.state.LastValue, "afterMinutes": delay})
 		var evidenceID string
 		if err := tx.QueryRow(ctx, `INSERT INTO evidence(id,event_id,kind,observed_at,payload_json)
 			VALUES(gen_random_uuid(),$1,'alert_escalation',$2,$3) RETURNING id::text`,

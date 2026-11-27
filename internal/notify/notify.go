@@ -169,6 +169,7 @@ func (cfg Config) Send(ctx context.Context, item store.Notification) (string, er
 	}
 	message := map[string]any{"schemaVersion": 1, "deliveryId": item.ID,
 		"eventId": item.EventID, "eventTitle": item.EventTitle, "eventStatus": item.EventStatus,
+		"consolePath": "/#incidents?event=" + item.EventID,
 		"assetId": item.AssetID, "assetName": item.AssetName, "kind": item.Kind,
 		"observedAt": item.ObservedAt, "ruleId": payload["ruleId"],
 		"severity": severity, "value": payload["value"], "source": payload["source"]}
@@ -181,7 +182,6 @@ func (cfg Config) Send(ctx context.Context, item store.Notification) (string, er
 			}
 			endpoint, secret = cfg.OperationsWebhookURL, cfg.OperationsWebhookSecret
 			message["organizationId"] = item.OrganizationID
-			message["consolePath"] = "/#incidents?event=" + item.EventID
 		}
 		if endpoint == nil {
 			return "skipped", nil

@@ -79,6 +79,7 @@ const views = {
   assets: ['资产与实例', '纳管数据库、缓存和控制面，查看采集状态与原始证据。'],
   alerts: ['告警与通知', '处理当前告警，管理规则、静默和投递。'],
   inspections: ['巡检与报告', '运行定期检查，查看历史结果和差异。'],
+  'service-reports': ['服务报告', '核对服务可用性、维护窗口、缺采和原始证据。'],
   settings: ['系统状态', '检查监控数据存储与部署状态。']
 };
 
@@ -120,6 +121,8 @@ function setView(route, updateHash = true) {
     const section = params.get('section');
     if (selected === 'alerts' && section === 'rca' && currentRole === 'admin') {
       showSection(selected, section, params.get('event'), params.get('rule'));
+    } else if (selected === 'alerts' && section === 'routes' && currentRole === 'admin') {
+      showSection(selected, section);
     } else {
       showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers', 'ai-model'].includes(section) ? section : pageSections[selected]);
     }
@@ -133,6 +136,7 @@ function setView(route, updateHash = true) {
   showOverview(selected === 'overview');
   showGrafanaView(selected === 'grafana' ? params : null);
   showSample(selected === 'sample' && currentRole ? params : null);
+  if (selected === 'service-reports' && currentRole) void showServiceOperations('reports', params);
   void showCollectionHistory(selected === 'collection' && currentRole ? params : null);
   void showEngineDiagnosis(selected === 'engine-diagnosis' && currentRole ? params : null);
   void showHAHistory(selected === 'ha-history' && currentRole ? params : null);
@@ -177,6 +181,7 @@ function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && section === 'ai-model' && !nativeOverview) section = 'storage';
   if (view === 'settings' && currentOrganization && ['collector', 'platform', 'ai-model'].includes(section)) section = 'organizations';
   if (view === 'alerts' && section === 'rca' && (currentRole !== 'admin' || currentOrganization)) section = 'active';
+  if (view === 'alerts' && section === 'routes' && currentRole !== 'admin') section = 'active';
   pageSections[view] = section;
   for (const button of document.querySelectorAll(`[data-view="${view}"] [data-section]`)) {
     button.setAttribute('aria-pressed', String(button.dataset.section === section));
@@ -188,12 +193,24 @@ function showSection(view, section, eventId, ruleCode) {
     panel.hidden = panel.dataset.sectionPanel !== section || (panel.classList.contains('admin-only') && currentRole !== 'admin');
   }
   if (view === 'alerts' && section === 'rca') void renderRCAWorkbench(eventId, ruleCode);
+  if (view === 'alerts' && section === 'routes') void showServiceOperations('routes', new URLSearchParams());
   if (view === 'settings' && section === 'access') void loadAccessDirectory();
   if (view === 'settings' && section === 'platform') void loadPlatformStatus();
   if (view === 'settings' && section === 'ai-model') void loadAIModelSettings();
   if (view === 'settings' && section === 'organizations') void loadOrganizations();
   if (view === 'settings' && section === 'audit') renderOrganizationAudit();
   if (view === 'settings' && section === 'history-tiers') void loadHistoryPolicies();
+}
+
+async function showServiceOperations(tool, params) {
+  const state = workspaceData;
+  const view = tool === 'reports' ? 'service-reports' : 'alerts';
+  if (currentRole === 'admin') await loadOrganizations(false);
+  if (state !== workspaceData || document.body.dataset.activeView !== view ||
+      (tool === 'routes' && pageSections.alerts !== 'routes')) return;
+  const panel = $(tool === 'reports' ? 'service-reports-workspace' : 'notification-routes-workspace');
+  window.DbSphereServiceOperations[tool](panel, params, {api, role: currentRole, formatTime,
+    organization: currentOrganization, options: organizationOptions(), defaultOrganization: defaultOrganizationID});
 }
 
 let aiModelSettings = null;
@@ -4279,7 +4296,7 @@ function investigationParams(eventId) {
 }
 
 function eventMonitoringReturn(value) {
-  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs|engine-diagnosis|ha-history)(?:\?|$)/.test(value)) return '';
+  if (typeof value !== 'string' || value.length > 4000 || !/^(overview|monitoring|live|storage|wallboard|logs|engine-diagnosis|ha-history|service-reports)(?:\?|$)/.test(value)) return '';
   const [view, query] = value.split('?', 2);
   const params = new URLSearchParams(query);
   params.delete('incidentReturn');
@@ -5576,7 +5593,7 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     const link = cell('a', storageBack ? '返回容器历史' : back.startsWith('live') ? '返回实时观测' :
       back.startsWith('wallboard') ? '返回监控大屏' : back.startsWith('overview') ? '返回全域总览' :
         back.startsWith('logs') ? '返回日志调查' : back.startsWith('ha-history') ? '返回主备切换与写入口' : back.startsWith('engine-diagnosis') ?
-          '返回引擎专项诊断' : '返回集群同窗', 'monitor-link incident-monitor-return');
+          '返回引擎专项诊断' : back.startsWith('service-reports') ? '返回服务报告' : '返回集群同窗', 'monitor-link incident-monitor-return');
     link.href = `#${back}`;
     summary.append(link);
   }
@@ -5948,6 +5965,15 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     reports.append(button);
   }
   timelinePanel.append(reports);
+  timelinePanel.append(window.DbSphereServiceOperations.postmortem(event, {api, role: currentRole, formatTime,
+    showSource(id) {
+      const evidence = timelinePanel.querySelector('#event-evidence-' + id);
+      if (!evidence) return false;
+      evidence.closest('details').open = true;
+      evidence.tabIndex = -1;
+      evidence.focus();
+      return true;
+    }}));
   if (canRespond) timelinePanel.append(eventSharingPanel(event.id));
   if (deliveryData?.deliveries?.length) {
     const deliveryPanel = cell('section', '', 'response-form');
