@@ -30,6 +30,19 @@ func TestReadinessSeparatesPVCVisibilityFromDatabaseHealth(t *testing.T) {
 	}
 }
 
+func TestReadinessPreservesConnectionPermissionLimit(t *testing.T) {
+	for _, tc := range []struct{ message, want string }{
+		{"Redis cannot read INFO server", "limited"},
+		{"PostgreSQL monitoring role lacks permission (SQLSTATE 42501)", "limited"},
+		{"PostgreSQL authentication failed (SQLSTATE 28P01)", "failed"},
+	} {
+		checks := describeReadiness(readinessSample{Status: "error", Error: tc.message}, "redis")
+		if status := summarizeReadiness(checks); status != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.message, status, tc.want)
+		}
+	}
+}
+
 func TestKindReadinessReportsDeniedPVC(t *testing.T) {
 	namespace, pod := os.Getenv("DBSPHERE_TEST_READINESS_NAMESPACE"), os.Getenv("DBSPHERE_TEST_READINESS_POD")
 	if namespace == "" || pod == "" {

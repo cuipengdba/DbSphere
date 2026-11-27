@@ -65,17 +65,7 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 		report.Product = "highgo"
 	}
 	report.Checks = describeReadiness(current, report.Runtime)
-	report.Status = "ready"
-	if report.Checks[0].Status != "ok" {
-		report.Status = "failed"
-	} else {
-		for _, check := range report.Checks {
-			if check.Status == "failed" || check.Status == "limited" || check.Status == "unknown" {
-				report.Status = "limited"
-				break
-			}
-		}
-	}
+	report.Status = summarizeReadiness(report.Checks)
 	if len(samples) > 1 {
 		report.PreviousSampleID = samples[1].ID
 		states := map[string]string{}
@@ -89,6 +79,24 @@ func (s *Postgres) assetReadiness(ctx context.Context, id string, at *time.Time)
 		}
 	}
 	return report, nil
+}
+
+func summarizeReadiness(checks []readinessCheck) string {
+	// The first check describes database access. An explicit permission
+	// limitation still carries a useful distinction from failed authentication.
+	switch checks[0].Status {
+	case "limited":
+		return "limited"
+	case "ok":
+		for _, check := range checks[1:] {
+			if check.Status == "failed" || check.Status == "limited" || check.Status == "unknown" {
+				return "limited"
+			}
+		}
+		return "ready"
+	default:
+		return "failed"
+	}
 }
 
 func describeReadiness(sample readinessSample, runtime string) []readinessCheck {
