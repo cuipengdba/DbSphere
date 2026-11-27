@@ -2,7 +2,7 @@
 
 [快速开始](QUICK_START.md) · [最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest) · [支持矩阵](SUPPORT_MATRIX.md)
 
-发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.4.0 为例。
+发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.5.0 为例。
 
 跨网段部署可在中心启用站点接收端，并在业务网段运行同架构静态采集程序。客户可独立配置本地推理服务或 HTTPS 模型网关。[站点采集与模型接入](SITE_COLLECTION.md)
 
@@ -16,7 +16,7 @@
 ## 容器化一键安装
 
 ```bash
-bundle=DbSphere-go-offline-4.4.0-linux-amd64.run
+bundle=DbSphere-go-offline-4.5.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
@@ -34,7 +34,7 @@ curl -fsS http://127.0.0.1:8081/readyz
 ## Grafana 增强离线包
 
 ```bash
-bundle=DbSphere-go-observability-4.4.0-linux-amd64.run
+bundle=DbSphere-go-observability-4.5.0-linux-amd64.run
 sha256sum --check "$bundle.sha256" && bash "$bundle"
 ```
 
@@ -49,7 +49,7 @@ Prometheus 数据默认保留 7 天并限制为 2 GB，可通过 `DBSPHERE_PROME
 从发布页下载对应架构的 systemd 包。将示例路径 `/absolute/dbsphere.env` 改成实际配置路径。填写独立 `DBSPHERE_DATABASE_URL` 和管理员引导配置。已部署环境须沿用原 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 ```bash
-bundle=DbSphere-go-systemd-4.4.0-linux-amd64.run
+bundle=DbSphere-go-systemd-4.5.0-linux-amd64.run
 sha256sum --check "$bundle.sha256"
 (umask 077 && bash "$bundle" --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env

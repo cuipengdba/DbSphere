@@ -99,6 +99,7 @@ Linux x86_64 的 PostgreSQL 兼容模式，验收介质 `V009R001C010B0004`。�
 | 双向 TLS 站点采集 | v4.2.0 | 两个隔离网络中的 PostgreSQL 18.7、MySQL 8.4.13、Redis OSS 6.2.24 单实例。覆盖采样上报、断线补送、去重和同一事件恢复。 |
 | 可选模型接入 | v4.2.0 | llama.cpp b7256 与 Qwen2.5-0.5B-Instruct Q4_K_M 在 Linux x86_64 上完成离线事件审核。客户 HTTPS 网关的证书、密钥引用、超时和预算路径使用协议夹具。 |
 | 事件内 SQL 性能对比与复测 | v4.3.0 | PostgreSQL 18.7 和 MySQL Community 8.4.13 实库验证索引变化、慢日志分位及同事件复测。模型引用使用协议夹具。权限和匹配口径见[SQL 性能对比手册](SQL_PERFORMANCE_COMPARISON.md)。 |
+| 数据库变更治理 | v4.5.0 | PostgreSQL 18.7 和 MySQL Community 8.4.13 实库验证只读预检、锁等待和回退恢复。通用 ITSM 协议夹具验证独立审批、超窗、幂等回执和原事件回链。 [变更治理手册](CHANGE_GOVERNANCE.md) |
 
 [站点采集与模型配置](SITE_COLLECTION.md)
 

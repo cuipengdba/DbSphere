@@ -24,6 +24,7 @@
 | GET | `/api/v1/events/{event}` | 事件状态、时间、控制台路径和最近 100 条外部证据。 |
 | POST | `/api/v1/external-incidents` | 记录外部告警触发、恢复或工单关联，返回 `eventId`、`evidenceId` 和状态。 |
 | POST | `/api/v1/ticket-receipts` | 保存已关联工单的状态回执，关联原事件、原投递和工单号。 |
+| POST | `/api/v1/change-receipts` | 保存数据库变更的开始、结果或回退回执。 [变更治理协议](CHANGE_GOVERNANCE.md#通用-itsm-接入) |
 
 外部告警发出 `kind=alert`、`state=firing`，并传入来源、外部告警发生 ID、资产 ID 和标题。可指定已有 DbSphere `eventId`，也可由 DbSphere 创建事件。恢复时传入相同的来源、发生 ID 和资产，并使用 `state=resolved`。由外部告警创建的事件随该恢复消息关闭。已有数据库告警从自身规则判断恢复。一条外部告警恢复后再发生时使用新的外部发生 ID。
 

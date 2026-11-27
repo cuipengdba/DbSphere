@@ -9,6 +9,7 @@ import (
 //
 //go:embed public/index.html public/app.js public/observability.js public/monitoring.js public/live.js public/live.css public/overview.js public/overview.css public/wallboard.js public/wallboard.css public/container-storage.js public/container-storage.css public/theme.js public/styles.css public/freshness.css public/console.css public/favicon.svg
 //go:embed public/log-analysis.js public/log-analysis.css
+//go:embed public/change-governance.js
 var Assets embed.FS
 
 // Version is embedded in the binary from the same package manifest used to

@@ -587,8 +587,8 @@ async function api(path, method = 'GET', payload, signal) {
   if (currentRole === 'viewer' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences)
     throw new Error('只读账号不能修改监控数据。');
   if (currentRole === 'approver' && method !== 'GET' && path !== '/api/logout' && !dutyPreferences &&
-      !(method === 'POST' && /^\/api\/work-orders\/[0-9a-f-]+\/(approve|reject)$/.test(path)))
-    throw new Error('审批账号只能审批事件工单。');
+      !(method === 'POST' && /^\/api\/(?:work-orders\/[0-9a-f-]+|assets\/[0-9a-f-]+\/change-governance\/[0-9a-f-]+)\/(approve|reject)$/.test(path)))
+    throw new Error('审批账号只能审批工单和变更申请。');
   const binary = payload instanceof Blob;
   const response = await fetch(path, {
     method, signal, credentials: 'same-origin',
@@ -1531,7 +1531,8 @@ $('asset-retry-readiness').addEventListener('click', () => void runAssetReadines
 
 async function showAsset(id, layer, background = false) {
   const detail = $('detail');
-  const editing = () => detail.contains(document.activeElement) && document.activeElement.closest('form');
+  const editing = () => detail.querySelector('[data-change-governance][open]') ||
+    (detail.contains(document.activeElement) && document.activeElement.closest('form'));
   if (background && editing()) return;
   const request = ++assetDetailRequest;
   const valid = () => selectedAsset === id && assetDetailRequest === request && !(background && editing());
@@ -1540,6 +1541,8 @@ async function showAsset(id, layer, background = false) {
   const [{ asset }, { samples }, readiness] = await Promise.all([api(`/api/assets/${id}`), api(`/api/assets/${id}/samples`),
     api(`/api/assets/${id}/readiness`).catch(() => null)]);
   if (!valid()) return;
+  const changePanel = () => window.DbSphereChangeGovernance.create(asset,
+    new URLSearchParams(window.location.hash.split('?')[1]).get('change'), {api, role:currentRole, formatTime});
   if (asset.runtime === 'mysql') {
     renderMySQLAsset(detail, asset, samples);
     appendSiteCollection(detail, asset);
@@ -1550,6 +1553,7 @@ async function showAsset(id, layer, background = false) {
     if (!valid()) return;
     if (settings) renderRoutingSettings(detail, asset, settings, samples[0]?.collectedAt === asset.lastSampleAt ? samples[0] : null);
     if (readiness) detail.append(readinessPanel(readiness));
+    if (nativeOverview) detail.append(changePanel());
     return;
   }
   if (asset.runtime === 'dm8') {
@@ -1602,6 +1606,7 @@ async function showAsset(id, layer, background = false) {
   const currentSample = sample?.collectedAt === asset.lastSampleAt ? sample : null;
   const adapter = currentSample?.metrics?.adapter;
   detail.append(cell('h3', asset.name));
+  if (nativeOverview) detail.append(changePanel());
   appendSiteCollection(detail, asset);
   detail.append(haHistoryLink(id));
   attachCollectionHistory(detail, id);
@@ -6244,6 +6249,8 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
     if (evidence.kind === 'ai_evidence_review') text = (evidence.payload.result?.model || '模型') + ' · ' +
       (evidence.payload.result?.claims?.length || 0) + ' 条带引用的审核结论';
     if (evidence.kind === 'statement_retest') text = `${evidence.payload.source} · ${evidence.payload.fingerprint}`;
+    if (evidence.kind === 'change_review') text = [evidence.payload.externalId, evidence.payload.actor, evidence.payload.note].filter(Boolean).join(' · ');
+    if (evidence.kind === 'change_receipt') text = [evidence.payload.externalId, evidence.payload.receiptId, evidence.payload.state].filter(Boolean).join(' · ');
     if (evidence.kind === 'event_handoff') text = evidence.payload.action === 'accepted' ?
       `${evidence.payload.actor} 已确认接手` : `${evidence.payload.actor} 交接给 ${evidence.payload.assignedTo} · ${evidence.payload.note}`;
     if (evidence.kind === 'work_order_requested') text = `${evidence.payload.actor || '管理员'} 申请${workActionLabels[evidence.payload.action] || '受控作业'} ${evidence.payload.workOrderId} · ${evidence.payload.reason}`;
@@ -6254,11 +6261,23 @@ async function showEvent(id, updateHash = true, monitoringReturn = '') {
       text = `${evidence.payload.actor || '管理员'} · ${responseLabels[evidence.payload.phase] || '处置'} · ${evidence.payload.note}${evidence.payload.sampleId ? ` · 成功采样 ${evidence.payload.sampleId}` : ''}`;
       responsePanel.append(cell('p', `${formatTime(evidence.observedAt)} · ${text}`, 'evidence'));
     }
-    const label = evidence.kind === 'opengauss_lock_wait' ? replayKinds[evidence.kind] :
+    const label = evidence.kind === 'change_review' ? (evidence.payload.phase === 'recovery' ? '变更回退核对' : '上线后复核') :
+      evidence.kind === 'change_receipt' ? '外部变更回执' : evidence.kind === 'opengauss_lock_wait' ? replayKinds[evidence.kind] :
       evidence.kind === 'log_record' ? '日志原始证据' : ['log_retest', 'statement_retest'].includes(evidence.kind) ? '调优复测' :
       external || risk || evidence.kind === 'ai_evidence_review' ? replayKinds[evidence.kind] : evidence.kind;
     const row = cell('p', `${formatTime(evidence.observedAt)} · ${label} · ${text}`, 'evidence');
     row.id = 'event-evidence-' + evidence.id;
+    if (['change_review', 'change_receipt'].includes(evidence.kind) && sampleUUID.test(evidence.payload.changeId || '')) {
+      const order = cell('a', '查看变更单', 'monitor-link');
+      order.href = '#assets?' + new URLSearchParams({asset:event.assetId, change:evidence.payload.changeId});
+      row.append(' · ', order);
+      for (const [sampleId, title] of [[evidence.payload.baseline?.sampleId, '基线原始采样'], [evidence.payload.sampleId, '复核原始采样']]) {
+        if (!sampleUUID.test(sampleId || '')) continue;
+        const link = cell('a', title, 'monitor-link');
+        link.href = '#sample?' + new URLSearchParams({asset:event.assetId, sample:sampleId, return:'incidents?' + investigationParams(event.id)});
+        row.append(' · ', link);
+      }
+    }
     if (evidence.kind === 'statement_retest') {
       for (const [window, name] of [[evidence.payload.baseline, '基准期原始采样'], [evidence.payload.current, '复测原始采样']]) {
         if (!sampleUUID.test(window?.lastSampleId || '')) continue;

@@ -75,6 +75,11 @@ func registerOperations(mux *http.ServeMux, db HealthStore, auth *AuthConfig) {
 	cfg := auth.Operations
 	ops, _ := db.(operationsStore)
 	if cfg.Token != "" {
+		mux.HandleFunc("POST /api/v1/change-receipts", func(w http.ResponseWriter, r *http.Request) {
+			if requireOperationsToken(w, r, cfg.Token) {
+				handleChangeReceipt(w, r, db, cfg.Organization)
+			}
+		})
 		for _, route := range []string{"GET /api/v1/assets", "GET /api/v1/assets/{asset}", "GET /api/v1/events",
 			"GET /api/v1/events/{event}", "POST /api/v1/external-incidents", "POST /api/v1/ticket-receipts"} {
 			mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
