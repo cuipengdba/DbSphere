@@ -25,6 +25,13 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) > 1 && os.Args[1] == "license-issue" {
+		if err := issueEntitlement(os.Args[2:]); err != nil {
+			log.Error("license issuance failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "site-summary" {
 		if len(os.Args) != 3 {
 			log.Error("use site-summary CONFIG")
@@ -234,6 +241,9 @@ func run(log *slog.Logger) error {
 	}
 	defer pg.Close()
 	pg.ConfigureOpenBao(openBao)
+	if err := configureEntitlement(pg); err != nil {
+		return err
+	}
 	pg.ConfigureContainerStorage(storageConfig)
 	pg.ConfigureRetention(cfg.SampleDays, cfg.EventDays)
 	notifyConfig, err := notify.Load()

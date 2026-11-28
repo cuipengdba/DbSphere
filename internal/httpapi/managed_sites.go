@@ -72,6 +72,8 @@ func handleManagedSites(w http.ResponseWriter, r *http.Request, db HealthStore, 
 		respond(w, http.StatusNotFound, map[string]string{"error": "站点、组织或委派账号不可用"})
 	case errors.Is(err, storepkg.ErrSiteTransition):
 		respond(w, http.StatusConflict, map[string]string{"error": "请核对当前修订、前序批次或站点上报版本"})
+	case errors.Is(err, storepkg.ErrEntitlementCapacity):
+		respondExpansionDenied(w)
 	default:
 		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "站点管理暂不可用"})
 	}

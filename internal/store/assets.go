@@ -39,7 +39,23 @@ func assetByID(ctx context.Context, db assetQueryer, id string) (json.RawMessage
 }
 
 func (s *Postgres) CreateAsset(ctx context.Context, input assets.Input, key []byte) (json.RawMessage, error) {
-	return createAsset(ctx, s.pool, input, key, "")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	row, err := readEntitlement(ctx, tx, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.allowExpansion(ctx, tx, row, 1, 0); err != nil {
+		return nil, err
+	}
+	asset, err := createAsset(ctx, tx, input, key, "")
+	if err != nil {
+		return nil, err
+	}
+	return asset, tx.Commit(ctx)
 }
 
 func createAsset(ctx context.Context, db assetQueryer, input assets.Input, key []byte, explicitID string) (json.RawMessage, error) {

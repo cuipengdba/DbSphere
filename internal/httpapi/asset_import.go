@@ -55,7 +55,9 @@ func handleAssetImport(w http.ResponseWriter, r *http.Request, db any, role stri
 		case action != "batches" && r.Method == http.MethodGet:
 			result, err = batches.OnboardingBatch(r.Context(), id)
 		case strings.HasSuffix(id, "/check") && r.Method == http.MethodPost:
-			var request struct{ IDs []string `json:"ids"` }
+			var request struct {
+				IDs []string `json:"ids"`
+			}
 			if readJSON(w, r, &request) != nil {
 				err = assets.ErrInvalidImport
 			} else {
@@ -100,6 +102,8 @@ func handleAssetImport(w http.ResponseWriter, r *http.Request, db any, role stri
 		respond(w, http.StatusBadRequest, map[string]string{"error": "清单、资产 ID 或分页参数无效，清单每批最多 100 项"})
 	case errors.Is(err, store.ErrAssetImportConflict):
 		respond(w, http.StatusConflict, map[string]any{"error": "资产配置已变化或存在冲突，请重新预览", "plan": result})
+	case errors.Is(err, store.ErrEntitlementCapacity):
+		respondExpansionDenied(w)
 	case errors.Is(err, store.ErrOnboardingBusy):
 		respond(w, http.StatusConflict, map[string]string{"error": "已有接入批次正在体检，请稍后重试"})
 	case errors.Is(err, store.ErrOnboardingNotFound):

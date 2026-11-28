@@ -83,7 +83,7 @@ fi
 docker image save --platform "linux/$arch" "${images[@]}" | gzip -n > "$stage/observability-images.tar.gz"
 (cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 enhanced="$out/DbSphere-go-observability-$version-linux-$arch.run"
-cat "$repo_dir/scripts/offline-self-extract.sh" > "$enhanced"
+bash "$repo_dir/scripts/render-offline-header.sh" "$repo_dir/scripts/offline-self-extract.sh" > "$enhanced"
 tar -C "$stage" -czf - . >> "$enhanced"
 chmod 0755 "$enhanced"
 (cd -- "$out" && sha256sum "$(basename -- "$enhanced")" > "$(basename -- "$enhanced").sha256")

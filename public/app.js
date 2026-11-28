@@ -127,7 +127,7 @@ function setView(route, updateHash = true) {
     } else if (selected === 'alerts' && section === 'routes' && currentRole === 'admin') {
       showSection(selected, section);
     } else {
-      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers', 'ai-model'].includes(section) ? section : pageSections[selected]);
+      showSection(selected, selected === 'settings' && ['storage', 'collector', 'platform', 'organizations', 'access', 'audit', 'history-tiers', 'ai-model', 'entitlement'].includes(section) ? section : pageSections[selected]);
     }
   }
   monitoring.setVisible(selected === 'monitoring');
@@ -183,7 +183,7 @@ function setView(route, updateHash = true) {
 function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && currentRole !== 'admin') section = 'storage';
   if (view === 'settings' && section === 'ai-model' && !nativeOverview) section = 'storage';
-  if (view === 'settings' && currentOrganization && ['collector', 'platform', 'ai-model'].includes(section)) section = 'organizations';
+  if (view === 'settings' && currentOrganization && ['collector', 'platform', 'ai-model', 'entitlement'].includes(section)) section = 'organizations';
   if (view === 'alerts' && section === 'rca' && (currentRole !== 'admin' || currentOrganization)) section = 'active';
   if (view === 'alerts' && section === 'routes' && currentRole !== 'admin') section = 'active';
   pageSections[view] = section;
@@ -201,9 +201,49 @@ function showSection(view, section, eventId, ruleCode) {
   if (view === 'settings' && section === 'access') void loadAccessDirectory();
   if (view === 'settings' && section === 'platform') void loadPlatformStatus();
   if (view === 'settings' && section === 'ai-model') void loadAIModelSettings();
+  if (view === 'settings' && section === 'entitlement') void loadEntitlement();
   if (view === 'settings' && section === 'organizations') void loadOrganizations();
   if (view === 'settings' && section === 'audit') renderOrganizationAudit();
   if (view === 'settings' && section === 'history-tiers') void loadHistoryPolicies();
+}
+
+const entitlementPath = '/api/admin/deployment-entitlement';
+let entitlementRequest = 0;
+$('entitlement-refresh').addEventListener('click', () => void loadEntitlement());
+$('entitlement-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const file = event.currentTarget.elements.license.files[0];
+  if (file && file.size <= 16384) void loadEntitlement(file);
+  else $('entitlement-status').textContent = '请选择不超过 16 KiB 的授权文件。';
+});
+
+async function loadEntitlement(file) {
+  const request = ++entitlementRequest;
+  const status = $('entitlement-status');
+  const details = $('entitlement-details');
+  const form = $('entitlement-form');
+  form.querySelector('fieldset').disabled = true;
+  status.textContent = file ? '正在验签并导入…' : '正在读取部署授权…';
+  try {
+    const value = await api(entitlementPath, file ? 'PUT' : 'GET', file);
+    if (request !== entitlementRequest) return;
+    const labels = {community:'社区部署', awaiting_license:'待导入授权', invalid:'当前授权验签失败',
+      active:'授权有效', expired:'授权已到期', pending:'授权尚未生效', clock_skew:'服务器时钟异常'};
+    const license = value.license;
+    const values = [['部署编号',value.deploymentId], ['资产用量',`${value.assetCount} / ${license?.assetLimit ?? '—'}`],
+      ['站点用量',`${value.siteCount} / ${license?.siteLimit ?? '—'}`]];
+    if (value.issuerFingerprint) values.push(['授权方公钥指纹',value.issuerFingerprint]);
+    if (license) values.push(['授权有效期',`${formatTime(license.startsAt)} 至 ${formatTime(license.expiresAt)}`],
+      ['续期序号',license.sequence], ['最近导入',`${value.installedBy || '—'} · ${formatTime(value.installedAt)}`]);
+    details.replaceChildren(...values.flatMap(([label, value]) => [cell('dt',label),cell('dd',String(value))]));
+    status.textContent = `${file ? '已导入 · ' : ''}${labels[value.status] || value.status}`;
+    form.reset();
+    form.hidden = !value.issuerFingerprint;
+  } catch (error) {
+    if (request === entitlementRequest) status.textContent = error.message;
+  } finally {
+    if (request === entitlementRequest) form.querySelector('fieldset').disabled = false;
+  }
 }
 
 async function showServiceOperations(tool, params) {

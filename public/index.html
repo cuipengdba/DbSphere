@@ -661,7 +661,13 @@
         <section class="panel" data-section-panel="templates"><div class="section-head"><h2>巡检模板与阈值</h2></div><div id="inspection-templates" class="list"></div></section>
         <section class="panel" data-section-panel="history"><div class="section-head"><div><h2>巡检历史</h2></div></div><div id="inspection-runs" class="list"></div></section>
       </div>
-      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="history-tiers">指标保留</button><button type="button" class="admin-only platform-only" data-section="collector">采集器</button><button type="button" class="admin-only platform-only" data-section="ai-model">模型接入</button><button type="button" class="admin-only platform-only" data-section="platform">平台副本</button><button type="button" class="admin-only" data-section="organizations">组织管理</button><button type="button" class="admin-only" data-section="access">账号和团队</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <div class="section-nav" data-view="settings" aria-label="系统专题"><button type="button" data-section="storage">长期存储</button><button type="button" class="admin-only" data-section="history-tiers">指标保留</button><button type="button" class="admin-only platform-only" data-section="collector">采集器</button><button type="button" class="admin-only platform-only" data-section="ai-model">模型接入</button><button type="button" class="admin-only platform-only" data-section="platform">平台副本</button><button type="button" class="admin-only platform-only" data-section="entitlement">部署授权</button><button type="button" class="admin-only" data-section="organizations">组织管理</button><button type="button" class="admin-only" data-section="access">账号和团队</button><button type="button" class="admin-only" data-section="audit">操作记录</button></div>
+      <section class="panel admin-only platform-only" data-view="settings" data-section-panel="entitlement" hidden>
+        <div class="section-head"><h2>部署授权</h2><button id="entitlement-refresh" type="button" class="ghost">刷新用量</button></div>
+        <p id="entitlement-status" class="hint" role="status"></p>
+        <dl id="entitlement-details" class="sample-fields"></dl>
+        <form id="entitlement-form" class="response-form" hidden><fieldset><label>签名授权文件<input name="license" type="file" accept=".json,.license" required></label><button type="submit">导入授权</button></fieldset></form>
+      </section>
       <section class="panel admin-only platform-only" data-view="settings" data-section-panel="ai-model" id="ai-model-panel" hidden>
         <div class="section-head"><h2>模型接入</h2><button id="ai-model-refresh" class="ghost" type="button">刷新</button></div>
         <form id="ai-model-form">

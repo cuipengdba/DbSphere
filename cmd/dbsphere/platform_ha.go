@@ -90,6 +90,7 @@ func runMaintenance(ctx context.Context, pg *store.Postgres, cfg config.Config, 
 	aiRuntime *ai.Runtime, log *slog.Logger) {
 	var tasks sync.WaitGroup
 	tasks.Go(func() { runNotifier(ctx, pg, notifications, log) })
+	tasks.Go(func() { runEntitlementClock(ctx, pg, log) })
 	tasks.Go(func() { runTracePruner(ctx, pg, cfg.TraceDays, log) })
 	tasks.Go(func() { runPartitionMaintainer(ctx, pg, log) })
 	tasks.Go(func() { runTrendMaintainer(ctx, pg, log) })

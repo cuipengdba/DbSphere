@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/ed25519"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ type Postgres struct {
 	sampleRetentionDays           int
 	eventRetentionDays            int
 	operationsWebhookOrganization string
+	entitlementKey                ed25519.PublicKey
 	tracePodMu                    sync.Mutex
 	tracePodCache                 map[string]tracePodCacheEntry
 	containerStorage              collector.ContainerStorageConfig
@@ -564,6 +566,9 @@ func (s *Postgres) Migrate(ctx context.Context) error {
 	}
 	if err := migrateSiteManagement(ctx, tx); err != nil {
 		return fmt.Errorf("migrate site management: %w", err)
+	}
+	if err := migrateEntitlement(ctx, tx); err != nil {
+		return fmt.Errorf("migrate deployment entitlement: %w", err)
 	}
 	if err := seedGoRules(ctx, tx); err != nil {
 		return fmt.Errorf("seed supported Go alert rules: %w", err)

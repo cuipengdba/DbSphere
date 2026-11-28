@@ -880,6 +880,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 			handleManagedSites(w, r.WithContext(storepkg.WithAccessActor(r.Context(), actor)), store, managedSite[1], role, principal)
 			return
 		}
+		if r.URL.Path == deploymentEntitlementPath {
+			handleDeploymentEntitlement(w, r.WithContext(storepkg.WithAccessActor(r.Context(), actor)), store, role)
+			return
+		}
 		if handleAccessDirectory(w, r, namedDB, role, credentials) {
 			return
 		}
@@ -1471,6 +1475,10 @@ func New(store HealthStore, auth ...AuthConfig) http.Handler {
 					return
 				}
 				asset, err := assetsDB.CreateAsset(r.Context(), input, credentials.MasterKey)
+				if errors.Is(err, storepkg.ErrEntitlementCapacity) {
+					respondExpansionDenied(w)
+					return
+				}
 				if errors.Is(err, storepkg.ErrAccessInput) {
 					respond(w, http.StatusBadRequest, map[string]string{"error": "Invalid asset organization"})
 					return

@@ -27,6 +27,7 @@ bash "$repo/scripts/stage-pgbackrest-bundle.sh" "$stage" "$arch"
 (cd -- "$stage" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$out/DbSphere-go-systemd-$version-linux-$arch.run"
 tar -C "$stage" -czf "$payload" .
-cat "$repo/scripts/offline-self-extract.sh" "$payload" > "$archive"
+bash "$repo/scripts/render-offline-header.sh" "$repo/scripts/offline-self-extract.sh" > "$archive"
+cat "$payload" >> "$archive"
 chmod 0755 -- "$archive"
 (cd -- "$out" && sha256sum "$(basename -- "$archive")" > "$(basename -- "$archive").sha256")

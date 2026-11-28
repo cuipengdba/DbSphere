@@ -2,7 +2,7 @@
 
 [快速开始](QUICK_START.md) · [最新正式版](https://github.com/cuipengdba/DbSphere/releases/latest) · [支持矩阵](SUPPORT_MATRIX.md)
 
-发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.8.0 为例。
+发布页提供 Linux amd64 和 arm64 产物。先在联网机器下载所选文件及同名 `.sha256`，再复制到目标服务器。下列命令以 v4.9.0 为例。
 
 跨网段部署可在中心启用站点接收端，并在业务网段运行同架构静态采集程序。客户可独立配置本地推理服务或 HTTPS 模型网关。[站点采集与模型接入](SITE_COLLECTION.md)
 
@@ -13,11 +13,36 @@
 | 原生 systemd 包 | `DbSphere-go-systemd-` | Linux systemd、独立可写 PostgreSQL 18 |
 | 静态 Go 程序 | `DbSphere-go-<版本>-linux-<架构>` | 独立可写 PostgreSQL 18，按现场需要配置服务管理 |
 
+## 执行前核对发布签名
+
+v4.9.0 的 GitHub Release 提供 `SHA256SUMS`、二进制 Ed25519 签名 `SHA256SUMS.sig`、发布公钥和预检脚本。把清单、签名及包的 `.sha256` 放在安装包目录。目标机需要支持 Ed25519 `pkeyutl -rawin` 的 OpenSSL 3。发布公钥从可信渠道取得，也可从已核对来源的仓库副本获取。发布公钥的 SHA-256 指纹按 DER 格式计算。 [发布公钥](DBSPHERE-RELEASE-PUBLIC-KEY.pem)
+
+```text
+71725ca157d4974c6ead38e7b6f056c4c2088a3d42ed424d091c657c8fabee05
+```
+
+先在安装包目录核对公钥指纹和签名，再核对选择的安装包摘要。环境变量填写可信公钥的绝对路径，后续安装、升级和维护命令沿用它。标准包以 amd64 为例。安装其他架构或包型时将 `bundle` 改成对应的文件名。
+
+```bash
+set -e
+bundle=DbSphere-go-offline-4.9.0-linux-amd64.run
+export DBSPHERE_RELEASE_VERIFY_KEY=/absolute/DBSPHERE-RELEASE-PUBLIC-KEY.pem
+fingerprint=$(openssl pkey -pubin -in "$DBSPHERE_RELEASE_VERIFY_KEY" -outform DER | sha256sum)
+test "${fingerprint%% *}" = 71725ca157d4974c6ead38e7b6f056c4c2088a3d42ed424d091c657c8fabee05
+openssl pkeyutl -verify -pubin -inkey "$DBSPHERE_RELEASE_VERIFY_KEY" \
+  -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+digest=$(awk -v name="$bundle" 'NF==2 && $2==name {print $1}' SHA256SUMS)
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+printf '%s  %s\n' "$digest" "$bundle" | sha256sum --check --strict
+```
+
+需要脚本化预检时，使用可信源码中的 `scripts/verify-go-release.sh`。执行 `.run` 前完成独立核验。正式应用安装包在解包前会再次检查发布签名和自身摘要。仅下载部分附件时按所选文件逐项核对摘要，下载全部附件时可运行 `sha256sum --check --strict SHA256SUMS`。
+
 ## 容器化一键安装
 
 ```bash
-bundle=DbSphere-go-offline-4.8.0-linux-amd64.run
-sha256sum --check "$bundle.sha256" && bash "$bundle"
+bundle=DbSphere-go-offline-4.9.0-linux-amd64.run
+bash "$bundle"
 curl -fsS http://127.0.0.1:8081/readyz
 ```
 
@@ -34,8 +59,8 @@ curl -fsS http://127.0.0.1:8081/readyz
 ## Grafana 增强离线包
 
 ```bash
-bundle=DbSphere-go-observability-4.8.0-linux-amd64.run
-sha256sum --check "$bundle.sha256" && bash "$bundle"
+bundle=DbSphere-go-observability-4.9.0-linux-amd64.run
+bash "$bundle"
 ```
 
 增强模式使用相同的配置目录和 PG18 数据卷。Prometheus 和 Grafana 在 Compose 私有网络中监听。平台管理员登录 DbSphere 后，从实时观测、基础设施专题或事件详情进入站内 Grafana，可直接查看只读面板。返回时保留当前调查上下文。
@@ -49,12 +74,12 @@ Prometheus 数据默认保留 7 天并限制为 2 GB，可通过 `DBSPHERE_PROME
 从发布页下载对应架构的 systemd 包。将示例路径 `/absolute/dbsphere.env` 改成实际配置路径。填写独立 `DBSPHERE_DATABASE_URL` 和管理员引导配置。已部署环境须沿用原 `DBSPHERE_MASTER_KEY`，它用于解密已有资产凭据。
 
 ```bash
-bundle=DbSphere-go-systemd-4.8.0-linux-amd64.run
+bundle=DbSphere-go-systemd-4.9.0-linux-amd64.run
 sha256sum --check "$bundle.sha256"
 (umask 077 && bash "$bundle" --sample-config > /absolute/dbsphere.env)
 sudoedit /absolute/dbsphere.env
-sudo bash "$bundle" --check /absolute/dbsphere.env
-sudo bash "$bundle" /absolute/dbsphere.env
+sudo DBSPHERE_RELEASE_VERIFY_KEY="$DBSPHERE_RELEASE_VERIFY_KEY" bash "$bundle" --check /absolute/dbsphere.env
+sudo DBSPHERE_RELEASE_VERIFY_KEY="$DBSPHERE_RELEASE_VERIFY_KEY" bash "$bundle" /absolute/dbsphere.env
 systemctl status dbsphere-native.service
 ```
 

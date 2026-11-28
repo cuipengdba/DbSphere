@@ -63,7 +63,12 @@ func (s *Postgres) ImportAssets(ctx context.Context, request assets.ImportReques
 	}
 	defer tx.Rollback(ctx)
 	var requestDigest string
+	var license entitlementRow
 	if apply {
+		license, err = readEntitlement(ctx, tx, true)
+		if err != nil {
+			return nil, err
+		}
 		if _, err := tx.Exec(ctx, "LOCK TABLE assets IN SHARE ROW EXCLUSIVE MODE"); err != nil {
 			return nil, err
 		}
@@ -95,6 +100,15 @@ func (s *Postgres) ImportAssets(ctx context.Context, request assets.ImportReques
 	if apply {
 		if !plan.CanApply || request.Revision != plan.Revision {
 			return plan, ErrAssetImportConflict
+		}
+		var creates int
+		for _, row := range plan.Rows {
+			if row.Action == "create" {
+				creates++
+			}
+		}
+		if err := s.allowExpansion(ctx, tx, license, creates, 0); err != nil {
+			return nil, err
 		}
 		for i, row := range plan.Rows {
 			var raw json.RawMessage

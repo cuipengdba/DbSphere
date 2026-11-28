@@ -116,7 +116,8 @@ bash "$repo_dir/scripts/stage-pgbackrest-bundle.sh" "$stage" "$arch"
 (cd -- "$stage" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 archive="$output_dir/DbSphere-go-offline-$version-linux-$arch.run"
 tar -C "$stage" -czf "$payload" .
-cat "$repo_dir/scripts/offline-self-extract.sh" "$payload" > "$archive"
+bash "$repo_dir/scripts/render-offline-header.sh" "$repo_dir/scripts/offline-self-extract.sh" > "$archive"
+cat "$payload" >> "$archive"
 chmod 0755 "$archive"
 (cd -- "$output_dir" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
 echo "Go development offline bundle: $archive"

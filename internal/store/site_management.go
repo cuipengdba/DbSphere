@@ -59,17 +59,38 @@ func (s *Postgres) SaveManagedSite(ctx context.Context, in ManagedSiteInput) err
 		console.RawQuery != "" || console.Fragment != "" || len(in.ConsoleURL) > 512 || strings.ContainsAny(in.ConsoleURL, "\\\r\n\t") {
 		return remoteobs.ErrInvalid
 	}
-	result, err := s.pool.Exec(ctx, `INSERT INTO managed_sites(site,organization_id,label,console_url,asset_cap,delegate_id,updated_by)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	license, err := readEntitlement(ctx, tx, true)
+	if err != nil {
+		return err
+	}
+	var existing bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT FROM managed_sites WHERE site=$1)`, in.Site).Scan(&existing); err != nil {
+		return err
+	}
+	if !existing {
+		if err := s.allowExpansion(ctx, tx, license, 0, 1); err != nil {
+			return err
+		}
+	}
+	result, err := tx.Exec(ctx, `INSERT INTO managed_sites(site,organization_id,label,console_url,asset_cap,delegate_id,updated_by)
 		SELECT $1,$2,$3,$4,$5,$6,$7 WHERE EXISTS(SELECT FROM organizations WHERE id=$2)
 		AND ($6::uuid IS NULL OR EXISTS(SELECT FROM access_accounts WHERE id=$6 AND organization_id=$2 AND role='operator' AND enabled))
 		ON CONFLICT(site) DO UPDATE SET label=excluded.label,console_url=excluded.console_url,asset_cap=excluded.asset_cap,
 			delegate_id=excluded.delegate_id,updated_by=excluded.updated_by,updated_at=now()
 		WHERE managed_sites.organization_id=excluded.organization_id`, in.Site, org, in.Label, console.String(),
 		in.AssetCap, nullable(in.Delegate), accessActor(ctx, "admin"))
-	if err == nil && result.RowsAffected() != 1 {
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
 		return ErrSiteUnavailable
 	}
-	return err
+	return tx.Commit(ctx)
 }
 
 const managedSiteScope = `($1::uuid IS NULL OR m.organization_id=$1) AND ($2::boolean OR m.delegate_id=$3::uuid)`
